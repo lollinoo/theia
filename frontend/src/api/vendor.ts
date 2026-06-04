@@ -1,6 +1,7 @@
 import { type VendorConfig } from '../types/api';
 import { requestJSON, requestJSONWithBody } from './transport';
 
+// fetchVendorConfigs loads all vendor configuration records and keeps absent lists empty.
 export async function fetchVendorConfigs(): Promise<VendorConfig[]> {
   const payload = await requestJSON('/api/v1/vendors');
   const data = (payload as Record<string, unknown>)?.data;
@@ -15,6 +16,7 @@ export async function fetchVendorConfigs(): Promise<VendorConfig[]> {
   });
 }
 
+// fetchVendorConfig loads one vendor configuration record by vendor name.
 export async function fetchVendorConfig(name: string): Promise<VendorConfig> {
   const payload = await requestJSON(`/api/v1/vendors/${encodeURIComponent(name)}`);
   const rec = (payload as Record<string, unknown>)?.data as Record<string, unknown>;
@@ -25,6 +27,7 @@ export async function fetchVendorConfig(name: string): Promise<VendorConfig> {
   };
 }
 
+// updateVendorConfig saves one vendor configuration and returns the normalized record.
 export async function updateVendorConfig(
   name: string,
   config: VendorConfig['config'],

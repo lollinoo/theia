@@ -51,11 +51,13 @@ type FetchCanvasBootstrapOptions = {
   force?: boolean;
 };
 
+// resetCanvasBootstrapRequestCache clears in-flight and short-lived bootstrap reuse state for tests.
 export function resetCanvasBootstrapRequestCache(): void {
   canvasBootstrapRequests.clear();
   recentCanvasBootstraps.clear();
 }
 
+// fetchCanvasBootstrap loads the default canvas topology bootstrap with request reuse.
 export async function fetchCanvasBootstrap(
   options: FetchCanvasBootstrapOptions = {},
 ): Promise<{ topology: CanvasTopologyResponse }> {
@@ -66,6 +68,7 @@ export async function fetchCanvasBootstrap(
   );
 }
 
+// fetchCanvasBootstrapWithCache deduplicates concurrent bootstrap loads and short reuse windows.
 function fetchCanvasBootstrapWithCache(
   cacheKey: CanvasBootstrapCacheKey,
   path: string,
@@ -98,6 +101,7 @@ function fetchCanvasBootstrapWithCache(
   return request;
 }
 
+// fetchCanvasBootstrapUncached performs one bootstrap HTTP request and maps topology errors.
 async function fetchCanvasBootstrapUncached(
   path: string,
 ): Promise<{ topology: CanvasTopologyResponse }> {
@@ -128,12 +132,14 @@ async function fetchCanvasBootstrapUncached(
   };
 }
 
+// fetchCanvasTopology loads the default topology and preserves 304 ETag semantics.
 export async function fetchCanvasTopology(
   ifNoneMatch?: string,
 ): Promise<CanvasTopologyFetchResult> {
   return fetchCanvasTopologyFromPath('/api/v1/topology/canvas', ifNoneMatch);
 }
 
+// fetchCanvasTopologyFromPath performs topology fetches for default and saved-map endpoints.
 async function fetchCanvasTopologyFromPath(
   path: string,
   ifNoneMatch?: string,
@@ -178,10 +184,12 @@ async function fetchCanvasTopologyFromPath(
   };
 }
 
+// fetchCanvasMaps lists saved canvas maps through the compatibility client barrel.
 export async function fetchCanvasMaps(): Promise<CanvasMap[]> {
   return parseCanvasMapsResponse(await requestJSON('/api/v1/canvas/maps'));
 }
 
+// createCanvasMap creates a saved map from direct filters, source areas, or source maps.
 export async function createCanvasMap(payload: {
   name: string;
   description?: string;
@@ -192,6 +200,7 @@ export async function createCanvasMap(payload: {
   return parseCanvasMapResponse(await requestJSONWithBody('/api/v1/canvas/maps', 'POST', payload));
 }
 
+// updateCanvasMap patches saved-map metadata while preserving nullable source and filter fields.
 export async function updateCanvasMap(
   id: string,
   payload: Partial<{
@@ -206,16 +215,19 @@ export async function updateCanvasMap(
   );
 }
 
+// deleteCanvasMap deletes a saved map and lets the backend enforce default-map conflicts.
 export async function deleteCanvasMap(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}`, 'DELETE');
 }
 
+// setCanvasMapPrimary promotes one saved map to primary and returns the updated map DTO.
 export async function setCanvasMapPrimary(id: string): Promise<CanvasMap> {
   return parseCanvasMapResponse(
     await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}/primary`, 'POST'),
   );
 }
 
+// removeDeviceFromCanvasMap removes one materialized device membership from a saved map.
 export async function removeDeviceFromCanvasMap(mapId: string, deviceId: string): Promise<void> {
   await requestJSONWithBody(
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,
@@ -223,6 +235,7 @@ export async function removeDeviceFromCanvasMap(mapId: string, deviceId: string)
   );
 }
 
+// addDeviceToCanvasMap adds a device and optionally asks the backend to include missing links.
 export async function addDeviceToCanvasMap(
   mapId: string,
   deviceId: string,
@@ -237,6 +250,7 @@ export async function addDeviceToCanvasMap(
   );
 }
 
+// updateCanvasMapDeviceAreas replaces saved-map area assignments for selected devices.
 export async function updateCanvasMapDeviceAreas(
   mapId: string,
   payload: { device_ids: string[]; area_ids: string[] },
@@ -250,6 +264,7 @@ export async function updateCanvasMapDeviceAreas(
   );
 }
 
+// updateCanvasMapDeviceVisualColor applies map-local visual color metadata to a device.
 export async function updateCanvasMapDeviceVisualColor(
   mapId: string,
   deviceId: string,
@@ -264,12 +279,14 @@ export async function updateCanvasMapDeviceVisualColor(
   );
 }
 
+// fetchCanvasMapAreas loads saved-map areas with imported device counts.
 export async function fetchCanvasMapAreas(mapId: string): Promise<Area[]> {
   return parseAreasResponse(
     await requestJSON(`/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas`),
   );
 }
 
+// createCanvasMapArea creates a map-local area snapshot.
 export async function createCanvasMapArea(
   mapId: string,
   payload: { name: string; description: string; color: string },
@@ -283,6 +300,7 @@ export async function createCanvasMapArea(
   );
 }
 
+// updateCanvasMapArea replaces one map-local area snapshot.
 export async function updateCanvasMapArea(
   mapId: string,
   areaId: string,
@@ -297,6 +315,7 @@ export async function updateCanvasMapArea(
   );
 }
 
+// deleteCanvasMapArea removes one map-local area from a saved map.
 export async function deleteCanvasMapArea(mapId: string, areaId: string): Promise<void> {
   await requestJSONWithBody(
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas/${encodeURIComponent(areaId)}`,
@@ -304,6 +323,7 @@ export async function deleteCanvasMapArea(mapId: string, areaId: string): Promis
   );
 }
 
+// duplicateCanvasMap creates a copy that preserves backend-managed memberships and positions.
 export async function duplicateCanvasMap(
   id: string,
   payload: { name: string },
@@ -317,6 +337,7 @@ export async function duplicateCanvasMap(
   );
 }
 
+// fetchCanvasMapBootstrap loads a saved-map topology bootstrap with map-specific cache identity.
 export async function fetchCanvasMapBootstrap(
   mapId: string,
   options: FetchCanvasBootstrapOptions = {},
@@ -328,6 +349,7 @@ export async function fetchCanvasMapBootstrap(
   );
 }
 
+// fetchCanvasMapTopology loads a saved-map topology and preserves 304 ETag semantics.
 export async function fetchCanvasMapTopology(
   mapId: string,
   ifNoneMatch?: string,

@@ -46,6 +46,7 @@ export interface CreateDevicePayload {
   skip_primary_map_membership?: boolean;
 }
 
+// fetchDevices loads all devices and keeps legacy error text used by callers.
 export async function fetchDevices(): Promise<Device[]> {
   try {
     return parseDevicesResponse(await requestJSON('/api/v1/devices'));
@@ -55,6 +56,7 @@ export async function fetchDevices(): Promise<Device[]> {
   }
 }
 
+// fetchOrphanDevices loads devices that are not assigned to a canvas area.
 export async function fetchOrphanDevices(): Promise<Device[]> {
   try {
     return parseDevicesResponse(await requestJSON('/api/v1/devices/orphans'));
@@ -64,6 +66,7 @@ export async function fetchOrphanDevices(): Promise<Device[]> {
   }
 }
 
+// fetchLinks loads topology links and preserves the caller-facing failure message.
 export async function fetchLinks(): Promise<Link[]> {
   try {
     return parseLinksResponse(await requestJSON('/api/v1/links'));
@@ -73,6 +76,7 @@ export async function fetchLinks(): Promise<Link[]> {
   }
 }
 
+// createDevice creates a device and unwraps the single returned resource from the API envelope.
 export async function createDevice(payload: CreateDevicePayload): Promise<Device> {
   const response = await requestJSONWithBody('/api/v1/devices', 'POST', payload);
   const data = (response as Record<string, unknown>)?.data;
@@ -87,6 +91,7 @@ export async function createDevice(payload: CreateDevicePayload): Promise<Device
   return devices[0];
 }
 
+// updateDevice replaces editable device metadata and unwraps the single returned resource.
 export async function updateDevice(
   id: string,
   payload: Partial<{
@@ -122,14 +127,17 @@ export async function updateDevice(
   return devices[0];
 }
 
+// deleteDevice removes one device by ID.
 export async function deleteDevice(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/devices/${encodeURIComponent(id)}`, 'DELETE');
 }
 
+// runTopologyDiscovery triggers backend topology discovery for one device.
 export async function runTopologyDiscovery(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/devices/${encodeURIComponent(id)}/topology-discovery`, 'POST');
 }
 
+// fetchDeviceInterfaces loads interface telemetry metadata for one device.
 export async function fetchDeviceInterfaces(deviceId: string): Promise<InterfaceInfo[]> {
   try {
     return parseInterfacesResponse(
@@ -141,6 +149,7 @@ export async function fetchDeviceInterfaces(deviceId: string): Promise<Interface
   }
 }
 
+// createLink creates a manual topology link and preserves legacy field defaults.
 export async function createLink(payload: {
   source_device_id: string;
   source_if_name: string;
@@ -171,6 +180,7 @@ export async function createLink(payload: {
   };
 }
 
+// updateLink replaces manual link endpoints and preserves legacy field defaults.
 export async function updateLink(
   id: string,
   payload: { source_if_name: string; target_if_name: string },
@@ -202,10 +212,12 @@ export async function updateLink(
   };
 }
 
+// deleteLink removes one topology link by ID.
 export async function deleteLink(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/links/${encodeURIComponent(id)}`, 'DELETE');
 }
 
+// testSNMPConnection runs the backend SNMP connectivity probe for one device.
 export async function testSNMPConnection(deviceId: string): Promise<{
   success: boolean;
   sys_name?: string;
@@ -229,6 +241,7 @@ export async function testSNMPConnection(deviceId: string): Promise<{
   };
 }
 
+// fetchDeviceCredentialProfiles loads credential assignments for one device.
 export async function fetchDeviceCredentialProfiles(
   deviceId: string,
 ): Promise<DeviceCredentialProfile[]> {
@@ -238,6 +251,7 @@ export async function fetchDeviceCredentialProfiles(
   return parseDeviceCredentialProfilesResponse(payload);
 }
 
+// assignCredentialProfile assigns an existing credential profile to one device.
 export async function assignCredentialProfile(deviceId: string, profileId: string): Promise<void> {
   await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles`,
@@ -246,6 +260,7 @@ export async function assignCredentialProfile(deviceId: string, profileId: strin
   );
 }
 
+// unassignCredentialProfile removes one credential profile assignment from a device.
 export async function unassignCredentialProfile(
   deviceId: string,
   profileId: string,
@@ -256,6 +271,7 @@ export async function unassignCredentialProfile(
   );
 }
 
+// setWinBoxProfile assigns the WinBox credential profile for one device.
 export async function setWinBoxProfile(deviceId: string, profileId: string): Promise<void> {
   await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-profile`,
@@ -264,6 +280,7 @@ export async function setWinBoxProfile(deviceId: string, profileId: string): Pro
   );
 }
 
+// clearWinBoxProfile removes the WinBox credential profile for one device.
 export async function clearWinBoxProfile(deviceId: string): Promise<void> {
   await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-profile`,
@@ -271,6 +288,7 @@ export async function clearWinBoxProfile(deviceId: string): Promise<void> {
   );
 }
 
+// fetchWinBoxCredentials requests privileged WinBox credentials for one device.
 export async function fetchWinBoxCredentials(deviceId: string): Promise<WinBoxCredentials> {
   const payload = await requestJSON(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-credentials`,
@@ -278,6 +296,7 @@ export async function fetchWinBoxCredentials(deviceId: string): Promise<WinBoxCr
   return parseWinBoxCredentialsResponse(payload);
 }
 
+// createBridgeLaunchRequest creates a short-lived bridge launch token for one device.
 export async function createBridgeLaunchRequest(
   deviceId: string,
 ): Promise<BridgeLaunchRequestResponse> {
@@ -295,6 +314,7 @@ export async function createBridgeLaunchRequest(
   };
 }
 
+// testSSHConnection runs the backend SSH credential probe for one device.
 export async function testSSHConnection(
   deviceId: string,
 ): Promise<{ success: boolean; error?: string }> {
