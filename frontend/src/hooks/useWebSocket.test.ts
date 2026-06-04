@@ -1639,6 +1639,7 @@ describe('useWebSocket', () => {
   });
 
   it('does not crash when receiving an unknown message type', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
     act(() => {
@@ -1657,6 +1658,12 @@ describe('useWebSocket', () => {
 
     // snapshot must remain null — no state mutation from the unknown message.
     expect(result.current.snapshot).toBeNull();
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to parse WebSocket message',
+      expect.objectContaining({
+        message: 'unsupported websocket message type: unknown_type',
+      }),
+    );
   });
 
   it('requests resync when a runtime_delta payload cannot be parsed', () => {
