@@ -175,6 +175,24 @@ func TestDuplicateDeviceAddressMessagePreservesHTTPErrorText(t *testing.T) {
 	}
 }
 
+func TestAreasToMembershipPreservesAreaSnapshots(t *testing.T) {
+	firstID := uuid.New()
+	secondID := uuid.New()
+
+	got := AreasToMembership([]domain.Area{
+		{ID: firstID, Name: "Core", Description: "Core area", Color: "#00E676"},
+		{ID: secondID, Name: "Edge", Description: "Edge area", Color: "#2979FF"},
+	})
+
+	want := []domain.CanvasMapAreaMembership{
+		{AreaID: firstID, Name: "Core", Description: "Core area", Color: "#00E676"},
+		{AreaID: secondID, Name: "Edge", Description: "Edge area", Color: "#2979FF"},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("AreasToMembership() = %+v, want %+v", got, want)
+	}
+}
+
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false

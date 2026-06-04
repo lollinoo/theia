@@ -1523,20 +1523,15 @@ func (h *CanvasMapHandler) canvasMapAreaMembershipsForDevice(device *domain.Devi
 	if device == nil || len(device.AreaIDs) == 0 {
 		return []domain.CanvasMapAreaMembership{}, nil
 	}
-	areas := make([]domain.CanvasMapAreaMembership, 0, len(device.AreaIDs))
+	areas := make([]domain.Area, 0, len(device.AreaIDs))
 	for _, areaID := range device.AreaIDs {
 		area, err := h.areaRepo.GetByID(areaID)
 		if err != nil {
 			return nil, err
 		}
-		areas = append(areas, domain.CanvasMapAreaMembership{
-			AreaID:      area.ID,
-			Name:        area.Name,
-			Description: area.Description,
-			Color:       area.Color,
-		})
+		areas = append(areas, *area)
 	}
-	return areas, nil
+	return canvasmap.AreasToMembership(areas), nil
 }
 
 func parseCanvasMapDeviceAction(action string) (uuid.UUID, bool) {

@@ -216,6 +216,15 @@ func MaterializeMembershipFromSourceMap(
 
 // AreasWithCountToMembership converts global area rows into saved-map snapshots.
 func AreasWithCountToMembership(areas []domain.AreaWithCount) []domain.CanvasMapAreaMembership {
+	areaRows := make([]domain.Area, 0, len(areas))
+	for _, area := range areas {
+		areaRows = append(areaRows, area.Area)
+	}
+	return AreasToMembership(areaRows)
+}
+
+// AreasToMembership converts area rows into saved-map snapshots.
+func AreasToMembership(areas []domain.Area) []domain.CanvasMapAreaMembership {
 	snapshots := make([]domain.CanvasMapAreaMembership, 0, len(areas))
 	for _, area := range areas {
 		snapshots = append(snapshots, domain.CanvasMapAreaMembership{
