@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// readRestoreManifest loads the archive manifest from the extracted restore directory.
 func readRestoreManifest(tempDir string) (backupManifest, error) {
 	manifestPath := filepath.Join(tempDir, "manifest.json")
 	manifestData, err := os.ReadFile(manifestPath)
@@ -22,6 +23,7 @@ func readRestoreManifest(tempDir string) (backupManifest, error) {
 	return manifest, nil
 }
 
+// manifestDatabaseEntryName selects the PostgreSQL dump entry and rejects legacy SQLite entries.
 func manifestDatabaseEntryName(manifest backupManifest) (string, error) {
 	if entry := strings.TrimSpace(manifest.DBEntryName); entry != "" {
 		if entry == postgresArchiveDBEntry {
@@ -35,6 +37,7 @@ func manifestDatabaseEntryName(manifest backupManifest) (string, error) {
 	return postgresArchiveDBEntry, nil
 }
 
+// validateRestoreManifestEncryptionKey ensures the archive was created with the current key.
 func validateRestoreManifestEncryptionKey(manifest backupManifest, encryptionKey []byte) error {
 	currentKeyHash := computeEncryptionKeyHash(encryptionKey)
 	if manifest.EncryptionKeyHash != currentKeyHash {
@@ -43,6 +46,7 @@ func validateRestoreManifestEncryptionKey(manifest backupManifest, encryptionKey
 	return nil
 }
 
+// validateRestoreManifestMigrationCompatibility prevents restoring archives from newer schemas.
 func validateRestoreManifestMigrationCompatibility(manifest backupManifest, currentVersion int) (bool, error) {
 	if manifest.MigrationVersion > currentVersion {
 		return false, fmt.Errorf("archive has newer migration version (%d) than current (%d); upgrade Theia first",

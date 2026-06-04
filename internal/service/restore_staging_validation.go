@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 )
 
+// validateRestoreStagingLayout verifies marker paths still point at the runtime staging layout.
 func validateRestoreStagingLayout(marker restoreMarker, stagingDir string) error {
 	if err := validateRestoreStagingDir(stagingDir); err != nil {
 		return err
@@ -42,6 +43,7 @@ func validateRestoreStagingLayout(marker restoreMarker, stagingDir string) error
 	return nil
 }
 
+// validateStagedDBFile requires the staged database dump to be a regular file.
 func validateStagedDBFile(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -53,6 +55,7 @@ func validateStagedDBFile(path string) error {
 	return nil
 }
 
+// validateRestoreStagingDir requires the staging root to be a real directory.
 func validateRestoreStagingDir(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -67,6 +70,7 @@ func validateRestoreStagingDir(path string) error {
 	return nil
 }
 
+// validateOptionalStagedBackupDir permits a missing backup dir but rejects unsafe entries.
 func validateOptionalStagedBackupDir(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -97,6 +101,7 @@ func validateOptionalStagedBackupDir(path string) error {
 	})
 }
 
+// validateOptionalStagedKnownHosts permits absence but requires a real known_hosts file when present.
 func validateOptionalStagedKnownHosts(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -144,6 +149,7 @@ func validateLiveRestoreKnownHosts(path string) error {
 	return nil
 }
 
+// validateRetryStagedDBDestination confirms retry refreshes write only to the staged DB path.
 func validateRetryStagedDBDestination(stagedDB string, stagingDir string) error {
 	if err := validateRestoreStagingDir(stagingDir); err != nil {
 		return err

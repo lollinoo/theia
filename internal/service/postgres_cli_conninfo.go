@@ -13,6 +13,7 @@ type postgresCLIConnectionInfo struct {
 	env      []string
 }
 
+// postgresCLIConnInfo converts DSNs into libpq conninfo plus password environment.
 func postgresCLIConnInfo(dsn string) (postgresCLIConnectionInfo, error) {
 	trimmed := strings.TrimSpace(dsn)
 	if trimmed == "" {
@@ -74,6 +75,7 @@ type parsedPostgresURL struct {
 	params   map[string]string
 }
 
+// parsePostgresURLDSN parses URL-form PostgreSQL DSNs without logging secrets.
 func parsePostgresURLDSN(dsn string) (*parsedPostgresURL, error) {
 	remainder := dsn
 	if idx := strings.Index(remainder, "://"); idx >= 0 {
@@ -180,6 +182,7 @@ func parsePostgresURLDSN(dsn string) (*parsedPostgresURL, error) {
 	}, nil
 }
 
+// splitPostgresHostPort handles host, host:port, and bracketed IPv6 authorities.
 func splitPostgresHostPort(hostport string) (string, string, error) {
 	if hostport == "" {
 		return "", "", nil
@@ -200,6 +203,7 @@ func splitPostgresHostPort(hostport string) (string, string, error) {
 	return hostport, "", nil
 }
 
+// quoteLibpqConnValue quotes a value for libpq keyword/value conninfo.
 func quoteLibpqConnValue(value string) string {
 	escaped := strings.ReplaceAll(value, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
@@ -211,6 +215,7 @@ type postgresConnInfoParam struct {
 	value string
 }
 
+// postgresKeywordCLIConnInfo removes password from keyword conninfo and moves it to env.
 func postgresKeywordCLIConnInfo(connInfo string) (postgresCLIConnectionInfo, bool, error) {
 	params, ok, err := parsePostgresKeywordConnInfo(connInfo)
 	if !ok || err != nil {
@@ -233,6 +238,7 @@ func postgresKeywordCLIConnInfo(connInfo string) (postgresCLIConnectionInfo, boo
 	}, true, nil
 }
 
+// parsePostgresKeywordConnInfo parses libpq keyword/value connection strings.
 func parsePostgresKeywordConnInfo(connInfo string) ([]postgresConnInfoParam, bool, error) {
 	params := []postgresConnInfoParam{}
 	index := 0
@@ -273,6 +279,7 @@ func parsePostgresKeywordConnInfo(connInfo string) ([]postgresConnInfoParam, boo
 	return params, true, nil
 }
 
+// parsePostgresConnInfoValue reads one quoted or unquoted libpq value.
 func parsePostgresConnInfoValue(connInfo string, index *int) (string, error) {
 	if *index >= len(connInfo) {
 		return "", nil
@@ -302,12 +309,14 @@ func parsePostgresConnInfoValue(connInfo string, index *int) (string, error) {
 	return "", fmt.Errorf("parse postgres conninfo: unterminated quoted value")
 }
 
+// skipPostgresConnInfoSpaces advances over libpq whitespace bytes.
 func skipPostgresConnInfoSpaces(connInfo string, index *int) {
 	for *index < len(connInfo) && isPostgresConnInfoSpace(connInfo[*index]) {
 		*index = *index + 1
 	}
 }
 
+// isPostgresConnInfoSpace mirrors libpq whitespace accepted between key/value tokens.
 func isPostgresConnInfoSpace(ch byte) bool {
 	switch ch {
 	case ' ', '\t', '\n', '\r', '\f', '\v':
@@ -317,6 +326,7 @@ func isPostgresConnInfoSpace(ch byte) bool {
 	}
 }
 
+// postgresPasswordEnv returns a PGPASSWORD environment assignment when needed.
 func postgresPasswordEnv(password string) []string {
 	if password == "" {
 		return nil

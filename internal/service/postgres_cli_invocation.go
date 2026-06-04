@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// runPostgresDump writes a custom-format PostgreSQL dump using redacted CLI invocation errors.
 func runPostgresDump(ctx context.Context, dbDSN string, destPath string) error {
 	if strings.TrimSpace(dbDSN) == "" {
 		return fmt.Errorf("postgres backup requires db_dsn")
@@ -32,6 +33,7 @@ func runPostgresDump(ctx context.Context, dbDSN string, destPath string) error {
 	return nil
 }
 
+// validatePostgresDumpArchive checks that pg_restore can inspect a generated dump archive.
 func validatePostgresDumpArchive(ctx context.Context, dumpPath string) error {
 	if err := ensureSupportedPostgresCLITools(ctx, "pg_restore"); err != nil {
 		return err
@@ -42,6 +44,7 @@ func validatePostgresDumpArchive(ctx context.Context, dumpPath string) error {
 	return nil
 }
 
+// runPostgresRestore replaces the public schema from a validated staged dump.
 func runPostgresRestore(ctx context.Context, dbDSN string, stagedDB string) error {
 	if strings.TrimSpace(dbDSN) == "" {
 		return fmt.Errorf("postgres restore requires db_dsn")

@@ -20,18 +20,21 @@ type instanceBackupOperationTracker struct {
 	operations map[uuid.UUID]*instanceBackupOperation
 }
 
+// newInstanceBackupOperationTracker creates the in-memory operation tracker.
 func newInstanceBackupOperationTracker() *instanceBackupOperationTracker {
 	return &instanceBackupOperationTracker{
 		operations: make(map[uuid.UUID]*instanceBackupOperation),
 	}
 }
 
+// hasActive reports whether any instance backup operation is currently running.
 func (t *instanceBackupOperationTracker) hasActive() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.operations) > 0
 }
 
+// begin records a cancellable running operation and its initial progress.
 func (t *instanceBackupOperationTracker) begin(id uuid.UUID, cancel context.CancelFunc, progress domain.InstanceBackupProgress) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -41,12 +44,14 @@ func (t *instanceBackupOperationTracker) begin(id uuid.UUID, cancel context.Canc
 	}
 }
 
+// end removes a running operation from the tracker.
 func (t *instanceBackupOperationTracker) end(id uuid.UUID) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.operations, id)
 }
 
+// updateProgress replaces the best-effort progress snapshot for a running operation.
 func (t *instanceBackupOperationTracker) updateProgress(id uuid.UUID, progress domain.InstanceBackupProgress) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -55,6 +60,7 @@ func (t *instanceBackupOperationTracker) updateProgress(id uuid.UUID, progress d
 	}
 }
 
+// getProgress returns the best-effort progress snapshot for a running operation.
 func (t *instanceBackupOperationTracker) getProgress(id uuid.UUID) (domain.InstanceBackupProgress, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -65,6 +71,7 @@ func (t *instanceBackupOperationTracker) getProgress(id uuid.UUID) (domain.Insta
 	return op.progress, true
 }
 
+// cancellationRequested reports whether the running operation has been asked to stop.
 func (t *instanceBackupOperationTracker) cancellationRequested(id uuid.UUID) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -117,6 +124,7 @@ func (t *instanceBackupOperationTracker) requestCancel(
 	return backup, true, nil
 }
 
+// completeSuccess persists success unless cancellation won the race.
 func (t *instanceBackupOperationTracker) completeSuccess(
 	id uuid.UUID,
 	totalSize int64,
@@ -146,22 +154,27 @@ func (t *instanceBackupOperationTracker) completeSuccess(
 	return nil
 }
 
+// hasActiveInstanceBackupOperation delegates active-operation checks to the tracker.
 func (s *InstanceBackupService) hasActiveInstanceBackupOperation() bool {
 	return s.operations.hasActive()
 }
 
+// beginInstanceBackupOperation records a service-level running backup operation.
 func (s *InstanceBackupService) beginInstanceBackupOperation(id uuid.UUID, cancel context.CancelFunc, progress domain.InstanceBackupProgress) {
 	s.operations.begin(id, cancel, progress)
 }
 
+// endInstanceBackupOperation removes a service-level running backup operation.
 func (s *InstanceBackupService) endInstanceBackupOperation(id uuid.UUID) {
 	s.operations.end(id)
 }
 
+// updateInstanceBackupProgress publishes progress for API polling.
 func (s *InstanceBackupService) updateInstanceBackupProgress(id uuid.UUID, progress domain.InstanceBackupProgress) {
 	s.operations.updateProgress(id, progress)
 }
 
+// instanceBackupCancellationRequested checks whether backup work should stop early.
 func (s *InstanceBackupService) instanceBackupCancellationRequested(id uuid.UUID) bool {
 	return s.operations.cancellationRequested(id)
 }
