@@ -254,6 +254,69 @@ func TestDefaultPositionsForMembershipPrunesNonMembers(t *testing.T) {
 	}
 }
 
+func TestPlanDefaultPositionCopySkipsDefaultMap(t *testing.T) {
+	defaultMapID := uuid.New()
+	memberID := uuid.New()
+
+	plan := PlanDefaultPositionCopy(
+		defaultMapID,
+		defaultMapID,
+		[]domain.DevicePosition{{DeviceID: memberID, X: 10, Y: 20}},
+		nil,
+		[]domain.CanvasMapDeviceMembership{{DeviceID: memberID}},
+	)
+
+	if plan.ShouldSave {
+		t.Fatal("PlanDefaultPositionCopy().ShouldSave = true for default map, want false")
+	}
+	if len(plan.Positions) != 0 {
+		t.Fatalf("PlanDefaultPositionCopy().Positions = %+v, want empty for default map", plan.Positions)
+	}
+}
+
+func TestPlanDefaultPositionCopyUsesDefaultPositionsAndPrunesNonMembers(t *testing.T) {
+	memberID := uuid.New()
+	otherID := uuid.New()
+	legacyID := uuid.New()
+
+	plan := PlanDefaultPositionCopy(
+		uuid.New(),
+		uuid.New(),
+		[]domain.DevicePosition{
+			{DeviceID: memberID, X: 10, Y: 20},
+			{DeviceID: otherID, X: 30, Y: 40},
+		},
+		[]domain.DevicePosition{{DeviceID: legacyID, X: 50, Y: 60}},
+		[]domain.CanvasMapDeviceMembership{{DeviceID: memberID}},
+	)
+
+	if !plan.ShouldSave {
+		t.Fatal("PlanDefaultPositionCopy().ShouldSave = false, want true")
+	}
+	if len(plan.Positions) != 1 || plan.Positions[0].DeviceID != memberID {
+		t.Fatalf("PlanDefaultPositionCopy().Positions = %+v, want member default position", plan.Positions)
+	}
+}
+
+func TestPlanDefaultPositionCopyFallsBackToLegacyPositions(t *testing.T) {
+	memberID := uuid.New()
+
+	plan := PlanDefaultPositionCopy(
+		uuid.New(),
+		uuid.New(),
+		nil,
+		[]domain.DevicePosition{{DeviceID: memberID, X: 10, Y: 20}},
+		[]domain.CanvasMapDeviceMembership{{DeviceID: memberID}},
+	)
+
+	if !plan.ShouldSave {
+		t.Fatal("PlanDefaultPositionCopy().ShouldSave = false, want true")
+	}
+	if len(plan.Positions) != 1 || plan.Positions[0].DeviceID != memberID {
+		t.Fatalf("PlanDefaultPositionCopy().Positions = %+v, want legacy member position", plan.Positions)
+	}
+}
+
 func TestValidateDeleteRejectsDefaultMap(t *testing.T) {
 	err := ValidateDelete(domain.CanvasMap{IsDefault: true})
 	if err == nil {

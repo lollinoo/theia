@@ -35,6 +35,11 @@ type CreatePlan struct {
 	CreateEmptyMembership bool
 }
 
+type DefaultPositionCopyPlan struct {
+	ShouldSave bool
+	Positions  []domain.DevicePosition
+}
+
 var ErrDefaultMapDelete = errors.New("cannot delete default canvas map")
 
 // ValidateDelete rejects attempts to delete the default saved map.
@@ -346,6 +351,27 @@ func DefaultPositionsForMembership(
 	devices []domain.CanvasMapDeviceMembership,
 ) []domain.DevicePosition {
 	return FilterPositionsForMemberDevices(candidates, devices)
+}
+
+// PlanDefaultPositionCopy selects copyable positions for a newly materialized map.
+func PlanDefaultPositionCopy(
+	mapID uuid.UUID,
+	defaultMapID uuid.UUID,
+	defaultPositions []domain.DevicePosition,
+	legacyPositions []domain.DevicePosition,
+	devices []domain.CanvasMapDeviceMembership,
+) DefaultPositionCopyPlan {
+	if !ShouldCopyDefaultPositions(mapID, defaultMapID) {
+		return DefaultPositionCopyPlan{Positions: []domain.DevicePosition{}}
+	}
+	positions := DefaultPositionsForMembership(
+		DefaultPositionCandidates(defaultPositions, legacyPositions),
+		devices,
+	)
+	return DefaultPositionCopyPlan{
+		ShouldSave: len(positions) > 0,
+		Positions:  positions,
+	}
 }
 
 // VirtualMemberDeviceIDs returns materialized members that are virtual devices.
