@@ -7,6 +7,10 @@ import {
   buildTopologySourceRequestPlan,
 } from './topologyLoadPlan';
 
+/**
+ * Creates the manual-edge migration plan fixture used by topology load planning
+ * tests so each case only overrides the migration signal it cares about.
+ */
 function manualMigrationPlan(
   overrides: Partial<ManualEdgeMigrationTopologyLoadPlan> = {},
 ): ManualEdgeMigrationTopologyLoadPlan {

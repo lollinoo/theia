@@ -37,6 +37,11 @@ interface ShouldFitViewAfterTopologyLoadInput {
   usablePositionState: string;
 }
 
+/**
+ * Builds the fetch flags for a topology load without touching hook state.
+ * This keeps ETag bypass decisions tied to map ownership, bootstrap needs,
+ * and pending manual-edge migration in one place.
+ */
 export function buildTopologySourceRequestPlan({
   trigger,
   options,
@@ -63,6 +68,10 @@ export function buildTopologySourceRequestPlan({
   };
 }
 
+/**
+ * Normalizes a 304 response into the state updates the hook should still make,
+ * including the fallback ETag used when the backend omits one.
+ */
 export function buildNotModifiedTopologyLoadPlan({
   responseEtag,
   lastCanvasTopologyEtag,
@@ -74,6 +83,10 @@ export function buildNotModifiedTopologyLoadPlan({
   };
 }
 
+/**
+ * Decides whether a completed topology load should refit the viewport.
+ * Ordinary refreshes keep the user's viewport once positions are usable.
+ */
 export function buildShouldFitViewAfterTopologyLoad({
   trigger,
   forceFitView,

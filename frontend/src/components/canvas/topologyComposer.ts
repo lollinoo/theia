@@ -28,6 +28,10 @@ interface ComposeCanvasTopologyResult {
   edges: LinkEdgeType[];
 }
 
+/**
+ * Converts runtime snapshots into the edge data consumed by React Flow edges.
+ * Static topology stays unchanged while status, health, and throughput remain live.
+ */
 function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeData> {
   const edgeDataById = new Map<string, LinkEdgeData>();
 
@@ -59,6 +63,10 @@ function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeD
   return edgeDataById;
 }
 
+/**
+ * Builds React Flow nodes and edges from static topology plus runtime overlays.
+ * The helper isolates composition ordering so the hook only applies the result.
+ */
 export function composeCanvasTopology({
   devices,
   links,
