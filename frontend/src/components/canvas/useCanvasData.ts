@@ -56,6 +56,7 @@ import {
   nodePositionsToPositionMap,
   positionsChanged,
 } from './topologyPositionState';
+import { buildTopologySourceRequestPlan } from './topologyLoadPlan';
 import {
   type StructuralRefreshCause,
   type TopologyRecoveryNotice,
@@ -296,27 +297,25 @@ export function useCanvasData({
         setError(null);
 
         try {
-          const includeRuntimeBootstrap =
-            options.includeRuntimeBootstrap === true || trigger === 'initial_load';
-          const forceRuntimeBootstrap = options.includeRuntimeBootstrap === true;
           const manualEdgeMigrationPlan = prepareManualEdgeMigrationForTopologyLoad({
             storage: window.localStorage,
             mapId,
           });
           const lastCanvasTopologyEtag = lastCanvasTopologyEtagByMapRef.current.get(mapKey) ?? null;
-          const renderedNodesOwnedByMap = nodesOwnerMapKeyRef.current === mapKey;
-          const topologyEtag =
-            includeRuntimeBootstrap ||
-            manualEdgeMigrationPlan.shouldBypassReadModelEtagForManualEdgeMigration ||
-            !renderedNodesOwnedByMap
-              ? null
-              : lastCanvasTopologyEtag;
+          const topologyRequestPlan = buildTopologySourceRequestPlan({
+            trigger,
+            options,
+            mapKey,
+            nodesOwnerMapKey: nodesOwnerMapKeyRef.current,
+            lastCanvasTopologyEtag,
+            manualEdgeMigrationPlan,
+          });
           const topologySource = await loadCanvasTopologySource({
             mapId,
             fetchPositions,
-            etag: topologyEtag,
-            includeRuntimeBootstrap,
-            forceRuntimeBootstrap,
+            etag: topologyRequestPlan.etag,
+            includeRuntimeBootstrap: topologyRequestPlan.includeRuntimeBootstrap,
+            forceRuntimeBootstrap: topologyRequestPlan.forceRuntimeBootstrap,
           });
           if (topologySource.status === 'ok' && topologySource.runtimeSnapshot !== undefined) {
             publishCanvasRuntimeBootstrap({
