@@ -1028,6 +1028,7 @@ func (h *CanvasMapHandler) replaceMaterializedMembership(
 	return true
 }
 
+// replaceMaterializedMembershipFromSourceMap delegates saved-map source materialization and keeps HTTP mapping local.
 func (h *CanvasMapHandler) replaceMaterializedMembershipFromSourceMap(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1035,60 +1036,15 @@ func (h *CanvasMapHandler) replaceMaterializedMembershipFromSourceMap(
 	sourceMapID uuid.UUID,
 	filter domain.CanvasMapFilter,
 ) bool {
-	sourceMembership, err := h.mapRepo.GetMembership(sourceMapID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load source map membership", err)
+	if err := canvasmap.ReplaceMaterializedMembershipFromSourceMap(r.Context(), mapID, sourceMapID, filter, canvasmap.SourceMapMaterializationDeps{
+		Maps:      h.mapRepo,
+		Positions: h.mapPositionRepo,
+		Devices:   h.deviceService,
+		Links:     h.linkRepo,
+		Areas:     h.areaRepo,
+	}); err != nil {
+		h.writeCanvasMapSourceMapMaterializationError(w, err)
 		return false
-	}
-	devices, err := h.deviceService.GetDevicesByIDs(r.Context(), canvasmap.MembershipDeviceIDs(sourceMembership.Devices))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list source map devices", err)
-		return false
-	}
-	links, err := canvasmap.LoadLinksByIDs(h.linkRepo, sourceMembership.LinkIDs)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list source map links", err)
-		return false
-	}
-	fallbackAreas := []domain.AreaWithCount{}
-	if len(sourceMembership.Areas) == 0 {
-		fallbackAreas, err = h.areaRepo.GetAllWithDeviceCount()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list source map areas", err)
-			return false
-		}
-	}
-	plan := canvasmap.PlanSourceMapMaterialization(
-		devices,
-		links,
-		sourceMembership,
-		fallbackAreas,
-		filter,
-		nil,
-	)
-
-	if err := h.mapRepo.ReplaceMembership(mapID, plan.Membership); err != nil {
-		h.writeMapRepoMutationError(w, err)
-		return false
-	}
-	sourcePositions, err := h.mapPositionRepo.GetAllForMap(sourceMapID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to copy source map positions", err)
-		return false
-	}
-	positionPlan := canvasmap.PlanSourceMapMaterialization(
-		devices,
-		links,
-		sourceMembership,
-		fallbackAreas,
-		filter,
-		sourcePositions,
-	)
-	if positionPlan.ShouldSavePositions {
-		if err := h.mapPositionRepo.SaveAllForMap(mapID, positionPlan.Positions); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to copy source map positions", err)
-			return false
-		}
 	}
 	return true
 }
@@ -1263,6 +1219,32 @@ func (h *CanvasMapHandler) writeCanvasMapMaterializationError(w http.ResponseWri
 		h.writeMapRepoMutationError(w, materializationErr.Err)
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to materialize canvas map membership", materializationErr.Err)
+	}
+}
+
+// writeCanvasMapSourceMapMaterializationError maps source-map service stages to existing HTTP errors.
+func (h *CanvasMapHandler) writeCanvasMapSourceMapMaterializationError(w http.ResponseWriter, err error) {
+	var sourceErr canvasmap.SourceMapMaterializationError
+	if !errors.As(err, &sourceErr) {
+		writeError(w, http.StatusInternalServerError, "failed to materialize source map membership", err)
+		return
+	}
+
+	switch sourceErr.Stage {
+	case canvasmap.SourceMapMaterializationStageMembership:
+		writeError(w, http.StatusInternalServerError, "failed to load source map membership", sourceErr.Err)
+	case canvasmap.SourceMapMaterializationStageDevices:
+		writeError(w, http.StatusInternalServerError, "failed to list source map devices", sourceErr.Err)
+	case canvasmap.SourceMapMaterializationStageLinks:
+		writeError(w, http.StatusInternalServerError, "failed to list source map links", sourceErr.Err)
+	case canvasmap.SourceMapMaterializationStageAreas:
+		writeError(w, http.StatusInternalServerError, "failed to list source map areas", sourceErr.Err)
+	case canvasmap.SourceMapMaterializationStageReplace:
+		h.writeMapRepoMutationError(w, sourceErr.Err)
+	case canvasmap.SourceMapMaterializationStagePositions, canvasmap.SourceMapMaterializationStageSavePositions:
+		writeError(w, http.StatusInternalServerError, "failed to copy source map positions", sourceErr.Err)
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to materialize source map membership", sourceErr.Err)
 	}
 }
 
