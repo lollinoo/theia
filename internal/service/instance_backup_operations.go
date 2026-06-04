@@ -72,6 +72,7 @@ func (t *instanceBackupOperationTracker) cancellationRequested(id uuid.UUID) boo
 	return op != nil && op.cancelRequested
 }
 
+// requestCancel loads the target backup outside the tracker lock, then marks an active operation as cancelling.
 func (t *instanceBackupOperationTracker) requestCancel(
 	id uuid.UUID,
 	loadBackup func() (*domain.InstanceBackup, error),
@@ -82,29 +83,36 @@ func (t *instanceBackupOperationTracker) requestCancel(
 		t.mu.Unlock()
 		return nil, false, nil
 	}
+	t.mu.Unlock()
 
 	backup, err := loadBackup()
 	if err != nil {
-		t.mu.Unlock()
 		return nil, true, fmt.Errorf("getting backup for cancel: %w", err)
 	}
 	if backup == nil {
-		t.mu.Unlock()
 		return nil, true, ErrInstanceBackupNotFound
 	}
 	if backup.Status != domain.InstanceBackupStatusRunning {
-		t.mu.Unlock()
 		return nil, true, ErrInstanceBackupNotRunning
 	}
 
+	t.mu.Lock()
+	op = t.operations[id]
+	if op == nil {
+		t.mu.Unlock()
+		return nil, false, nil
+	}
 	op.cancelRequested = true
-	op.cancel()
+	cancel := op.cancel
 	op.progress = domain.InstanceBackupProgress{
 		Phase:   "cancelling",
 		Message: "Cancellation requested",
 	}
 	t.mu.Unlock()
 
+	if cancel != nil {
+		cancel()
+	}
 	backup.ErrorMessage = "cancellation requested"
 	return backup, true, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
@@ -85,6 +86,55 @@ func TestInstanceBackupOperationTrackerCancelActiveOperation(t *testing.T) {
 	}
 	if progress.Phase != "cancelling" || progress.Message != "Cancellation requested" {
 		t.Fatalf("progress = %#v, want cancellation progress", progress)
+	}
+}
+
+// TestInstanceBackupOperationTrackerCancelDoesNotBlockProgressReadsDuringLoad preserves progress reads during cancel IO.
+func TestInstanceBackupOperationTrackerCancelDoesNotBlockProgressReadsDuringLoad(t *testing.T) {
+	tracker := newInstanceBackupOperationTracker()
+	id := uuid.New()
+	initial := domain.InstanceBackupProgress{Phase: "archiving"}
+	loadStarted := make(chan struct{})
+	allowLoad := make(chan struct{})
+	cancelDone := make(chan error, 1)
+	tracker.begin(id, func() {}, initial)
+
+	go func() {
+		_, _, err := tracker.requestCancel(id, func() (*domain.InstanceBackup, error) {
+			close(loadStarted)
+			<-allowLoad
+			return &domain.InstanceBackup{ID: id, Status: domain.InstanceBackupStatusRunning}, nil
+		})
+		cancelDone <- err
+	}()
+
+	select {
+	case <-loadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("requestCancel() did not start loading backup")
+	}
+
+	progressDone := make(chan domain.InstanceBackupProgress, 1)
+	go func() {
+		progress, ok := tracker.getProgress(id)
+		if !ok {
+			t.Error("getProgress() ok = false while cancel load is blocked")
+		}
+		progressDone <- progress
+	}()
+
+	select {
+	case progress := <-progressDone:
+		if progress != initial {
+			t.Fatalf("getProgress() = %#v, want initial progress while load is pending", progress)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("getProgress() blocked behind requestCancel() loadBackup")
+	}
+
+	close(allowLoad)
+	if err := <-cancelDone; err != nil {
+		t.Fatalf("requestCancel() error = %v", err)
 	}
 }
 
