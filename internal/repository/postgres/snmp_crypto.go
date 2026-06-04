@@ -91,11 +91,11 @@ func encryptSensitiveSNMPField(value string, keySource any) (string, error) {
 	case *crypto.Keyring:
 		return key.EncryptString(value)
 	case []byte:
-		encrypted, err := crypto.Encrypt([]byte(value), key)
+		keyring, err := crypto.NewKeyringFromLegacyKey(key)
 		if err != nil {
 			return "", err
 		}
-		return base64.StdEncoding.EncodeToString(encrypted), nil
+		return keyring.EncryptString(value)
 	case nil:
 		return "", fmt.Errorf("encryption keyring is required")
 	default:

@@ -2293,8 +2293,8 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	if !utf8.ValidString(encStr) {
 		t.Fatal("EncryptSecret returned a non-UTF-8 string")
 	}
-	if _, err := base64.StdEncoding.DecodeString(encStr); err != nil {
-		t.Fatalf("EncryptSecret returned a non-base64 string: %v", err)
+	if !strings.HasPrefix(encStr, crypto.EnvelopePrefix) {
+		t.Fatalf("EncryptSecret prefix = %q, want %q", encStr[:min(len(encStr), len(crypto.EnvelopePrefix))], crypto.EnvelopePrefix)
 	}
 	decrypted, err := svc.decryptSecret(encStr)
 	if err != nil {

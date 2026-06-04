@@ -177,7 +177,11 @@ func normalizeBackupEncryptionKey(key any) (*crypto.Keyring, []byte) {
 	case *crypto.Keyring:
 		return k, nil
 	case []byte:
-		return nil, k
+		keyring, err := crypto.NewKeyringFromLegacyKey(k)
+		if err != nil {
+			return nil, k
+		}
+		return keyring, k
 	case nil:
 		return nil, nil
 	default:
@@ -1922,11 +1926,13 @@ func (s *BackupService) decryptSecret(encrypted string) (string, error) {
 		if crypto.IsEnvelope(encrypted) {
 			return s.encryptionKeyring.DecryptString(encrypted)
 		}
-		plaintext, _, err := s.encryptionKeyring.DecryptLegacyString(encrypted)
-		if err == nil {
-			return plaintext, nil
+		if len(s.legacyEncryptionKey) == 0 {
+			plaintext, _, err := s.encryptionKeyring.DecryptLegacyString(encrypted)
+			if err == nil {
+				return plaintext, nil
+			}
+			return "", err
 		}
-		return "", err
 	}
 
 	var base64DecryptErr error
@@ -1956,11 +1962,7 @@ func (s *BackupService) EncryptSecret(plaintext string) (string, error) {
 	if s.encryptionKeyring != nil {
 		return s.encryptionKeyring.EncryptString(plaintext)
 	}
-	encrypted, err := crypto.Encrypt([]byte(plaintext), s.legacyEncryptionKey)
-	if err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(encrypted), nil
+	return "", fmt.Errorf("encryption keyring is required")
 }
 
 // GetWinboxCredentials retrieves the decrypted WinBox password for a device.

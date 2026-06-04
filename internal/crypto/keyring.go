@@ -94,6 +94,12 @@ func NewKeyring(activeID string, secrets map[string]string) (*Keyring, error) {
 	return &Keyring{activeID: activeID, keys: keys}, nil
 }
 
+func NewKeyringFromLegacyKey(key []byte) (*Keyring, error) {
+	return NewKeyring(LegacyKeyID, map[string]string{
+		LegacyKeyID: base64.StdEncoding.EncodeToString(key),
+	})
+}
+
 func ParseKeyring(activeID, keyList string) (*Keyring, error) {
 	activeID = strings.TrimSpace(activeID)
 	keyList = strings.TrimSpace(keyList)
