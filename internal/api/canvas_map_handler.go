@@ -590,8 +590,9 @@ func (h *CanvasMapHandler) HandlePatchDevice(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "visual_color is required")
 		return
 	}
-	visualColor, ok := normalizeCanvasMapVisualColor(w, req.VisualColor.Value)
-	if !ok {
+	visualColor, err := canvasmap.NormalizeVisualColor(req.VisualColor.Value)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -1640,38 +1641,6 @@ func canvasMapAreaMembershipFromRequest(
 	}, true
 }
 
-func normalizeCanvasMapVisualColor(w http.ResponseWriter, raw *string) (*string, bool) {
-	if raw == nil {
-		return nil, true
-	}
-	color := strings.TrimSpace(*raw)
-	if color == "" {
-		return nil, true
-	}
-	if !isHexRGBColor(color) {
-		writeError(w, http.StatusBadRequest, "invalid visual_color format (must be #RRGGBB)")
-		return nil, false
-	}
-	normalized := strings.ToUpper(color)
-	return &normalized, true
-}
-
-func isHexRGBColor(color string) bool {
-	if len(color) != 7 || color[0] != '#' {
-		return false
-	}
-	for _, r := range color[1:] {
-		switch {
-		case r >= '0' && r <= '9':
-		case r >= 'a' && r <= 'f':
-		case r >= 'A' && r <= 'F':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
 func applyCanvasMapDeviceVisualColors(
 	devices []jsonAPIResource,
 	membership []domain.CanvasMapDeviceMembership,
@@ -1679,18 +1648,16 @@ func applyCanvasMapDeviceVisualColors(
 	if len(devices) == 0 || len(membership) == 0 {
 		return
 	}
-	visualColors := make(map[string]string, len(membership))
-	for _, member := range membership {
-		if member.VisualColor == nil {
-			continue
-		}
-		visualColors[member.DeviceID.String()] = *member.VisualColor
-	}
+	visualColors := canvasmap.VisualColorsByDeviceID(membership)
 	if len(visualColors) == 0 {
 		return
 	}
 	for i := range devices {
-		color, ok := visualColors[devices[i].ID]
+		deviceID, err := uuid.Parse(devices[i].ID)
+		if err != nil {
+			continue
+		}
+		color, ok := visualColors[deviceID]
 		if !ok {
 			continue
 		}
