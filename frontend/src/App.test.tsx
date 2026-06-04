@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import type { Area, CanvasMap, Device, Link } from './types/api';
-import type { SnapshotPayload } from './types/metrics';
+import type { DeviceRuntimeDTO, SnapshotPayload } from './types/metrics';
 
 const fetchAreasMock = vi.fn<() => Promise<Area[]>>();
 const fetchCanvasMapsMock = vi.fn<() => Promise<CanvasMap[]>>();
@@ -192,6 +192,7 @@ vi.mock('./components/Canvas', () => ({
           device_type: 'router',
           poll_class: 'standard',
           poll_interval_override: null,
+          polling_enabled: true,
           status: 'up',
           sys_name: 'router-01',
           sys_descr: 'RouterOS 7.15.1',
@@ -338,7 +339,7 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
         <span>{`devices:${devices.length}`}</span>
         <span>{`hub-areas:${areas.map((area) => area.name).join('|')}`}</span>
         <span>{`links:${links.length}`}</span>
-        <span>{`snapshot:${snapshot?.devices['dev-1']?.status ?? 'none'}`}</span>
+        <span>{`snapshot:${snapshot?.devices['dev-1']?.operational_status ?? 'none'}`}</span>
         <span>{`maps:${maps.length}`}</span>
         <span>{`selected-map:${selectedMapId ?? 'none'}:${selectedMapName}`}</span>
         <span>{`loading:${String(mapsLoading)}`}</span>
@@ -425,7 +426,7 @@ vi.mock('./components/Dashboard', () => ({
       <span>{`devices:${devices.length}`}</span>
       <span>{`dashboard-areas:${areas.map((area) => area.name).join('|')}`}</span>
       <span>{`selected-area:${selectedAreaId ?? 'all'}`}</span>
-      <span>{`status:${snapshot?.devices['dev-1']?.status ?? 'none'}`}</span>
+      <span>{`status:${snapshot?.devices['dev-1']?.operational_status ?? 'none'}`}</span>
       <button type="button" onClick={onOpenMap}>
         Open map
       </button>
@@ -459,6 +460,44 @@ function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
     position_count: 1,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-02T00:00:00Z',
+    ...overrides,
+  };
+}
+
+// mockRuntimeDevice returns a complete runtime DTO so App mocks stay type-aligned with WebSocket data.
+function mockRuntimeDevice(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRuntimeDTO {
+  return {
+    device_id: 'dev-1',
+    operational_status: 'down',
+    primary_health: 'unreachable',
+    runtime_flags: [],
+    field_states: { uptime: 'ok', cpu: 'ok', memory: 'ok' },
+    network_reachable: 'false',
+    snmp_reachable: 'false',
+    reachability: 'hard_down',
+    health: 'critical',
+    freshness: 'fresh',
+    primary_reason: 'device_unreachable',
+    metrics_status: 'unavailable',
+    metrics_reason: 'device_unreachable',
+    alert_status: 'down',
+    firing_alert_count: 1,
+    last_collected_at: null,
+    last_polled_at: null,
+    expected_poll_interval_seconds: null,
+    cpu_percent: null,
+    mem_percent: null,
+    temp_celsius: null,
+    uptime_secs: null,
+    ...overrides,
+  };
+}
+
+// mockSnapshot creates the minimal complete runtime snapshot used by App navigation tests.
+function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
+  return {
+    devices: { 'dev-1': mockRuntimeDevice() },
+    links: {},
     ...overrides,
   };
 }
@@ -509,10 +548,7 @@ describe('App', () => {
     deleteCanvasMapMock.mockResolvedValue(undefined);
     setCanvasMapPrimaryMock.mockResolvedValue(mockMap({ is_default: true }));
     useWebSocketMock.mockReturnValue({
-      snapshot: {
-        devices: { 'dev-1': { status: 'down' } },
-        links: {},
-      } as unknown as SnapshotPayload,
+      snapshot: mockSnapshot(),
       alerts: [],
       reconnecting: false,
       prometheusStatus: null,
