@@ -290,7 +290,9 @@ function readFiniteNumber(record: APIRecord, key: string, fallback = 0): number 
 const MAX_POLLING_HEALTH_QUEUES = 16;
 const MAX_POLLING_HEALTH_WARNINGS = 16;
 
-function parsePollingHealthQueues(value: unknown): Record<string, PollingHealthQueuePayload> | undefined {
+function parsePollingHealthQueues(
+  value: unknown,
+): Record<string, PollingHealthQueuePayload> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
