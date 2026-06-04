@@ -1009,31 +1009,20 @@ func (h *CanvasMapHandler) validateSourceMapID(w http.ResponseWriter, raw *strin
 	return &mapID, true
 }
 
+// replaceMaterializedMembership delegates current-topology materialization while preserving HTTP error mapping.
 func (h *CanvasMapHandler) replaceMaterializedMembership(
 	w http.ResponseWriter,
 	r *http.Request,
 	mapID uuid.UUID,
 	filter domain.CanvasMapFilter,
 ) bool {
-	devices, err := h.deviceService.GetAllDevices(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
-		return false
-	}
-	links, err := h.linkRepo.GetAll()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list links", err)
-		return false
-	}
-	areas, err := h.areaRepo.GetAllWithDeviceCount()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list areas", err)
-		return false
-	}
-
-	membership := canvasmap.MaterializeMembership(devices, links, areas, filter)
-	if err := h.mapRepo.ReplaceMembership(mapID, membership); err != nil {
-		h.writeMapRepoMutationError(w, err)
+	if err := canvasmap.ReplaceMaterializedMembership(r.Context(), mapID, filter, canvasmap.MaterializationDeps{
+		Maps:    h.mapRepo,
+		Devices: h.deviceService,
+		Links:   h.linkRepo,
+		Areas:   h.areaRepo,
+	}); err != nil {
+		h.writeCanvasMapMaterializationError(w, err)
 		return false
 	}
 	return true
@@ -1252,6 +1241,28 @@ func (h *CanvasMapHandler) writeMapRepoMutationError(w http.ResponseWriter, err 
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to mutate canvas map", err)
+	}
+}
+
+// writeCanvasMapMaterializationError maps service-stage failures to the existing saved-map HTTP errors.
+func (h *CanvasMapHandler) writeCanvasMapMaterializationError(w http.ResponseWriter, err error) {
+	var materializationErr canvasmap.MaterializationError
+	if !errors.As(err, &materializationErr) {
+		writeError(w, http.StatusInternalServerError, "failed to materialize canvas map membership", err)
+		return
+	}
+
+	switch materializationErr.Stage {
+	case canvasmap.MaterializationStageDevices:
+		writeError(w, http.StatusInternalServerError, "failed to list devices", materializationErr.Err)
+	case canvasmap.MaterializationStageLinks:
+		writeError(w, http.StatusInternalServerError, "failed to list links", materializationErr.Err)
+	case canvasmap.MaterializationStageAreas:
+		writeError(w, http.StatusInternalServerError, "failed to list areas", materializationErr.Err)
+	case canvasmap.MaterializationStageReplace:
+		h.writeMapRepoMutationError(w, materializationErr.Err)
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to materialize canvas map membership", materializationErr.Err)
 	}
 }
 
