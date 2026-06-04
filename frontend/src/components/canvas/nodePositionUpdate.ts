@@ -23,6 +23,7 @@ interface ManualNodePositionUpdatePlan {
   buildEdges: (currentEdges: LinkEdgeType[]) => LinkEdgeType[];
 }
 
+// buildManualNodePositionUpdate pins one node and returns the dependent position and edge updates.
 export function buildManualNodePositionUpdate({
   deviceId,
   position,
@@ -54,6 +55,7 @@ export function buildManualNodePositionUpdate({
     nodes: nextNodes,
     positionMap: nodePositionsToPositionMap(nextNodes),
     positionPayload: buildPositionPayload(nextNodes),
+    // buildEdges rebuilds affected edge geometry while preserving existing edge presentation data.
     buildEdges: (currentEdges) => {
       const existingEdgeData = new Map<string, LinkEdgeData>(
         currentEdges.map((edge) => [edge.id, edge.data ?? {}]),

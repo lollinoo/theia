@@ -6,6 +6,7 @@ import {
   readManualEdgeMigrationState,
 } from './manualEdgeMigration';
 
+// manualEdgeMigrationHasVisibleResult decides whether migration diagnostics should be surfaced.
 function manualEdgeMigrationHasVisibleResult(
   result: ManualEdgeMigrationResult,
   hadPendingStorage: boolean,
@@ -20,6 +21,7 @@ function manualEdgeMigrationHasVisibleResult(
   );
 }
 
+// manualEdgeMigrationStateHasVisibleResult detects persisted migration state worth reporting.
 function manualEdgeMigrationStateHasVisibleResult(state: ManualEdgeMigrationState): boolean {
   return (
     state.status !== 'idle' ||
@@ -32,6 +34,7 @@ function manualEdgeMigrationStateHasVisibleResult(state: ManualEdgeMigrationStat
   );
 }
 
+// updateManualEdgeMigrationDiagnosticsState mirrors migration state into canvas diagnostics.
 function updateManualEdgeMigrationDiagnosticsState(state: ManualEdgeMigrationState): void {
   updateCanvasDiagnosticsState({
     manualEdgeMigration: {
@@ -48,6 +51,7 @@ function updateManualEdgeMigrationDiagnosticsState(state: ManualEdgeMigrationSta
   });
 }
 
+// recordPersistedManualEdgeMigrationDiagnostics restores visible migration diagnostics from storage.
 export function recordPersistedManualEdgeMigrationDiagnostics(
   storage: Pick<Storage, 'getItem'>,
 ): void {
@@ -61,6 +65,7 @@ export function recordPersistedManualEdgeMigrationDiagnostics(
   }
 }
 
+// recordManualEdgeMigrationDiagnostics records migration state plus applied/failed/skipped events.
 export function recordManualEdgeMigrationDiagnostics(
   result: ManualEdgeMigrationResult,
   hadPendingStorage: boolean,

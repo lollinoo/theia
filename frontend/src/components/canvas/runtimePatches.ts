@@ -43,6 +43,7 @@ interface PatchRuntimeEdgesInput {
   edgeIndexById?: ReadonlyMap<string, number>;
 }
 
+// collectChangedRuntimeIds identifies record keys whose runtime payload changed or disappeared.
 function collectChangedRuntimeIds<T>(
   previousRecords: Record<string, T> | undefined,
   nextRecords: Record<string, T>,
@@ -61,6 +62,7 @@ function collectChangedRuntimeIds<T>(
   return changedIds;
 }
 
+// runtimeValueEqual compares JSON-like runtime payloads without relying on object identity.
 function runtimeValueEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) {
     return true;
@@ -87,6 +89,7 @@ function runtimeValueEqual(left: unknown, right: unknown): boolean {
   return false;
 }
 
+// buildRuntimeEdgeDataForLink projects link runtime and endpoint health into edge data.
 function buildRuntimeEdgeDataForLink(
   linkId: string,
   runtimeState: RuntimeState,
@@ -120,6 +123,7 @@ function buildRuntimeEdgeDataForLink(
   };
 }
 
+// runtimeNodeDataChanged checks whether rendered node runtime fields need patching.
 function runtimeNodeDataChanged(
   node: DeviceNode,
   runtimeDevice: RuntimeState['devicesById'] extends Map<string, infer Model> ? Model : never,
@@ -134,6 +138,7 @@ function runtimeNodeDataChanged(
   );
 }
 
+// buildNodeRuntimeData extracts the runtime subset stored on React Flow node data.
 function buildNodeRuntimeData(
   runtimeDevice: RuntimeState['devicesById'] extends Map<string, infer Model> ? Model : never,
 ): DeviceNodeRuntimeData {
@@ -145,6 +150,7 @@ function buildNodeRuntimeData(
   };
 }
 
+// runtimeMetricRenderEqual compares metric fields that affect rendered node state.
 function runtimeMetricRenderEqual(
   previous: DeviceMetricsDTO | null | undefined,
   next: DeviceMetricsDTO | null | undefined,
@@ -178,6 +184,7 @@ function runtimeMetricRenderEqual(
   );
 }
 
+// buildRuntimePatchPlan decides which nodes, devices, and edges need runtime-only updates.
 export function buildRuntimePatchPlan({
   previousSnapshot,
   nextSnapshot,
@@ -198,10 +205,12 @@ export function buildRuntimePatchPlan({
   return { deviceIds, directLinkIds, edgeIds };
 }
 
+// hasRuntimePatchWork reports whether a runtime patch plan would update any rendered state.
 export function hasRuntimePatchWork(plan: RuntimePatchPlan): boolean {
   return plan.deviceIds.size > 0 || plan.directLinkIds.size > 0 || plan.edgeIds.size > 0;
 }
 
+// patchRuntimeNodes updates node runtime data without rebuilding unchanged nodes.
 export function patchRuntimeNodes({
   nodes,
   runtimeState,
@@ -272,6 +281,7 @@ export function patchRuntimeNodes({
   return changed ? nextNodes : nodes;
 }
 
+// patchRuntimeDevices refreshes canonical device runtime state without touching unchanged devices.
 export function patchRuntimeDevices({
   devices,
   runtimeState,
@@ -299,6 +309,7 @@ export function patchRuntimeDevices({
   return changed ? nextDevices : devices;
 }
 
+// patchRuntimeEdges refreshes edge runtime and alert data without full topology recomposition.
 export function patchRuntimeEdges({
   edges,
   links,
@@ -314,6 +325,7 @@ export function patchRuntimeEdges({
 
   let linksById: Map<string, Link> | null = null;
   let changed = false;
+  // linkForEdge prefers existing edge data and lazily indexes canonical links only when needed.
   const linkForEdge = (edge: LinkEdgeType, edgeId: string): Link | undefined => {
     if (edge.data?.link) {
       return edge.data.link;
@@ -321,6 +333,7 @@ export function patchRuntimeEdges({
     linksById ??= new Map(links.map((link) => [link.id, link]));
     return linksById.get(edgeId);
   };
+  // runtimeDevicesByIdForLink supplies runtime endpoint devices for edge data recomputation.
   const runtimeDevicesByIdForLink = (link: Link): Map<string, Device> => {
     const runtimeDevicesById = new Map<string, Device>();
     const sourceRuntimeDevice = runtimeState.devicesById.get(link.source_device_id)?.device;
@@ -333,6 +346,7 @@ export function patchRuntimeEdges({
     }
     return runtimeDevicesById;
   };
+  // buildPatchedEdge rebuilds one edge's data while preserving layout-only presentation fields.
   const buildPatchedEdge = (edge: LinkEdgeType, edgeId: string): LinkEdgeType | null => {
     const link = linkForEdge(edge, edgeId);
     if (!link || !edge.data) {

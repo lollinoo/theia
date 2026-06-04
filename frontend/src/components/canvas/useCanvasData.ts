@@ -138,12 +138,14 @@ type LoadTopologyResult = 'applied' | 'stale' | 'failed';
 const structuralRefreshDebounceMs = 250;
 const emptyAlerts: AlertDTO[] = [];
 
+// nowMs prefers high-resolution browser timing for topology diagnostics.
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
     : Date.now();
 }
 
+// useCanvasData orchestrates topology loading, runtime patches, position saves, and recovery notices.
 export function useCanvasData({
   mapId,
   mapName,

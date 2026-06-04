@@ -46,6 +46,7 @@ interface RunDefaultMapManualEdgeMigrationForTopologyLoadOptions {
   stateStorageKey?: string;
 }
 
+// prepareManualEdgeMigrationForTopologyLoad decides if legacy edge migration can run for this map.
 export function prepareManualEdgeMigrationForTopologyLoad({
   storage,
   mapId,
@@ -64,6 +65,7 @@ export function prepareManualEdgeMigrationForTopologyLoad({
   };
 }
 
+// recordSavedMapManualEdgeMigrationSkip records one diagnostic when saved maps skip legacy migration.
 export function recordSavedMapManualEdgeMigrationSkip({
   plan,
   mapId,
@@ -94,6 +96,7 @@ export function recordSavedMapManualEdgeMigrationSkip({
   });
 }
 
+// runDefaultMapManualEdgeMigrationForTopologyLoad migrates legacy edges only for the default map.
 export async function runDefaultMapManualEdgeMigrationForTopologyLoad({
   plan,
   storage,

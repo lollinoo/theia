@@ -25,10 +25,12 @@ interface CanvasTopologyLoadFailedInput {
   error: string;
 }
 
+// roundTopologyDurationMs normalizes topology load durations for stable diagnostics.
 function roundTopologyDurationMs(durationMs: number): number {
   return Number(Math.max(0, durationMs).toFixed(3));
 }
 
+// topologyMetadataRecord builds a safe event metadata record for topology diagnostics.
 function topologyMetadataRecord(
   metadata: CanvasTopologyLoadMetadata,
   extra: Record<string, unknown> = {},
@@ -42,6 +44,7 @@ function topologyMetadataRecord(
   };
 }
 
+// recordCanvasTopologyLoadStarted records the beginning of a topology load.
 export function recordCanvasTopologyLoadStarted(metadata: CanvasTopologyLoadMetadata): void {
   updateCanvasDiagnosticsState({
     topology: {
@@ -59,6 +62,7 @@ export function recordCanvasTopologyLoadStarted(metadata: CanvasTopologyLoadMeta
   });
 }
 
+// recordCanvasTopologyLoadSucceeded records successful topology loads and 304 not-modified paths.
 export function recordCanvasTopologyLoadSucceeded({
   metadata,
   durationMs,
@@ -118,6 +122,7 @@ export function recordCanvasTopologyLoadSucceeded({
   });
 }
 
+// recordCanvasTopologyLoadFailed records topology load failures and clears pending layout state.
 export function recordCanvasTopologyLoadFailed({
   metadata,
   durationMs,

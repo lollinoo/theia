@@ -111,6 +111,7 @@ type CanvasDiagnosticEventInput = Omit<CanvasDiagnosticEvent, 'id' | 'timestamp'
 
 const maxCanvasDiagnosticEvents = 200;
 
+// createInitialState builds the diagnostics baseline used after reset and module load.
 function createInitialState(): CanvasDiagnosticsState {
   return {
     topology: {
@@ -159,6 +160,7 @@ const listeners = new Set<() => void>();
 let diagnosticEventSequence = 0;
 let diagnosticsNotificationTimer: ReturnType<typeof setTimeout> | undefined;
 
+// flushDiagnosticsListeners delivers a coalesced diagnostics notification batch.
 function flushDiagnosticsListeners(): void {
   diagnosticsNotificationTimer = undefined;
   for (const listener of Array.from(listeners)) {
@@ -166,6 +168,7 @@ function flushDiagnosticsListeners(): void {
   }
 }
 
+// notifyDiagnosticsListeners schedules one async notification for all pending diagnostics changes.
 function notifyDiagnosticsListeners(): void {
   if (listeners.size === 0 || diagnosticsNotificationTimer !== undefined) {
     return;
@@ -174,6 +177,7 @@ function notifyDiagnosticsListeners(): void {
   diagnosticsNotificationTimer = setTimeout(flushDiagnosticsListeners, 0);
 }
 
+// installCanvasDiagnosticsWindowHelpers exposes diagnostics helpers for browser inspection.
 function installCanvasDiagnosticsWindowHelpers(): void {
   if (typeof window === 'undefined') {
     return;
@@ -185,6 +189,7 @@ function installCanvasDiagnosticsWindowHelpers(): void {
   window.__THEIA_CANVAS_DIAGNOSTIC_EVENTS__ = diagnosticEvents;
 }
 
+// sanitizeMetadata clones event metadata and records serialization failures instead of throwing.
 function sanitizeMetadata(
   metadata: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
@@ -199,6 +204,7 @@ function sanitizeMetadata(
   }
 }
 
+// snapshotFromState builds an immutable diagnostics snapshot with current performance aggregates.
 function snapshotFromState(): CanvasDiagnosticsSnapshot {
   const metrics = exportCanvasMetrics().aggregates;
 
@@ -217,11 +223,13 @@ function snapshotFromState(): CanvasDiagnosticsSnapshot {
   };
 }
 
+// getCanvasDiagnosticsSnapshot returns the latest canvas diagnostics snapshot.
 export function getCanvasDiagnosticsSnapshot(): CanvasDiagnosticsSnapshot {
   installCanvasDiagnosticsWindowHelpers();
   return snapshotFromState();
 }
 
+// getCanvasDiagnosticEvents returns cloned diagnostic events for subscribers and exports.
 export function getCanvasDiagnosticEvents(): CanvasDiagnosticEvent[] {
   return diagnosticEvents.map((event) => ({
     ...event,
@@ -229,6 +237,7 @@ export function getCanvasDiagnosticEvents(): CanvasDiagnosticEvent[] {
   }));
 }
 
+// subscribeCanvasDiagnostics registers a listener for coalesced diagnostics updates.
 export function subscribeCanvasDiagnostics(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
@@ -236,6 +245,7 @@ export function subscribeCanvasDiagnostics(listener: () => void): () => void {
   };
 }
 
+// updateCanvasDiagnosticsState merges partial diagnostics patches by section.
 export function updateCanvasDiagnosticsState(patch: CanvasDiagnosticsPatch): void {
   diagnosticsState = {
     topology: { ...diagnosticsState.topology, ...patch.topology },
@@ -253,6 +263,7 @@ export function updateCanvasDiagnosticsState(patch: CanvasDiagnosticsPatch): voi
   notifyDiagnosticsListeners();
 }
 
+// recordCanvasDiagnosticEvent appends one bounded diagnostic event with sanitized metadata.
 export function recordCanvasDiagnosticEvent(event: CanvasDiagnosticEventInput): void {
   diagnosticEvents = [
     ...diagnosticEvents,
@@ -276,12 +287,14 @@ export function recordCanvasDiagnosticEvent(event: CanvasDiagnosticEventInput): 
   notifyDiagnosticsListeners();
 }
 
+// clearCanvasDiagnosticEvents clears event history without resetting aggregate diagnostics state.
 export function clearCanvasDiagnosticEvents(): void {
   diagnosticEvents = [];
   installCanvasDiagnosticsWindowHelpers();
   notifyDiagnosticsListeners();
 }
 
+// resetCanvasDiagnostics resets state, events, and sequence counters for tests and diagnostics clear.
 export function resetCanvasDiagnostics(): void {
   diagnosticsState = createInitialState();
   diagnosticEvents = [];
@@ -290,6 +303,7 @@ export function resetCanvasDiagnostics(): void {
   notifyDiagnosticsListeners();
 }
 
+// exportCanvasDiagnostics packages state, events, and metrics for support downloads.
 export function exportCanvasDiagnostics(): CanvasDiagnosticsExport {
   const diagnostics = getCanvasDiagnosticsSnapshot();
 
