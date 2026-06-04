@@ -2378,6 +2378,83 @@ func TestBackupServiceDecryptSecret_LegacyRawCiphertextCompatible(t *testing.T) 
 	}
 }
 
+func TestBackupServiceEncryptSecretUsesKeyringEnvelope(t *testing.T) {
+	keyring := mustServiceTestKeyring(t, "kid-active", map[string]string{
+		"kid-active": "active credential secret material",
+	})
+	svc := NewBackupService(
+		newMockBackupJobRepo(),
+		newMockBackupFileRepo(),
+		newMockCredentialProfileRepo(),
+		newMockDeviceRepo(),
+		newMockBackupSettingsRepo(),
+		buildTestVendorRegistry("testvendor", true),
+		&recordingSSHDialer{},
+		keyring,
+		t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+
+	encrypted, err := svc.EncryptSecret("profile-password")
+	if err != nil {
+		t.Fatalf("EncryptSecret failed: %v", err)
+	}
+	if !strings.HasPrefix(encrypted, crypto.EnvelopePrefix) {
+		t.Fatalf("EncryptSecret prefix = %q, want %q", encrypted[:min(len(encrypted), len(crypto.EnvelopePrefix))], crypto.EnvelopePrefix)
+	}
+	if strings.Contains(encrypted, "profile-password") {
+		t.Fatal("encrypted secret should not contain plaintext")
+	}
+
+	decrypted, err := svc.decryptSecret(encrypted)
+	if err != nil {
+		t.Fatalf("decryptSecret failed: %v", err)
+	}
+	if decrypted != "profile-password" {
+		t.Fatalf("decrypted secret = %q, want profile-password", decrypted)
+	}
+}
+
+func TestBackupServiceDecryptSecretAcceptsLegacyBase64ThroughCompatibilityPath(t *testing.T) {
+	keyring := mustServiceTestKeyring(t, "kid-active", map[string]string{
+		"kid-active": "active credential secret material",
+		"legacy":     "legacy credential secret material",
+	})
+	legacyRaw, err := crypto.Encrypt([]byte("legacy-profile-password"), crypto.DeriveKey("legacy credential secret material"))
+	if err != nil {
+		t.Fatalf("legacy Encrypt failed: %v", err)
+	}
+	svc := NewBackupService(
+		newMockBackupJobRepo(),
+		newMockBackupFileRepo(),
+		newMockCredentialProfileRepo(),
+		newMockDeviceRepo(),
+		newMockBackupSettingsRepo(),
+		buildTestVendorRegistry("testvendor", true),
+		&recordingSSHDialer{},
+		keyring,
+		t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+
+	decrypted, err := svc.decryptSecret(base64.StdEncoding.EncodeToString(legacyRaw))
+	if err != nil {
+		t.Fatalf("decryptSecret failed for legacy base64 ciphertext: %v", err)
+	}
+	if decrypted != "legacy-profile-password" {
+		t.Fatalf("decrypted secret = %q, want legacy-profile-password", decrypted)
+	}
+}
+
+func mustServiceTestKeyring(t *testing.T, activeID string, secrets map[string]string) *crypto.Keyring {
+	t.Helper()
+	keyring, err := crypto.NewKeyring(activeID, secrets)
+	if err != nil {
+		t.Fatalf("NewKeyring failed: %v", err)
+	}
+	return keyring
+}
+
 // ---------------------------------------------------------------------------
 // Test 10: TestTriggerBackup_NoCredentialProfileAssigned (Phase 27 Gap 5)
 // ---------------------------------------------------------------------------

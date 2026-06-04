@@ -108,7 +108,8 @@ type BackupService struct {
 	settingsRepo           domain.SettingsRepository
 	vendorRegistry         *vendor.Registry
 	sshDialer              ssh.Dialer
-	encryptionKey          []byte
+	encryptionKeyring      *crypto.Keyring
+	legacyEncryptionKey    []byte
 	backupDir              string
 	hostKeyCallback        gossh.HostKeyCallback
 	deviceLocks            sync.Map // per-device mutex: map[uuid.UUID]*sync.Mutex
@@ -144,11 +145,12 @@ func NewBackupService(
 	settingsRepo domain.SettingsRepository,
 	vendorRegistry *vendor.Registry,
 	sshDialer ssh.Dialer,
-	encryptionKey []byte,
+	encryptionKey any,
 	backupDir string,
 	hostKeyCallback gossh.HostKeyCallback,
 	opts ...BackupServiceOption,
 ) *BackupService {
+	keyring, legacyKey := normalizeBackupEncryptionKey(encryptionKey)
 	svc := &BackupService{
 		jobRepo:               jobRepo,
 		fileRepo:              fileRepo,
@@ -157,7 +159,8 @@ func NewBackupService(
 		settingsRepo:          settingsRepo,
 		vendorRegistry:        vendorRegistry,
 		sshDialer:             sshDialer,
-		encryptionKey:         encryptionKey,
+		encryptionKeyring:     keyring,
+		legacyEncryptionKey:   legacyKey,
 		backupDir:             backupDir,
 		hostKeyCallback:       hostKeyCallback,
 		bulkLimits:            DefaultBulkOperationLimits,
@@ -167,6 +170,19 @@ func NewBackupService(
 	}
 	recordLegacyBulkBackupLocalConcurrencyLimit()
 	return svc
+}
+
+func normalizeBackupEncryptionKey(key any) (*crypto.Keyring, []byte) {
+	switch k := key.(type) {
+	case *crypto.Keyring:
+		return k, nil
+	case []byte:
+		return nil, k
+	case nil:
+		return nil, nil
+	default:
+		return nil, nil
+	}
 }
 
 // SetBulkOperationLimits overrides bulk request quotas.
@@ -1902,17 +1918,27 @@ func (s *BackupService) decryptSecret(encrypted string) (string, error) {
 	if encrypted == "" {
 		return "", nil
 	}
+	if s.encryptionKeyring != nil {
+		if crypto.IsEnvelope(encrypted) {
+			return s.encryptionKeyring.DecryptString(encrypted)
+		}
+		plaintext, _, err := s.encryptionKeyring.DecryptLegacyString(encrypted)
+		if err == nil {
+			return plaintext, nil
+		}
+		return "", err
+	}
 
 	var base64DecryptErr error
 	if ciphertext, err := base64.StdEncoding.DecodeString(encrypted); err == nil {
-		decrypted, err := crypto.Decrypt(ciphertext, s.encryptionKey)
+		decrypted, err := crypto.Decrypt(ciphertext, s.legacyEncryptionKey)
 		if err == nil {
 			return string(decrypted), nil
 		}
 		base64DecryptErr = err
 	}
 
-	decrypted, err := crypto.Decrypt([]byte(encrypted), s.encryptionKey)
+	decrypted, err := crypto.Decrypt([]byte(encrypted), s.legacyEncryptionKey)
 	if err == nil {
 		return string(decrypted), nil
 	}
@@ -1927,7 +1953,10 @@ func (s *BackupService) EncryptSecret(plaintext string) (string, error) {
 	if plaintext == "" {
 		return "", nil
 	}
-	encrypted, err := crypto.Encrypt([]byte(plaintext), s.encryptionKey)
+	if s.encryptionKeyring != nil {
+		return s.encryptionKeyring.EncryptString(plaintext)
+	}
+	encrypted, err := crypto.Encrypt([]byte(plaintext), s.legacyEncryptionKey)
 	if err != nil {
 		return "", err
 	}
