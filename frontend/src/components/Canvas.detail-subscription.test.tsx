@@ -190,9 +190,9 @@ vi.mock('../api/client', () => apiMocks);
 describe('Canvas detail subscription', () => {
   beforeEach(() => {
     apiMocks.fetchSettings.mockReset();
-    apiMocks.fetchSettings.mockResolvedValue({});
+    apiMocks.fetchSettings.mockImplementation(() => new Promise<never>(() => {}));
     apiMocks.fetchUserSettings.mockReset();
-    apiMocks.fetchUserSettings.mockResolvedValue({ preferences: { bridge_port: 1337 } });
+    apiMocks.fetchUserSettings.mockImplementation(() => new Promise<never>(() => {}));
     apiMocks.createBridgeLaunchRequest.mockReset();
     xyflowMocks.MiniMap.mockClear();
   });

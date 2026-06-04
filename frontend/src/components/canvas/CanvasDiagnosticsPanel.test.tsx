@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CanvasDiagnosticsPanel } from './CanvasDiagnosticsPanel';
@@ -121,7 +121,7 @@ describe('CanvasDiagnosticsPanel', () => {
     expect(screen.getByText('backend unavailable')).toBeInTheDocument();
   });
 
-  it('runs safe actions from the panel', () => {
+  it('runs safe actions from the panel', async () => {
     const onForceRefresh = vi.fn();
     const onFitView = vi.fn();
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -143,5 +143,6 @@ describe('CanvasDiagnosticsPanel', () => {
     expect(onForceRefresh).toHaveBeenCalledTimes(1);
     expect(onFitView).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByText('Copied')).toBeInTheDocument());
   });
 });

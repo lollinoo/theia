@@ -5,11 +5,7 @@ import NavigationPill from './NavigationPill';
 
 // Mock fetchHealthVersion
 vi.mock('../api/client', () => ({
-  fetchHealthVersion: vi.fn().mockResolvedValue({
-    version: '1.3.0',
-    git_commit: 'abc',
-    build_date: '2026-01-01',
-  }),
+  fetchHealthVersion: vi.fn().mockImplementation(() => new Promise<never>(() => {})),
 }));
 
 // Mock useTheme
@@ -74,6 +70,13 @@ describe('NavigationPill', () => {
   });
 
   it('renders THEIA branding text and version', async () => {
+    const { fetchHealthVersion } = await import('../api/client');
+    (fetchHealthVersion as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      version: '1.3.0',
+      git_commit: 'abc',
+      build_date: '2026-01-01',
+    });
+
     render(<NavigationPill {...defaultProps} />);
     expect(screen.getByText('THEIA')).toBeDefined();
     const version = await screen.findByText('v1.3.0');

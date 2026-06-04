@@ -3,14 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsPanel } from './SettingsPanel';
 
 // Mock API calls made in SettingsPanel on mount
-vi.mock('../api/client', () => ({
-  fetchSettings: vi.fn().mockResolvedValue({}),
-  fetchSettingsWithMetadata: vi.fn().mockResolvedValue({ data: {}, secrets: {} }),
-  updateSetting: vi.fn().mockResolvedValue(undefined),
-  fetchHealthVersion: vi
-    .fn()
-    .mockResolvedValue({ version: '1.3.0', git_commit: 'abc', build_date: '2026-01-01' }),
-}));
+vi.mock('../api/client', () => {
+  const pendingApiCall = () => new Promise<never>(() => {});
+
+  return {
+    fetchSettings: vi.fn().mockImplementation(pendingApiCall),
+    fetchSettingsWithMetadata: vi.fn().mockImplementation(pendingApiCall),
+    updateSetting: vi.fn().mockResolvedValue(undefined),
+    fetchHealthVersion: vi.fn().mockImplementation(pendingApiCall),
+  };
+});
 
 // Mock sub-components that have their own complex dependencies
 vi.mock('./AreaManager', () => ({

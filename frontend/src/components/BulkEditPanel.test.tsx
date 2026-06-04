@@ -13,8 +13,8 @@ import { BulkEditPanel } from './BulkEditPanel';
 
 // Mock API calls
 vi.mock('../api/client', () => ({
-  fetchAreas: vi.fn().mockResolvedValue([]),
-  fetchCredentialProfiles: vi.fn().mockResolvedValue([]),
+  fetchAreas: vi.fn().mockImplementation(() => new Promise<never>(() => {})),
+  fetchCredentialProfiles: vi.fn().mockImplementation(() => new Promise<never>(() => {})),
   updateDevice: vi.fn().mockResolvedValue({}),
   updateCanvasMapDeviceAreas: vi.fn().mockResolvedValue({}),
   deleteDevice: vi.fn().mockResolvedValue(undefined),
@@ -45,7 +45,7 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(fetchAreas).mockResolvedValue([]);
+  vi.mocked(fetchAreas).mockImplementation(() => new Promise<never>(() => {}));
   vi.mocked(updateCanvasMapDeviceAreas).mockResolvedValue({});
   vi.mocked(deleteDevice).mockResolvedValue(undefined);
   vi.mocked(removeDeviceFromCanvasMap).mockResolvedValue(undefined);

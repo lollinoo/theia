@@ -16,7 +16,9 @@ vi.mock('@xyflow/react', () => ({
 
 describe('LinkLabelLayer', () => {
   afterEach(() => {
-    clearLinkLabelRegistry();
+    act(() => {
+      clearLinkLabelRegistry();
+    });
   });
 
   it('renders registered link telemetry badges through one centralized label renderer', () => {

@@ -350,7 +350,7 @@ describe('DeviceGrafanaDashboardSection', () => {
     expect(screen.queryByText('Grafana Dashboard')).not.toBeInTheDocument();
   });
 
-  it('hides virtual devices without IP and disables read-only controls', () => {
+  it('hides virtual devices without IP and disables read-only controls', async () => {
     const { rerender } = render(
       <DeviceGrafanaDashboardSection
         device={mockDevice({ device_type: 'virtual', ip: '' })}
@@ -361,6 +361,10 @@ describe('DeviceGrafanaDashboardSection', () => {
     expect(screen.queryByText('Grafana Dashboard')).not.toBeInTheDocument();
 
     rerender(<DeviceGrafanaDashboardSection device={mockDevice()} readOnly />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(screen.getByRole('combobox', { name: /dashboard profile/i })).toBeDisabled();
     expect(screen.getByPlaceholderText('Optional custom URL override')).toBeDisabled();
