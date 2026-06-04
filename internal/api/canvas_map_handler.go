@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -454,66 +455,49 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotImplemented, "canvas map incremental membership unavailable")
 		return
 	}
-	for _, member := range membership.Devices {
-		if member.DeviceID == deviceID {
-			if includeConnectedLinks {
-				links, err := h.linkRepo.GetByDeviceID(deviceID)
-				if err != nil {
-					writeError(w, http.StatusInternalServerError, "failed to list canvas map device links", err)
-					return
-				}
-				linkIDs := canvasmap.ConnectedBaseLinkIDs(deviceID, membership, links)
-				missingLinkIDs := canvasmap.MissingLinkIDs(membership.LinkIDs, linkIDs)
-				if len(missingLinkIDs) > 0 {
-					if err := adder.AddDeviceMembership(canvasMap.ID, member, linkIDs, membership.Areas); err != nil {
-						h.writeMapRepoMutationError(w, err)
-						return
-					}
-					updated, err := h.mapRepo.GetByID(canvasMap.ID)
-					if err != nil {
-						writeError(w, http.StatusInternalServerError, "failed to load updated canvas map", err)
-						return
-					}
-					json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
-					return
-				}
-			}
-			writeError(w, http.StatusConflict, "device already exists in this map")
-			return
-		}
-	}
-	if canvasmap.NormalizeDeviceAddress(device.IP) != "" {
-		memberDevices, err := h.deviceService.GetDevicesByIDs(r.Context(), canvasmap.MembershipDeviceIDs(membership.Devices))
+
+	memberDevices := []domain.Device{}
+	areas := []domain.CanvasMapAreaMembership{}
+	_, existingMember := canvasmap.MemberByDeviceID(membership, deviceID)
+	if !existingMember && canvasmap.NormalizeDeviceAddress(device.IP) != "" {
+		memberDevices, err = h.deviceService.GetDevicesByIDs(r.Context(), canvasmap.MembershipDeviceIDs(membership.Devices))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list canvas map devices", err)
 			return
 		}
-		if canvasmap.HasDuplicateDeviceAddress(*device, memberDevices) {
-			writeError(w, http.StatusConflict, canvasmap.DuplicateDeviceAddressMessage(device.IP))
+		if _, err := canvasmap.PlanAddDeviceMembership(*device, membership, memberDevices, nil, nil, false); err != nil {
+			h.writeCanvasMapAddDevicePlanError(w, err)
 			return
 		}
 	}
 
-	linkIDs := []uuid.UUID{}
+	links := []domain.Link{}
 	if includeConnectedLinks {
-		links, err := h.linkRepo.GetByDeviceID(deviceID)
+		links, err = h.linkRepo.GetByDeviceID(deviceID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list canvas map device links", err)
 			return
 		}
-		linkIDs = canvasmap.ConnectedBaseLinkIDs(deviceID, membership, links)
 	}
-	areas, err := h.canvasMapAreaMembershipsForDevice(device)
+
+	if !existingMember {
+		areas, err = h.canvasMapAreaMembershipsForDevice(device)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load canvas map device areas", err)
+			return
+		}
+	}
+	plan, err := canvasmap.PlanAddDeviceMembership(*device, membership, memberDevices, links, areas, includeConnectedLinks)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load canvas map device areas", err)
+		h.writeCanvasMapAddDevicePlanError(w, err)
 		return
 	}
 
 	if err := adder.AddDeviceMembership(
 		canvasMap.ID,
-		canvasmap.BaseDeviceMembership(*device),
-		linkIDs,
-		areas,
+		plan.Device,
+		plan.LinkIDs,
+		plan.Areas,
 	); err != nil {
 		h.writeMapRepoMutationError(w, err)
 		return
@@ -1420,6 +1404,18 @@ func (h *CanvasMapHandler) writeCanvasMapAreaMutationError(w http.ResponseWriter
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to mutate canvas map area", err)
+	}
+}
+
+func (h *CanvasMapHandler) writeCanvasMapAddDevicePlanError(w http.ResponseWriter, err error) {
+	var duplicateAddress canvasmap.DuplicateDeviceAddressError
+	switch {
+	case errors.Is(err, canvasmap.ErrDeviceAlreadyInCanvasMap):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.As(err, &duplicateAddress):
+		writeError(w, http.StatusConflict, duplicateAddress.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to plan canvas map device membership", err)
 	}
 }
 
