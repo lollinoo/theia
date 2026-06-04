@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
 )
@@ -17,7 +18,7 @@ import (
 // DeviceRepo implements domain.DeviceRepository using PostgreSQL.
 type DeviceRepo struct {
 	db            *DB
-	encryptionKey []byte
+	keyring       *crypto.Keyring
 	onChange      chan<- struct{}
 	subscribersMu sync.RWMutex
 	subscribers   map[chan domain.DeviceChangeEvent]struct{}
@@ -27,12 +28,12 @@ type DeviceRepo struct {
 // NewDeviceRepo creates a new PostgreSQL-backed device repository.
 // The onChange channel, if non-nil, receives a non-blocking signal after
 // every successful Create, Update, or Delete operation.
-func NewDeviceRepo(db *sql.DB, encryptionKey []byte, onChange chan<- struct{}) *DeviceRepo {
+func NewDeviceRepo(db *sql.DB, keyring *crypto.Keyring, onChange chan<- struct{}) *DeviceRepo {
 	return &DeviceRepo{
-		db:            wrapDB(db),
-		encryptionKey: encryptionKey,
-		onChange:      onChange,
-		subscribers:   make(map[chan domain.DeviceChangeEvent]struct{}),
+		db:          wrapDB(db),
+		keyring:     keyring,
+		onChange:    onChange,
+		subscribers: make(map[chan domain.DeviceChangeEvent]struct{}),
 	}
 }
 
@@ -107,7 +108,7 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 
 	// Deep copy credentials for encryption (don't modify the original)
 	credsCopy := deepCopySNMPCredentials(device.SNMPCredentials)
-	if err := encryptSNMPCredentials(&credsCopy, r.encryptionKey); err != nil {
+	if err := encryptSNMPCredentials(&credsCopy, r.keyring); err != nil {
 		return fmt.Errorf("encrypting snmp credentials: %w", err)
 	}
 	credsJSON, err := json.Marshal(credsCopy)
@@ -529,7 +530,7 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 
 	// Deep copy credentials for encryption (don't modify the original)
 	credsCopy := deepCopySNMPCredentials(device.SNMPCredentials)
-	if err := encryptSNMPCredentials(&credsCopy, r.encryptionKey); err != nil {
+	if err := encryptSNMPCredentials(&credsCopy, r.keyring); err != nil {
 		return fmt.Errorf("encrypting snmp credentials: %w", err)
 	}
 	credsJSON, err := json.Marshal(credsCopy)
@@ -741,7 +742,9 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {
 		return nil, fmt.Errorf("unmarshaling snmp credentials: %w", err)
 	}
-	decryptSNMPCredentials(&d.SNMPCredentials, r.encryptionKey)
+	if err := decryptSNMPCredentials(&d.SNMPCredentials, r.keyring); err != nil {
+		return nil, fmt.Errorf("decrypting snmp credentials for device %s: %w", d.ID, err)
+	}
 	if err := json.Unmarshal([]byte(tagsJSON), &d.Tags); err != nil {
 		return nil, fmt.Errorf("unmarshaling tags: %w", err)
 	}
@@ -803,7 +806,9 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {
 		return nil, fmt.Errorf("unmarshaling snmp credentials: %w", err)
 	}
-	decryptSNMPCredentials(&d.SNMPCredentials, r.encryptionKey)
+	if err := decryptSNMPCredentials(&d.SNMPCredentials, r.keyring); err != nil {
+		return nil, fmt.Errorf("decrypting snmp credentials for device %s: %w", d.ID, err)
+	}
 	if err := json.Unmarshal([]byte(tagsJSON), &d.Tags); err != nil {
 		return nil, fmt.Errorf("unmarshaling tags: %w", err)
 	}

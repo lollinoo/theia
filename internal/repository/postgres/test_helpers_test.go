@@ -8,9 +8,21 @@ import (
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/lollinoo/theia/internal/crypto"
 )
 
 var testKey = []byte("test-encryption-key-32-bytes!!!!")
+var testKeyring = mustKeyringForTests()
+
+func mustKeyringForTests() *crypto.Keyring {
+	keyring, err := crypto.NewKeyring("test-key", map[string]string{
+		"test-key": "test-encryption-key-32-bytes!!!!",
+	})
+	if err != nil {
+		panic(err)
+	}
+	return keyring
+}
 
 func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()

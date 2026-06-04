@@ -7,18 +7,19 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
 )
 
 // SNMPProfileRepo implements domain.SNMPProfileRepository using PostgreSQL.
 type SNMPProfileRepo struct {
-	db            *DB
-	encryptionKey []byte
+	db      *DB
+	keyring *crypto.Keyring
 }
 
 // NewSNMPProfileRepo creates a new SNMPProfileRepo.
-func NewSNMPProfileRepo(db *sql.DB, encryptionKey []byte) *SNMPProfileRepo {
-	return &SNMPProfileRepo{db: wrapDB(db), encryptionKey: encryptionKey}
+func NewSNMPProfileRepo(db *sql.DB, keyring *crypto.Keyring) *SNMPProfileRepo {
+	return &SNMPProfileRepo{db: wrapDB(db), keyring: keyring}
 }
 
 // Create inserts a new SNMP profile.
@@ -32,7 +33,7 @@ func (r *SNMPProfileRepo) Create(profile *domain.SNMPProfile) error {
 
 	// Deep copy credentials for encryption (don't modify the original)
 	credsCopy := deepCopySNMPCredentials(profile.Credentials)
-	if err := encryptSNMPCredentials(&credsCopy, r.encryptionKey); err != nil {
+	if err := encryptSNMPCredentials(&credsCopy, r.keyring); err != nil {
 		return fmt.Errorf("encrypting snmp credentials: %w", err)
 	}
 	credsJSON, err := json.Marshal(credsCopy)
@@ -60,7 +61,7 @@ func (r *SNMPProfileRepo) GetByID(id uuid.UUID) (*domain.SNMPProfile, error) {
 		 FROM snmp_profiles WHERE id = ?`,
 		id.String(),
 	)
-	return scanProfile(row, r.encryptionKey)
+	return scanProfile(row, r.keyring)
 }
 
 // GetAll returns all profiles ordered by name.
@@ -76,7 +77,7 @@ func (r *SNMPProfileRepo) GetAll() ([]domain.SNMPProfile, error) {
 
 	var profiles []domain.SNMPProfile
 	for rows.Next() {
-		p, err := scanProfileRow(rows, r.encryptionKey)
+		p, err := scanProfileRow(rows, r.keyring)
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +92,7 @@ func (r *SNMPProfileRepo) Update(profile *domain.SNMPProfile) error {
 
 	// Deep copy credentials for encryption (don't modify the original)
 	credsCopy := deepCopySNMPCredentials(profile.Credentials)
-	if err := encryptSNMPCredentials(&credsCopy, r.encryptionKey); err != nil {
+	if err := encryptSNMPCredentials(&credsCopy, r.keyring); err != nil {
 		return fmt.Errorf("encrypting snmp credentials: %w", err)
 	}
 	credsJSON, err := json.Marshal(credsCopy)
@@ -136,7 +137,7 @@ type profileScanner interface {
 	Scan(dest ...interface{}) error
 }
 
-func scanProfile(row *sql.Row, encryptionKey []byte) (*domain.SNMPProfile, error) {
+func scanProfile(row *sql.Row, keyring *crypto.Keyring) (*domain.SNMPProfile, error) {
 	var idStr, credsJSON string
 	var p domain.SNMPProfile
 	if err := row.Scan(&idStr, &p.Name, &p.Description, &credsJSON, &p.CreatedAt, &p.UpdatedAt); err != nil {
@@ -153,11 +154,13 @@ func scanProfile(row *sql.Row, encryptionKey []byte) (*domain.SNMPProfile, error
 	if err := json.Unmarshal([]byte(credsJSON), &p.Credentials); err != nil {
 		return nil, fmt.Errorf("unmarshal credentials: %w", err)
 	}
-	decryptSNMPCredentials(&p.Credentials, encryptionKey)
+	if err := decryptSNMPCredentials(&p.Credentials, keyring); err != nil {
+		return nil, fmt.Errorf("decrypting snmp profile credentials %s: %w", p.ID, err)
+	}
 	return &p, nil
 }
 
-func scanProfileRow(rows *sql.Rows, encryptionKey []byte) (*domain.SNMPProfile, error) {
+func scanProfileRow(rows *sql.Rows, keyring *crypto.Keyring) (*domain.SNMPProfile, error) {
 	var idStr, credsJSON string
 	var p domain.SNMPProfile
 	if err := rows.Scan(&idStr, &p.Name, &p.Description, &credsJSON, &p.CreatedAt, &p.UpdatedAt); err != nil {
@@ -171,6 +174,8 @@ func scanProfileRow(rows *sql.Rows, encryptionKey []byte) (*domain.SNMPProfile, 
 	if err := json.Unmarshal([]byte(credsJSON), &p.Credentials); err != nil {
 		return nil, fmt.Errorf("unmarshal credentials: %w", err)
 	}
-	decryptSNMPCredentials(&p.Credentials, encryptionKey)
+	if err := decryptSNMPCredentials(&p.Credentials, keyring); err != nil {
+		return nil, fmt.Errorf("decrypting snmp profile credentials %s: %w", p.ID, err)
+	}
 	return &p, nil
 }

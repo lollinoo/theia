@@ -9,7 +9,7 @@ import (
 
 func TestDeviceRepoGetBySysName_NormalizedLookup(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	first := &domain.Device{
 		ID:       uuid.New(),
@@ -90,7 +90,7 @@ func TestDeviceRepoGetBySysName_NormalizedLookup(t *testing.T) {
 
 func TestDeviceRepoGetByIDsLoadsOnlyRequestedDevicesWithInterfacesAndAreas(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 	areaRepo := NewAreaRepo(db)
 
 	area := &domain.Area{
@@ -182,7 +182,7 @@ func TestDeviceRepoGetByIDsLoadsOnlyRequestedDevicesWithInterfacesAndAreas(t *te
 
 func TestDeviceRepoGetOrphansReturnsDevicesWithoutCanvasMapMembership(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 	areaRepo := NewAreaRepo(db)
 	mapRepo := NewCanvasMapRepo(db)
 
@@ -266,7 +266,7 @@ func TestDeviceRepoGetOrphansReturnsDevicesWithoutCanvasMapMembership(t *testing
 
 func TestDeviceRepoGetBySysName_EmptyOrUnknownLookup(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:       uuid.New(),
@@ -301,7 +301,7 @@ func TestDeviceRepoGetBySysName_EmptyOrUnknownLookup(t *testing.T) {
 
 func TestDeviceRepoGetBySysName_UpdateRefreshesLookupIndex(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:       uuid.New(),
@@ -354,7 +354,7 @@ func intPtr(i int) *int { return &i }
 // Verifies that PollClass=PollClassCore round-trips through Create → GetByID.
 func TestDeviceRepo_PollClassRoundTrip(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:        uuid.New(),
@@ -392,7 +392,7 @@ func TestDeviceRepo_PollClassRoundTrip(t *testing.T) {
 // Verifies that a non-nil PollIntervalOverride persists and can be cleared.
 func TestDeviceRepo_PollIntervalOverrideRoundTrip(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:                   uuid.New(),
@@ -440,7 +440,7 @@ func TestDeviceRepo_PollIntervalOverrideRoundTrip(t *testing.T) {
 
 func TestDeviceRepo_PollingEnabledDefaultsTrueAndRoundTripsFalse(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:        uuid.New(),
@@ -503,7 +503,7 @@ func TestDeviceRepo_PollingEnabledDefaultsTrueAndRoundTripsFalse(t *testing.T) {
 // Verifies that an empty PollClass is normalized to PollClassStandard by createOnce.
 func TestDeviceRepo_PollClassEmptyDefaultsToStandard(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:        uuid.New(),
@@ -533,7 +533,7 @@ func TestDeviceRepo_PollClassEmptyDefaultsToStandard(t *testing.T) {
 
 func TestDeviceRepo_NotesRoundTrip(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	notes := "Installed in rack A3"
 	device := &domain.Device{

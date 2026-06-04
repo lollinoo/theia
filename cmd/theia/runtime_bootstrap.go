@@ -298,8 +298,14 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("security configuration error: %w", err)
 	}
+	encryptionKeyring, err := crypto.NewKeyring(crypto.LegacyKeyID, map[string]string{
+		crypto.LegacyKeyID: strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY")),
+	})
+	if err != nil {
+		return fmt.Errorf("security keyring configuration error: %w", err)
+	}
 
-	if err := postgres.RunMigrations(db, encryptionKey); err != nil {
+	if err := postgres.RunMigrations(db, encryptionKeyring); err != nil {
 		return fmt.Errorf("run database migrations: %w", err)
 	}
 	log.Println("Database migrations completed")
@@ -353,7 +359,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 
 	cacheInvalidate := make(chan struct{}, 1)
 
-	deviceRepo := postgres.NewDeviceRepo(db, encryptionKey, cacheInvalidate)
+	deviceRepo := postgres.NewDeviceRepo(db, encryptionKeyring, cacheInvalidate)
 	linkRepo := postgres.NewLinkRepo(db, cacheInvalidate)
 	topologyObservationRepo := postgres.NewTopologyObservationRepo(db)
 	deviceLinkCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, cacheInvalidate)
@@ -364,7 +370,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	canvasMapPositionRepo := postgres.NewCanvasMapPositionRepo(db)
 	settingsRepo := postgres.NewSettingsRepo(db)
 	logging.Debugf("runtime effective config %s", runtimeDebugSettingsSummary(cfg, settingsRepo))
-	snmpProfileRepo := postgres.NewSNMPProfileRepo(db, encryptionKey)
+	snmpProfileRepo := postgres.NewSNMPProfileRepo(db, encryptionKeyring)
 	credentialProfileRepo := postgres.NewCredentialProfileRepo(db)
 	areaRepo := postgres.NewAreaRepo(db)
 	backupJobRepo := postgres.NewBackupJobRepo(db)

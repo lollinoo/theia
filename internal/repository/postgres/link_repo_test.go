@@ -45,7 +45,7 @@ func createTestDevicePair(t *testing.T, repo *DeviceRepo) (uuid.UUID, uuid.UUID)
 
 func TestLinkRepo_CreateAndGetByDeviceID(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -93,7 +93,7 @@ func TestLinkRepo_CreateAndGetByDeviceID(t *testing.T) {
 
 func TestLinkRepoGetByIDsLoadsOnlyRequestedLinks(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -154,7 +154,7 @@ func TestLinkRepoGetByIDsLoadsOnlyRequestedLinks(t *testing.T) {
 
 func TestLinkRepo_Upsert_InsertNew(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -189,7 +189,7 @@ func TestLinkRepo_Upsert_InsertNew(t *testing.T) {
 
 func TestLinkRepo_Upsert_UpdateExisting(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -240,7 +240,7 @@ func TestLinkRepo_Upsert_UpdateExisting(t *testing.T) {
 
 func TestLinkRepo_UpsertDetailed_NoopDoesNotUpdateTimestampOrNotify(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	changes := make(chan struct{}, 1)
 	linkRepo := NewLinkRepo(db, changes)
 
@@ -301,7 +301,7 @@ func TestLinkRepo_UpsertDetailed_NoopDoesNotUpdateTimestampOrNotify(t *testing.T
 
 func TestLinkRepo_Delete(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -332,7 +332,7 @@ func TestLinkRepo_Delete(t *testing.T) {
 
 func TestLinkRepo_GetAll(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -359,7 +359,7 @@ func TestLinkRepo_GetAll(t *testing.T) {
 
 func TestLinkRepo_CreateManualIdempotent_PreservesDiscoveredDuplicate(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -411,7 +411,7 @@ func TestLinkRepo_CreateManualIdempotent_PreservesDiscoveredDuplicate(t *testing
 
 func TestLinkRepo_CreateManualIdempotent_ReturnsCanonicalReverseDuplicate(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -464,7 +464,7 @@ func TestLinkRepo_CreateManualIdempotent_ReturnsCanonicalReverseDuplicate(t *tes
 
 func TestLinkRepo_CreateManualIdempotent_AllowsParallelManualLinks(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -510,7 +510,7 @@ func TestLinkRepo_CreateManualIdempotent_AllowsParallelManualLinks(t *testing.T)
 
 func TestLinkRepo_CreateManualIdempotent_BrowserMigrationUsesDevicePair(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -562,7 +562,7 @@ func TestLinkRepo_CreateManualIdempotent_BrowserMigrationUsesDevicePair(t *testi
 
 func TestLinkRepo_CreateManualIdempotent_ConcurrentReverseCreatesCreateOneRow(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -628,7 +628,7 @@ func TestLinkRepo_CreateManualIdempotent_ConcurrentReverseCreatesCreateOneRow(t 
 
 func TestLinkRepo_Upsert_PreservesDistinctParallelUplinks(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -670,7 +670,7 @@ func TestLinkRepo_Upsert_PreservesDistinctParallelUplinks(t *testing.T) {
 
 func TestLinkRepo_Upsert_EmptyIncomingInterfacesDoesNotArbitrarilyMatchParallelUplinks(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -737,7 +737,7 @@ func TestLinkRepo_Upsert_EmptyIncomingInterfacesDoesNotArbitrarilyMatchParallelU
 
 func TestLinkRepo_Upsert_PrefersExactSameDirectionMatchOverPartialCandidate(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -802,7 +802,7 @@ func TestLinkRepo_Upsert_PrefersExactSameDirectionMatchOverPartialCandidate(t *t
 
 func TestLinkRepo_UpsertAddsDiscoveredLinkToMaterializedMapsWithBothBaseEndpoints(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 	mapRepo := NewCanvasMapRepo(db)
 
@@ -846,7 +846,7 @@ func TestLinkRepo_UpsertAddsDiscoveredLinkToMaterializedMapsWithBothBaseEndpoint
 
 func TestLinkRepo_UpsertAddsDiscoveredLinkToMaterializedMapWithBaseAndGhostEndpoints(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 	mapRepo := NewCanvasMapRepo(db)
 
@@ -890,7 +890,7 @@ func TestLinkRepo_UpsertAddsDiscoveredLinkToMaterializedMapWithBaseAndGhostEndpo
 
 func TestLinkRepo_UpsertDoesNotAddDiscoveredLinkToMaterializedMapWithOnlyGhostEndpoints(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 	mapRepo := NewCanvasMapRepo(db)
 
@@ -934,7 +934,7 @@ func TestLinkRepo_UpsertDoesNotAddDiscoveredLinkToMaterializedMapWithOnlyGhostEn
 
 func TestLinkRepo_UpsertRepairsMissingMapMembershipForRediscoveredLink(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 	mapRepo := NewCanvasMapRepo(db)
 
@@ -994,7 +994,7 @@ func TestLinkRepo_UpsertRepairsMissingMapMembershipForRediscoveredLink(t *testin
 // that has an empty SourceIfName (a "broken" link from an incomplete discovery).
 func TestLinkRepo_Upsert_CleansUpBrokenLink(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -1039,7 +1039,7 @@ func TestLinkRepo_Upsert_CleansUpBrokenLink(t *testing.T) {
 // non-empty SourceIfName when no broken link exists works as a normal insert.
 func TestLinkRepo_Upsert_NoBrokenLinkNoDeletion(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -1073,7 +1073,7 @@ func TestLinkRepo_Upsert_NoBrokenLinkNoDeletion(t *testing.T) {
 // NOT overwrite the existing port names.
 func TestLinkRepo_Upsert_EmptySourceIfNamePreservesExisting(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -1121,7 +1121,7 @@ func TestLinkRepo_Upsert_EmptySourceIfNamePreservesExisting(t *testing.T) {
 
 func TestLinkRepo_Upsert_EmptyTargetIfNameEnrichesExistingSameDirectionLink(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -1181,7 +1181,7 @@ func TestLinkRepo_Upsert_EmptyTargetIfNameEnrichesExistingSameDirectionLink(t *t
 // is created for the same physical interface pair.
 func TestLinkRepo_Upsert_BidirectionalDedup(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -1235,7 +1235,7 @@ func TestLinkRepo_Upsert_BidirectionalDedup(t *testing.T) {
 
 func TestLinkRepo_Upsert_BidirectionalDedup_MatchesAnchoredInterfaceLabels(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -1277,7 +1277,7 @@ func TestLinkRepo_Upsert_BidirectionalDedup_MatchesAnchoredInterfaceLabels(t *te
 
 func TestLinkRepo_Upsert_BidirectionalDedup_EnrichesEmptyReverseInterface(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)
@@ -1325,7 +1325,7 @@ func TestLinkRepo_Upsert_BidirectionalDedup_EnrichesEmptyReverseInterface(t *tes
 
 func TestLinkRepo_Upsert_BidirectionalDedup_ReorientsWhenIncomingOnlyKnowsNewSourcePort(t *testing.T) {
 	db := setupTestDB(t)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 	linkRepo := NewLinkRepo(db, nil)
 
 	d1ID, d2ID := createTestDevicePair(t, deviceRepo)

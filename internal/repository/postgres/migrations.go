@@ -13,6 +13,7 @@ import (
 	pgdriver "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
 )
 
@@ -20,10 +21,10 @@ import (
 var migrationsFS embed.FS
 
 // RunMigrations runs all pending PostgreSQL migrations using golang-migrate.
-// The encryptionKey is used for Go-level data migrations, such as encrypting
+// The optional key source is used for Go-level data migrations, such as encrypting
 // existing plaintext SNMP credentials.
-func RunMigrations(db *sql.DB, encryptionKey ...[]byte) error {
-	var encKey []byte
+func RunMigrations(db *sql.DB, encryptionKey ...any) error {
+	var encKey any
 	if len(encryptionKey) > 0 {
 		encKey = encryptionKey[0]
 	}
@@ -93,8 +94,8 @@ func runPostgresMigrations(db *sql.DB) error {
 // migrateEncryptSNMPCredentials encrypts any plaintext SNMP credentials found in the database.
 // This is a Go-level data migration that runs after SQL migrations.
 // It is idempotent: already-encrypted values are detected by tryDecryptField and skipped.
-func migrateEncryptSNMPCredentials(db *sql.DB, encryptionKey []byte) error {
-	if len(encryptionKey) == 0 {
+func migrateEncryptSNMPCredentials(db *sql.DB, encryptionKey any) error {
+	if encryptionKey == nil {
 		return nil // No key = no encryption possible
 	}
 
@@ -116,7 +117,7 @@ func migrateEncryptSNMPCredentials(db *sql.DB, encryptionKey []byte) error {
 	return nil
 }
 
-func migrateDeviceSNMPCredentials(db *sql.DB, key []byte) (int, error) {
+func migrateDeviceSNMPCredentials(db *sql.DB, key any) (int, error) {
 	queryDB := wrapDB(db)
 	rows, err := db.Query("SELECT id, snmp_credentials_json FROM devices WHERE snmp_credentials_json != '' AND snmp_credentials_json != '{}'")
 	if err != nil {
@@ -182,7 +183,7 @@ func migrateDeviceSNMPCredentials(db *sql.DB, key []byte) (int, error) {
 	return updated, nil
 }
 
-func migrateSNMPProfileCredentials(db *sql.DB, key []byte) (int, error) {
+func migrateSNMPProfileCredentials(db *sql.DB, key any) (int, error) {
 	queryDB := wrapDB(db)
 	rows, err := db.Query("SELECT id, credentials_json FROM snmp_profiles WHERE credentials_json != '' AND credentials_json != '{}'")
 	if err != nil {
@@ -259,7 +260,7 @@ func hasSensitiveSNMPCredentials(creds *domain.SNMPCredentials) bool {
 	return false
 }
 
-func hasUndecryptableEncryptedSNMPCredentials(creds *domain.SNMPCredentials, key []byte) bool {
+func hasUndecryptableEncryptedSNMPCredentials(creds *domain.SNMPCredentials, key any) bool {
 	if creds == nil {
 		return false
 	}
@@ -273,17 +274,20 @@ func hasUndecryptableEncryptedSNMPCredentials(creds *domain.SNMPCredentials, key
 	return false
 }
 
-func isUndecryptableEncryptedSNMPField(value string, key []byte) bool {
+func isUndecryptableEncryptedSNMPField(value string, key any) bool {
 	if !looksLikeEncryptedSNMPField(value) {
 		return false
 	}
-	_, ok := tryDecryptField(value, key)
+	_, ok := tryDecryptFieldWithKeySource(value, key)
 	return !ok
 }
 
 func looksLikeEncryptedSNMPField(value string) bool {
 	if value == "" {
 		return false
+	}
+	if crypto.IsEnvelope(value) {
+		return true
 	}
 	ciphertext, err := base64.StdEncoding.DecodeString(value)
 	if err != nil {
@@ -294,25 +298,43 @@ func looksLikeEncryptedSNMPField(value string) bool {
 
 // isAlreadyEncrypted checks if any sensitive field in the credentials is already encrypted.
 // Returns true if at least one field decrypts successfully (indicating already encrypted).
-func isAlreadyEncrypted(creds *domain.SNMPCredentials, key []byte) bool {
+func isAlreadyEncrypted(creds *domain.SNMPCredentials, key any) bool {
 	if creds.V2c != nil && creds.V2c.Community != "" {
-		if _, ok := tryDecryptField(creds.V2c.Community, key); ok {
+		if _, ok := tryDecryptFieldWithKeySource(creds.V2c.Community, key); ok {
 			return true
 		}
 	}
 	if creds.V3 != nil {
 		if creds.V3.AuthPassword != "" {
-			if _, ok := tryDecryptField(creds.V3.AuthPassword, key); ok {
+			if _, ok := tryDecryptFieldWithKeySource(creds.V3.AuthPassword, key); ok {
 				return true
 			}
 		}
 		if creds.V3.PrivPassword != "" {
-			if _, ok := tryDecryptField(creds.V3.PrivPassword, key); ok {
+			if _, ok := tryDecryptFieldWithKeySource(creds.V3.PrivPassword, key); ok {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func tryDecryptFieldWithKeySource(value string, key any) (string, bool) {
+	switch k := key.(type) {
+	case *crypto.Keyring:
+		if !crypto.IsEnvelope(value) {
+			if plaintext, _, err := k.DecryptLegacyString(value); err == nil {
+				return plaintext, true
+			}
+			return "", false
+		}
+		plaintext, err := k.DecryptString(value)
+		return plaintext, err == nil
+	case []byte:
+		return tryDecryptField(value, k)
+	default:
+		return "", false
+	}
 }
 
 // migrateDevicePollClass backfills the devices.poll_class column by
