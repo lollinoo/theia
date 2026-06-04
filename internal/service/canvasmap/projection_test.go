@@ -193,6 +193,24 @@ func TestAreasToMembershipPreservesAreaSnapshots(t *testing.T) {
 	}
 }
 
+func TestBaseDeviceMembershipCopiesAreaIDs(t *testing.T) {
+	areaID := uuid.New()
+	device := domain.Device{ID: uuid.New(), AreaIDs: []uuid.UUID{areaID}}
+
+	got := BaseDeviceMembership(device)
+	device.AreaIDs[0] = uuid.New()
+
+	if got.DeviceID != device.ID {
+		t.Fatalf("BaseDeviceMembership().DeviceID = %s, want %s", got.DeviceID, device.ID)
+	}
+	if got.Role != domain.CanvasMapDeviceRoleBase {
+		t.Fatalf("BaseDeviceMembership().Role = %s, want base", got.Role)
+	}
+	if !uuidSlicesEqual(got.AreaIDs, []uuid.UUID{areaID}) {
+		t.Fatalf("BaseDeviceMembership().AreaIDs = %v, want copied %s", got.AreaIDs, areaID)
+	}
+}
+
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false

@@ -515,11 +515,7 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 
 	if err := adder.AddDeviceMembership(
 		canvasMap.ID,
-		domain.CanvasMapDeviceMembership{
-			DeviceID: deviceID,
-			Role:     domain.CanvasMapDeviceRoleBase,
-			AreaIDs:  append([]uuid.UUID(nil), device.AreaIDs...),
-		},
+		canvasmap.BaseDeviceMembership(*device),
 		linkIDs,
 		areas,
 	); err != nil {

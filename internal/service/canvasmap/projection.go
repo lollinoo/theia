@@ -237,6 +237,15 @@ func AreasToMembership(areas []domain.Area) []domain.CanvasMapAreaMembership {
 	return snapshots
 }
 
+// BaseDeviceMembership returns the saved-map membership row for an added base device.
+func BaseDeviceMembership(device domain.Device) domain.CanvasMapDeviceMembership {
+	return domain.CanvasMapDeviceMembership{
+		DeviceID: device.ID,
+		Role:     domain.CanvasMapDeviceRoleBase,
+		AreaIDs:  append([]uuid.UUID(nil), device.AreaIDs...),
+	}
+}
+
 // ProjectTopologyForMembership applies a materialized map membership to a topology.
 func ProjectTopologyForMembership(
 	devices []domain.Device,
