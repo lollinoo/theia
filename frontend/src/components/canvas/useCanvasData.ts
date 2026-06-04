@@ -21,6 +21,10 @@ import {
   measureCanvasAsyncWork,
   measureCanvasWork,
 } from './canvasInstrumentation';
+import {
+  recordCanvasLayoutCompleted,
+  recordCanvasLayoutStarted,
+} from './canvasLayoutDiagnostics';
 import { canvasMapKey, loadCanvasTopologySource } from './canvasTopologySource';
 import {
   buildIncrementalLayoutInputs,
@@ -552,23 +556,10 @@ export function useCanvasData({
             layoutNodes.length > 0
               ? measureCanvasWork('theia:canvas:layout', trigger, () => {
                   const layoutStartedAt = nowMs();
-                  updateCanvasDiagnosticsState({
-                    layout: {
-                      pendingLayout: true,
-                      lastLayoutReason: trigger,
-                      lastLayoutNodeCount: layoutNodes.length,
-                    },
-                  });
-                  recordCanvasDiagnosticEvent({
-                    level: 'debug',
-                    source: 'layout',
-                    event: 'layout.started',
-                    message: 'Canvas incremental layout started',
-                    metadata: {
-                      reason: trigger,
-                      nodeCount: layoutNodes.length,
-                      edgeCount: layoutEdges.length,
-                    },
+                  recordCanvasLayoutStarted({
+                    reason: trigger,
+                    nodeCount: layoutNodes.length,
+                    edgeCount: layoutEdges.length,
                   });
                   const positions = computeIncrementalLayoutPositions({
                     layoutNodes,
@@ -577,24 +568,10 @@ export function useCanvasData({
                     width,
                     height,
                   });
-                  updateCanvasDiagnosticsState({
-                    layout: {
-                      lastLayoutAt: new Date().toISOString(),
-                      lastLayoutDurationMs: roundDurationMs(nowMs() - layoutStartedAt),
-                      lastLayoutNodeCount: layoutNodes.length,
-                      lastLayoutReason: trigger,
-                      pendingLayout: false,
-                    },
-                  });
-                  recordCanvasDiagnosticEvent({
-                    level: 'info',
-                    source: 'layout',
-                    event: 'layout.completed',
-                    message: 'Canvas incremental layout completed',
-                    metadata: {
-                      reason: trigger,
-                      nodeCount: layoutNodes.length,
-                    },
+                  recordCanvasLayoutCompleted({
+                    reason: trigger,
+                    nodeCount: layoutNodes.length,
+                    durationMs: nowMs() - layoutStartedAt,
                   });
                   return positions;
                 })
