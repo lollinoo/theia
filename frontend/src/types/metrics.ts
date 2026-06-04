@@ -273,15 +273,18 @@ export interface AlertEnvelopePayload {
   alerts: AlertDTO[];
 }
 
+// isRecord narrows unknown websocket payloads before strict runtime parsing.
 function isRecord(value: unknown): value is APIRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+// readString reads optional string metadata with the existing fallback behavior.
 function readString(record: APIRecord, key: string, fallback = ''): string {
   const value = record[key];
   return typeof value === 'string' ? value : fallback;
 }
 
+// readFiniteNumber reads optional finite numbers with the existing fallback behavior.
 function readFiniteNumber(record: APIRecord, key: string, fallback = 0): number {
   const value = record[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -290,6 +293,7 @@ function readFiniteNumber(record: APIRecord, key: string, fallback = 0): number 
 const MAX_POLLING_HEALTH_QUEUES = 16;
 const MAX_POLLING_HEALTH_WARNINGS = 16;
 
+// parsePollingHealthQueues normalizes bounded queue telemetry for websocket health updates.
 function parsePollingHealthQueues(
   value: unknown,
 ): Record<string, PollingHealthQueuePayload> | undefined {
@@ -313,6 +317,7 @@ function parsePollingHealthQueues(
   return Object.keys(queues).length > 0 ? queues : undefined;
 }
 
+// parsePollingHealthWarnings normalizes bounded warning telemetry for websocket health updates.
 function parsePollingHealthWarnings(value: unknown): PollingHealthWarningPayload[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -334,6 +339,7 @@ function parsePollingHealthWarnings(value: unknown): PollingHealthWarningPayload
   return warnings.length > 0 ? warnings : undefined;
 }
 
+// readRequiredString reads mandatory string fields and rejects absent or empty values by default.
 function readRequiredString(record: APIRecord, key: string, allowEmpty = false): string {
   const value = record[key];
   if (typeof value === 'string' && (allowEmpty || value.length > 0)) {
@@ -342,6 +348,7 @@ function readRequiredString(record: APIRecord, key: string, allowEmpty = false):
   throw new Error(`invalid required field: ${key}`);
 }
 
+// readRequiredNullableString accepts explicit null while rejecting absent or non-string values.
 function readRequiredNullableString(record: APIRecord, key: string): string | null {
   if (!(key in record)) {
     throw new Error(`invalid required field: ${key}`);
@@ -359,6 +366,7 @@ function readRequiredNullableString(record: APIRecord, key: string): string | nu
   throw new Error(`invalid required field: ${key}`);
 }
 
+// readRequiredNullableNumber accepts explicit null while rejecting absent or non-finite values.
 function readRequiredNullableNumber(record: APIRecord, key: string): number | null {
   if (!(key in record)) {
     throw new Error(`invalid required field: ${key}`);
@@ -376,6 +384,7 @@ function readRequiredNullableNumber(record: APIRecord, key: string): number | nu
   throw new Error(`invalid required field: ${key}`);
 }
 
+// readRequiredEnum validates mandatory enum fields against the caller-provided allowlist.
 function readRequiredEnum<T extends string>(
   record: APIRecord,
   key: string,
@@ -388,6 +397,7 @@ function readRequiredEnum<T extends string>(
   throw new Error(`invalid required field: ${key}`);
 }
 
+// readRuntimeFlags validates runtime flag arrays without silently dropping invalid flags.
 function readRuntimeFlags(record: APIRecord, key: string): RuntimeFlag[] {
   const value = record[key];
   if (!Array.isArray(value)) {
@@ -402,6 +412,7 @@ function readRuntimeFlags(record: APIRecord, key: string): RuntimeFlag[] {
   });
 }
 
+// readRuntimeFlagsPatch treats null patch values as clearing the runtime flag list.
 function readRuntimeFlagsPatch(record: APIRecord, key: string): RuntimeFlag[] {
   if (record[key] === null) {
     return [];
@@ -409,6 +420,7 @@ function readRuntimeFlagsPatch(record: APIRecord, key: string): RuntimeFlag[] {
   return readRuntimeFlags(record, key);
 }
 
+// readFieldStates validates grouped field-state metadata for device runtime.
 function readFieldStates(
   record: APIRecord,
   key: string,
@@ -425,6 +437,7 @@ function readFieldStates(
   };
 }
 
+// readRequiredCount validates non-negative counters and truncates fractional values.
 function readRequiredCount(record: APIRecord, key: string): number {
   const value = record[key];
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
@@ -433,6 +446,7 @@ function readRequiredCount(record: APIRecord, key: string): number {
   throw new Error(`invalid required field: ${key}`);
 }
 
+// parseDeviceRuntime strictly parses a complete device runtime snapshot.
 export function parseDeviceRuntime(value: unknown): DeviceRuntimeDTO {
   if (!isRecord(value)) {
     throw new Error('invalid device runtime payload');
@@ -473,6 +487,7 @@ export function parseDeviceRuntime(value: unknown): DeviceRuntimeDTO {
 
 export const parseDeviceMetrics = parseDeviceRuntime;
 
+// parseLinkRuntime strictly parses a complete link runtime snapshot.
 export function parseLinkRuntime(value: unknown): LinkRuntimeDTO {
   if (!isRecord(value)) {
     throw new Error('invalid link runtime payload');
@@ -499,6 +514,7 @@ export function parseLinkRuntime(value: unknown): LinkRuntimeDTO {
 
 export const parseLinkMetrics = parseLinkRuntime;
 
+// parseAlert strictly parses one alert DTO used by alert envelopes and websocket messages.
 export function parseAlert(value: unknown): AlertDTO {
   if (!isRecord(value)) {
     throw new Error('invalid alert payload');
@@ -517,6 +533,7 @@ export function parseAlert(value: unknown): AlertDTO {
   }
 }
 
+// parseSnapshotPayload parses full device and link runtime maps and verifies key identity.
 export function parseSnapshotPayload(value: unknown): SnapshotPayload {
   if (!isRecord(value)) {
     throw new Error('invalid snapshot payload');
@@ -558,6 +575,7 @@ export function parseSnapshotPayload(value: unknown): SnapshotPayload {
   };
 }
 
+// parseDeviceRuntimePatch parses partial runtime updates while keeping device_id mandatory.
 function parseDeviceRuntimePatch(value: unknown): DeviceRuntimePatch {
   if (!isRecord(value)) {
     throw new Error('invalid device runtime patch payload');
@@ -645,6 +663,7 @@ function parseDeviceRuntimePatch(value: unknown): DeviceRuntimePatch {
   }
 }
 
+// parseLinkRuntimePatch parses partial link runtime updates while keeping link_id mandatory.
 function parseLinkRuntimePatch(value: unknown): LinkRuntimePatch {
   if (!isRecord(value)) {
     throw new Error('invalid link runtime patch payload');
@@ -692,6 +711,7 @@ function parseLinkRuntimePatch(value: unknown): LinkRuntimePatch {
   }
 }
 
+// parseRuntimePatchPayload parses runtime delta maps and verifies patch key identity.
 export function parseRuntimePatchPayload(value: unknown): RuntimePatchPayload {
   if (!isRecord(value)) {
     throw new Error('invalid runtime patch payload');
@@ -746,6 +766,7 @@ export function mergeSnapshotDelta(
   };
 }
 
+// mergeRuntimeDeltaPatch applies partial runtime updates without changing untouched records.
 export function mergeRuntimeDeltaPatch(
   existing: SnapshotPayload,
   delta: RuntimePatchPayload,
@@ -754,6 +775,7 @@ export function mergeRuntimeDeltaPatch(
   let links = existing.links;
   let changed = false;
 
+  // mergeRecord preserves immutable identity fields while applying one parsed patch.
   function mergeRecord<T extends object, K extends keyof T>(
     current: T,
     patch: Partial<T>,
@@ -766,6 +788,7 @@ export function mergeRuntimeDeltaPatch(
     return recordChanged ? next : current;
   }
 
+  // runtimePatchValueEqual compares JSON-like runtime values without reference sensitivity.
   function runtimePatchValueEqual(left: unknown, right: unknown): boolean {
     if (Object.is(left, right)) {
       return true;
@@ -825,6 +848,7 @@ export function mergeRuntimeDeltaPatch(
   return changed ? { devices, links } : existing;
 }
 
+// parseWSMessage validates known websocket message shapes and preserves legacy passthrough payloads.
 export function parseWSMessage(
   value: unknown,
 ):
@@ -1086,6 +1110,7 @@ export function parseWSMessage(
   };
 }
 
+// formatUptime formats seconds into the compact uptime labels used by the canvas UI.
 export function formatUptime(secs: number): string {
   const totalSeconds = Math.max(0, Math.floor(secs));
   const days = Math.floor(totalSeconds / 86_400);
@@ -1107,6 +1132,7 @@ export function formatUptime(secs: number): string {
   return `${totalSeconds}s`;
 }
 
+// metricColor maps percentage-style metrics to semantic text color classes.
 export function metricColor(value: number): string {
   if (value > 85) {
     return 'text-status-down';
@@ -1117,6 +1143,7 @@ export function metricColor(value: number): string {
   return 'text-status-up';
 }
 
+// utilizationColor maps normalized link utilization to semantic CSS custom properties.
 export function utilizationColor(value: number): string {
   if (value > 0.8) {
     return 'var(--color-status-down)';
@@ -1127,6 +1154,7 @@ export function utilizationColor(value: number): string {
   return 'var(--color-status-up)';
 }
 
+// alertStatusForDevice derives device alert status from active firing alerts.
 export function alertStatusForDevice(deviceId: string, alerts: AlertDTO[]): AlertStatus {
   const activeAlerts = alerts.filter(
     (alert) => alert.device_id === deviceId && alert.state === 'firing',
@@ -1143,10 +1171,12 @@ export function alertStatusForDevice(deviceId: string, alerts: AlertDTO[]): Aler
   return 'normal';
 }
 
+// isPrometheusUnavailable reports unavailable Prometheus only when it is enabled.
 export function isPrometheusUnavailable(status: PrometheusStatusPayload | null): boolean {
   return status !== null && status.enabled !== false && !status.available;
 }
 
+// formatThroughput formats bits-per-second values for compact link labels.
 export function formatThroughput(bps: number): string {
   if (bps <= 0) {
     return '0 bps';
