@@ -1,7 +1,7 @@
 import type { PositionState } from '../../hooks/usePositions';
 import type { Device } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
-import type { buildPositionPayload } from './canvasHelpers';
+import { buildPositionPayload } from './canvasHelpers';
 import type { CanvasMeasurementTrigger } from './canvasInstrumentation';
 
 interface TopologyCompositionPositionPlanInput {
@@ -13,6 +13,11 @@ interface TopologyCompositionPositionPlanInput {
 interface TopologyCompositionPositionPlan {
   effectivePositions: Map<string, PositionState>;
   currentPositionsForComposition: Map<string, PositionState>;
+}
+
+interface TopologyPositionSavePlan {
+  shouldSave: boolean;
+  payload: ReturnType<typeof buildPositionPayload>;
 }
 
 function hasUsablePosition(position: PositionState | undefined): position is PositionState {
@@ -80,6 +85,17 @@ export function positionsChanged(
   }
 
   return false;
+}
+
+export function buildTopologyPositionSavePlan(
+  nodes: DeviceNode[],
+  savedPositions: Map<string, PositionState>,
+): TopologyPositionSavePlan {
+  const payload = buildPositionPayload(nodes);
+  return {
+    payload,
+    shouldSave: positionsChanged(payload, savedPositions),
+  };
 }
 
 export function nodePositionsToPositionMap(nodes: DeviceNode[]): Map<string, PositionState> {

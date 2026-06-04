@@ -52,10 +52,10 @@ import {
 import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
 import {
   buildTopologyCompositionPositionPlan,
+  buildTopologyPositionSavePlan,
   buildUsablePositionState,
   mergeNodePresentationState,
   nodePositionsToPositionMap,
-  positionsChanged,
 } from './topologyPositionState';
 import {
   buildNotModifiedTopologyLoadPlan,
@@ -627,9 +627,9 @@ export function useCanvasData({
           setEdges(composedEdges);
           lastAppliedRuntimeSnapshotRef.current = runtimeSnapshot;
 
-          const nextPositionPayload = buildPositionPayload(composedNodes);
-          if (positionsChanged(nextPositionPayload, savedPositions)) {
-            void savePositions(nextPositionPayload);
+          const positionSavePlan = buildTopologyPositionSavePlan(composedNodes, savedPositions);
+          if (positionSavePlan.shouldSave) {
+            void savePositions(positionSavePlan.payload);
           }
 
           if (shouldFitViewAfterLoad) {

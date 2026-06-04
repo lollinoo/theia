@@ -5,6 +5,7 @@ import type { Device } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
 import {
   buildTopologyCompositionPositionPlan,
+  buildTopologyPositionSavePlan,
   buildUsablePositionState,
   mergeNodePresentationState,
   nodePositionsToPositionMap,
@@ -44,6 +45,17 @@ function node(id: string, x: number, y: number): DeviceNode {
       status: 'up',
       pinned: false,
       onContextMenu: () => undefined,
+    },
+  } as DeviceNode;
+}
+
+function ghostNode(id: string, x: number, y: number): DeviceNode {
+  return {
+    ...node(id, x, y),
+    data: {
+      ...node(id, x, y).data,
+      kind: 'ghost-device',
+      isGhost: true,
     },
   } as DeviceNode;
 }
@@ -114,6 +126,29 @@ describe('topology position state helpers', () => {
     expect(positionsChanged([{ device_id: 'dev-1', x: 1, y: 3, pinned: false }], saved)).toBe(
       true,
     );
+  });
+
+  it('builds a position save plan that prunes ghost nodes and detects changes', () => {
+    const saved = new Map<string, PositionState>([['dev-1', { x: 1, y: 2, pinned: false }]]);
+
+    expect(
+      buildTopologyPositionSavePlan(
+        [node('dev-1', 10, 20), ghostNode('ghost-dev-1', 30, 40)],
+        saved,
+      ),
+    ).toEqual({
+      shouldSave: true,
+      payload: [{ device_id: 'dev-1', x: 10, y: 20, pinned: false }],
+    });
+  });
+
+  it('builds a position save plan that skips unchanged positions', () => {
+    const saved = new Map<string, PositionState>([['dev-1', { x: 10, y: 20, pinned: false }]]);
+
+    expect(buildTopologyPositionSavePlan([node('dev-1', 10, 20)], saved)).toEqual({
+      shouldSave: false,
+      payload: [{ device_id: 'dev-1', x: 10, y: 20, pinned: false }],
+    });
   });
 
   it('converts node positions to saveable position state', () => {
