@@ -2,6 +2,7 @@ import {
   type GrafanaDashboardConfig,
   parseGrafanaDashboardConfigResponse,
 } from '../types/api';
+import { parsePrometheusHealthPayload } from './grafanaParsers';
 import { requestJSON, requestJSONWithBody } from './transport';
 
 export interface GrafanaDashboardProfilePayload {
@@ -23,31 +24,25 @@ export interface PrometheusHealthResult {
   error?: string;
 }
 
+// checkPrometheusHealth returns a normalized availability result instead of throwing UI errors.
 export async function checkPrometheusHealth(): Promise<PrometheusHealthResult> {
   try {
     const payload = await requestJSON('/api/v1/prometheus/health');
-    if (typeof payload === 'object' && payload !== null) {
-      const p = payload as Record<string, unknown>;
-      return {
-        enabled: typeof p.enabled === 'boolean' ? p.enabled : undefined,
-        available: p.available === true,
-        url: typeof p.url === 'string' ? p.url : '',
-        error: typeof p.error === 'string' ? p.error : undefined,
-      };
-    }
-    return { available: false, url: '', error: 'invalid response' };
+    return parsePrometheusHealthPayload(payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error';
     return { available: false, url: '', error: message };
   }
 }
 
+// fetchGrafanaDashboardConfig loads dashboard profiles and device overrides.
 export async function fetchGrafanaDashboardConfig(): Promise<GrafanaDashboardConfig> {
   return parseGrafanaDashboardConfigResponse(
     await requestJSON('/api/v1/grafana/dashboard-profiles'),
   );
 }
 
+// createGrafanaDashboardProfile creates one dashboard profile and returns the refreshed config.
 export async function createGrafanaDashboardProfile(
   payload: GrafanaDashboardProfilePayload,
 ): Promise<GrafanaDashboardConfig> {
@@ -56,6 +51,7 @@ export async function createGrafanaDashboardProfile(
   );
 }
 
+// updateGrafanaDashboardProfile updates one dashboard profile and returns the refreshed config.
 export async function updateGrafanaDashboardProfile(
   id: string,
   payload: GrafanaDashboardProfilePayload,
@@ -69,6 +65,7 @@ export async function updateGrafanaDashboardProfile(
   );
 }
 
+// deleteGrafanaDashboardProfile removes one dashboard profile.
 export async function deleteGrafanaDashboardProfile(id: string): Promise<void> {
   await requestJSONWithBody(
     `/api/v1/grafana/dashboard-profiles/${encodeURIComponent(id)}`,
@@ -76,6 +73,7 @@ export async function deleteGrafanaDashboardProfile(id: string): Promise<void> {
   );
 }
 
+// saveDeviceGrafanaDashboardOverride saves one device override and returns the refreshed config.
 export async function saveDeviceGrafanaDashboardOverride(
   deviceId: string,
   payload: GrafanaDeviceOverridePayload,
