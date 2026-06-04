@@ -1365,27 +1365,17 @@ func (h *CanvasMapHandler) cloneCanvasMapLinkForVirtualDevices(
 	link domain.Link,
 	clonedDeviceIDs map[uuid.UUID]uuid.UUID,
 ) (uuid.UUID, error) {
-	sourceID := link.SourceDeviceID
-	targetID := link.TargetDeviceID
-	cloned := false
-	if cloneID, ok := clonedDeviceIDs[sourceID]; ok {
-		sourceID = cloneID
-		cloned = true
-	}
-	if cloneID, ok := clonedDeviceIDs[targetID]; ok {
-		targetID = cloneID
-		cloned = true
-	}
+	remapped, cloned := canvasmap.RemapLinkForDeviceClones(link, clonedDeviceIDs)
 	if !cloned {
 		return link.ID, nil
 	}
 
 	nextLink := &domain.Link{
-		SourceDeviceID:    sourceID,
-		SourceIfName:      link.SourceIfName,
-		TargetDeviceID:    targetID,
-		TargetIfName:      link.TargetIfName,
-		DiscoveryProtocol: link.DiscoveryProtocol,
+		SourceDeviceID:    remapped.SourceDeviceID,
+		SourceIfName:      remapped.SourceIfName,
+		TargetDeviceID:    remapped.TargetDeviceID,
+		TargetIfName:      remapped.TargetIfName,
+		DiscoveryProtocol: remapped.DiscoveryProtocol,
 	}
 	if err := h.linkRepo.Create(nextLink); err != nil {
 		return uuid.Nil, fmt.Errorf("cloning canvas map link %s: %w", link.ID, err)

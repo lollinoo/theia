@@ -348,6 +348,39 @@ func TestRemapPositionsForDeviceClonesPrunesNonMembers(t *testing.T) {
 	}
 }
 
+func TestRemapLinkForDeviceClonesPreservesLinkDetails(t *testing.T) {
+	sourceID := uuid.New()
+	targetID := uuid.New()
+	cloneID := uuid.New()
+	linkID := uuid.New()
+	link := domain.Link{
+		ID:                linkID,
+		SourceDeviceID:    sourceID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    targetID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: "lldp",
+	}
+
+	remapped, cloned := RemapLinkForDeviceClones(link, map[uuid.UUID]uuid.UUID{sourceID: cloneID})
+
+	if !cloned {
+		t.Fatal("RemapLinkForDeviceClones() cloned = false, want true")
+	}
+	if remapped.ID != linkID || remapped.SourceDeviceID != cloneID || remapped.TargetDeviceID != targetID ||
+		remapped.SourceIfName != "ether1" || remapped.TargetIfName != "ether2" || remapped.DiscoveryProtocol != "lldp" {
+		t.Fatalf("RemapLinkForDeviceClones() = %+v, want source clone with details preserved", remapped)
+	}
+
+	unchanged, cloned := RemapLinkForDeviceClones(link, map[uuid.UUID]uuid.UUID{})
+	if cloned {
+		t.Fatal("RemapLinkForDeviceClones() cloned = true for unchanged link, want false")
+	}
+	if unchanged != link {
+		t.Fatalf("RemapLinkForDeviceClones() unchanged = %+v, want %+v", unchanged, link)
+	}
+}
+
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false

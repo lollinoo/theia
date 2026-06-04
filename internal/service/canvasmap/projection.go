@@ -326,6 +326,23 @@ func RemapPositionsForDeviceClones(
 	return nextPositions
 }
 
+// RemapLinkForDeviceClones returns a link with cloned endpoint IDs applied.
+func RemapLinkForDeviceClones(
+	link domain.Link,
+	clonedDeviceIDs map[uuid.UUID]uuid.UUID,
+) (domain.Link, bool) {
+	cloned := false
+	if cloneID, ok := clonedDeviceIDs[link.SourceDeviceID]; ok {
+		link.SourceDeviceID = cloneID
+		cloned = true
+	}
+	if cloneID, ok := clonedDeviceIDs[link.TargetDeviceID]; ok {
+		link.TargetDeviceID = cloneID
+		cloned = true
+	}
+	return link, cloned
+}
+
 // ProjectTopologyForMembership applies a materialized map membership to a topology.
 func ProjectTopologyForMembership(
 	devices []domain.Device,
