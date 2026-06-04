@@ -18,8 +18,6 @@ import { recordCanvasDiagnosticEvent, updateCanvasDiagnosticsState } from './can
 import {
   buildPositionPayload,
   isGhostDeviceNode,
-  manualEdgeMigrationStorageKey,
-  manualEdgeStorageKey,
   topologyFitViewPadding,
   viewportSize,
 } from './canvasHelpers';
@@ -34,11 +32,11 @@ import {
   buildIncrementalLayoutInputs,
   computeIncrementalLayoutPositions,
 } from './incrementalLayout';
-import { migrateStoredManualEdges } from './manualEdgeMigration';
 import {
-  recordManualEdgeMigrationDiagnostics,
-  recordPersistedManualEdgeMigrationDiagnostics,
-} from './manualEdgeMigrationDiagnostics';
+  prepareManualEdgeMigrationForTopologyLoad,
+  recordSavedMapManualEdgeMigrationSkip,
+  runDefaultMapManualEdgeMigrationForTopologyLoad,
+} from './manualEdgeMigrationOrchestrator';
 import { buildAlertsPanelModel } from './panelAdapters';
 import { buildRuntimeState } from './runtimeAdapters';
 import { applyRuntimeSnapshotPatch } from './runtimeSnapshotPatch';
@@ -301,16 +299,15 @@ export function useCanvasData({
           const includeRuntimeBootstrap =
             options.includeRuntimeBootstrap === true || trigger === 'initial_load';
           const forceRuntimeBootstrap = options.includeRuntimeBootstrap === true;
-          const pendingManualEdgeStorageValue = window.localStorage.getItem(manualEdgeStorageKey);
-          const hadPendingManualEdgeMigration = pendingManualEdgeStorageValue !== null;
-          const canRunLegacyManualEdgeMigration = mapId === null;
-          const shouldBypassReadModelEtagForManualEdgeMigration =
-            canRunLegacyManualEdgeMigration && hadPendingManualEdgeMigration;
+          const manualEdgeMigrationPlan = prepareManualEdgeMigrationForTopologyLoad({
+            storage: window.localStorage,
+            mapId,
+          });
           const lastCanvasTopologyEtag = lastCanvasTopologyEtagByMapRef.current.get(mapKey) ?? null;
           const renderedNodesOwnedByMap = nodesOwnerMapKeyRef.current === mapKey;
           const topologyEtag =
             includeRuntimeBootstrap ||
-            shouldBypassReadModelEtagForManualEdgeMigration ||
+            manualEdgeMigrationPlan.shouldBypassReadModelEtagForManualEdgeMigration ||
             !renderedNodesOwnedByMap
               ? null
               : lastCanvasTopologyEtag;
@@ -332,19 +329,13 @@ export function useCanvasData({
           if (!isCurrentTopologyLoad()) {
             return 'stale';
           }
-          if (hadPendingManualEdgeMigration && !canRunLegacyManualEdgeMigration) {
-            const skipDiagnosticKey = `${mapKey}:${pendingManualEdgeStorageValue}`;
-            if (!skippedSavedMapManualEdgeMigrationRef.current.has(skipDiagnosticKey)) {
-              skippedSavedMapManualEdgeMigrationRef.current.add(skipDiagnosticKey);
-              recordCanvasDiagnosticEvent({
-                level: 'info',
-                source: 'topology',
-                event: 'manual_edges.migration.skipped_saved_map',
-                message: 'Manual edge localStorage migration skipped for saved map',
-                metadata: { ...topologyLoadMetadata, mapId },
-              });
-            }
-          }
+          recordSavedMapManualEdgeMigrationSkip({
+            plan: manualEdgeMigrationPlan,
+            mapId,
+            mapKey,
+            skippedKeys: skippedSavedMapManualEdgeMigrationRef.current,
+            topologyLoadMetadata,
+          });
           if (topologySource.status === 'not-modified') {
             lastCanvasTopologyEtagByMapRef.current.set(
               mapKey,
@@ -396,26 +387,18 @@ export function useCanvasData({
             },
           });
 
-          if (hadPendingManualEdgeMigration && canRunLegacyManualEdgeMigration) {
-            const manualEdgeMigrationResult = await migrateStoredManualEdges({
-              storage: window.localStorage,
-              pendingStorageKey: manualEdgeStorageKey,
-              stateStorageKey: manualEdgeMigrationStorageKey,
-              existingLinks: fetchedLinks,
-              createLink,
-            });
-            if (!isCurrentTopologyLoad()) {
-              return 'stale';
-            }
-            recordManualEdgeMigrationDiagnostics(
-              manualEdgeMigrationResult,
-              hadPendingManualEdgeMigration,
-            );
-            if (manualEdgeMigrationResult.appliedCount > 0) {
-              lastCanvasTopologyEtagByMapRef.current.set(mapKey, null);
-            }
-          } else if (canRunLegacyManualEdgeMigration) {
-            recordPersistedManualEdgeMigrationDiagnostics(window.localStorage);
+          const manualEdgeMigrationResult = await runDefaultMapManualEdgeMigrationForTopologyLoad({
+            plan: manualEdgeMigrationPlan,
+            storage: window.localStorage,
+            existingLinks: fetchedLinks,
+            createLink,
+            isCurrentTopologyLoad,
+          });
+          if (manualEdgeMigrationResult.status === 'stale') {
+            return 'stale';
+          }
+          if (manualEdgeMigrationResult.appliedCount > 0) {
+            lastCanvasTopologyEtagByMapRef.current.set(mapKey, null);
           }
 
           const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
