@@ -141,6 +141,40 @@ func TestMissingLinkIDsKeepsOnlyCandidatesNotAlreadyInMembership(t *testing.T) {
 	}
 }
 
+func TestDuplicateDeviceAddressDetectsExistingMemberAddress(t *testing.T) {
+	newID := uuid.New()
+	otherID := uuid.New()
+
+	duplicate := HasDuplicateDeviceAddress(
+		domain.Device{ID: newID, IP: " Router.EXAMPLE.com "},
+		[]domain.Device{
+			{ID: otherID, IP: "router.example.com"},
+			{ID: uuid.New(), IP: "other.example.com"},
+		},
+	)
+
+	if !duplicate {
+		t.Fatal("HasDuplicateDeviceAddress() = false, want true")
+	}
+
+	if HasDuplicateDeviceAddress(domain.Device{ID: newID, IP: ""}, []domain.Device{{ID: otherID, IP: ""}}) {
+		t.Fatal("HasDuplicateDeviceAddress() matched blank address, want false")
+	}
+
+	if HasDuplicateDeviceAddress(domain.Device{ID: newID, IP: "router.example.com"}, []domain.Device{{ID: newID, IP: "router.example.com"}}) {
+		t.Fatal("HasDuplicateDeviceAddress() matched the same device, want false")
+	}
+}
+
+func TestDuplicateDeviceAddressMessagePreservesHTTPErrorText(t *testing.T) {
+	if got, want := DuplicateDeviceAddressMessage(" Router.EXAMPLE.com "), `a device with IP/host "Router.EXAMPLE.com" already exists in this map`; got != want {
+		t.Fatalf("DuplicateDeviceAddressMessage() = %q, want %q", got, want)
+	}
+	if got, want := DuplicateDeviceAddressMessage(" "), "a device with that address already exists in this map"; got != want {
+		t.Fatalf("DuplicateDeviceAddressMessage() = %q, want %q", got, want)
+	}
+}
+
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false

@@ -1,6 +1,9 @@
 package canvasmap
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 )
@@ -338,6 +341,36 @@ func MissingLinkIDs(existing []uuid.UUID, candidates []uuid.UUID) []uuid.UUID {
 		missing = append(missing, id)
 	}
 	return missing
+}
+
+// HasDuplicateDeviceAddress reports whether another map member already has the
+// device address being added.
+func HasDuplicateDeviceAddress(device domain.Device, existing []domain.Device) bool {
+	address := NormalizeDeviceAddress(device.IP)
+	if address == "" {
+		return false
+	}
+	for _, existingDevice := range existing {
+		if existingDevice.ID == device.ID {
+			continue
+		}
+		if NormalizeDeviceAddress(existingDevice.IP) == address {
+			return true
+		}
+	}
+	return false
+}
+
+func NormalizeDeviceAddress(address string) string {
+	return strings.ToLower(strings.TrimSpace(address))
+}
+
+func DuplicateDeviceAddressMessage(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "a device with that address already exists in this map"
+	}
+	return fmt.Sprintf("a device with IP/host %q already exists in this map", address)
 }
 
 // AreaMembershipToAreas converts saved-map area snapshots to area rows with map-local counts.
