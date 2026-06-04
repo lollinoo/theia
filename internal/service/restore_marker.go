@@ -12,6 +12,8 @@ const restoreMarkerFileName = ".theia-restore-pending"
 
 var errRestoreMarkerTargetMismatch = errors.New("restore marker targets do not match runtime paths")
 
+var errRestoreMarkerMissingStagedDB = errors.New("restore marker missing staged_db")
+
 // restoreMarkerFilePath returns the pending-restore marker location for a state directory.
 func restoreMarkerFilePath(stateDir string) string {
 	return filepath.Join(stateDir, restoreMarkerFileName)
@@ -27,14 +29,26 @@ func readRestoreMarker(path string) (*restoreMarker, bool, error) {
 		return nil, false, fmt.Errorf("read restore marker: %w", err)
 	}
 
+	marker, err := parseRestoreMarker(markerData)
+	if err != nil {
+		if errors.Is(err, errRestoreMarkerMissingStagedDB) {
+			return nil, true, err
+		}
+		return nil, false, err
+	}
+	return marker, true, nil
+}
+
+// parseRestoreMarker decodes and validates the required marker fields before restore activation.
+func parseRestoreMarker(markerData []byte) (*restoreMarker, error) {
 	var marker restoreMarker
 	if err := json.Unmarshal(markerData, &marker); err != nil {
-		return nil, false, fmt.Errorf("parse restore marker: %w", err)
+		return nil, fmt.Errorf("parse restore marker: %w", err)
 	}
 	if marker.StagedDB == "" {
-		return nil, true, fmt.Errorf("restore marker missing staged_db")
+		return nil, errRestoreMarkerMissingStagedDB
 	}
-	return &marker, true, nil
+	return &marker, nil
 }
 
 // writeRestoreMarker persists a pending restore marker with owner-only permissions.

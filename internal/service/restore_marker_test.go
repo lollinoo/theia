@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +64,38 @@ func TestReadRestoreMarkerMissingIsNoOp(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("readRestoreMarker() marker = %#v, want nil", got)
+	}
+}
+
+// TestParseRestoreMarkerRejectsMalformedAndIncompleteMarkers preserves marker parse fail-closed errors.
+func TestParseRestoreMarkerRejectsMalformedAndIncompleteMarkers(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name:    "malformed json",
+			body:    "{",
+			wantErr: "parse restore marker:",
+		},
+		{
+			name:    "missing staged db",
+			body:    `{"state_dir":"/tmp/theia"}`,
+			wantErr: "restore marker missing staged_db",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseRestoreMarker([]byte(tt.body))
+			if err == nil {
+				t.Fatalf("parseRestoreMarker() error = nil, want %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("parseRestoreMarker() error = %q, want %q", err.Error(), tt.wantErr)
+			}
+		})
 	}
 }
 
