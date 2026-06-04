@@ -13,7 +13,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1406,8 +1405,8 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 		}
 
 		if header.Typeflag == tar.TypeDir {
-			if !isAllowedRestoreArchiveDirectory(cleanName) {
-				return fmt.Errorf("disallowed restore archive entry: %s", cleanName)
+			if _, err := validateRestoreArchiveEntryForExtraction(cleanName, true); err != nil {
+				return err
 			}
 			if err := os.MkdirAll(targetPath, 0700); err != nil {
 				return fmt.Errorf("creating directory %s: %w", cleanName, err)
@@ -1426,11 +1425,8 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 		}
 
 		// Security: regular files outside the restore archive contract are rejected.
-		if isLegacySQLiteRestoreArchiveFile(cleanName) {
-			return legacySQLiteRestoreArchiveError()
-		}
-		if !isAllowedRestoreArchiveFile(cleanName) {
-			return fmt.Errorf("disallowed restore archive entry: %s", cleanName)
+		if _, err := validateRestoreArchiveEntryForExtraction(cleanName, false); err != nil {
+			return err
 		}
 
 		// Ensure parent directory exists
@@ -1451,60 +1447,6 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 	}
 
 	return nil
-}
-
-func cleanRestoreArchiveEntryName(name string) (string, error) {
-	entryName := strings.ReplaceAll(name, "\\", "/")
-	for strings.HasPrefix(entryName, "./") {
-		entryName = strings.TrimPrefix(entryName, "./")
-	}
-
-	if archiveEntryHasTraversal(entryName) {
-		return "", fmt.Errorf("archive contains path traversal: %s", name)
-	}
-	cleanName := path.Clean(entryName)
-	if cleanName == "." {
-		return "", fmt.Errorf("disallowed restore archive entry: %s", name)
-	}
-	if strings.HasPrefix(cleanName, "/") {
-		return "", fmt.Errorf("archive contains absolute path: %s", name)
-	}
-	return cleanName, nil
-}
-
-func archiveEntryHasTraversal(name string) bool {
-	normalized := strings.ReplaceAll(name, "\\", "/")
-	for _, part := range strings.Split(normalized, "/") {
-		if part == ".." {
-			return true
-		}
-	}
-	return false
-}
-
-func legacySQLiteRestoreArchiveError() error {
-	return fmt.Errorf("legacy SQLite instance backup archives containing %s cannot be restored by this PostgreSQL-only runtime; matching THEIA_ENCRYPTION_KEY is not sufficient. Restore a PostgreSQL instance backup containing %s, or restore/migrate the SQLite backup with a 1.7.x build before upgrading", legacySQLiteArchiveDBEntry, postgresArchiveDBEntry)
-}
-
-func isLegacySQLiteRestoreArchiveFile(name string) bool {
-	return strings.ReplaceAll(name, "\\", "/") == legacySQLiteArchiveDBEntry
-}
-
-// isAllowedRestoreArchiveFile checks if a regular file entry matches the restore archive contract.
-func isAllowedRestoreArchiveFile(name string) bool {
-	normalized := strings.ReplaceAll(name, "\\", "/")
-	switch normalized {
-	case "manifest.json", postgresArchiveDBEntry, "known_hosts":
-		return true
-	default:
-		return strings.HasPrefix(normalized, "backups/")
-	}
-}
-
-// isAllowedRestoreArchiveDirectory checks if a directory entry matches the restore archive contract.
-func isAllowedRestoreArchiveDirectory(name string) bool {
-	normalized := strings.ReplaceAll(name, "\\", "/")
-	return normalized == "backups" || strings.HasPrefix(normalized, "backups/")
 }
 
 // copyFile copies a single file from src to dst with private file permissions.
