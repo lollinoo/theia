@@ -901,27 +901,8 @@ func (s *InstanceBackupService) backupDatabase(ctx context.Context, backupSubDir
 }
 
 func (s *InstanceBackupService) backupPostgresDatabase(ctx context.Context, destPath string) (databaseBackupArtifact, error) {
-	if strings.TrimSpace(s.dbDSN) == "" {
-		return databaseBackupArtifact{}, fmt.Errorf("postgres backup requires db_dsn")
-	}
-	if err := ensureSupportedPostgresCLITools(ctx, "pg_dump"); err != nil {
+	if err := runPostgresDump(ctx, s.dbDSN, destPath); err != nil {
 		return databaseBackupArtifact{}, err
-	}
-	conn, err := postgresCLIConnInfo(s.dbDSN)
-	if err != nil {
-		return databaseBackupArtifact{}, fmt.Errorf("build postgres conninfo: %w", err)
-	}
-	if _, err := runExternalCommandWithEnv(
-		ctx,
-		conn.env,
-		"pg_dump",
-		"--format=custom",
-		"--no-owner",
-		"--no-privileges",
-		"--file", destPath,
-		"--dbname", conn.connInfo,
-	); err != nil {
-		return databaseBackupArtifact{}, fmt.Errorf("pg_dump failed: %w", err)
 	}
 
 	migrationVersion, err := s.readCurrentMigrationVersion(ctx)
@@ -961,13 +942,7 @@ func (s *InstanceBackupService) readCurrentMigrationVersion(ctx context.Context)
 }
 
 func (s *InstanceBackupService) validatePostgresDump(ctx context.Context, dumpPath string) error {
-	if err := ensureSupportedPostgresCLITools(ctx, "pg_restore"); err != nil {
-		return err
-	}
-	if _, err := runExternalCommand(ctx, "pg_restore", "--list", dumpPath); err != nil {
-		return fmt.Errorf("validating postgres dump: %w", err)
-	}
-	return nil
+	return validatePostgresDumpArchive(ctx, dumpPath)
 }
 
 // addFileToTar adds a file from disk to the tar archive. Returns the file size.

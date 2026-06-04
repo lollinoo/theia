@@ -110,7 +110,7 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		return false, err
 	}
 
-	if err := c.applyPostgresRestore(ctx, marker.StagedDB); err != nil {
+	if err := runPostgresRestore(ctx, c.dbDSN, marker.StagedDB); err != nil {
 		return false, err
 	}
 
@@ -137,50 +137,6 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	return true, nil
 }
 
-func (c *RestoreCoordinator) applyPostgresRestore(ctx context.Context, stagedDB string) error {
-	if strings.TrimSpace(c.dbDSN) == "" {
-		return fmt.Errorf("postgres restore requires db_dsn")
-	}
-	if err := ensureSupportedPostgresCLITools(ctx, "pg_restore", "psql"); err != nil {
-		return err
-	}
-	conn, err := postgresCLIConnInfo(c.dbDSN)
-	if err != nil {
-		return fmt.Errorf("build postgres conninfo: %w", err)
-	}
-	if err := terminatePostgresConnections(ctx, c.dbDSN); err != nil {
-		return err
-	}
-	if err := validateStagedDBFile(stagedDB); err != nil {
-		return err
-	}
-	if _, err := runExternalCommandWithEnv(
-		ctx,
-		conn.env,
-		"psql",
-		"--set", "ON_ERROR_STOP=1",
-		"--single-transaction",
-		"--dbname", conn.connInfo,
-		"--command", "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;",
-	); err != nil {
-		return fmt.Errorf("clean postgres schema before restore: %w", err)
-	}
-	if _, err := runExternalCommandWithEnv(
-		ctx,
-		conn.env,
-		"pg_restore",
-		"--no-owner",
-		"--no-privileges",
-		"--single-transaction",
-		"--exit-on-error",
-		"--dbname", conn.connInfo,
-		stagedDB,
-	); err != nil {
-		return fmt.Errorf("restore postgres database: %w", err)
-	}
-	return nil
-}
-
 func (c *RestoreCoordinator) backupLiveDB() error {
 	bakPath := filepath.Join(c.stateDir, "postgres.pre-restore.dump")
 	if _, err := os.Stat(bakPath); err == nil {
@@ -195,29 +151,7 @@ func (c *RestoreCoordinator) backupLiveDB() error {
 }
 
 func (c *RestoreCoordinator) dumpLivePostgresDatabase(ctx context.Context, destPath string) error {
-	if strings.TrimSpace(c.dbDSN) == "" {
-		return fmt.Errorf("postgres backup requires db_dsn")
-	}
-	if err := ensureSupportedPostgresCLITools(ctx, "pg_dump"); err != nil {
-		return err
-	}
-	conn, err := postgresCLIConnInfo(c.dbDSN)
-	if err != nil {
-		return fmt.Errorf("build postgres conninfo: %w", err)
-	}
-	if _, err := runExternalCommandWithEnv(
-		ctx,
-		conn.env,
-		"pg_dump",
-		"--format=custom",
-		"--no-owner",
-		"--no-privileges",
-		"--file", destPath,
-		"--dbname", conn.connInfo,
-	); err != nil {
-		return fmt.Errorf("pg_dump failed: %w", err)
-	}
-	return nil
+	return runPostgresDump(ctx, c.dbDSN, destPath)
 }
 
 func (c *RestoreCoordinator) restoreRetryableError(stagedDB string, stagingDir string, activationErr error) error {
