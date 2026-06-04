@@ -141,6 +141,7 @@ func AuthenticatedUserFromRequest(r *http.Request) (*service.AuthenticatedUser, 
 	return user, ok && user != nil
 }
 
+// withAuthenticatedUser stores the authenticated session user on the request context.
 func withAuthenticatedUser(ctx context.Context, user *service.AuthenticatedUser) context.Context {
 	return context.WithValue(ctx, authenticatedUserContextKey{}, user)
 }
@@ -154,6 +155,7 @@ func OperatorSubjectFromRequest(r *http.Request) security.OperatorSubject {
 	return security.OperatorSubject{Name: auditSubjectName(user), Authenticated: true}
 }
 
+// requireAuthenticatedOperator returns an audit subject or writes a forbidden response.
 func requireAuthenticatedOperator(w http.ResponseWriter, r *http.Request, action string) (security.OperatorSubject, bool) {
 	subject := OperatorSubjectFromRequest(r)
 	if subject.Authenticated {
@@ -163,6 +165,7 @@ func requireAuthenticatedOperator(w http.ResponseWriter, r *http.Request, action
 	return subject, false
 }
 
+// requireAuthenticatedUser returns the current user or writes a forbidden response.
 func requireAuthenticatedUser(w http.ResponseWriter, r *http.Request, action string) (*service.AuthenticatedUser, bool) {
 	user, ok := AuthenticatedUserFromRequest(r)
 	if ok {
@@ -172,6 +175,7 @@ func requireAuthenticatedUser(w http.ResponseWriter, r *http.Request, action str
 	return nil, false
 }
 
+// requirePermission enforces one permission and maps RBAC/service failures to HTTP errors.
 func requirePermission(w http.ResponseWriter, auth authProvider, user *service.AuthenticatedUser, permission string) bool {
 	if auth == nil {
 		writeError(w, http.StatusServiceUnavailable, "authentication service not configured")
@@ -188,6 +192,7 @@ func requirePermission(w http.ResponseWriter, auth authProvider, user *service.A
 	return true
 }
 
+// requireRole enforces one role and maps RBAC/service failures to HTTP errors.
 func requireRole(w http.ResponseWriter, auth authProvider, user *service.AuthenticatedUser, roleID string) bool {
 	if auth == nil {
 		writeError(w, http.StatusServiceUnavailable, "authentication service not configured")
@@ -204,6 +209,7 @@ func requireRole(w http.ResponseWriter, auth authProvider, user *service.Authent
 	return true
 }
 
+// requireAnyPermission allows any listed permission and rejects empty permission policies.
 func requireAnyPermission(w http.ResponseWriter, auth authProvider, user *service.AuthenticatedUser, permissions []string) bool {
 	if len(permissions) == 0 {
 		writeAuthCodeError(w, http.StatusForbidden, "permission_denied", "permission denied")
@@ -218,6 +224,7 @@ func requireAnyPermission(w http.ResponseWriter, auth authProvider, user *servic
 	return false
 }
 
+// sessionTokenFromRequest extracts the trimmed password-session cookie value.
 func sessionTokenFromRequest(r *http.Request) (string, bool) {
 	cookie, err := r.Cookie(authSessionCookieName)
 	if err != nil || strings.TrimSpace(cookie.Value) == "" {
@@ -226,6 +233,7 @@ func sessionTokenFromRequest(r *http.Request) (string, bool) {
 	return strings.TrimSpace(cookie.Value), true
 }
 
+// requiresCSRF marks mutating authenticated routes as CSRF-protected.
 func requiresCSRF(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
@@ -235,6 +243,7 @@ func requiresCSRF(r *http.Request) bool {
 	}
 }
 
+// validateRequestCSRF checks the CSRF header against the active session token.
 func validateRequestCSRF(w http.ResponseWriter, r *http.Request, auth authProvider, rawSessionToken string) bool {
 	csrfToken := strings.TrimSpace(r.Header.Get(csrfHeaderName))
 	if csrfToken == "" {
@@ -252,12 +261,14 @@ func validateRequestCSRF(w http.ResponseWriter, r *http.Request, auth authProvid
 	return true
 }
 
+// isInvalidCurrentUserError identifies service errors that invalidate a browser session.
 func isInvalidCurrentUserError(err error) bool {
 	return errors.Is(err, service.ErrInvalidSession) ||
 		errors.Is(err, service.ErrUserDisabled) ||
 		errors.Is(err, service.ErrUserLocked)
 }
 
+// passwordChangeAllowedPath permits only account-recovery routes while a password change is required.
 func passwordChangeAllowedPath(path string) bool {
 	switch path {
 	case "/api/v1/auth/me", "/api/v1/auth/logout", "/api/v1/auth/password/change":
@@ -267,6 +278,7 @@ func passwordChangeAllowedPath(path string) bool {
 	}
 }
 
+// writeAuthCodeError emits the stable JSON shape used by auth and RBAC errors.
 func writeAuthCodeError(w http.ResponseWriter, code int, errorCode, message string) {
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{
@@ -275,6 +287,7 @@ func writeAuthCodeError(w http.ResponseWriter, code int, errorCode, message stri
 	})
 }
 
+// auditSubjectName chooses a stable human-readable audit identity for a session user.
 func auditSubjectName(user *service.AuthenticatedUser) string {
 	if user == nil {
 		return "anonymous"
@@ -291,6 +304,7 @@ func auditSubjectName(user *service.AuthenticatedUser) string {
 	return "authenticated-user"
 }
 
+// requiredPermissionsForRoute is the auth adapter for protected route metadata.
 func requiredPermissionsForRoute(method, path string) ([]string, bool) {
 	if path == "/api/v1/ws" {
 		return []string{domain.PermissionTopologyRead}, true
@@ -304,25 +318,31 @@ func requiredPermissionsForRoute(method, path string) ([]string, bool) {
 	return protectedRoutePermissionRegistry.permissionsForRoute(method, path)
 }
 
+// routePermissionSpec binds one segment-exact route pattern to its method policy.
 type routePermissionSpec struct {
 	pattern     string
 	permissions routePermissionPolicy
 }
 
+// routePermissionPolicy resolves permissions for one HTTP method.
 type routePermissionPolicy func(method string) []string
 
+// routePermissionRegistry performs ordered, segment-exact route policy lookup.
 type routePermissionRegistry struct {
 	specs []routePermissionSpec
 }
 
+// matches reports whether a concrete path has the same segment shape as the route pattern.
 func (s routePermissionSpec) matches(path string) bool {
 	return matchRoutePattern(path, s.pattern)
 }
 
+// newRoutePermissionRegistry copies permission specs so tests cannot mutate the caller's slice.
 func newRoutePermissionRegistry(specs []routePermissionSpec) routePermissionRegistry {
 	return routePermissionRegistry{specs: append([]routePermissionSpec(nil), specs...)}
 }
 
+// permissionsForRoute returns the permissions for a known route and whether the route matched.
 func (r routePermissionRegistry) permissionsForRoute(method, path string) ([]string, bool) {
 	for _, spec := range r.specs {
 		if spec.matches(path) {
@@ -332,6 +352,7 @@ func (r routePermissionRegistry) permissionsForRoute(method, path string) ([]str
 	return nil, false
 }
 
+// validate rejects duplicate, shadowed, or policy-less metadata before it can grant access.
 func (r routePermissionRegistry) validate() error {
 	seenPatterns := make(map[string]struct{}, len(r.specs))
 	for index, spec := range r.specs {
@@ -577,6 +598,7 @@ var routePermissionSpecs = []routePermissionSpec{
 
 var protectedRoutePermissionRegistry = newRoutePermissionRegistry(routePermissionSpecs)
 
+// matchRoutePattern compares route patterns by path segment instead of raw string prefixes.
 func matchRoutePattern(path, pattern string) bool {
 	pathSegments := splitRouteSegments(path)
 	patternSegments := splitRouteSegments(pattern)
@@ -597,6 +619,7 @@ func matchRoutePattern(path, pattern string) bool {
 	return true
 }
 
+// splitRouteSegments normalizes a route path into slash-delimited segments.
 func splitRouteSegments(path string) []string {
 	trimmed := strings.Trim(path, "/")
 	if trimmed == "" {
@@ -605,6 +628,7 @@ func splitRouteSegments(path string) []string {
 	return strings.Split(trimmed, "/")
 }
 
+// isRoutePlaceholder identifies pattern segments like {deviceID}.
 func isRoutePlaceholder(segment string) bool {
 	return strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") && len(segment) > 2
 }
@@ -657,6 +681,7 @@ func fixedRoutePermissions(permissions ...string) routePermissionPolicy {
 	}
 }
 
+// nonEmptyPermissions trims, de-duplicates, and drops blank permission keys.
 func nonEmptyPermissions(values ...string) []string {
 	out := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -674,6 +699,7 @@ func nonEmptyPermissions(values ...string) []string {
 	return out
 }
 
+// applyMiddleware layers protected API middleware in the order expected by auth tests.
 func applyMiddleware(next http.Handler, config SecurityConfig, auth authProvider, includeJSON bool, bodyLimit int64) http.Handler {
 	handler := next
 	if includeJSON {
@@ -689,6 +715,7 @@ func applyMiddleware(next http.Handler, config SecurityConfig, auth authProvider
 	return handler
 }
 
+// applyPublicMiddleware layers origin, logging, and optional body limits for public routes.
 func applyPublicMiddleware(next http.Handler, config SecurityConfig, includeJSON bool, bodyLimit int64) http.Handler {
 	handler := next
 	if includeJSON {
@@ -720,6 +747,7 @@ type statusWriter struct {
 	status int
 }
 
+// WriteHeader records the response status before forwarding it to the wrapped writer.
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)

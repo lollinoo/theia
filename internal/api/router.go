@@ -13,8 +13,7 @@ import (
 	"github.com/lollinoo/theia/internal/ws"
 )
 
-// NewRouter creates the HTTP handler with all /api/v1/ routes registered.
-// Uses standard net/http (no framework needed at this scale).
+// routerOptions collects optional services that alter middleware or route behavior.
 type routerOptions struct {
 	security      SecurityConfig
 	auth          authProvider
@@ -39,24 +38,29 @@ func WithAuthService(authService *service.AuthService) RouterOption {
 	}
 }
 
+// WithBridgeService configures bridge launch and connector endpoints.
 func WithBridgeService(bridgeService *service.BridgeService) RouterOption {
 	return func(options *routerOptions) {
 		options.bridgeService = bridgeService
 	}
 }
 
+// WithAuditLogRepository configures audit logging for backup routes.
 func WithAuditLogRepository(auditLogs domain.AuditLogRepository) RouterOption {
 	return func(options *routerOptions) {
 		options.auditLogs = auditLogs
 	}
 }
 
+// withAuthProvider injects a test auth provider without requiring the concrete service.
 func withAuthProvider(auth authProvider) RouterOption {
 	return func(options *routerOptions) {
 		options.auth = auth
 	}
 }
 
+// NewRouter creates the HTTP handler with all /api/v1/ routes registered.
+// Uses standard net/http (no framework needed at this scale).
 func NewRouter(
 	db *sql.DB,
 	deviceService *service.DeviceService,
@@ -862,6 +866,7 @@ func NewRouter(
 	})
 }
 
+// isAuthRoute identifies public auth routes that bypass protected RBAC middleware.
 func isAuthRoute(path string) bool {
 	switch path {
 	case "/api/v1/auth/login",
@@ -877,6 +882,7 @@ func isAuthRoute(path string) bool {
 	}
 }
 
+// parseCanvasMapRoute extracts the map ID and action suffix from saved-map routes.
 func parseCanvasMapRoute(path string) (uuid.UUID, string, bool) {
 	const prefix = "/api/v1/canvas/maps/"
 	suffix, ok := strings.CutPrefix(path, prefix)
@@ -899,6 +905,7 @@ func parseCanvasMapRoute(path string) (uuid.UUID, string, bool) {
 	return mapID, action, true
 }
 
+// isWinboxCredentialsRevealPath matches the explicit credential reveal endpoint shape.
 func isWinboxCredentialsRevealPath(path string) bool {
 	const prefix = "/api/v1/devices/"
 	suffix, ok := strings.CutPrefix(path, prefix)
@@ -912,6 +919,7 @@ func isWinboxCredentialsRevealPath(path string) bool {
 		parts[2] == "reveal"
 }
 
+// indexOf returns the first byte offset of a substring or -1 when absent.
 func indexOf(s, substr string) int {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {
