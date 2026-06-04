@@ -1049,48 +1049,17 @@ func (h *CanvasMapHandler) replaceMaterializedMembershipFromSourceMap(
 	return true
 }
 
+// copyDefaultCanvasMapPositionsForMaterializedMembership delegates default-position copy while preserving HTTP mapping.
 func (h *CanvasMapHandler) copyDefaultCanvasMapPositionsForMaterializedMembership(
 	w http.ResponseWriter,
 	mapID uuid.UUID,
 ) bool {
-	defaultMap, err := h.mapRepo.GetDefault()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load default canvas map", err)
-		return false
-	}
-	if !canvasmap.ShouldCopyDefaultPositions(mapID, defaultMap.ID) {
-		return true
-	}
-	membership, err := h.mapRepo.GetMembership(mapID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load materialized canvas map membership", err)
-		return false
-	}
-	sourcePositions, err := h.mapPositionRepo.GetAllForMap(defaultMap.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load default canvas map positions", err)
-		return false
-	}
-	legacyPositions := []domain.DevicePosition{}
-	if len(sourcePositions) == 0 && h.legacyPositionRepo != nil {
-		legacyPositions, err = h.legacyPositionRepo.GetAll()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to load legacy canvas positions", err)
-			return false
-		}
-	}
-	copyPlan := canvasmap.PlanDefaultPositionCopy(
-		mapID,
-		defaultMap.ID,
-		sourcePositions,
-		legacyPositions,
-		membership.Devices,
-	)
-	if !copyPlan.ShouldSave {
-		return true
-	}
-	if err := h.mapPositionRepo.SaveAllForMap(mapID, copyPlan.Positions); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to copy default canvas map positions", err)
+	if err := canvasmap.CopyDefaultPositionsForMaterializedMembership(mapID, canvasmap.DefaultPositionCopyDeps{
+		Maps:            h.mapRepo,
+		Positions:       h.mapPositionRepo,
+		LegacyPositions: h.legacyPositionRepo,
+	}); err != nil {
+		h.writeCanvasMapDefaultPositionCopyError(w, err)
 		return false
 	}
 	return true
@@ -1245,6 +1214,30 @@ func (h *CanvasMapHandler) writeCanvasMapSourceMapMaterializationError(w http.Re
 		writeError(w, http.StatusInternalServerError, "failed to copy source map positions", sourceErr.Err)
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to materialize source map membership", sourceErr.Err)
+	}
+}
+
+// writeCanvasMapDefaultPositionCopyError maps position-copy service stages to existing HTTP errors.
+func (h *CanvasMapHandler) writeCanvasMapDefaultPositionCopyError(w http.ResponseWriter, err error) {
+	var copyErr canvasmap.DefaultPositionCopyError
+	if !errors.As(err, &copyErr) {
+		writeError(w, http.StatusInternalServerError, "failed to copy default canvas map positions", err)
+		return
+	}
+
+	switch copyErr.Stage {
+	case canvasmap.DefaultPositionCopyStageDefaultMap:
+		writeError(w, http.StatusInternalServerError, "failed to load default canvas map", copyErr.Err)
+	case canvasmap.DefaultPositionCopyStageMembership:
+		writeError(w, http.StatusInternalServerError, "failed to load materialized canvas map membership", copyErr.Err)
+	case canvasmap.DefaultPositionCopyStagePositions:
+		writeError(w, http.StatusInternalServerError, "failed to load default canvas map positions", copyErr.Err)
+	case canvasmap.DefaultPositionCopyStageLegacyPositions:
+		writeError(w, http.StatusInternalServerError, "failed to load legacy canvas positions", copyErr.Err)
+	case canvasmap.DefaultPositionCopyStageSavePositions:
+		writeError(w, http.StatusInternalServerError, "failed to copy default canvas map positions", copyErr.Err)
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to copy default canvas map positions", copyErr.Err)
 	}
 }
 
