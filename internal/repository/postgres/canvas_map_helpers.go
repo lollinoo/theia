@@ -15,6 +15,7 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+// canvasMapSelectQuery builds the shared saved-map select with aggregate counts.
 func canvasMapSelectQuery(whereClause string) string {
 	return `SELECT
 			cm.id,
@@ -61,6 +62,7 @@ func canvasMapSelectQuery(whereClause string) string {
 			position_counts.position_count`
 }
 
+// scanCanvasMap converts one saved-map row into the domain DTO.
 func scanCanvasMap(scanner rowScanner) (domain.CanvasMap, error) {
 	var canvasMap domain.CanvasMap
 	var (
@@ -119,6 +121,7 @@ func scanCanvasMap(scanner rowScanner) (domain.CanvasMap, error) {
 	return canvasMap, nil
 }
 
+// scanCanvasMapAreaWithCount converts one map-local area row into an area count DTO.
 func scanCanvasMapAreaWithCount(scanner rowScanner) (domain.AreaWithCount, error) {
 	var area domain.AreaWithCount
 	var areaIDRaw string
@@ -148,6 +151,7 @@ type canvasMapQueryRower interface {
 	QueryRow(query string, args ...interface{}) *sql.Row
 }
 
+// ensureCanvasMapExists fails with the stable not-found text used by API mapping.
 func ensureCanvasMapExists(queryer canvasMapQueryRower, id uuid.UUID) error {
 	var count int
 	if err := queryer.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, id.String()).Scan(&count); err != nil {
@@ -159,6 +163,7 @@ func ensureCanvasMapExists(queryer canvasMapQueryRower, id uuid.UUID) error {
 	return nil
 }
 
+// countCanvasMapAreas counts the map-local area catalog for one saved map.
 func countCanvasMapAreas(queryer canvasMapQueryRower, id uuid.UUID) (int, error) {
 	var count int
 	if err := queryer.QueryRow(`SELECT COUNT(*) FROM canvas_map_areas WHERE map_id = ?`, id.String()).Scan(&count); err != nil {
@@ -167,6 +172,7 @@ func countCanvasMapAreas(queryer canvasMapQueryRower, id uuid.UUID) (int, error)
 	return count, nil
 }
 
+// countCanvasMapDeviceAreas counts map-local device-to-area assignments.
 func countCanvasMapDeviceAreas(queryer canvasMapQueryRower, id uuid.UUID) (int, error) {
 	var count int
 	if err := queryer.QueryRow(`SELECT COUNT(*) FROM canvas_map_device_areas WHERE map_id = ?`, id.String()).Scan(&count); err != nil {
@@ -175,6 +181,7 @@ func countCanvasMapDeviceAreas(queryer canvasMapQueryRower, id uuid.UUID) (int, 
 	return count, nil
 }
 
+// getCanvasMapArea loads one map-local area with its base-device count.
 func getCanvasMapArea(queryer canvasMapQueryRower, mapID uuid.UUID, areaID uuid.UUID) (domain.AreaWithCount, error) {
 	return scanCanvasMapAreaWithCount(queryer.QueryRow(
 		`SELECT cma.area_id, cma.name, cma.description, cma.color, cma.added_at,
@@ -192,6 +199,7 @@ func getCanvasMapArea(queryer canvasMapQueryRower, mapID uuid.UUID, areaID uuid.
 	))
 }
 
+// ensureCanvasMapAreaNameAvailable enforces per-map area-name uniqueness.
 func ensureCanvasMapAreaNameAvailable(queryer canvasMapQueryRower, mapID uuid.UUID, areaID uuid.UUID, name string) error {
 	var count int
 	if err := queryer.QueryRow(
@@ -210,6 +218,7 @@ func ensureCanvasMapAreaNameAvailable(queryer canvasMapQueryRower, mapID uuid.UU
 	return nil
 }
 
+// backfillCanvasMapAreasFromMemberDevices snapshots global areas for materialized base members.
 func backfillCanvasMapAreasFromMemberDevices(tx *Tx, mapID uuid.UUID) error {
 	rows, err := tx.Query(
 		`SELECT DISTINCT a.id, a.name, a.description, a.color
@@ -263,6 +272,7 @@ func backfillCanvasMapAreasFromMemberDevices(tx *Tx, mapID uuid.UUID) error {
 	return nil
 }
 
+// backfillCanvasMapDeviceAreasFromMemberDevices snapshots base-member global area assignments.
 func backfillCanvasMapDeviceAreasFromMemberDevices(tx *Tx, mapID uuid.UUID) error {
 	if _, err := tx.Exec(
 		`INSERT INTO canvas_map_device_areas (map_id, device_id, area_id, assigned_at)
@@ -281,6 +291,7 @@ func backfillCanvasMapDeviceAreasFromMemberDevices(tx *Tx, mapID uuid.UUID) erro
 	return nil
 }
 
+// insertCanvasMapDeviceAreas inserts normalized map-local device area memberships.
 func insertCanvasMapDeviceAreas(
 	tx *Tx,
 	mapID uuid.UUID,
@@ -309,6 +320,7 @@ func insertCanvasMapDeviceAreas(
 	return nil
 }
 
+// validateCanvasMapMembership rejects invalid or duplicate materialized membership rows.
 func validateCanvasMapMembership(membership domain.CanvasMapMembership) error {
 	deviceIDs := make(map[uuid.UUID]struct{}, len(membership.Devices))
 	for _, device := range membership.Devices {
@@ -359,6 +371,7 @@ func validateCanvasMapMembership(membership domain.CanvasMapMembership) error {
 	return nil
 }
 
+// validateCanvasMapUUIDList sorts and de-duplicates required UUID inputs.
 func validateCanvasMapUUIDList(ids []uuid.UUID, label string) ([]uuid.UUID, error) {
 	if len(ids) == 0 {
 		return []uuid.UUID{}, nil
@@ -378,6 +391,7 @@ func validateCanvasMapUUIDList(ids []uuid.UUID, label string) ([]uuid.UUID, erro
 	return canonical, nil
 }
 
+// rejectCanvasMapNonMemberPositions rejects position saves for devices outside materialized membership.
 func rejectCanvasMapNonMemberPositions(tx *Tx, mapID uuid.UUID, positions []domain.DevicePosition) error {
 	membershipMaterialized, err := canvasMapMembershipMaterialized(tx, mapID)
 	if err != nil {
@@ -415,6 +429,7 @@ func rejectCanvasMapNonMemberPositions(tx *Tx, mapID uuid.UUID, positions []doma
 	return nil
 }
 
+// canvasMapMembershipMaterialized returns whether saved-map membership constraints are active.
 func canvasMapMembershipMaterialized(queryer canvasMapQueryRower, mapID uuid.UUID) (bool, error) {
 	var materialized any
 	if err := queryer.QueryRow(
@@ -426,6 +441,7 @@ func canvasMapMembershipMaterialized(queryer canvasMapQueryRower, mapID uuid.UUI
 	return normalizeBoolValue(materialized)
 }
 
+// pruneCanvasMapPositionsForMembership removes positions for devices no longer in membership.
 func pruneCanvasMapPositionsForMembership(
 	tx *Tx,
 	mapID uuid.UUID,
@@ -456,6 +472,7 @@ func pruneCanvasMapPositionsForMembership(
 	return nil
 }
 
+// nullableUUIDString converts optional UUIDs to SQL values without empty-string sentinels.
 func nullableUUIDString(id *uuid.UUID) any {
 	if id == nil {
 		return nil

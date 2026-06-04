@@ -112,6 +112,7 @@ func (r *CanvasMapPositionRepo) DeleteByDeviceID(deviceID uuid.UUID) error {
 	return nil
 }
 
+// scanCanvasMapPosition converts one saved-map position row into a domain position.
 func scanCanvasMapPosition(scanner rowScanner) (domain.DevicePosition, error) {
 	var position domain.DevicePosition
 	var (
