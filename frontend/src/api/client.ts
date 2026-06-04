@@ -1,14 +1,10 @@
-import {
-  type Area,
-  type VendorConfig,
-  parseAreaResponse,
-  parseAreasResponse,
-} from '../types/api';
+import { type VendorConfig } from '../types/api';
 import { ServerError, ValidationError } from './errors';
 import { requestJSON, requestJSONWithBody } from './transport';
 
 export { ValidationError, ServerError };
 export * from './admin';
+export * from './areas';
 export * from './auth';
 export * from './backup';
 export * from './canvas';
@@ -19,33 +15,6 @@ export * from './instanceBackup';
 export * from './settings';
 export * from './snmp';
 export { headersWithCsrf } from './transport';
-
-// --- Areas ---
-
-export async function fetchAreas(): Promise<Area[]> {
-  return parseAreasResponse(await requestJSON('/api/v1/areas'));
-}
-
-export async function createArea(payload: {
-  name: string;
-  description: string;
-  color: string;
-}): Promise<Area> {
-  return parseAreaResponse(await requestJSONWithBody('/api/v1/areas', 'POST', payload));
-}
-
-export async function updateArea(
-  id: string,
-  payload: { name: string; description: string; color: string },
-): Promise<Area> {
-  return parseAreaResponse(
-    await requestJSONWithBody(`/api/v1/areas/${encodeURIComponent(id)}`, 'PUT', payload),
-  );
-}
-
-export async function deleteArea(id: string): Promise<void> {
-  await requestJSONWithBody(`/api/v1/areas/${encodeURIComponent(id)}`, 'DELETE');
-}
 
 // --- Vendor Configs ---
 
