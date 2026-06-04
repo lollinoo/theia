@@ -4,6 +4,7 @@ export type ErrorPayload = {
   error?: string;
 };
 
+// csrfTokenFromCookie extracts the CSRF cookie without throwing during SSR or malformed encoding.
 function csrfTokenFromCookie(): string | null {
   if (typeof document === 'undefined') {
     return null;
@@ -22,6 +23,7 @@ function csrfTokenFromCookie(): string | null {
   }
 }
 
+// headersWithCsrf appends the browser CSRF token to mutating JSON requests when available.
 export function headersWithCsrf(headers: Record<string, string>): Record<string, string> {
   const csrfToken = csrfTokenFromCookie();
   if (!csrfToken) {
@@ -30,6 +32,7 @@ export function headersWithCsrf(headers: Record<string, string>): Record<string,
   return { ...headers, 'X-CSRF-Token': csrfToken };
 }
 
+// errorMessageFromPayload preserves backend error text while falling back to response status text.
 function errorMessageFromPayload(payload: ErrorPayload | unknown, fallback: string): string {
   return typeof payload === 'object' &&
     payload !== null &&
@@ -39,6 +42,7 @@ function errorMessageFromPayload(payload: ErrorPayload | unknown, fallback: stri
     : fallback;
 }
 
+// serverErrorFromMessage hides raw 500 details and preserves correlation references.
 function serverErrorFromMessage(errorMessage: string): ServerError {
   const refMatch = /ref:\s*([a-zA-Z0-9-]+)/.exec(errorMessage);
   const correlationId = refMatch ? refMatch[1] : undefined;
@@ -48,6 +52,7 @@ function serverErrorFromMessage(errorMessage: string): ServerError {
   return new ServerError(userMessage, correlationId);
 }
 
+// requestJSON performs a GET JSON request and preserves the legacy generic Error shape.
 export async function requestJSON(path: string): Promise<unknown> {
   const response = await fetch(path, {
     headers: {
@@ -65,6 +70,7 @@ export async function requestJSON(path: string): Promise<unknown> {
   return payload;
 }
 
+// requestJSONWithBody sends JSON with CSRF headers and maps validation/server failures to typed errors.
 export async function requestJSONWithBody(
   path: string,
   method: string,
