@@ -25,6 +25,7 @@ type instanceBackupArchiveManifestPlan struct {
 	totalArchiveBytes int64
 }
 
+// buildInstanceBackupArchiveManifestPlan builds manifest JSON and final archive byte totals.
 func buildInstanceBackupArchiveManifestPlan(input instanceBackupArchiveManifestInput) (instanceBackupArchiveManifestPlan, error) {
 	var plan instanceBackupArchiveManifestPlan
 	manifest := backupManifest{

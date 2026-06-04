@@ -51,6 +51,7 @@ func (s *InstanceBackupService) createArchive(
 	})
 }
 
+// writeInstanceBackupArchive writes the full tar.gz archive and reports progress after each entry.
 func writeInstanceBackupArchive(ctx context.Context, req instanceBackupArchiveWriteRequest) (int64, error) {
 	f, err := os.OpenFile(req.archivePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
@@ -112,6 +113,7 @@ func writeInstanceBackupArchive(ctx context.Context, req instanceBackupArchiveWr
 	return totalSize, nil
 }
 
+// reportInstanceBackupArchiveProgress publishes an archiving phase update when a tracker is present.
 func reportInstanceBackupArchiveProgress(req instanceBackupArchiveWriteRequest, message string, current int64) {
 	if req.progress == nil || req.manifest == nil {
 		return
@@ -129,6 +131,7 @@ func addFileToTar(tw *tar.Writer, name string, sourcePath string) (int64, error)
 	return addFileToTarContext(context.Background(), tw, name, sourcePath)
 }
 
+// addFileToTarContext streams one file into the archive and verifies the expected byte count.
 func addFileToTarContext(ctx context.Context, tw *tar.Writer, name string, sourcePath string) (int64, error) {
 	f, err := os.Open(sourcePath)
 	if err != nil {
@@ -161,6 +164,7 @@ func addFileToTarContext(ctx context.Context, tw *tar.Writer, name string, sourc
 	return written, nil
 }
 
+// addCollectedFileToTarContext rechecks quotas before archiving a previously collected file.
 func addCollectedFileToTarContext(ctx context.Context, tw *tar.Writer, source archiveSourceFile, limits BackupArchiveLimits) (int64, error) {
 	f, err := os.Open(source.diskPath)
 	if err != nil {

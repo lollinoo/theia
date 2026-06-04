@@ -17,6 +17,7 @@ type instanceBackupArchiveSources struct {
 	fileEntries       int
 }
 
+// checkBackupArchiveEntryQuota enforces the per-entry backup archive size limit.
 func checkBackupArchiveEntryQuota(name string, size int64, limits BackupArchiveLimits) error {
 	if size > limits.MaxEntryBytes {
 		return newRestoreLimitError("backup archive entry %s exceeds per-entry backup limit: %d bytes > %d bytes", name, size, limits.MaxEntryBytes)
@@ -24,6 +25,7 @@ func checkBackupArchiveEntryQuota(name string, size int64, limits BackupArchiveL
 	return nil
 }
 
+// checkBackupArchiveTotals enforces total expanded bytes and file-count limits.
 func checkBackupArchiveTotals(totalBytes int64, fileEntries int, limits BackupArchiveLimits) error {
 	if totalBytes > limits.MaxTotalBytes {
 		return newRestoreLimitError("backup archive exceeds expanded backup limit: %d bytes > %d bytes", totalBytes, limits.MaxTotalBytes)
@@ -34,6 +36,7 @@ func checkBackupArchiveTotals(totalBytes int64, fileEntries int, limits BackupAr
 	return nil
 }
 
+// checkedArchiveByteTotal adds bytes while detecting negative inputs and overflow past limits.
 func checkedArchiveByteTotal(current int64, increment int64, maxTotal int64) (int64, error) {
 	if increment < 0 {
 		return 0, fmt.Errorf("archive byte increment must be non-negative")
@@ -47,11 +50,13 @@ func checkedArchiveByteTotal(current int64, increment int64, maxTotal int64) (in
 	return current + increment, nil
 }
 
+// isArchiveQuotaError detects quota errors that should abort archive creation.
 func isArchiveQuotaError(err error) bool {
 	var limitErr *RestoreLimitError
 	return errors.As(err, &limitErr)
 }
 
+// collectArchiveSourceFiles gathers source files using the service's configured directories.
 func (s *InstanceBackupService) collectArchiveSourceFiles(ctx context.Context, limits BackupArchiveLimits, initialBytes int64) ([]archiveSourceFile, int, *archiveSourceFile, int64, int, error) {
 	sources, err := collectInstanceBackupArchiveSourceFiles(ctx, s.backupDir, s.deviceBackupDir, s.knownHostsPath, limits, initialBytes)
 	if err != nil {
@@ -60,6 +65,7 @@ func (s *InstanceBackupService) collectArchiveSourceFiles(ctx context.Context, l
 	return sources.deviceBackupFiles, sources.backupFileCount, sources.knownHostsFile, sources.totalBytes, sources.fileEntries, nil
 }
 
+// collectInstanceBackupArchiveSourceFiles walks optional backup artifacts while enforcing quotas.
 func collectInstanceBackupArchiveSourceFiles(
 	ctx context.Context,
 	backupDir string,
