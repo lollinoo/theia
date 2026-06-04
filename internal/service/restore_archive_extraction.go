@@ -10,6 +10,13 @@ import (
 	"path/filepath"
 )
 
+// restoreArchiveHeaderValidation carries the sanitized tar entry metadata used by extraction.
+type restoreArchiveHeaderValidation struct {
+	cleanName string
+	directory bool
+}
+
+// validateRestoreArchiveFile rejects missing, non-regular, or oversized restore archives.
 func validateRestoreArchiveFile(archivePath string, limits RestoreArchiveLimits) error {
 	info, err := os.Stat(archivePath)
 	if err != nil {
@@ -29,6 +36,7 @@ func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) er
 	return extractArchiveContext(context.Background(), archivePath, destDir, limits)
 }
 
+// extractArchiveContext extracts a .tar.gz archive while enforcing entry safety and restore quotas.
 func extractArchiveContext(ctx context.Context, archivePath, destDir string, limits RestoreArchiveLimits) error {
 	f, err := os.Open(archivePath)
 	if err != nil {
@@ -57,22 +65,11 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 			return fmt.Errorf("reading tar entry: %w", err)
 		}
 
-		// Security: reject symlinks and hard links (T-17-01)
-		if header.Typeflag == tar.TypeSymlink || header.Typeflag == tar.TypeLink {
-			return fmt.Errorf("archive contains disallowed link entry: %s", header.Name)
-		}
-
-		regularFile := header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA
-
-		// Security: only allow regular files and directories
-		if !regularFile && header.Typeflag != tar.TypeDir {
-			return fmt.Errorf("unsupported restore archive entry type %c: %s", header.Typeflag, header.Name)
-		}
-
-		cleanName, err := cleanRestoreArchiveEntryName(header.Name)
+		validated, err := validateRestoreArchiveHeader(header)
 		if err != nil {
 			return err
 		}
+		cleanName := validated.cleanName
 
 		targetPath := filepath.Join(destDir, filepath.FromSlash(cleanName))
 		archiveEntries++
@@ -84,10 +81,7 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 			)
 		}
 
-		if header.Typeflag == tar.TypeDir {
-			if _, err := validateRestoreArchiveEntryForExtraction(cleanName, true); err != nil {
-				return err
-			}
+		if validated.directory {
 			if err := os.MkdirAll(targetPath, 0700); err != nil {
 				return fmt.Errorf("creating directory %s: %w", cleanName, err)
 			}
@@ -102,11 +96,6 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 		}
 		if header.Size > limits.MaxTotalBytes-totalBytes {
 			return newRestoreLimitError("expanded archive exceeds restore limit: %d bytes > %d bytes", totalBytes+header.Size, limits.MaxTotalBytes)
-		}
-
-		// Security: regular files outside the restore archive contract are rejected.
-		if _, err := validateRestoreArchiveEntryForExtraction(cleanName, false); err != nil {
-			return err
 		}
 
 		// Ensure parent directory exists
@@ -127,4 +116,23 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 	}
 
 	return nil
+}
+
+// validateRestoreArchiveHeader normalizes, type-checks, and allowlists a tar restore entry.
+func validateRestoreArchiveHeader(header *tar.Header) (restoreArchiveHeaderValidation, error) {
+	if header.Typeflag == tar.TypeSymlink || header.Typeflag == tar.TypeLink {
+		return restoreArchiveHeaderValidation{}, fmt.Errorf("archive contains disallowed link entry: %s", header.Name)
+	}
+
+	regularFile := header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA
+	directory := header.Typeflag == tar.TypeDir
+	if !regularFile && !directory {
+		return restoreArchiveHeaderValidation{}, fmt.Errorf("unsupported restore archive entry type %c: %s", header.Typeflag, header.Name)
+	}
+
+	cleanName, err := validateRestoreArchiveEntryForExtraction(header.Name, directory)
+	if err != nil {
+		return restoreArchiveHeaderValidation{}, err
+	}
+	return restoreArchiveHeaderValidation{cleanName: cleanName, directory: directory}, nil
 }
