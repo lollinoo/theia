@@ -10,32 +10,22 @@ import {
   type BulkBackupRunStatus,
   type BulkOperationStatus,
   type CredentialProfile,
-  type Device,
-  type DeviceCredentialProfile,
   type GrafanaDashboardConfig,
   type InstanceBackup,
   type InstanceBackupProgress,
   type InstanceBackupStatus,
-  type InterfaceInfo,
-  type Link,
   type RestoreReport,
   type SNMPProfile,
-  type TopologyDiscoveryMode,
   type VendorConfig,
-  type WinBoxCredentials,
   parseAreaResponse,
   parseAreasResponse,
   parseCredentialProfileResponse,
   parseCredentialProfilesResponse,
-  parseDeviceCredentialProfilesResponse,
-  parseDevicesResponse,
   parseGrafanaDashboardConfigResponse,
-  parseInterfacesResponse,
-  parseLinksResponse,
   parseSNMPProfileResponse,
   parseSNMPProfilesResponse,
-  parseWinBoxCredentialsResponse,
 } from '../types/api';
+import { type SNMPPayload } from './device';
 import { ServerError, ValidationError } from './errors';
 import { recordField, stringField } from './parsers';
 import { type ErrorPayload, headersWithCsrf, requestJSON, requestJSONWithBody } from './transport';
@@ -44,201 +34,9 @@ export { ValidationError, ServerError };
 export * from './admin';
 export * from './auth';
 export * from './canvas';
+export * from './device';
 export * from './settings';
 export { headersWithCsrf } from './transport';
-
-export interface BridgeLaunchRequestResponse {
-  launch_token: string;
-  expires_at?: string;
-}
-
-export async function fetchDevices(): Promise<Device[]> {
-  try {
-    return parseDevicesResponse(await requestJSON('/api/v1/devices'));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown error';
-    throw new Error(`Failed to fetch devices: ${message}`);
-  }
-}
-
-export async function fetchOrphanDevices(): Promise<Device[]> {
-  try {
-    return parseDevicesResponse(await requestJSON('/api/v1/devices/orphans'));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown error';
-    throw new Error(`Failed to fetch orphan devices: ${message}`);
-  }
-}
-
-export async function fetchLinks(): Promise<Link[]> {
-  try {
-    return parseLinksResponse(await requestJSON('/api/v1/links'));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown error';
-    throw new Error(`Failed to fetch links: ${message}`);
-  }
-}
-
-export interface SNMPPayload {
-  version: string;
-  community?: string;
-  // SNMPv3 fields
-  username?: string;
-  auth_protocol?: string;
-  auth_password?: string;
-  priv_protocol?: string;
-  priv_password?: string;
-  security_level?: string;
-}
-
-export interface CreateDevicePayload {
-  hostname: string;
-  ip?: string;
-  notes?: string | null;
-  device_type?: string;
-  snmp?: SNMPPayload;
-  tags?: Record<string, string>;
-  vendor?: string;
-  metrics_source?: string;
-  prometheus_label_name?: string;
-  prometheus_label_value?: string;
-  topology_discovery_mode?: TopologyDiscoveryMode;
-  area_ids?: string[];
-  skip_primary_map_membership?: boolean;
-}
-
-export async function createDevice(payload: CreateDevicePayload): Promise<Device> {
-  const response = await requestJSONWithBody('/api/v1/devices', 'POST', payload);
-  const data = (response as Record<string, unknown>)?.data;
-  if (!data) {
-    throw new Error('Invalid create device response');
-  }
-  const wrapped = { data: [data] };
-  const devices = parseDevicesResponse(wrapped);
-  if (devices.length === 0) {
-    throw new Error('No device returned from create');
-  }
-  return devices[0];
-}
-
-export async function updateDevice(
-  id: string,
-  payload: Partial<{
-    hostname: string;
-    ip: string;
-    notes: string | null;
-    snmp: SNMPPayload;
-    tags: Record<string, string>;
-    vendor: string;
-    metrics_source: string;
-    prometheus_label_name: string;
-    prometheus_label_value: string;
-    topology_discovery_mode: TopologyDiscoveryMode;
-    poll_interval_override: number | null;
-    polling_enabled: boolean;
-    area_ids: string[];
-  }>,
-): Promise<Device> {
-  const response = await requestJSONWithBody(
-    `/api/v1/devices/${encodeURIComponent(id)}`,
-    'PUT',
-    payload,
-  );
-  const data = (response as Record<string, unknown>)?.data;
-  if (!data) {
-    throw new Error('Invalid update device response');
-  }
-  const wrapped = { data: [data] };
-  const devices = parseDevicesResponse(wrapped);
-  if (devices.length === 0) {
-    throw new Error('No device returned from update');
-  }
-  return devices[0];
-}
-
-export async function deleteDevice(id: string): Promise<void> {
-  await requestJSONWithBody(`/api/v1/devices/${encodeURIComponent(id)}`, 'DELETE');
-}
-
-export async function runTopologyDiscovery(id: string): Promise<void> {
-  await requestJSONWithBody(`/api/v1/devices/${encodeURIComponent(id)}/topology-discovery`, 'POST');
-}
-
-export async function fetchDeviceInterfaces(deviceId: string): Promise<InterfaceInfo[]> {
-  try {
-    return parseInterfacesResponse(
-      await requestJSON(`/api/v1/devices/${encodeURIComponent(deviceId)}/interfaces`),
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown error';
-    throw new Error(`Failed to fetch interfaces: ${message}`);
-  }
-}
-
-export async function createLink(payload: {
-  source_device_id: string;
-  source_if_name: string;
-  target_device_id: string;
-  target_if_name: string;
-  migration_source?: 'browser_localstorage';
-}): Promise<Link> {
-  const response = await requestJSONWithBody('/api/v1/links', 'POST', payload);
-  const data = (response as Record<string, unknown>)?.data;
-  if (!data || typeof data !== 'object') {
-    throw new Error('Invalid create link response');
-  }
-  const record = data as Record<string, unknown>;
-  return {
-    id: typeof record.id === 'string' ? record.id : '',
-    source_device_id: typeof record.source_device_id === 'string' ? record.source_device_id : '',
-    source_if_name: typeof record.source_if_name === 'string' ? record.source_if_name : '',
-    target_device_id: typeof record.target_device_id === 'string' ? record.target_device_id : '',
-    target_if_name: typeof record.target_if_name === 'string' ? record.target_if_name : '',
-    discovery_protocol:
-      typeof record.discovery_protocol === 'string' ? record.discovery_protocol : 'manual',
-    source_if_speed: typeof record.source_if_speed === 'number' ? record.source_if_speed : 0,
-    source_if_oper_status:
-      typeof record.source_if_oper_status === 'string' ? record.source_if_oper_status : '',
-    target_if_speed: typeof record.target_if_speed === 'number' ? record.target_if_speed : 0,
-    target_if_oper_status:
-      typeof record.target_if_oper_status === 'string' ? record.target_if_oper_status : '',
-  };
-}
-
-export async function updateLink(
-  id: string,
-  payload: { source_if_name: string; target_if_name: string },
-): Promise<Link> {
-  const response = await requestJSONWithBody(
-    `/api/v1/links/${encodeURIComponent(id)}`,
-    'PUT',
-    payload,
-  );
-  const data = (response as Record<string, unknown>)?.data;
-  if (!data || typeof data !== 'object') {
-    throw new Error('Invalid update link response');
-  }
-  const record = data as Record<string, unknown>;
-  return {
-    id: typeof record.id === 'string' ? record.id : '',
-    source_device_id: typeof record.source_device_id === 'string' ? record.source_device_id : '',
-    source_if_name: typeof record.source_if_name === 'string' ? record.source_if_name : '',
-    target_device_id: typeof record.target_device_id === 'string' ? record.target_device_id : '',
-    target_if_name: typeof record.target_if_name === 'string' ? record.target_if_name : '',
-    discovery_protocol:
-      typeof record.discovery_protocol === 'string' ? record.discovery_protocol : 'manual',
-    source_if_speed: typeof record.source_if_speed === 'number' ? record.source_if_speed : 0,
-    source_if_oper_status:
-      typeof record.source_if_oper_status === 'string' ? record.source_if_oper_status : '',
-    target_if_speed: typeof record.target_if_speed === 'number' ? record.target_if_speed : 0,
-    target_if_oper_status:
-      typeof record.target_if_oper_status === 'string' ? record.target_if_oper_status : '',
-  };
-}
-
-export async function deleteLink(id: string): Promise<void> {
-  await requestJSONWithBody(`/api/v1/links/${encodeURIComponent(id)}`, 'DELETE');
-}
 
 export interface SNMPProfilePayload {
   name: string;
@@ -354,31 +152,6 @@ export async function deleteSNMPProfile(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/snmp-profiles/${encodeURIComponent(id)}`, 'DELETE');
 }
 
-// --- SNMP Test ---
-
-export async function testSNMPConnection(deviceId: string): Promise<{
-  success: boolean;
-  sys_name?: string;
-  sys_descr?: string;
-  error?: string;
-  target_ip?: string;
-  snmp_version?: string;
-}> {
-  const response = await requestJSONWithBody(
-    `/api/v1/devices/${encodeURIComponent(deviceId)}/snmp-test`,
-    'POST',
-  );
-  const data = response as Record<string, unknown>;
-  return {
-    success: data.success === true,
-    sys_name: typeof data.sys_name === 'string' ? data.sys_name : undefined,
-    sys_descr: typeof data.sys_descr === 'string' ? data.sys_descr : undefined,
-    error: typeof data.error === 'string' ? data.error : undefined,
-    target_ip: typeof data.target_ip === 'string' ? data.target_ip : undefined,
-    snmp_version: typeof data.snmp_version === 'string' ? data.snmp_version : undefined,
-  };
-}
-
 // --- Credential Profiles ---
 
 export async function fetchCredentialProfiles(): Promise<CredentialProfile[]> {
@@ -420,94 +193,12 @@ export async function deleteCredentialProfile(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/credential-profiles/${encodeURIComponent(id)}`, 'DELETE');
 }
 
-// --- Device Credential Profile Assignments ---
-
-export async function fetchDeviceCredentialProfiles(
-  deviceId: string,
-): Promise<DeviceCredentialProfile[]> {
-  const payload = await requestJSON(
-    `/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles`,
-  );
-  return parseDeviceCredentialProfilesResponse(payload);
-}
-
-export async function assignCredentialProfile(deviceId: string, profileId: string): Promise<void> {
-  await requestJSONWithBody(
-    `/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles`,
-    'POST',
-    { profile_id: profileId },
-  );
-}
-
-export async function unassignCredentialProfile(
-  deviceId: string,
-  profileId: string,
-): Promise<void> {
-  await requestJSONWithBody(
-    `/api/v1/devices/${encodeURIComponent(deviceId)}/credential-profiles/${encodeURIComponent(profileId)}`,
-    'DELETE',
-  );
-}
-
-export async function setWinBoxProfile(deviceId: string, profileId: string): Promise<void> {
-  await requestJSONWithBody(
-    `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-profile`,
-    'PUT',
-    { profile_id: profileId },
-  );
-}
-
-export async function clearWinBoxProfile(deviceId: string): Promise<void> {
-  await requestJSONWithBody(
-    `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-profile`,
-    'DELETE',
-  );
-}
-
-export async function fetchWinBoxCredentials(deviceId: string): Promise<WinBoxCredentials> {
-  const payload = await requestJSON(
-    `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-credentials`,
-  );
-  return parseWinBoxCredentialsResponse(payload);
-}
-
 export async function revealSNMPProfile(id: string, reason: string): Promise<SNMPProfile> {
   return parseSNMPProfileResponse(
     await requestJSONWithBody(`/api/v1/snmp-profiles/${encodeURIComponent(id)}/reveal`, 'POST', {
       reason,
     }),
   );
-}
-
-export async function createBridgeLaunchRequest(
-  deviceId: string,
-): Promise<BridgeLaunchRequestResponse> {
-  const payload = await requestJSONWithBody(
-    `/api/v1/bridge/launch-requests/${encodeURIComponent(deviceId)}`,
-    'POST',
-  );
-  const p = payload as Record<string, unknown>;
-  if (typeof p?.launch_token !== 'string' || p.launch_token === '') {
-    throw new Error('invalid bridge launch response');
-  }
-  return {
-    launch_token: p.launch_token,
-    expires_at: typeof p.expires_at === 'string' ? p.expires_at : undefined,
-  };
-}
-
-export async function testSSHConnection(
-  deviceId: string,
-): Promise<{ success: boolean; error?: string }> {
-  const response = await requestJSONWithBody(
-    `/api/v1/devices/${encodeURIComponent(deviceId)}/ssh-credentials/test`,
-    'POST',
-  );
-  const data = response as Record<string, unknown>;
-  return {
-    success: data.success === true,
-    error: typeof data.error === 'string' ? data.error : undefined,
-  };
 }
 
 // --- Areas ---
