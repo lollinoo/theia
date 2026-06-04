@@ -1268,7 +1268,7 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 
 	// Step 14: Stage files for restore
 	stagingDir := filepath.Join(s.stateDir, ".restore-staging")
-	markerPath := filepath.Join(s.stateDir, ".theia-restore-pending")
+	markerPath := restoreMarkerFilePath(s.stateDir)
 	if err := os.RemoveAll(stagingDir); err != nil {
 		return nil, fmt.Errorf("removing existing staging dir: %w", err)
 	}
@@ -1323,15 +1323,8 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 		s.knownHostsPath,
 		time.Now().UTC().Format(time.RFC3339),
 	)
-	markerJSON, err := json.MarshalIndent(marker, "", "  ")
-	if err != nil {
-		return nil, cleanupStagingOnError(fmt.Errorf("marshaling marker JSON: %w", err))
-	}
-	if err := os.WriteFile(markerPath, markerJSON, 0600); err != nil {
-		return nil, cleanupStagingOnError(fmt.Errorf("writing restore marker: %w", err))
-	}
-	if err := os.Chmod(markerPath, 0600); err != nil {
-		return nil, cleanupStagingOnError(fmt.Errorf("restricting restore marker permissions: %w", err))
+	if err := writeRestoreMarker(markerPath, marker); err != nil {
+		return nil, cleanupStagingOnError(err)
 	}
 
 	report.Message = "Restore staged successfully. Server will restart to apply."

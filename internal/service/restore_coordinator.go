@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -85,31 +84,21 @@ func NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPa
 // removes both the marker and staging dir.
 func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	ctx := context.Background()
-	markerPath := filepath.Join(c.stateDir, ".theia-restore-pending")
-	markerData, err := os.ReadFile(markerPath)
+	markerPath := restoreMarkerFilePath(c.stateDir)
+	marker, exists, err := readRestoreMarker(markerPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("read restore marker: %w", err)
+		return false, err
+	}
+	if !exists {
+		return false, nil
 	}
 
-	var marker restoreMarker
-	if err := json.Unmarshal(markerData, &marker); err != nil {
-		return false, fmt.Errorf("parse restore marker: %w", err)
-	}
-	if marker.StagedDB == "" {
-		return false, fmt.Errorf("restore marker missing staged_db")
-	}
-
-	if filepath.Clean(marker.StateDir) != filepath.Clean(c.stateDir) ||
-		filepath.Clean(marker.DeviceBackupDir) != filepath.Clean(c.deviceBackupDir) ||
-		filepath.Clean(marker.KnownHostsPath) != filepath.Clean(c.knownHostsPath) {
-		return false, fmt.Errorf("restore marker targets do not match runtime paths")
+	if err := validateRestoreMarkerRuntimeTargets(*marker, c.stateDir, c.deviceBackupDir, c.knownHostsPath); err != nil {
+		return false, err
 	}
 
 	stagingDir := filepath.Join(c.stateDir, ".restore-staging")
-	if err := c.validateStagedRestoreArtifacts(marker, stagingDir); err != nil {
+	if err := c.validateStagedRestoreArtifacts(*marker, stagingDir); err != nil {
 		return false, err
 	}
 
@@ -163,8 +152,8 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		}
 	}
 
-	if err := os.Remove(markerPath); err != nil && !os.IsNotExist(err) {
-		return false, fmt.Errorf("remove restore marker: %w", err)
+	if err := removeRestoreMarker(markerPath); err != nil {
+		return false, err
 	}
 
 	if stagingDir != "" && stagingDir != "." {
