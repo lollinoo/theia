@@ -5,8 +5,8 @@ import { type DeviceFormModel, createDeviceConfigFormModel } from '../forms/devi
 import { DeviceNetworkSettingsSection } from './DeviceNetworkSettingsSection';
 
 vi.mock('../../api/client', () => ({
-  checkPrometheusHealth: vi.fn().mockResolvedValue({ available: true, enabled: true, url: '' }),
-  fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
+  checkPrometheusHealth: vi.fn().mockImplementation(() => new Promise<never>(() => {})),
+  fetchSNMPProfiles: vi.fn().mockImplementation(() => new Promise<never>(() => {})),
 }));
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -183,6 +183,12 @@ describe('DeviceNetworkSettingsSection', () => {
   });
 
   it('renders Prometheus target controls only for Prometheus-backed modes', async () => {
+    const { checkPrometheusHealth } = await import('../../api/client');
+    (checkPrometheusHealth as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      available: true,
+      enabled: true,
+      url: '',
+    });
     const device = mockDevice({ metrics_source: 'prometheus', prometheus_label_value: '' });
     const { onFormChange, onPrometheusChange, onFieldError } = renderSection({
       device,

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fetchDeviceInterfaces } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
 import type { Device } from '../types/api';
 import { LinkCreatePanel } from './LinkCreatePanel';
@@ -14,7 +15,11 @@ vi.mock('../api/client', () => ({
     target_if_name: '',
     discovery_protocol: '',
   }),
-  fetchDeviceInterfaces: vi.fn().mockImplementation((deviceId: string) => {
+  fetchDeviceInterfaces: vi.fn().mockImplementation(() => new Promise<never>(() => {})),
+}));
+
+function mockPhysicalInterfaces() {
+  vi.mocked(fetchDeviceInterfaces).mockImplementation((deviceId: string) => {
     const iface = {
       if_name: 'ether1',
       if_descr: 'Eth1',
@@ -27,8 +32,8 @@ vi.mock('../api/client', () => ({
       return Promise.resolve([iface]);
     }
     return Promise.resolve([]);
-  }),
-}));
+  });
+}
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -78,6 +83,7 @@ function mockVirtualDevice(overrides: Partial<Device> = {}): Device {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(fetchDeviceInterfaces).mockImplementation(() => new Promise<never>(() => {}));
 });
 
 describe('LinkCreatePanel', () => {
@@ -206,6 +212,7 @@ describe('LinkCreatePanel — handleSubmit catch handles typed errors', () => {
   };
 
   it('shows ServerError ref message when createLink throws ServerError', async () => {
+    mockPhysicalInterfaces();
     const { createLink } = await import('../api/client');
     (createLink as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new ServerError('internal error, ref: lnk001', 'lnk001'),
@@ -236,6 +243,7 @@ describe('LinkCreatePanel — handleSubmit catch handles typed errors', () => {
   });
 
   it('shows ValidationError message when createLink throws ValidationError', async () => {
+    mockPhysicalInterfaces();
     const { createLink } = await import('../api/client');
     (createLink as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new ValidationError('link already exists between these ports'),

@@ -12,6 +12,7 @@ const supportedPostgresCLIToolMajorVersion = 17
 
 var postgresCLIToolVersionPattern = regexp.MustCompile(`(?i)\(PostgreSQL\)[[:space:]]+([0-9]+)(?:\.[0-9]+)?(?:[[:space:]]|$)`)
 
+// ensureSupportedPostgresCLITools verifies required PostgreSQL CLI tools and major version.
 func ensureSupportedPostgresCLITools(ctx context.Context, names ...string) error {
 	for _, name := range names {
 		if err := ensureExternalCommand(name); err != nil {
@@ -34,6 +35,7 @@ func ensureSupportedPostgresCLITools(ctx context.Context, names ...string) error
 	return nil
 }
 
+// parsePostgresCLIToolMajorVersion extracts the major version from --version output.
 func parsePostgresCLIToolMajorVersion(output []byte) (int, bool) {
 	matches := postgresCLIToolVersionPattern.FindSubmatch(output)
 	if len(matches) != 2 {
@@ -46,6 +48,7 @@ func parsePostgresCLIToolMajorVersion(output []byte) (int, bool) {
 	return major, true
 }
 
+// redactedPostgresCLIToolOutput trims CLI version output after secret redaction.
 func redactedPostgresCLIToolOutput(output []byte) string {
 	return strings.TrimSpace(redactExternalCommandText(string(output)))
 }

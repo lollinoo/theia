@@ -41,6 +41,7 @@ func NewInstanceBackupHandlerWithRestarter(svc *service.InstanceBackupService, r
 	}
 }
 
+// ensureConfigured rejects instance-backup routes when the service is unavailable.
 func (h *InstanceBackupHandler) ensureConfigured(w http.ResponseWriter) bool {
 	if h.svc != nil {
 		return true
@@ -322,15 +323,18 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// recordInstanceRestoreRejection records why a restore upload was rejected.
 func recordInstanceRestoreRejection(reason string) {
 	observability.Default().IncBulkOperationRejection("instance_restore", reason, "local")
 }
 
+// isRequestBodyTooLarge recognizes http.MaxBytesReader limit errors.
 func isRequestBodyTooLarge(err error) bool {
 	var maxBytesErr *http.MaxBytesError
 	return errors.As(err, &maxBytesErr)
 }
 
+// restoreUploadPart streams the multipart file field without buffering the whole upload.
 func restoreUploadPart(r *http.Request) (io.ReadCloser, string, error) {
 	reader, err := r.MultipartReader()
 	if err != nil {
@@ -352,6 +356,7 @@ func restoreUploadPart(r *http.Request) (io.ReadCloser, string, error) {
 	}
 }
 
+// copyRestoreUpload copies an upload while allowing callers to detect limit overflow.
 func copyRestoreUpload(dst io.Writer, src io.Reader, limit int64) (int64, error) {
 	if limit <= 0 {
 		return io.Copy(dst, src)
@@ -362,6 +367,7 @@ func copyRestoreUpload(dst io.Writer, src io.Reader, limit int64) (int64, error)
 
 // --- Helpers ---
 
+// instanceBackupToMap preserves the API response shape and optional progress field.
 func instanceBackupToMap(b domain.InstanceBackup, progress ...*domain.InstanceBackupProgress) map[string]interface{} {
 	data := map[string]interface{}{
 		"id":                b.ID.String(),

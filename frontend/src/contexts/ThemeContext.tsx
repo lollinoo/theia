@@ -13,6 +13,12 @@ const STORAGE_KEY = 'theia-theme';
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
+// requireThemeContext preserves the hook invariant in a pure helper that tests can assert quietly.
+export function requireThemeContext<T>(ctx: T | null): T {
+  if (!ctx) throw new Error('useTheme must be used within ThemeProvider');
+  return ctx;
+}
+
 function getSystemTheme(): ResolvedTheme {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
@@ -58,8 +64,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
 export function useTheme(): ThemeContextValue {
   const ctx = useContext(ThemeContext);
-  if (!ctx) throw new Error('useTheme must be used within ThemeProvider');
-  return ctx;
+  return requireThemeContext(ctx);
 }
 
 // Light-mode equivalents for the neon area color palette.

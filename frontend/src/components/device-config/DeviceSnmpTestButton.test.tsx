@@ -150,23 +150,27 @@ describe('DeviceSnmpTestButton', () => {
     document.body.appendChild(container);
     const root = createRoot(container);
     try {
-      flushSync(() => {
-        root.render(<Harness deviceId="dev-1" resolve={false} />);
+      await act(async () => {
+        flushSync(() => {
+          root.render(<Harness deviceId="dev-1" resolve={false} />);
+        });
       });
 
       fireEvent.click(screen.getByRole('button', { name: 'Test SNMP Connectivity' }));
 
-      flushSync(() => {
-        root.render(<Harness deviceId="dev-2" resolve={true} />);
+      await act(async () => {
+        flushSync(() => {
+          root.render(<Harness deviceId="dev-2" resolve={true} />);
+        });
       });
-      await Promise.resolve();
-      await Promise.resolve();
 
       expect(screen.queryByText('SNMP OK')).not.toBeInTheDocument();
       expect(screen.queryByText('sysName: old-device')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Test SNMP Connectivity' })).toBeEnabled();
     } finally {
-      root.unmount();
+      await act(async () => {
+        root.unmount();
+      });
       container.remove();
     }
   });

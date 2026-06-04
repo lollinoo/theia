@@ -1,23 +1,15 @@
 package service
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,8 +32,7 @@ type InstanceBackupService struct {
 	restoreLimits   RestoreArchiveLimits
 	backupLimits    BackupArchiveLimits
 	createMu        sync.Mutex
-	operationMu     sync.Mutex
-	operations      map[uuid.UUID]*instanceBackupOperation
+	operations      *instanceBackupOperationTracker
 }
 
 // backupManifest describes the contents and metadata of an instance backup archive.
@@ -76,10 +67,12 @@ type RestoreLimitError struct {
 	message string
 }
 
+// Error returns the restore quota failure message used by API error mapping.
 func (e *RestoreLimitError) Error() string {
 	return e.message
 }
 
+// newRestoreLimitError wraps a formatted message in the restore quota error type.
 func newRestoreLimitError(format string, args ...interface{}) error {
 	return &RestoreLimitError{message: fmt.Sprintf(format, args...)}
 }
@@ -102,12 +95,6 @@ type archiveSourceFile struct {
 	archiveName string
 	diskPath    string
 	sizeBytes   int64
-}
-
-type instanceBackupOperation struct {
-	cancel          context.CancelFunc
-	progress        domain.InstanceBackupProgress
-	cancelRequested bool
 }
 
 // BackupArchiveLimits defines defensive quotas for instance backup archive creation.
@@ -133,8 +120,6 @@ var (
 	ErrInstanceBackupNotRunning     = errors.New("instance backup is not running")
 )
 
-var renameRestoreStagingPath = os.Rename
-
 // NewInstanceBackupService creates a new InstanceBackupService.
 func NewInstanceBackupService(
 	db *sql.DB,
@@ -159,7 +144,7 @@ func NewInstanceBackupService(
 		encryptionKey:   encryptionKey,
 		restoreLimits:   DefaultRestoreArchiveLimits,
 		backupLimits:    DefaultBackupArchiveLimits,
-		operations:      make(map[uuid.UUID]*instanceBackupOperation),
+		operations:      newInstanceBackupOperationTracker(),
 	}
 }
 
@@ -193,6 +178,7 @@ func (s *InstanceBackupService) BackupArchiveLimits() BackupArchiveLimits {
 	return normalizeBackupArchiveLimits(s.backupLimits)
 }
 
+// normalizeRestoreArchiveLimits fills missing restore limits with defensive defaults.
 func normalizeRestoreArchiveLimits(limits RestoreArchiveLimits) RestoreArchiveLimits {
 	defaults := DefaultRestoreArchiveLimits
 	if limits.MaxCompressedBytes <= 0 {
@@ -210,6 +196,7 @@ func normalizeRestoreArchiveLimits(limits RestoreArchiveLimits) RestoreArchiveLi
 	return limits
 }
 
+// normalizeBackupArchiveLimits fills missing backup limits with defensive defaults.
 func normalizeBackupArchiveLimits(limits BackupArchiveLimits) BackupArchiveLimits {
 	defaults := DefaultBackupArchiveLimits
 	if limits.MaxTotalBytes <= 0 {
@@ -264,6 +251,7 @@ func (s *InstanceBackupService) StartCreateWithTrigger(ctx context.Context, trig
 	return backup, nil
 }
 
+// prepareInstanceBackup creates the filesystem and repository state for a new run.
 func (s *InstanceBackupService) prepareInstanceBackup(trigger domain.InstanceBackupTrigger) (*domain.InstanceBackup, string, error) {
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
@@ -307,6 +295,7 @@ func (s *InstanceBackupService) prepareInstanceBackup(trigger domain.InstanceBac
 	return backup, backupSubDir, nil
 }
 
+// runPreparedInstanceBackup runs a prepared backup synchronously with its own tracker entry.
 func (s *InstanceBackupService) runPreparedInstanceBackup(ctx context.Context, backup *domain.InstanceBackup, backupSubDir string) (*domain.InstanceBackup, error) {
 	runCtx, cancel := s.backupRunContext(ctx)
 	s.beginInstanceBackupOperation(backup.ID, cancel, domain.InstanceBackupProgress{
@@ -318,6 +307,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackup(ctx context.Context, b
 	return s.runPreparedInstanceBackupWithContext(runCtx, backup, backupSubDir, true)
 }
 
+// runPreparedInstanceBackupWithContext performs database dump, manifest, archive, hash, and persistence steps.
 func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context.Context, backup *domain.InstanceBackup, backupSubDir string, ownOperation bool) (*domain.InstanceBackup, error) {
 	if err := ctx.Err(); err != nil {
 		s.cleanupFailedInstanceBackup(backup, backupSubDir, "backup cancelled", err)
@@ -379,49 +369,29 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 	}
 
 	// Step 5: Build manifest
-	manifest := backupManifest{
-		Version:           1,
-		AppVersion:        version.Version,
-		GitCommit:         version.GitCommit,
-		DBEntryName:       dbArtifact.archiveEntryName,
-		MigrationVersion:  dbArtifact.migrationVersion,
-		CreatedAt:         backup.CreatedAt.UTC().Format(time.RFC3339),
-		DBSHA256:          dbHash,
-		BackupFileCount:   backupFileCount,
-		TotalSizeBytes:    0, // will be updated after archiving
-		EncryptionKeyHash: computeEncryptionKeyHash(s.encryptionKey),
-	}
-
-	manifestJSON, err := json.MarshalIndent(&manifest, "", "  ")
+	manifestPlan, err := buildInstanceBackupArchiveManifestPlan(instanceBackupArchiveManifestInput{
+		appVersion:         version.Version,
+		gitCommit:          version.GitCommit,
+		dbArtifact:         dbArtifact,
+		backupCreatedAt:    backup.CreatedAt,
+		dbSHA256:           dbHash,
+		backupFileCount:    backupFileCount,
+		totalSourceBytes:   totalSourceBytes,
+		archiveFileEntries: archiveFileEntries,
+		encryptionKey:      s.encryptionKey,
+		limits:             limits,
+	})
 	if err != nil {
-		cleanupOnError(fmt.Sprintf("marshaling manifest: %v", err), err)
-		return nil, fmt.Errorf("marshaling manifest: %w", err)
-	}
-	estimatedManifestTotal, err := checkedArchiveByteTotal(
-		totalSourceBytes,
-		int64(len(manifestJSON)),
-		limits.MaxTotalBytes,
-	)
-	if err != nil {
-		cleanupOnError(fmt.Sprintf("checking archive quota: %v", err), err)
+		errMsg := err.Error()
+		if !strings.HasPrefix(errMsg, "marshaling manifest:") {
+			errMsg = fmt.Sprintf("checking archive quota: %v", err)
+		}
+		cleanupOnError(errMsg, err)
 		return nil, err
 	}
-	manifest.TotalSizeBytes = estimatedManifestTotal
-	manifestJSON, err = json.MarshalIndent(&manifest, "", "  ")
-	if err != nil {
-		cleanupOnError(fmt.Sprintf("marshaling manifest: %v", err), err)
-		return nil, fmt.Errorf("marshaling manifest: %w", err)
-	}
-	totalArchiveBytes, err := checkedArchiveByteTotal(totalSourceBytes, int64(len(manifestJSON)), limits.MaxTotalBytes)
-	if err != nil {
-		cleanupOnError(fmt.Sprintf("checking archive quota: %v", err), err)
-		return nil, err
-	}
-	manifest.TotalSizeBytes = totalArchiveBytes
-	if err := checkBackupArchiveTotals(totalArchiveBytes, archiveFileEntries+1, limits); err != nil {
-		cleanupOnError(fmt.Sprintf("checking archive quota: %v", err), err)
-		return nil, err
-	}
+	manifest := manifestPlan.manifest
+	manifestJSON := manifestPlan.manifestJSON
+	totalArchiveBytes := manifestPlan.totalArchiveBytes
 
 	s.updateInstanceBackupProgress(backup.ID, domain.InstanceBackupProgress{
 		Phase:   "archiving",
@@ -507,30 +477,14 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 	return backup, nil
 }
 
+// completeInstanceBackupSuccess persists successful metadata while respecting cancellation races.
 func (s *InstanceBackupService) completeInstanceBackupSuccess(backup *domain.InstanceBackup, totalSize int64, ownOperation bool) error {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-
-	if op := s.operations[backup.ID]; op != nil && op.cancelRequested {
-		return context.Canceled
-	}
-	if err := s.repo.Update(backup); err != nil {
-		return err
-	}
-	if ownOperation {
-		if op := s.operations[backup.ID]; op != nil {
-			op.progress = domain.InstanceBackupProgress{
-				Phase:   "complete",
-				Message: "Backup complete",
-				Current: totalSize,
-				Total:   totalSize,
-			}
-		}
-	}
-	delete(s.operations, backup.ID)
-	return nil
+	return s.operations.completeSuccess(backup.ID, totalSize, ownOperation, func() error {
+		return s.repo.Update(backup)
+	})
 }
 
+// cleanupFailedInstanceBackup marks a failed or cancelled run and removes its working directory.
 func (s *InstanceBackupService) cleanupFailedInstanceBackup(backup *domain.InstanceBackup, backupSubDir string, errMsg string, err error) {
 	status := domain.InstanceBackupStatusFailed
 	if errors.Is(err, context.Canceled) || s.instanceBackupCancellationRequested(backup.ID) || backupAlreadyCancelled(s.repo, backup.ID) {
@@ -545,11 +499,13 @@ func (s *InstanceBackupService) cleanupFailedInstanceBackup(backup *domain.Insta
 	os.RemoveAll(backupSubDir)
 }
 
+// backupAlreadyCancelled checks persisted state for cancellation that arrived during cleanup.
 func backupAlreadyCancelled(repo domain.InstanceBackupRepository, id uuid.UUID) bool {
 	backup, err := repo.GetByID(id)
 	return err == nil && backup != nil && backup.Status == domain.InstanceBackupStatusCancelled
 }
 
+// backupRunContext applies the configured backup duration limit to a run context.
 func (s *InstanceBackupService) backupRunContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -561,6 +517,7 @@ func (s *InstanceBackupService) backupRunContext(ctx context.Context) (context.C
 	return context.WithCancel(ctx)
 }
 
+// hasRunningInstanceBackup checks persisted records for an already-running backup.
 func (s *InstanceBackupService) hasRunningInstanceBackup() (bool, error) {
 	backups, err := s.repo.List()
 	if err != nil {
@@ -574,355 +531,15 @@ func (s *InstanceBackupService) hasRunningInstanceBackup() (bool, error) {
 	return false, nil
 }
 
-func (s *InstanceBackupService) hasActiveInstanceBackupOperation() bool {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	return len(s.operations) > 0
-}
-
-func (s *InstanceBackupService) beginInstanceBackupOperation(id uuid.UUID, cancel context.CancelFunc, progress domain.InstanceBackupProgress) {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	s.operations[id] = &instanceBackupOperation{
-		cancel:   cancel,
-		progress: progress,
-	}
-}
-
-func (s *InstanceBackupService) endInstanceBackupOperation(id uuid.UUID) {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	delete(s.operations, id)
-}
-
-func (s *InstanceBackupService) updateInstanceBackupProgress(id uuid.UUID, progress domain.InstanceBackupProgress) {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	if op := s.operations[id]; op != nil {
-		op.progress = progress
-	}
-}
-
-func (s *InstanceBackupService) instanceBackupCancellationRequested(id uuid.UUID) bool {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	op := s.operations[id]
-	return op != nil && op.cancelRequested
-}
-
-// GetProgress returns best-effort in-memory progress for a running instance backup.
-func (s *InstanceBackupService) GetProgress(id uuid.UUID) (domain.InstanceBackupProgress, bool) {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	op := s.operations[id]
-	if op == nil {
-		return domain.InstanceBackupProgress{}, false
-	}
-	return op.progress, true
-}
-
-// Cancel requests cancellation of a running instance backup.
-func (s *InstanceBackupService) Cancel(ctx context.Context, id uuid.UUID) (*domain.InstanceBackup, error) {
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-	}
-
-	s.operationMu.Lock()
-	op := s.operations[id]
-	if op != nil {
-		backup, err := s.repo.GetByID(id)
-		if err != nil {
-			s.operationMu.Unlock()
-			return nil, fmt.Errorf("getting backup for cancel: %w", err)
-		}
-		if backup == nil {
-			s.operationMu.Unlock()
-			return nil, ErrInstanceBackupNotFound
-		}
-		if backup.Status != domain.InstanceBackupStatusRunning {
-			s.operationMu.Unlock()
-			return nil, ErrInstanceBackupNotRunning
-		}
-		op.cancelRequested = true
-		op.cancel()
-		op.progress = domain.InstanceBackupProgress{
-			Phase:   "cancelling",
-			Message: "Cancellation requested",
-		}
-		s.operationMu.Unlock()
-		backup.ErrorMessage = "cancellation requested"
-		return backup, nil
-	}
-	s.operationMu.Unlock()
-
-	backup, err := s.repo.GetByID(id)
-	if err != nil {
-		return nil, fmt.Errorf("getting backup for cancel: %w", err)
-	}
-	if backup == nil {
-		return nil, ErrInstanceBackupNotFound
-	}
-	if backup.Status != domain.InstanceBackupStatusRunning {
-		return nil, ErrInstanceBackupNotRunning
-	}
-
-	backup.Status = domain.InstanceBackupStatusCancelled
-	backup.ErrorMessage = "cancelled by user"
-	if err := s.repo.Update(backup); err != nil {
-		return nil, fmt.Errorf("updating cancelled backup: %w", err)
-	}
-	return backup, nil
-}
-
-func checkBackupArchiveEntryQuota(name string, size int64, limits BackupArchiveLimits) error {
-	if size > limits.MaxEntryBytes {
-		return newRestoreLimitError("backup archive entry %s exceeds per-entry backup limit: %d bytes > %d bytes", name, size, limits.MaxEntryBytes)
-	}
-	return nil
-}
-
-func checkBackupArchiveTotals(totalBytes int64, fileEntries int, limits BackupArchiveLimits) error {
-	if totalBytes > limits.MaxTotalBytes {
-		return newRestoreLimitError("backup archive exceeds expanded backup limit: %d bytes > %d bytes", totalBytes, limits.MaxTotalBytes)
-	}
-	if fileEntries > limits.MaxFileEntries {
-		return newRestoreLimitError("backup archive file count exceeds backup limit: %d entries > %d entries", fileEntries, limits.MaxFileEntries)
-	}
-	return nil
-}
-
-func checkedArchiveByteTotal(current int64, increment int64, maxTotal int64) (int64, error) {
-	if increment < 0 {
-		return 0, fmt.Errorf("archive byte increment must be non-negative")
-	}
-	if current < 0 {
-		return 0, fmt.Errorf("archive byte total must be non-negative")
-	}
-	if current > maxTotal || increment > maxTotal-current {
-		return 0, newRestoreLimitError("backup archive exceeds expanded backup limit: current %d bytes plus %d bytes exceeds %d bytes", current, increment, maxTotal)
-	}
-	return current + increment, nil
-}
-
-func isArchiveQuotaError(err error) bool {
-	var limitErr *RestoreLimitError
-	return errors.As(err, &limitErr)
-}
-
-func (s *InstanceBackupService) collectArchiveSourceFiles(ctx context.Context, limits BackupArchiveLimits, initialBytes int64) ([]archiveSourceFile, int, *archiveSourceFile, int64, int, error) {
-	if err := checkBackupArchiveTotals(initialBytes, 1, limits); err != nil {
-		return nil, 0, nil, 0, 0, err
-	}
-
-	deviceBackupFiles := make([]archiveSourceFile, 0)
-	backupFileCount := 0
-	totalBytes := initialBytes
-	fileEntries := 1 // database entry
-
-	if info, err := os.Stat(s.deviceBackupDir); err == nil && info.IsDir() {
-		err := filepath.Walk(s.deviceBackupDir, func(path string, info os.FileInfo, err error) error {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			if err != nil {
-				return nil // skip files we can't read
-			}
-			if info.IsDir() {
-				// Skip the instance backup directory to prevent circular inclusion (T-15-10)
-				cleanInstanceBackupDir := filepath.Clean(s.backupDir)
-				cleanPath := filepath.Clean(path)
-				if cleanPath == cleanInstanceBackupDir || strings.HasPrefix(cleanPath, cleanInstanceBackupDir+string(filepath.Separator)) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !info.Mode().IsRegular() {
-				return nil
-			}
-
-			rel, err := filepath.Rel(s.deviceBackupDir, path)
-			if err != nil {
-				return nil
-			}
-
-			// Validate archive entry name: no absolute paths, no traversal (T-15-05)
-			archiveName := filepath.ToSlash(filepath.Join("backups", rel))
-			if strings.HasPrefix(archiveName, "/") || archiveEntryHasTraversal(archiveName) {
-				return nil
-			}
-			if err := checkBackupArchiveEntryQuota(archiveName, info.Size(), limits); err != nil {
-				return err
-			}
-			totalBytes, err = checkedArchiveByteTotal(totalBytes, info.Size(), limits.MaxTotalBytes)
-			if err != nil {
-				return err
-			}
-			fileEntries++
-			if err := checkBackupArchiveTotals(totalBytes, fileEntries, limits); err != nil {
-				return err
-			}
-
-			deviceBackupFiles = append(deviceBackupFiles, archiveSourceFile{
-				archiveName: archiveName,
-				diskPath:    path,
-				sizeBytes:   info.Size(),
-			})
-			backupFileCount++
-			return nil
-		})
-		if err != nil {
-			return nil, 0, nil, 0, 0, err
-		}
-	} else if err != nil && !os.IsNotExist(err) {
-		return nil, 0, nil, 0, 0, fmt.Errorf("statting device backup dir: %w", err)
-	}
-
-	var knownHostsFile *archiveSourceFile
-	if info, err := os.Stat(s.knownHostsPath); err == nil && !info.IsDir() && info.Mode().IsRegular() {
-		if err := checkBackupArchiveEntryQuota("known_hosts", info.Size(), limits); err != nil {
-			return nil, 0, nil, 0, 0, err
-		}
-		totalBytes, err = checkedArchiveByteTotal(totalBytes, info.Size(), limits.MaxTotalBytes)
-		if err != nil {
-			return nil, 0, nil, 0, 0, err
-		}
-		fileEntries++
-		if err := checkBackupArchiveTotals(totalBytes, fileEntries, limits); err != nil {
-			return nil, 0, nil, 0, 0, err
-		}
-		knownHostsFile = &archiveSourceFile{
-			archiveName: "known_hosts",
-			diskPath:    s.knownHostsPath,
-			sizeBytes:   info.Size(),
-		}
-	} else if err != nil && !os.IsNotExist(err) {
-		return nil, 0, nil, 0, 0, fmt.Errorf("statting known_hosts: %w", err)
-	}
-
-	return deviceBackupFiles, backupFileCount, knownHostsFile, totalBytes, fileEntries, nil
-}
-
-// createArchive builds a .tar.gz archive containing manifest, database, device backups, and known_hosts.
-// Returns the total size of all archived file data.
-func (s *InstanceBackupService) createArchive(
-	ctx context.Context,
-	archivePath string,
-	dbArtifact databaseBackupArtifact,
-	deviceBackupFiles []archiveSourceFile,
-	knownHostsFile *archiveSourceFile,
-	manifestJSON []byte,
-	manifest *backupManifest,
-	backupID uuid.UUID,
-) (int64, error) {
-	f, err := os.OpenFile(archivePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return 0, fmt.Errorf("creating archive file: %w", err)
-	}
-	defer f.Close()
-
-	gw := gzip.NewWriter(f)
-	defer gw.Close()
-
-	tw := tar.NewWriter(gw)
-	defer tw.Close()
-
-	var totalSize int64
-
-	// Add manifest.json
-	if err := addBytesToTar(tw, "manifest.json", manifestJSON, time.Now().UTC()); err != nil {
-		return 0, fmt.Errorf("adding manifest to archive: %w", err)
-	}
-	totalSize += int64(len(manifestJSON))
-	s.updateInstanceBackupProgress(backupID, domain.InstanceBackupProgress{
-		Phase:   "archiving",
-		Message: "Archived manifest",
-		Current: totalSize,
-		Total:   manifest.TotalSizeBytes,
-	})
-
-	// Add the PostgreSQL dump.
-	dbSize, err := addFileToTarContext(ctx, tw, dbArtifact.archiveEntryName, dbArtifact.tempPath)
-	if err != nil {
-		return 0, fmt.Errorf("adding database to archive: %w", err)
-	}
-	totalSize += dbSize
-	s.updateInstanceBackupProgress(backupID, domain.InstanceBackupProgress{
-		Phase:   "archiving",
-		Message: "Archived database snapshot",
-		Current: totalSize,
-		Total:   manifest.TotalSizeBytes,
-	})
-
-	// Add device backup files under backups/
-	for _, bf := range deviceBackupFiles {
-		size, err := addCollectedFileToTarContext(ctx, tw, bf, s.BackupArchiveLimits())
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isArchiveQuotaError(err) {
-				return 0, err
-			}
-			log.Printf("Warning: skipping device backup file %s: %v", bf.diskPath, err)
-			continue
-		}
-		totalSize += size
-		s.updateInstanceBackupProgress(backupID, domain.InstanceBackupProgress{
-			Phase:   "archiving",
-			Message: "Archived " + bf.archiveName,
-			Current: totalSize,
-			Total:   manifest.TotalSizeBytes,
-		})
-	}
-
-	// Add known_hosts if it exists
-	if knownHostsFile != nil {
-		size, err := addCollectedFileToTarContext(ctx, tw, *knownHostsFile, s.BackupArchiveLimits())
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isArchiveQuotaError(err) {
-				return 0, err
-			}
-			log.Printf("Warning: failed to add known_hosts to archive: %v", err)
-		} else {
-			totalSize += size
-			s.updateInstanceBackupProgress(backupID, domain.InstanceBackupProgress{
-				Phase:   "archiving",
-				Message: "Archived known_hosts",
-				Current: totalSize,
-				Total:   manifest.TotalSizeBytes,
-			})
-		}
-	}
-
-	return totalSize, nil
-}
-
 // backupDatabase creates a logical dump of the live PostgreSQL database.
 func (s *InstanceBackupService) backupDatabase(ctx context.Context, backupSubDir string) (databaseBackupArtifact, error) {
 	return s.backupPostgresDatabase(ctx, filepath.Join(backupSubDir, postgresArchiveDBEntry+".tmp"))
 }
 
+// backupPostgresDatabase dumps PostgreSQL and records the migration version for the manifest.
 func (s *InstanceBackupService) backupPostgresDatabase(ctx context.Context, destPath string) (databaseBackupArtifact, error) {
-	if strings.TrimSpace(s.dbDSN) == "" {
-		return databaseBackupArtifact{}, fmt.Errorf("postgres backup requires db_dsn")
-	}
-	if err := ensureSupportedPostgresCLITools(ctx, "pg_dump"); err != nil {
+	if err := runPostgresDump(ctx, s.dbDSN, destPath); err != nil {
 		return databaseBackupArtifact{}, err
-	}
-	conn, err := postgresCLIConnInfo(s.dbDSN)
-	if err != nil {
-		return databaseBackupArtifact{}, fmt.Errorf("build postgres conninfo: %w", err)
-	}
-	if _, err := runExternalCommandWithEnv(
-		ctx,
-		conn.env,
-		"pg_dump",
-		"--format=custom",
-		"--no-owner",
-		"--no-privileges",
-		"--file", destPath,
-		"--dbname", conn.connInfo,
-	); err != nil {
-		return databaseBackupArtifact{}, fmt.Errorf("pg_dump failed: %w", err)
 	}
 
 	migrationVersion, err := s.readCurrentMigrationVersion(ctx)
@@ -937,18 +554,7 @@ func (s *InstanceBackupService) backupPostgresDatabase(ctx context.Context, dest
 	}, nil
 }
 
-// computeEncryptionKeyHash returns the SHA-256 hash of the first 8 bytes of the encryption key.
-// This allows verifying the correct key is used during restore without exposing the full key.
-func computeEncryptionKeyHash(key []byte) string {
-	if len(key) < 8 {
-		// Key too short; hash what we have
-		h := sha256.Sum256(key)
-		return hex.EncodeToString(h[:])
-	}
-	h := sha256.Sum256(key[:8])
-	return hex.EncodeToString(h[:])
-}
-
+// readCurrentMigrationVersion reads the live schema migration version from PostgreSQL.
 func (s *InstanceBackupService) readCurrentMigrationVersion(ctx context.Context) (int, error) {
 	if s.db == nil {
 		return 0, fmt.Errorf("database connection unavailable")
@@ -961,173 +567,9 @@ func (s *InstanceBackupService) readCurrentMigrationVersion(ctx context.Context)
 	return version, nil
 }
 
-func manifestDatabaseEntryName(manifest backupManifest) (string, error) {
-	if entry := strings.TrimSpace(manifest.DBEntryName); entry != "" {
-		if entry == postgresArchiveDBEntry {
-			return entry, nil
-		}
-		if entry == legacySQLiteArchiveDBEntry {
-			return "", legacySQLiteRestoreArchiveError()
-		}
-		return "", fmt.Errorf("unsupported database entry %q in manifest", entry)
-	}
-	return postgresArchiveDBEntry, nil
-}
-
+// validatePostgresDump delegates dump validation to pg_restore inspection.
 func (s *InstanceBackupService) validatePostgresDump(ctx context.Context, dumpPath string) error {
-	if err := ensureSupportedPostgresCLITools(ctx, "pg_restore"); err != nil {
-		return err
-	}
-	if _, err := runExternalCommand(ctx, "pg_restore", "--list", dumpPath); err != nil {
-		return fmt.Errorf("validating postgres dump: %w", err)
-	}
-	return nil
-}
-
-// addFileToTar adds a file from disk to the tar archive. Returns the file size.
-func addFileToTar(tw *tar.Writer, name string, sourcePath string) (int64, error) {
-	return addFileToTarContext(context.Background(), tw, name, sourcePath)
-}
-
-func addFileToTarContext(ctx context.Context, tw *tar.Writer, name string, sourcePath string) (int64, error) {
-	f, err := os.Open(sourcePath)
-	if err != nil {
-		return 0, fmt.Errorf("opening %s: %w", sourcePath, err)
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		return 0, fmt.Errorf("statting %s: %w", sourcePath, err)
-	}
-
-	header := &tar.Header{
-		Name:    name,
-		Size:    info.Size(),
-		Mode:    0644,
-		ModTime: info.ModTime(),
-	}
-	if err := tw.WriteHeader(header); err != nil {
-		return 0, fmt.Errorf("writing header for %s: %w", name, err)
-	}
-
-	written, err := copyWithContext(ctx, tw, f)
-	if err != nil {
-		return 0, fmt.Errorf("writing data for %s: %w", name, err)
-	}
-	if written != info.Size() {
-		return 0, fmt.Errorf("writing data for %s: wrote %d bytes, expected %d bytes", name, written, info.Size())
-	}
-	return written, nil
-}
-
-func addCollectedFileToTarContext(ctx context.Context, tw *tar.Writer, source archiveSourceFile, limits BackupArchiveLimits) (int64, error) {
-	f, err := os.Open(source.diskPath)
-	if err != nil {
-		return 0, fmt.Errorf("opening %s: %w", source.diskPath, err)
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		return 0, fmt.Errorf("statting %s: %w", source.diskPath, err)
-	}
-	if err := checkBackupArchiveEntryQuota(source.archiveName, info.Size(), limits); err != nil {
-		return 0, err
-	}
-	if info.Size() > source.sizeBytes {
-		return 0, newRestoreLimitError("backup archive entry %s grew after collection: %d bytes > %d bytes", source.archiveName, info.Size(), source.sizeBytes)
-	}
-
-	header := &tar.Header{
-		Name:    source.archiveName,
-		Size:    info.Size(),
-		Mode:    0644,
-		ModTime: info.ModTime(),
-	}
-	if err := tw.WriteHeader(header); err != nil {
-		return 0, fmt.Errorf("writing header for %s: %w", source.archiveName, err)
-	}
-
-	written, err := copyWithContext(ctx, tw, f)
-	if err != nil {
-		return 0, fmt.Errorf("writing data for %s: %w", source.archiveName, err)
-	}
-	if written != info.Size() {
-		return 0, fmt.Errorf("writing data for %s: wrote %d bytes, expected %d bytes", source.archiveName, written, info.Size())
-	}
-	return written, nil
-}
-
-// addBytesToTar adds raw bytes as a tar entry.
-func addBytesToTar(tw *tar.Writer, name string, data []byte, modTime time.Time) error {
-	header := &tar.Header{
-		Name:    name,
-		Size:    int64(len(data)),
-		Mode:    0644,
-		ModTime: modTime,
-	}
-	if err := tw.WriteHeader(header); err != nil {
-		return fmt.Errorf("writing header for %s: %w", name, err)
-	}
-	if _, err := tw.Write(data); err != nil {
-		return fmt.Errorf("writing data for %s: %w", name, err)
-	}
-	return nil
-}
-
-// computeFileHash computes the SHA-256 hash of a file using streaming I/O.
-func computeFileHash(path string) (string, error) {
-	return computeFileHashContext(context.Background(), path)
-}
-
-func computeFileHashContext(ctx context.Context, path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("opening file for hash: %w", err)
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := copyWithContext(ctx, h, f); err != nil {
-		return "", fmt.Errorf("hashing file: %w", err)
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func copyWithContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	buf := make([]byte, 32*1024)
-	var written int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return written, err
-		}
-		nr, er := src.Read(buf)
-		if nr > 0 {
-			if err := ctx.Err(); err != nil {
-				return written, err
-			}
-			nw, ew := dst.Write(buf[:nr])
-			if nw > 0 {
-				written += int64(nw)
-			}
-			if ew != nil {
-				return written, ew
-			}
-			if nr != nw {
-				return written, io.ErrShortWrite
-			}
-		}
-		if er != nil {
-			if er == io.EOF {
-				return written, nil
-			}
-			return written, er
-		}
-	}
+	return validatePostgresDumpArchive(ctx, dumpPath)
 }
 
 // RestoreReport contains the results of archive validation and staging.
@@ -1182,17 +624,10 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	}
 
 	// Step 3: Parse manifest
-	manifestPath := filepath.Join(tempDir, "manifest.json")
-	manifestData, err := os.ReadFile(manifestPath)
+	manifest, err := readRestoreManifest(tempDir)
 	if err != nil {
-		return nil, fmt.Errorf("archive missing manifest.json")
+		return nil, err
 	}
-
-	var manifest backupManifest
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return nil, fmt.Errorf("parsing manifest.json: %w", err)
-	}
-
 	dbEntryName, err := manifestDatabaseEntryName(manifest)
 	if err != nil {
 		return nil, err
@@ -1200,9 +635,8 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	extractedDBPath := filepath.Join(tempDir, filepath.FromSlash(dbEntryName))
 
 	// Step 4: Verify encryption key hash
-	currentKeyHash := computeEncryptionKeyHash(s.encryptionKey)
-	if manifest.EncryptionKeyHash != currentKeyHash {
-		return nil, fmt.Errorf("encryption key mismatch: backup was created with a different THEIA_ENCRYPTION_KEY")
+	if err := validateRestoreManifestEncryptionKey(manifest, s.encryptionKey); err != nil {
+		return nil, err
 	}
 
 	// Step 5: Verify DB checksum
@@ -1226,13 +660,10 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	}
 
 	// Step 8: Check migration version compatibility
-	if manifest.MigrationVersion > currentVersion {
-		return nil, fmt.Errorf("archive has newer migration version (%d) than current (%d); upgrade Theia first",
-			manifest.MigrationVersion, currentVersion)
+	needsMigration, err := validateRestoreManifestMigrationCompatibility(manifest, currentVersion)
+	if err != nil {
+		return nil, err
 	}
-
-	// Step 9: Determine if migration is needed
-	needsMigration := manifest.MigrationVersion < currentVersion
 
 	// Step 11: Get DB file size for report
 	dbInfo, err := os.Stat(extractedDBPath)
@@ -1268,7 +699,7 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 
 	// Step 14: Stage files for restore
 	stagingDir := filepath.Join(s.stateDir, ".restore-staging")
-	markerPath := filepath.Join(s.stateDir, ".theia-restore-pending")
+	markerPath := restoreMarkerFilePath(s.stateDir)
 	if err := os.RemoveAll(stagingDir); err != nil {
 		return nil, fmt.Errorf("removing existing staging dir: %w", err)
 	}
@@ -1323,344 +754,17 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 		s.knownHostsPath,
 		time.Now().UTC().Format(time.RFC3339),
 	)
-	markerJSON, err := json.MarshalIndent(marker, "", "  ")
-	if err != nil {
-		return nil, cleanupStagingOnError(fmt.Errorf("marshaling marker JSON: %w", err))
-	}
-	if err := os.WriteFile(markerPath, markerJSON, 0600); err != nil {
-		return nil, cleanupStagingOnError(fmt.Errorf("writing restore marker: %w", err))
-	}
-	if err := os.Chmod(markerPath, 0600); err != nil {
-		return nil, cleanupStagingOnError(fmt.Errorf("restricting restore marker permissions: %w", err))
+	if err := writeRestoreMarker(markerPath, marker); err != nil {
+		return nil, cleanupStagingOnError(err)
 	}
 
 	report.Message = "Restore staged successfully. Server will restart to apply."
 	return report, nil
 }
 
-func validateRestoreArchiveFile(archivePath string, limits RestoreArchiveLimits) error {
-	info, err := os.Stat(archivePath)
-	if err != nil {
-		return fmt.Errorf("statting archive: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("restore archive must be a regular file")
-	}
-	if info.Size() > limits.MaxCompressedBytes {
-		return newRestoreLimitError("compressed archive exceeds restore limit: %d bytes > %d bytes", info.Size(), limits.MaxCompressedBytes)
-	}
-	return nil
-}
-
-// extractArchive extracts a .tar.gz archive to the given directory with security validation and quotas.
-func extractArchive(archivePath, destDir string, limits RestoreArchiveLimits) error {
-	return extractArchiveContext(context.Background(), archivePath, destDir, limits)
-}
-
-func extractArchiveContext(ctx context.Context, archivePath, destDir string, limits RestoreArchiveLimits) error {
-	f, err := os.Open(archivePath)
-	if err != nil {
-		return fmt.Errorf("opening archive: %w", err)
-	}
-	defer f.Close()
-
-	gr, err := gzip.NewReader(f)
-	if err != nil {
-		return fmt.Errorf("creating gzip reader: %w", err)
-	}
-	defer gr.Close()
-
-	tr := tar.NewReader(gr)
-	var totalBytes int64
-	var archiveEntries int
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("reading tar entry: %w", err)
-		}
-
-		// Security: reject symlinks and hard links (T-17-01)
-		if header.Typeflag == tar.TypeSymlink || header.Typeflag == tar.TypeLink {
-			return fmt.Errorf("archive contains disallowed link entry: %s", header.Name)
-		}
-
-		regularFile := header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA
-
-		// Security: only allow regular files and directories
-		if !regularFile && header.Typeflag != tar.TypeDir {
-			return fmt.Errorf("unsupported restore archive entry type %c: %s", header.Typeflag, header.Name)
-		}
-
-		cleanName, err := cleanRestoreArchiveEntryName(header.Name)
-		if err != nil {
-			return err
-		}
-
-		targetPath := filepath.Join(destDir, filepath.FromSlash(cleanName))
-		archiveEntries++
-		if archiveEntries > limits.MaxFileEntries {
-			return newRestoreLimitError(
-				"archive file count exceeds restore limit (archive entry count exceeds): %d entries > %d entries",
-				archiveEntries,
-				limits.MaxFileEntries,
-			)
-		}
-
-		if header.Typeflag == tar.TypeDir {
-			if !isAllowedRestoreArchiveDirectory(cleanName) {
-				return fmt.Errorf("disallowed restore archive entry: %s", cleanName)
-			}
-			if err := os.MkdirAll(targetPath, 0700); err != nil {
-				return fmt.Errorf("creating directory %s: %w", cleanName, err)
-			}
-			continue
-		}
-
-		if header.Size < 0 {
-			return fmt.Errorf("archive entry %s has invalid negative size", cleanName)
-		}
-		if header.Size > limits.MaxEntryBytes {
-			return newRestoreLimitError("archive entry %s exceeds per-entry restore limit: %d bytes > %d bytes", cleanName, header.Size, limits.MaxEntryBytes)
-		}
-		if header.Size > limits.MaxTotalBytes-totalBytes {
-			return newRestoreLimitError("expanded archive exceeds restore limit: %d bytes > %d bytes", totalBytes+header.Size, limits.MaxTotalBytes)
-		}
-
-		// Security: regular files outside the restore archive contract are rejected.
-		if isLegacySQLiteRestoreArchiveFile(cleanName) {
-			return legacySQLiteRestoreArchiveError()
-		}
-		if !isAllowedRestoreArchiveFile(cleanName) {
-			return fmt.Errorf("disallowed restore archive entry: %s", cleanName)
-		}
-
-		// Ensure parent directory exists
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0700); err != nil {
-			return fmt.Errorf("creating parent directory for %s: %w", cleanName, err)
-		}
-
-		outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-		if err != nil {
-			return fmt.Errorf("creating file %s: %w", cleanName, err)
-		}
-		if _, err := copyWithContext(ctx, outFile, tr); err != nil {
-			outFile.Close()
-			return fmt.Errorf("writing file %s: %w", cleanName, err)
-		}
-		outFile.Close()
-		totalBytes += header.Size
-	}
-
-	return nil
-}
-
-func cleanRestoreArchiveEntryName(name string) (string, error) {
-	entryName := strings.ReplaceAll(name, "\\", "/")
-	for strings.HasPrefix(entryName, "./") {
-		entryName = strings.TrimPrefix(entryName, "./")
-	}
-
-	if archiveEntryHasTraversal(entryName) {
-		return "", fmt.Errorf("archive contains path traversal: %s", name)
-	}
-	cleanName := path.Clean(entryName)
-	if cleanName == "." {
-		return "", fmt.Errorf("disallowed restore archive entry: %s", name)
-	}
-	if strings.HasPrefix(cleanName, "/") {
-		return "", fmt.Errorf("archive contains absolute path: %s", name)
-	}
-	return cleanName, nil
-}
-
-func archiveEntryHasTraversal(name string) bool {
-	normalized := strings.ReplaceAll(name, "\\", "/")
-	for _, part := range strings.Split(normalized, "/") {
-		if part == ".." {
-			return true
-		}
-	}
-	return false
-}
-
-func legacySQLiteRestoreArchiveError() error {
-	return fmt.Errorf("legacy SQLite instance backup archives containing %s cannot be restored by this PostgreSQL-only runtime; matching THEIA_ENCRYPTION_KEY is not sufficient. Restore a PostgreSQL instance backup containing %s, or restore/migrate the SQLite backup with a 1.7.x build before upgrading", legacySQLiteArchiveDBEntry, postgresArchiveDBEntry)
-}
-
-func isLegacySQLiteRestoreArchiveFile(name string) bool {
-	return strings.ReplaceAll(name, "\\", "/") == legacySQLiteArchiveDBEntry
-}
-
-// isAllowedRestoreArchiveFile checks if a regular file entry matches the restore archive contract.
-func isAllowedRestoreArchiveFile(name string) bool {
-	normalized := strings.ReplaceAll(name, "\\", "/")
-	switch normalized {
-	case "manifest.json", postgresArchiveDBEntry, "known_hosts":
-		return true
-	default:
-		return strings.HasPrefix(normalized, "backups/")
-	}
-}
-
-// isAllowedRestoreArchiveDirectory checks if a directory entry matches the restore archive contract.
-func isAllowedRestoreArchiveDirectory(name string) bool {
-	normalized := strings.ReplaceAll(name, "\\", "/")
-	return normalized == "backups" || strings.HasPrefix(normalized, "backups/")
-}
-
-// copyFile copies a single file from src to dst with private file permissions.
-func copyFile(src, dst string) error {
-	return copyFileContext(context.Background(), src, dst)
-}
-
-func copyFileContext(ctx context.Context, src, dst string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("opening %s: %w", src, err)
-	}
-	defer in.Close()
-
-	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
-		return fmt.Errorf("creating parent directory for %s: %w", dst, err)
-	}
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("creating %s: %w", dst, err)
-	}
-	defer out.Close()
-
-	if _, err := copyWithContext(ctx, out, in); err != nil {
-		return fmt.Errorf("copying %s to %s: %w", src, dst, err)
-	}
-
-	return os.Chmod(dst, 0600)
-}
-
-func moveOrCopyFileForRestoreStagingContext(ctx context.Context, src, dst string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := validateRestoreStagingSourceFile(src); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
-		return fmt.Errorf("creating parent directory for %s: %w", dst, err)
-	}
-	if err := renameRestoreStagingPath(src, dst); err == nil {
-		return os.Chmod(dst, 0600)
-	} else if !isCrossDeviceRenameError(err) {
-		return fmt.Errorf("moving %s to %s: %w", src, dst, err)
-	}
-	return copyFileContext(ctx, src, dst)
-}
-
-func moveOrCopyDirForRestoreStagingContext(ctx context.Context, srcDir, dstDir string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := validateRestoreStagingSourceDir(ctx, srcDir); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(dstDir), 0700); err != nil {
-		return fmt.Errorf("creating parent directory for %s: %w", dstDir, err)
-	}
-	if err := renameRestoreStagingPath(srcDir, dstDir); err == nil {
-		return nil
-	} else if !isCrossDeviceRenameError(err) {
-		return fmt.Errorf("moving %s to %s: %w", srcDir, dstDir, err)
-	}
-	return copyDirContext(ctx, srcDir, dstDir)
-}
-
-func validateRestoreStagingSourceFile(src string) error {
-	info, err := os.Lstat(src)
-	if err != nil {
-		return fmt.Errorf("stat restore staging source %s: %w", src, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("restore staging source must be a regular file: %s", src)
-	}
-	return nil
-}
-
-func validateRestoreStagingSourceDir(ctx context.Context, srcDir string) error {
-	info, err := os.Lstat(srcDir)
-	if err != nil {
-		return fmt.Errorf("stat restore staging source dir %s: %w", srcDir, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("restore staging source must be a directory: %s", srcDir)
-	}
-	return filepath.WalkDir(srcDir, func(entryPath string, entry os.DirEntry, err error) error {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
-			return fmt.Errorf("restore staging source entry must be a regular file or directory: %s", entryPath)
-		}
-		return nil
-	})
-}
-
-func isCrossDeviceRenameError(err error) bool {
-	return errors.Is(err, syscall.EXDEV)
-}
-
-// copyDir recursively copies a directory from srcDir to dstDir.
-func copyDir(srcDir, dstDir string) error {
-	return copyDirContext(context.Background(), srcDir, dstDir)
-}
-
-func copyDirContext(ctx context.Context, srcDir, dstDir string) error {
-	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if err != nil {
-			return err
-		}
-
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dstDir, rel)
-
-		if info.IsDir() {
-			return os.MkdirAll(target, 0700)
-		}
-
-		return copyFileContext(ctx, path, target)
-	})
-}
-
-// List returns all instance backups.
 // FailStaleRunning reconciles any "running" backups on startup.
 // If the archive file exists on disk, the backup completed but the DB was
-// snapshot'd mid-process (self-referential backup) — mark it as success.
+// snapshot'd mid-process (self-referential backup), so it is marked as success.
 // Otherwise the goroutine is gone and the backup truly failed.
 func (s *InstanceBackupService) FailStaleRunning() {
 	backups, err := s.repo.List()
@@ -1704,6 +808,7 @@ func (s *InstanceBackupService) FailStaleRunning() {
 	}
 }
 
+// List returns all instance backups.
 func (s *InstanceBackupService) List(ctx context.Context) ([]domain.InstanceBackup, error) {
 	return s.repo.List()
 }
@@ -1739,6 +844,7 @@ func (s *InstanceBackupService) Delete(ctx context.Context, id uuid.UUID) error 
 	return s.repo.Delete(id)
 }
 
+// validateInstanceBackupFilePath ensures deletion targets stay inside the backup root.
 func validateInstanceBackupFilePath(rootDir string, filePath string) error {
 	root := filepath.Clean(rootDir)
 	dir := filepath.Clean(filepath.Dir(filePath))

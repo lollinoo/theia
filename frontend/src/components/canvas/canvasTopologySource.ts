@@ -37,10 +37,12 @@ interface LoadCanvasTopologySourceOptions {
   forceRuntimeBootstrap?: boolean;
 }
 
+// canvasMapKey returns the stable ownership key used to discard stale map loads.
 export function canvasMapKey(mapId: string | null): string {
   return mapId === null ? 'default:' : `map:${mapId}`;
 }
 
+// topologyPositionsToPositionMap converts API position rows into hook position state.
 export function topologyPositionsToPositionMap(
   positions: Iterable<DevicePosition>,
 ): Map<string, PositionState> {
@@ -56,6 +58,7 @@ export function topologyPositionsToPositionMap(
   );
 }
 
+// isCanvasTopologyUnsupported identifies backends that need the legacy topology fallback.
 export function isCanvasTopologyUnsupported(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('status' in error)) {
     return false;
@@ -65,11 +68,13 @@ export function isCanvasTopologyUnsupported(error: unknown): boolean {
   return status === 404 || status === 405 || status === 501;
 }
 
+// etagFromTopologyVersion converts topology versions to the quoted ETag format used by fetch.
 function etagFromTopologyVersion(topologyVersion: string | undefined): string | undefined {
   const version = topologyVersion?.trim();
   return version ? JSON.stringify(version) : undefined;
 }
 
+// loadCanvasTopologySource loads default or saved-map topology with ETag and bootstrap handling.
 export async function loadCanvasTopologySource({
   mapId,
   fetchPositions,

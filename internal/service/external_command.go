@@ -12,10 +12,12 @@ import (
 
 var lookupExternalCommand = exec.LookPath
 
+// runExternalCommand executes a command and returns redacted command-context errors.
 var runExternalCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return runExternalCommandWithEnv(ctx, nil, name, args...)
 }
 
+// runExternalCommandWithEnv executes a command with optional environment variables.
 var runExternalCommandWithEnv = func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	if len(env) > 0 {
@@ -29,6 +31,7 @@ var runExternalCommandWithEnv = func(ctx context.Context, env []string, name str
 	return output, externalCommandError(name, args, err, output)
 }
 
+// ensureExternalCommand verifies that a required executable is on PATH.
 func ensureExternalCommand(name string) error {
 	if _, err := lookupExternalCommand(name); err != nil {
 		return fmt.Errorf("required command %q not found in PATH: %w", name, err)
@@ -43,6 +46,7 @@ var (
 	externalCommandPGPasswordPattern         = regexp.MustCompile(`(?i)(PGPASSWORD=)[^\s]+`)
 )
 
+// externalCommandError combines command, error, and output after secret redaction.
 func externalCommandError(name string, args []string, err error, output []byte) error {
 	command := formatExternalCommand(name, args)
 	trimmedOutput := strings.TrimSpace(redactExternalCommandText(string(output)))
@@ -52,6 +56,7 @@ func externalCommandError(name string, args []string, err error, output []byte) 
 	return fmt.Errorf("%s: %w: %s", command, err, trimmedOutput)
 }
 
+// formatExternalCommand renders a redacted command line for error messages.
 func formatExternalCommand(name string, args []string) string {
 	if len(args) == 0 {
 		return name
@@ -59,6 +64,7 @@ func formatExternalCommand(name string, args []string) string {
 	return name + " " + strings.Join(redactExternalCommandArgs(args), " ")
 }
 
+// redactExternalCommandArgs redacts sensitive flags and inline secret-bearing arguments.
 func redactExternalCommandArgs(args []string) []string {
 	redacted := make([]string, 0, len(args))
 	redactNext := false
@@ -82,6 +88,7 @@ func redactExternalCommandArgs(args []string) []string {
 	return redacted
 }
 
+// isSensitiveExternalCommandFlag identifies flags whose following value must be hidden.
 func isSensitiveExternalCommandFlag(flag string) bool {
 	switch flag {
 	case "--dbname", "-d", "--password":
@@ -91,6 +98,7 @@ func isSensitiveExternalCommandFlag(flag string) bool {
 	}
 }
 
+// redactExternalCommandText removes credentials from arbitrary command output.
 func redactExternalCommandText(text string) string {
 	redacted := redactPostgresURLTokens(text)
 	redacted = externalCommandPasswordAssignmentPattern.ReplaceAllString(redacted, "${1}"+externalCommandRedactedValue)
@@ -98,6 +106,7 @@ func redactExternalCommandText(text string) string {
 	return redacted
 }
 
+// redactPostgresURLTokens replaces whitespace-delimited PostgreSQL URLs with a placeholder.
 func redactPostgresURLTokens(text string) string {
 	var b strings.Builder
 	inToken := false

@@ -1360,7 +1360,9 @@ describe('Canvas drag state ownership', () => {
     const remove = testState.canvasPanelsProps.onRemoveDeviceFromMap as (
       deviceId: string,
     ) => Promise<void>;
-    await remove('dev-a');
+    await act(async () => {
+      await remove('dev-a');
+    });
 
     expect(testState.removeDeviceFromCanvasMap).toHaveBeenCalledWith('map-backbone', 'dev-a');
     expect(testState.loadTopology).toHaveBeenCalledWith(true);

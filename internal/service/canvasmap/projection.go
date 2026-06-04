@@ -1,6 +1,10 @@
 package canvasmap
 
 import (
+	"errors"
+	"fmt"
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 )
@@ -11,6 +15,45 @@ type TopologyProjection struct {
 	Devices      []domain.Device
 	Links        []domain.Link
 	GhostDevices []domain.Device
+}
+
+type TopologyResponsePlan struct {
+	Devices       []domain.Device
+	Links         []domain.Link
+	Positions     []domain.DevicePosition
+	Areas         []domain.AreaWithCount
+	VisualColors  map[uuid.UUID]string
+	DeviceCount   int
+	LinkCount     int
+	PositionCount int
+}
+
+type CreatePlan struct {
+	Filter                domain.CanvasMapFilter
+	PersistedSourceAreaID *uuid.UUID
+	SourceMapID           *uuid.UUID
+	CreateEmptyMembership bool
+}
+
+type DefaultPositionCopyPlan struct {
+	ShouldSave bool
+	Positions  []domain.DevicePosition
+}
+
+type SourceMapMaterializationPlan struct {
+	Membership          domain.CanvasMapMembership
+	Positions           []domain.DevicePosition
+	ShouldSavePositions bool
+}
+
+var ErrDefaultMapDelete = errors.New("cannot delete default canvas map")
+
+// ValidateDelete rejects attempts to delete the default saved map.
+func ValidateDelete(canvasMap domain.CanvasMap) error {
+	if canvasMap.IsDefault {
+		return ErrDefaultMapDelete
+	}
+	return nil
 }
 
 // ProjectionFilterForMap returns the filter used to project a persisted canvas map.
@@ -33,6 +76,21 @@ func MaterializationFilter(filter domain.CanvasMapFilter, sourceAreaID *uuid.UUI
 		filter.AreaID = &areaID
 	}
 	return filter
+}
+
+// PlanCreate captures saved-map materialization decisions for a create request.
+func PlanCreate(filter domain.CanvasMapFilter, sourceAreaID *uuid.UUID, sourceMapID *uuid.UUID) CreatePlan {
+	materializationFilter := MaterializationFilter(filter, sourceAreaID)
+	persistedSourceAreaID := sourceAreaID
+	if sourceMapID != nil {
+		persistedSourceAreaID = nil
+	}
+	return CreatePlan{
+		Filter:                materializationFilter,
+		PersistedSourceAreaID: persistedSourceAreaID,
+		SourceMapID:           sourceMapID,
+		CreateEmptyMembership: ShouldCreateEmptyMembership(filter, sourceAreaID),
+	}
 }
 
 // ShouldCreateEmptyMembership reports whether map creation should persist an
@@ -211,8 +269,75 @@ func MaterializeMembershipFromSourceMap(
 	return membership
 }
 
+// PlanSourceMapMaterialization prepares membership and source-position copy
+// decisions for creating a saved map from another saved map.
+func PlanSourceMapMaterialization(
+	devices []domain.Device,
+	links []domain.Link,
+	sourceMembership domain.CanvasMapMembership,
+	fallbackAreas []domain.AreaWithCount,
+	filter domain.CanvasMapFilter,
+	sourcePositions []domain.DevicePosition,
+) SourceMapMaterializationPlan {
+	areaSnapshots := sourceMembership.Areas
+	if len(areaSnapshots) == 0 {
+		areaSnapshots = AreasWithCountToMembership(fallbackAreas)
+	}
+	membership := MaterializeMembershipFromSourceMap(devices, links, sourceMembership, areaSnapshots, filter)
+	positions := FilterPositionsForMemberDevices(sourcePositions, membership.Devices)
+	return SourceMapMaterializationPlan{
+		Membership:          membership,
+		Positions:           positions,
+		ShouldSavePositions: len(positions) > 0,
+	}
+}
+
+// BuildMaterializedTopologyResponsePlan prepares saved-map topology response inputs.
+func BuildMaterializedTopologyResponsePlan(
+	membership domain.CanvasMapMembership,
+	devices []domain.Device,
+	links []domain.Link,
+	positions []domain.DevicePosition,
+) TopologyResponsePlan {
+	projection := ProjectTopologyForMembership(devices, links, membership)
+	displayDevices := append([]domain.Device{}, projection.Devices...)
+	displayDevices = append(displayDevices, projection.GhostDevices...)
+	projectedPositions := FilterPositionsForDevices(positions, displayDevices)
+
+	return TopologyResponsePlan{
+		Devices:       displayDevices,
+		Links:         projection.Links,
+		Positions:     projectedPositions,
+		Areas:         AreaMembershipToAreas(membership.Areas, projection.Devices),
+		VisualColors:  VisualColorsByDeviceID(membership.Devices),
+		DeviceCount:   len(projection.Devices),
+		LinkCount:     len(projection.Links),
+		PositionCount: len(projectedPositions),
+	}
+}
+
+// EmptyTopologyResponsePlan returns the response inputs for an unmaterialized map.
+func EmptyTopologyResponsePlan() TopologyResponsePlan {
+	return TopologyResponsePlan{
+		Devices:      []domain.Device{},
+		Links:        []domain.Link{},
+		Positions:    []domain.DevicePosition{},
+		Areas:        []domain.AreaWithCount{},
+		VisualColors: map[uuid.UUID]string{},
+	}
+}
+
 // AreasWithCountToMembership converts global area rows into saved-map snapshots.
 func AreasWithCountToMembership(areas []domain.AreaWithCount) []domain.CanvasMapAreaMembership {
+	areaRows := make([]domain.Area, 0, len(areas))
+	for _, area := range areas {
+		areaRows = append(areaRows, area.Area)
+	}
+	return AreasToMembership(areaRows)
+}
+
+// AreasToMembership converts area rows into saved-map snapshots.
+func AreasToMembership(areas []domain.Area) []domain.CanvasMapAreaMembership {
 	snapshots := make([]domain.CanvasMapAreaMembership, 0, len(areas))
 	for _, area := range areas {
 		snapshots = append(snapshots, domain.CanvasMapAreaMembership{
@@ -223,6 +348,168 @@ func AreasWithCountToMembership(areas []domain.AreaWithCount) []domain.CanvasMap
 		})
 	}
 	return snapshots
+}
+
+// BaseDeviceMembership returns the saved-map membership row for an added base device.
+func BaseDeviceMembership(device domain.Device) domain.CanvasMapDeviceMembership {
+	return domain.CanvasMapDeviceMembership{
+		DeviceID: device.ID,
+		Role:     domain.CanvasMapDeviceRoleBase,
+		AreaIDs:  append([]uuid.UUID(nil), device.AreaIDs...),
+	}
+}
+
+// ShouldCopyDefaultPositions reports whether a new materialized map should copy
+// positions from the current default map.
+func ShouldCopyDefaultPositions(mapID uuid.UUID, defaultMapID uuid.UUID) bool {
+	return mapID != defaultMapID
+}
+
+// DefaultPositionCandidates returns default-map positions, falling back to
+// legacy canvas positions only when the default map has no saved positions.
+func DefaultPositionCandidates(defaultPositions []domain.DevicePosition, legacyPositions []domain.DevicePosition) []domain.DevicePosition {
+	if len(defaultPositions) > 0 {
+		return defaultPositions
+	}
+	return legacyPositions
+}
+
+// DefaultPositionsForMembership returns copyable default positions for map members.
+func DefaultPositionsForMembership(
+	candidates []domain.DevicePosition,
+	devices []domain.CanvasMapDeviceMembership,
+) []domain.DevicePosition {
+	return FilterPositionsForMemberDevices(candidates, devices)
+}
+
+// PlanDefaultPositionCopy selects copyable positions for a newly materialized map.
+func PlanDefaultPositionCopy(
+	mapID uuid.UUID,
+	defaultMapID uuid.UUID,
+	defaultPositions []domain.DevicePosition,
+	legacyPositions []domain.DevicePosition,
+	devices []domain.CanvasMapDeviceMembership,
+) DefaultPositionCopyPlan {
+	if !ShouldCopyDefaultPositions(mapID, defaultMapID) {
+		return DefaultPositionCopyPlan{Positions: []domain.DevicePosition{}}
+	}
+	positions := DefaultPositionsForMembership(
+		DefaultPositionCandidates(defaultPositions, legacyPositions),
+		devices,
+	)
+	return DefaultPositionCopyPlan{
+		ShouldSave: len(positions) > 0,
+		Positions:  positions,
+	}
+}
+
+// VirtualMemberDeviceIDs returns materialized members that are virtual devices.
+func VirtualMemberDeviceIDs(
+	membership domain.CanvasMapMembership,
+	devices []domain.Device,
+) (map[uuid.UUID]struct{}, error) {
+	deviceByID := canvasMapDeviceByID(devices)
+	virtualMemberIDs := make(map[uuid.UUID]struct{})
+	for _, member := range membership.Devices {
+		device, ok := deviceByID[member.DeviceID]
+		if !ok {
+			return nil, fmt.Errorf("canvas map member device %s not found", member.DeviceID)
+		}
+		if device.DeviceType == domain.DeviceTypeVirtual {
+			virtualMemberIDs[member.DeviceID] = struct{}{}
+		}
+	}
+	return virtualMemberIDs, nil
+}
+
+// VirtualDeviceCloneCandidates returns shared virtual members in membership order.
+func VirtualDeviceCloneCandidates(
+	membership domain.CanvasMapMembership,
+	devices []domain.Device,
+	sharedDeviceIDs map[uuid.UUID]struct{},
+) ([]domain.Device, error) {
+	deviceByID := canvasMapDeviceByID(devices)
+	candidates := make([]domain.Device, 0, len(sharedDeviceIDs))
+	for _, member := range membership.Devices {
+		device, ok := deviceByID[member.DeviceID]
+		if !ok {
+			return nil, fmt.Errorf("canvas map member device %s not found", member.DeviceID)
+		}
+		if _, shared := sharedDeviceIDs[member.DeviceID]; !shared {
+			continue
+		}
+		if device.DeviceType != domain.DeviceTypeVirtual {
+			continue
+		}
+		candidates = append(candidates, device)
+	}
+	return candidates, nil
+}
+
+// MembershipWithDeviceClones copies membership and replaces cloned device IDs.
+func MembershipWithDeviceClones(
+	membership domain.CanvasMapMembership,
+	clonedDeviceIDs map[uuid.UUID]uuid.UUID,
+) domain.CanvasMapMembership {
+	nextMembership := domain.CanvasMapMembership{
+		Devices: make([]domain.CanvasMapDeviceMembership, 0, len(membership.Devices)),
+		LinkIDs: append([]uuid.UUID(nil), membership.LinkIDs...),
+		Areas:   append([]domain.CanvasMapAreaMembership(nil), membership.Areas...),
+	}
+	for _, member := range membership.Devices {
+		nextMember := domain.CanvasMapDeviceMembership{
+			DeviceID:    member.DeviceID,
+			Role:        member.Role,
+			AreaIDs:     append([]uuid.UUID(nil), member.AreaIDs...),
+			VisualColor: copyOptionalString(member.VisualColor),
+		}
+		if cloneID, ok := clonedDeviceIDs[member.DeviceID]; ok {
+			nextMember.DeviceID = cloneID
+		}
+		nextMembership.Devices = append(nextMembership.Devices, nextMember)
+	}
+	return nextMembership
+}
+
+// RemapPositionsForDeviceClones moves positions from original device IDs to
+// their clone IDs and keeps only positions still present in membership.
+func RemapPositionsForDeviceClones(
+	positions []domain.DevicePosition,
+	clonedDeviceIDs map[uuid.UUID]uuid.UUID,
+	members []domain.CanvasMapDeviceMembership,
+) []domain.DevicePosition {
+	memberIDs := make(map[uuid.UUID]struct{}, len(members))
+	for _, member := range members {
+		memberIDs[member.DeviceID] = struct{}{}
+	}
+
+	nextPositions := make([]domain.DevicePosition, 0, len(positions))
+	for _, position := range positions {
+		if cloneID, ok := clonedDeviceIDs[position.DeviceID]; ok {
+			position.DeviceID = cloneID
+		}
+		if _, ok := memberIDs[position.DeviceID]; ok {
+			nextPositions = append(nextPositions, position)
+		}
+	}
+	return nextPositions
+}
+
+// RemapLinkForDeviceClones returns a link with cloned endpoint IDs applied.
+func RemapLinkForDeviceClones(
+	link domain.Link,
+	clonedDeviceIDs map[uuid.UUID]uuid.UUID,
+) (domain.Link, bool) {
+	cloned := false
+	if cloneID, ok := clonedDeviceIDs[link.SourceDeviceID]; ok {
+		link.SourceDeviceID = cloneID
+		cloned = true
+	}
+	if cloneID, ok := clonedDeviceIDs[link.TargetDeviceID]; ok {
+		link.TargetDeviceID = cloneID
+		cloned = true
+	}
+	return link, cloned
 }
 
 // ProjectTopologyForMembership applies a materialized map membership to a topology.
@@ -321,6 +608,57 @@ func ConnectedBaseLinkIDs(
 	return linkIDs
 }
 
+// MissingLinkIDs returns candidate links that are not already present.
+func MissingLinkIDs(existing []uuid.UUID, candidates []uuid.UUID) []uuid.UUID {
+	if len(candidates) == 0 {
+		return []uuid.UUID{}
+	}
+	known := make(map[uuid.UUID]struct{}, len(existing))
+	for _, id := range existing {
+		known[id] = struct{}{}
+	}
+	missing := make([]uuid.UUID, 0, len(candidates))
+	for _, id := range candidates {
+		if _, ok := known[id]; ok {
+			continue
+		}
+		missing = append(missing, id)
+	}
+	return missing
+}
+
+// HasDuplicateDeviceAddress reports whether another map member already has the
+// device address being added.
+func HasDuplicateDeviceAddress(device domain.Device, existing []domain.Device) bool {
+	address := NormalizeDeviceAddress(device.IP)
+	if address == "" {
+		return false
+	}
+	for _, existingDevice := range existing {
+		if existingDevice.ID == device.ID {
+			continue
+		}
+		if NormalizeDeviceAddress(existingDevice.IP) == address {
+			return true
+		}
+	}
+	return false
+}
+
+// NormalizeDeviceAddress canonicalizes device addresses before saved-map duplicate checks.
+func NormalizeDeviceAddress(address string) string {
+	return strings.ToLower(strings.TrimSpace(address))
+}
+
+// DuplicateDeviceAddressMessage formats the API-compatible duplicate-address conflict text.
+func DuplicateDeviceAddressMessage(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "a device with that address already exists in this map"
+	}
+	return fmt.Sprintf("a device with IP/host %q already exists in this map", address)
+}
+
 // AreaMembershipToAreas converts saved-map area snapshots to area rows with map-local counts.
 func AreaMembershipToAreas(
 	areas []domain.CanvasMapAreaMembership,
@@ -387,6 +725,7 @@ func FilterPositionsForMemberDevices(
 	return filtered
 }
 
+// areaWithCountIDSet indexes area rows by ID for membership filtering.
 func areaWithCountIDSet(areas []domain.AreaWithCount) map[uuid.UUID]struct{} {
 	ids := make(map[uuid.UUID]struct{}, len(areas))
 	for _, area := range areas {
@@ -395,6 +734,7 @@ func areaWithCountIDSet(areas []domain.AreaWithCount) map[uuid.UUID]struct{} {
 	return ids
 }
 
+// areaSnapshotIDSet indexes saved-map area snapshots by ID for source-map filtering.
 func areaSnapshotIDSet(areas []domain.CanvasMapAreaMembership) map[uuid.UUID]struct{} {
 	ids := make(map[uuid.UUID]struct{}, len(areas))
 	for _, area := range areas {
@@ -403,6 +743,7 @@ func areaSnapshotIDSet(areas []domain.CanvasMapAreaMembership) map[uuid.UUID]str
 	return ids
 }
 
+// filterDeviceAreaIDs keeps only device area assignments that are part of the map-local area set.
 func filterDeviceAreaIDs(areaIDs []uuid.UUID, included map[uuid.UUID]struct{}) []uuid.UUID {
 	if len(areaIDs) == 0 || len(included) == 0 {
 		return []uuid.UUID{}
@@ -416,6 +757,7 @@ func filterDeviceAreaIDs(areaIDs []uuid.UUID, included map[uuid.UUID]struct{}) [
 	return filtered
 }
 
+// areasForMembership selects global area rows that should be snapshotted into a materialized map.
 func areasForMembership(
 	areas []domain.AreaWithCount,
 	baseDevices []domain.Device,
@@ -441,6 +783,7 @@ func areasForMembership(
 	return filtered
 }
 
+// areaSnapshotsForMembership selects source-map area snapshots that remain after filtering.
 func areaSnapshotsForMembership(
 	areas []domain.CanvasMapAreaMembership,
 	baseDevices []domain.Device,
@@ -466,6 +809,7 @@ func areaSnapshotsForMembership(
 	return filtered
 }
 
+// areaDeviceCount counts base devices assigned to an area in the map-local projection.
 func areaDeviceCount(areaID uuid.UUID, devices []domain.Device) int {
 	count := 0
 	for _, device := range devices {
@@ -476,6 +820,7 @@ func areaDeviceCount(areaID uuid.UUID, devices []domain.Device) int {
 	return count
 }
 
+// deviceHasArea reports whether a device currently carries the given area assignment.
 func deviceHasArea(device domain.Device, areaID uuid.UUID) bool {
 	for _, deviceAreaID := range device.AreaIDs {
 		if deviceAreaID == areaID {
@@ -485,6 +830,7 @@ func deviceHasArea(device domain.Device, areaID uuid.UUID) bool {
 	return false
 }
 
+// deviceMatchesTags applies exact saved-map tag filters to a candidate base device.
 func deviceMatchesTags(device domain.Device, tags map[string]string) bool {
 	for key, expected := range tags {
 		actual, ok := device.Tags[key]
@@ -493,4 +839,22 @@ func deviceMatchesTags(device domain.Device, tags map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// canvasMapDeviceByID indexes loaded devices for membership validation and virtual isolation.
+func canvasMapDeviceByID(devices []domain.Device) map[uuid.UUID]domain.Device {
+	deviceByID := make(map[uuid.UUID]domain.Device, len(devices))
+	for _, device := range devices {
+		deviceByID[device.ID] = device
+	}
+	return deviceByID
+}
+
+// copyOptionalString returns a detached copy so membership plans cannot mutate caller-owned strings.
+func copyOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }

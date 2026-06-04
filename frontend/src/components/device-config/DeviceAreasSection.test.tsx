@@ -5,7 +5,7 @@ import { type DeviceFormModel, createDeviceConfigFormModel } from '../forms/devi
 import { DeviceAreasSection } from './DeviceAreasSection';
 
 vi.mock('../../api/client', () => ({
-  fetchAreas: vi.fn().mockResolvedValue([]),
+  fetchAreas: vi.fn().mockImplementation(() => new Promise<never>(() => {})),
 }));
 
 function mockDevice(overrides: Partial<Device> = {}): Device {

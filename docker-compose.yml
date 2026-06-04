@@ -41,7 +41,7 @@ services:
       - THEIA_LISTEN_ADDR=:8080
       - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-devkey1234567890}
       - THEIA_SESSION_SECRET=${THEIA_SESSION_SECRET:-dev-session-secret-change-me-32bytes}
-      - THEIA_ALLOWED_ORIGINS=${THEIA_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000, http://192.168.1.30:3000}
+      - THEIA_ALLOWED_ORIGINS=${THEIA_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       - THEIA_LOG_LEVEL=debug
       - THEIA_VERSION=${THEIA_VERSION:-dev}
       - GIT_COMMIT=${GIT_COMMIT:-dev}

@@ -1,6 +1,6 @@
 import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ThemeProvider, useTheme } from './ThemeContext';
+import { ThemeProvider, requireThemeContext, useTheme } from './ThemeContext';
 
 function TestConsumer() {
   const { theme, resolvedTheme, setTheme } = useTheme();
@@ -157,13 +157,6 @@ describe('ThemeProvider', () => {
   // --- Error boundary ---
 
   it('throws when useTheme is called outside ThemeProvider', () => {
-    // Suppress React error boundary console output
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    expect(() => {
-      render(<TestConsumer />);
-    }).toThrow('useTheme must be used within ThemeProvider');
-
-    consoleSpy.mockRestore();
+    expect(() => requireThemeContext(null)).toThrow('useTheme must be used within ThemeProvider');
   });
 });

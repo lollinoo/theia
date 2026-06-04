@@ -69,10 +69,12 @@ const sortedMapKeysCache = new WeakMap<object, SortedStringCacheEntry>();
 const sortedSetValuesCache = new WeakMap<object, SortedStringCacheEntry>();
 const sortedAlertSignaturesCache = new WeakMap<AlertDTO[], AlertSignatureCacheEntry>();
 
+// sortedRecordEntries makes object-like tag metadata stable for cache signatures.
 function sortedRecordEntries(record: Record<string, string> | undefined): string[][] {
   return Object.entries(record ?? {}).sort(([left], [right]) => left.localeCompare(right));
 }
 
+// devicePresentationSignature captures static device fields that affect rendered nodes.
 function devicePresentationSignature(devices: Device[]): unknown[] {
   return devices
     .map((device) => ({
@@ -116,6 +118,7 @@ function devicePresentationSignature(devices: Device[]): unknown[] {
     .sort((left, right) => left.id.localeCompare(right.id));
 }
 
+// linkPresentationSignature captures static link fields that affect rendered edges.
 function linkPresentationSignature(links: Link[]): unknown[] {
   return links
     .map((link) => ({
@@ -133,6 +136,7 @@ function linkPresentationSignature(links: Link[]): unknown[] {
     .sort((left, right) => left.id.localeCompare(right.id));
 }
 
+// encodeSignaturePart length-prefixes values so adjacent parts cannot collide.
 function encodeSignaturePart(value: unknown): string {
   if (value === undefined) {
     return 'u:';
@@ -145,10 +149,12 @@ function encodeSignaturePart(value: unknown): string {
   return `${encoded.length}:${encoded}`;
 }
 
+// encodeSignatureParts encodes multiple signature values into one stable string.
 function encodeSignatureParts(values: unknown[]): string {
   return values.map(encodeSignaturePart).join('');
 }
 
+// cachedSortedMapKeys avoids repeated sorting when a position map object is reused.
 function cachedSortedMapKeys<T>(map: Map<string, T>): string[] {
   const cached = sortedMapKeysCache.get(map);
   if (
@@ -164,6 +170,7 @@ function cachedSortedMapKeys<T>(map: Map<string, T>): string[] {
   return values;
 }
 
+// cachedSortedSetValues avoids repeated sorting when a placement set object is reused.
 function cachedSortedSetValues(values: Set<string>): string[] {
   const cached = sortedSetValuesCache.get(values);
   if (
@@ -179,6 +186,7 @@ function cachedSortedSetValues(values: Set<string>): string[] {
   return sortedValues;
 }
 
+// positionMapSignature captures position and pinned state for cache invalidation.
 function positionMapSignature(map: PositionMap | ComputedPositionMap): string {
   const parts = [`size:${map.size}`];
   for (const deviceId of cachedSortedMapKeys(map)) {
@@ -198,6 +206,7 @@ function positionMapSignature(map: PositionMap | ComputedPositionMap): string {
   return parts.join('|');
 }
 
+// placementSignature captures which devices participate in layout placement.
 function placementSignature(deviceIds: Set<string>): string {
   const parts = [`size:${deviceIds.size}`];
   for (const deviceId of cachedSortedSetValues(deviceIds)) {
@@ -206,6 +215,7 @@ function placementSignature(deviceIds: Set<string>): string {
   return parts.join('|');
 }
 
+// encodeAlertSignature captures alert fields that affect canvas presentation.
 function encodeAlertSignature(alert: AlertDTO): string {
   return encodeSignatureParts([
     alert.device_id,
@@ -216,6 +226,7 @@ function encodeAlertSignature(alert: AlertDTO): string {
   ]);
 }
 
+// cachedSortedAlertSignatures keeps alert signature sorting cheap across repeated renders.
 function cachedSortedAlertSignatures(alerts: AlertDTO[]): string[] {
   const inputSignatures = alerts.map(encodeAlertSignature);
   const cached = sortedAlertSignaturesCache.get(alerts);
@@ -232,6 +243,7 @@ function cachedSortedAlertSignatures(alerts: AlertDTO[]): string[] {
   return sortedSignatures;
 }
 
+// alertSignature captures alert presentation inputs for cache invalidation.
 function alertSignature(alerts: AlertDTO[]): string {
   const parts = [`size:${alerts.length}`];
   for (const alertSignatureValue of cachedSortedAlertSignatures(alerts)) {
@@ -240,6 +252,7 @@ function alertSignature(alerts: AlertDTO[]): string {
   return parts.join('|');
 }
 
+// prometheusStatusSignature captures Prometheus availability inputs for runtime presentation.
 function prometheusStatusSignature(status: PrometheusStatusPayload | null): string {
   if (status === null) {
     return 'null';
@@ -248,6 +261,7 @@ function prometheusStatusSignature(status: PrometheusStatusPayload | null): stri
   return encodeSignatureParts([status.enabled ?? null, status.available, status.error ?? null]);
 }
 
+// normalizedRuntimeIdentity treats blank runtime identities as absent.
 function normalizedRuntimeIdentity(
   input: BuildCanvasTopologyCompositionCacheKeyInput,
 ): string | null {
@@ -257,12 +271,14 @@ function normalizedRuntimeIdentity(
   return null;
 }
 
+// normalizedRuntimeVersion normalizes missing runtime versions for key comparison.
 function normalizedRuntimeVersion(
   input: BuildCanvasTopologyCompositionCacheKeyInput,
 ): number | null {
   return input.runtimeVersion ?? null;
 }
 
+// runtimeSignature prefers backend runtime identifiers and falls back to snapshot identity.
 function runtimeSignature(input: BuildCanvasTopologyCompositionCacheKeyInput): string {
   const runtimeIdentity = normalizedRuntimeIdentity(input);
   const runtimeVersion = normalizedRuntimeVersion(input);
@@ -274,6 +290,7 @@ function runtimeSignature(input: BuildCanvasTopologyCompositionCacheKeyInput): s
   return 'snapshot-ref';
 }
 
+// hasServerTopologyIdentifier reports whether backend topology identity can replace local signatures.
 function hasServerTopologyIdentifier(input: BuildCanvasTopologyCompositionCacheKeyInput): boolean {
   return (
     (input.topologyEtag !== undefined &&
@@ -283,6 +300,7 @@ function hasServerTopologyIdentifier(input: BuildCanvasTopologyCompositionCacheK
   );
 }
 
+// topologySignatureLayer chooses backend topology identity or local static topology signatures.
 function topologySignatureLayer(input: BuildCanvasTopologyCompositionCacheKeyInput): unknown {
   if (hasServerTopologyIdentifier(input)) {
     return {
@@ -298,6 +316,7 @@ function topologySignatureLayer(input: BuildCanvasTopologyCompositionCacheKeyInp
   };
 }
 
+// buildCanvasTopologyCompositionCacheKey builds the full cache identity for composed nodes and edges.
 export function buildCanvasTopologyCompositionCacheKey(
   input: BuildCanvasTopologyCompositionCacheKeyInput,
 ): CanvasTopologyCompositionCacheKey {
@@ -328,6 +347,7 @@ export function buildCanvasTopologyCompositionCacheKey(
   };
 }
 
+// cacheKeysEqual compares stable signatures plus callback/runtime identity references.
 function cacheKeysEqual(
   previous: CanvasTopologyCompositionCacheKey,
   next: CanvasTopologyCompositionCacheKey,
@@ -354,6 +374,7 @@ function cacheKeysEqual(
   return previous.runtimeSnapshot === next.runtimeSnapshot;
 }
 
+// createCanvasTopologyCompositionCache memoizes the last composed topology result.
 export function createCanvasTopologyCompositionCache(
   composer: CanvasTopologyComposer = composeCanvasTopology,
 ): CanvasTopologyCompositionCache {

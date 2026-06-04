@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 type archiveLimitTestEntry struct {
@@ -290,6 +292,140 @@ func TestCollectArchiveSourceFilesEnforcesBackupQuotas(t *testing.T) {
 			_, _, _, _, _, err := svc.collectArchiveSourceFiles(context.Background(), tt.limits, tt.initialBytes)
 			assertRestoreLimitError(t, err, tt.want)
 		})
+	}
+}
+
+func TestCollectInstanceBackupArchiveSourceFilesIncludesAllowedSourcesAndSkipsInstanceBackups(t *testing.T) {
+	tmpDir := t.TempDir()
+	deviceBackupDir := filepath.Join(tmpDir, "device-backups")
+	instanceBackupDir := filepath.Join(deviceBackupDir, "instance-backups")
+	knownHostsPath := filepath.Join(tmpDir, "known_hosts")
+	if err := os.MkdirAll(filepath.Join(deviceBackupDir, "router"), 0o700); err != nil {
+		t.Fatalf("creating router backup dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(instanceBackupDir, "old-instance"), 0o700); err != nil {
+		t.Fatalf("creating instance backup dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deviceBackupDir, "router", "config.rsc"), []byte("device"), 0o600); err != nil {
+		t.Fatalf("writing device backup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(instanceBackupDir, "old-instance", "archive.tar.gz"), []byte("instance"), 0o600); err != nil {
+		t.Fatalf("writing nested instance backup: %v", err)
+	}
+	if err := os.WriteFile(knownHostsPath, []byte("known-hosts"), 0o600); err != nil {
+		t.Fatalf("writing known_hosts: %v", err)
+	}
+
+	sources, err := collectInstanceBackupArchiveSourceFiles(
+		context.Background(),
+		instanceBackupDir,
+		deviceBackupDir,
+		knownHostsPath,
+		DefaultBackupArchiveLimits,
+		4,
+	)
+
+	if err != nil {
+		t.Fatalf("collectInstanceBackupArchiveSourceFiles: %v", err)
+	}
+	if sources.backupFileCount != 1 {
+		t.Fatalf("backupFileCount = %d, want 1", sources.backupFileCount)
+	}
+	if len(sources.deviceBackupFiles) != 1 {
+		t.Fatalf("deviceBackupFiles = %d, want 1", len(sources.deviceBackupFiles))
+	}
+	if got := sources.deviceBackupFiles[0].archiveName; got != "backups/router/config.rsc" {
+		t.Fatalf("device archiveName = %q, want backups/router/config.rsc", got)
+	}
+	if strings.Contains(sources.deviceBackupFiles[0].diskPath, "old-instance") {
+		t.Fatalf("instance backup source should be skipped, got %s", sources.deviceBackupFiles[0].diskPath)
+	}
+	if sources.knownHostsFile == nil {
+		t.Fatal("knownHostsFile = nil, want known_hosts source")
+	}
+	if got := sources.knownHostsFile.archiveName; got != "known_hosts" {
+		t.Fatalf("known_hosts archiveName = %q, want known_hosts", got)
+	}
+	if sources.totalBytes != int64(4+len("device")+len("known-hosts")) {
+		t.Fatalf("totalBytes = %d, want %d", sources.totalBytes, 4+len("device")+len("known-hosts"))
+	}
+	if sources.fileEntries != 3 {
+		t.Fatalf("fileEntries = %d, want 3", sources.fileEntries)
+	}
+}
+
+func TestWriteInstanceBackupArchiveWritesEntriesAndReportsProgress(t *testing.T) {
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "instance.tar.gz")
+	dbPath := filepath.Join(tmpDir, "database.dump")
+	devicePath := filepath.Join(tmpDir, "router.rsc")
+	knownHostsPath := filepath.Join(tmpDir, "known_hosts")
+	if err := os.WriteFile(dbPath, []byte("database"), 0o600); err != nil {
+		t.Fatalf("writing database dump: %v", err)
+	}
+	if err := os.WriteFile(devicePath, []byte("device-backup"), 0o600); err != nil {
+		t.Fatalf("writing device backup: %v", err)
+	}
+	if err := os.WriteFile(knownHostsPath, []byte("known-hosts"), 0o600); err != nil {
+		t.Fatalf("writing known_hosts: %v", err)
+	}
+	manifestJSON := []byte(`{"version":1}`)
+	manifest := &backupManifest{TotalSizeBytes: int64(len(manifestJSON) + len("database") + len("device-backup") + len("known-hosts"))}
+	var progress []domain.InstanceBackupProgress
+
+	total, err := writeInstanceBackupArchive(context.Background(), instanceBackupArchiveWriteRequest{
+		archivePath: archivePath,
+		dbArtifact: databaseBackupArtifact{
+			tempPath:         dbPath,
+			archiveEntryName: postgresArchiveDBEntry,
+		},
+		deviceBackupFiles: []archiveSourceFile{{
+			archiveName: "backups/router/config.rsc",
+			diskPath:    devicePath,
+			sizeBytes:   int64(len("device-backup")),
+		}},
+		knownHostsFile: &archiveSourceFile{
+			archiveName: "known_hosts",
+			diskPath:    knownHostsPath,
+			sizeBytes:   int64(len("known-hosts")),
+		},
+		manifestJSON: manifestJSON,
+		manifest:     manifest,
+		limits:       DefaultBackupArchiveLimits,
+		progress: func(update domain.InstanceBackupProgress) {
+			progress = append(progress, update)
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("writeInstanceBackupArchive: %v", err)
+	}
+	if total != manifest.TotalSizeBytes {
+		t.Fatalf("total = %d, want %d", total, manifest.TotalSizeBytes)
+	}
+	entries := readArchiveEntries(t, archivePath)
+	for name, want := range map[string]string{
+		"manifest.json":             string(manifestJSON),
+		postgresArchiveDBEntry:      "database",
+		"backups/router/config.rsc": "device-backup",
+		"known_hosts":               "known-hosts",
+	} {
+		if got := string(entries[name]); got != want {
+			t.Fatalf("entry %s = %q, want %q", name, got, want)
+		}
+	}
+	if len(progress) != 4 {
+		t.Fatalf("progress updates = %d, want 4", len(progress))
+	}
+	if progress[0].Message != "Archived manifest" {
+		t.Fatalf("first progress message = %q, want Archived manifest", progress[0].Message)
+	}
+	last := progress[len(progress)-1]
+	if last.Message != "Archived known_hosts" {
+		t.Fatalf("last progress message = %q, want Archived known_hosts", last.Message)
+	}
+	if last.Current != manifest.TotalSizeBytes || last.Total != manifest.TotalSizeBytes {
+		t.Fatalf("last progress current/total = %d/%d, want %d/%d", last.Current, last.Total, manifest.TotalSizeBytes, manifest.TotalSizeBytes)
 	}
 }
 

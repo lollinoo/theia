@@ -179,35 +179,42 @@ export interface GrafanaDashboardConfig {
 
 type APIRecord = Record<string, unknown>;
 
+// isRecord narrows unknown payloads to non-array objects before DTO parsing.
 function isRecord(value: unknown): value is APIRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+// readString reads optional string fields while preserving the caller's fallback.
 function readString(record: APIRecord, key: string, fallback = ''): string {
   const value = record[key];
   return typeof value === 'string' ? value : fallback;
 }
 
+// readNumber reads finite numeric fields while preserving existing zero-style defaults.
 function readNumber(record: APIRecord, key: string, fallback = 0): number {
   const value = record[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+// readNullableNumber preserves null for absent or non-finite numeric fields.
 function readNullableNumber(record: APIRecord, key: string): number | null {
   const value = record[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+// readNullableString preserves null for absent or non-string fields.
 function readNullableString(record: APIRecord, key: string): string | null {
   const value = record[key];
   return typeof value === 'string' ? value : null;
 }
 
+// readBoolean reads optional booleans while preserving the caller's default.
 function readBoolean(record: APIRecord, key: string, fallback = false): boolean {
   const value = record[key];
   return typeof value === 'boolean' ? value : fallback;
 }
 
+// parseDeviceType normalizes legacy access_point values and unknown device types.
 function parseDeviceType(value: unknown): DeviceType {
   switch (value) {
     case 'access_point':
@@ -223,6 +230,7 @@ function parseDeviceType(value: unknown): DeviceType {
   }
 }
 
+// parseDevicePollClass normalizes unknown poll classes to the standard class.
 function parseDevicePollClass(value: unknown): DevicePollClass {
   switch (value) {
     case 'core':
@@ -234,6 +242,7 @@ function parseDevicePollClass(value: unknown): DevicePollClass {
   }
 }
 
+// parseDeviceStatus normalizes unknown device status values for canvas rendering.
 function parseDeviceStatus(value: unknown): DeviceStatus {
   switch (value) {
     case 'up':
@@ -245,6 +254,7 @@ function parseDeviceStatus(value: unknown): DeviceStatus {
   }
 }
 
+// parseTopologyDiscoveryMode validates discovery modes with a caller-selected fallback.
 function parseTopologyDiscoveryMode(
   value: unknown,
   fallback: TopologyDiscoveryMode = 'inherit',
@@ -261,6 +271,7 @@ function parseTopologyDiscoveryMode(
   }
 }
 
+// parseTopologyBootstrapState normalizes missing bootstrap state to idle.
 function parseTopologyBootstrapState(value: unknown): TopologyBootstrapState {
   switch (value) {
     case 'pending':
@@ -272,6 +283,7 @@ function parseTopologyBootstrapState(value: unknown): TopologyBootstrapState {
   }
 }
 
+// parseDeviceInterface validates one embedded device interface resource.
 function parseDeviceInterface(value: unknown): DeviceInterface {
   if (!isRecord(value)) {
     throw new Error('invalid interface payload');
@@ -288,6 +300,7 @@ function parseDeviceInterface(value: unknown): DeviceInterface {
   };
 }
 
+// parseDevicesResponse converts JSON:API device resources while preserving legacy defaults.
 export function parseDevicesResponse(payload: unknown): Device[] {
   if (!isRecord(payload)) {
     throw new Error('invalid devices response');
@@ -359,6 +372,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
   });
 }
 
+// parseLinksResponse converts link resources while preserving empty-string and zero defaults.
 export function parseLinksResponse(payload: unknown): Link[] {
   if (!isRecord(payload)) {
     throw new Error('invalid links response');
@@ -386,6 +400,7 @@ export function parseLinksResponse(payload: unknown): Link[] {
   });
 }
 
+// parsePositionResource converts one canvas position and can fall back to the map key ID.
 function parsePositionResource(resource: unknown, fallbackDeviceId = ''): DevicePosition {
   if (!isRecord(resource)) {
     throw new Error('invalid position resource');
@@ -400,6 +415,7 @@ function parsePositionResource(resource: unknown, fallbackDeviceId = ''): Device
   };
 }
 
+// parseCanvasTopologyPositions accepts both array and keyed-object position payloads.
 function parseCanvasTopologyPositions(payload: unknown): Record<string, DevicePosition> {
   if (Array.isArray(payload)) {
     return Object.fromEntries(
@@ -422,6 +438,7 @@ function parseCanvasTopologyPositions(payload: unknown): Record<string, DevicePo
   );
 }
 
+// parseCanvasMapFilter validates saved-map filters without adding missing optional keys.
 function parseCanvasMapFilter(value: unknown): CanvasMapFilter {
   if (value === undefined || value === null) {
     return {};
@@ -474,6 +491,7 @@ function parseCanvasMapFilter(value: unknown): CanvasMapFilter {
   return filter;
 }
 
+// parseCanvasMapResponse parses a single saved-map DTO from wrapped or direct payloads.
 export function parseCanvasMapResponse(payload: unknown): CanvasMap {
   const resource = isRecord(payload) && isRecord(payload.data) ? payload.data : payload;
 
@@ -503,6 +521,7 @@ export function parseCanvasMapResponse(payload: unknown): CanvasMap {
   };
 }
 
+// parseCanvasMapsResponse parses saved-map list responses and rejects malformed envelopes.
 export function parseCanvasMapsResponse(payload: unknown): CanvasMap[] {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error('invalid canvas maps response');
@@ -511,6 +530,7 @@ export function parseCanvasMapsResponse(payload: unknown): CanvasMap[] {
   return payload.data.map(parseCanvasMapResponse);
 }
 
+// parseCanvasTopologyResponse parses topology payloads including runtime, positions, and map metadata.
 export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyResponse {
   if (!isRecord(payload)) {
     throw new Error('invalid canvas topology response');
@@ -558,6 +578,7 @@ export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyRes
   };
 }
 
+// parseInterfacesResponse converts interface list responses for device detail screens.
 export function parseInterfacesResponse(payload: unknown): InterfaceInfo[] {
   if (!isRecord(payload)) {
     throw new Error('invalid interfaces response');
@@ -582,6 +603,7 @@ export function parseInterfacesResponse(payload: unknown): InterfaceInfo[] {
   });
 }
 
+// parseSNMPProfilesResponse parses SNMP profiles while preserving secret-set booleans.
 export function parseSNMPProfilesResponse(payload: unknown): SNMPProfile[] {
   if (!isRecord(payload)) {
     throw new Error('invalid snmp profiles response');
@@ -617,10 +639,12 @@ export function parseSNMPProfilesResponse(payload: unknown): SNMPProfile[] {
   });
 }
 
+// parseGrafanaVariableSource keeps unknown variable sources on the hostname default.
 function parseGrafanaVariableSource(value: unknown): GrafanaVariableSource {
   return value === 'ip' || value === 'map_name' || value === 'map_id' ? value : 'hostname';
 }
 
+// parseGrafanaDashboardConfigResponse parses dashboard profiles and per-device overrides.
 export function parseGrafanaDashboardConfigResponse(payload: unknown): GrafanaDashboardConfig {
   if (!isRecord(payload)) {
     throw new Error('invalid grafana dashboard config response');
@@ -667,6 +691,7 @@ export function parseGrafanaDashboardConfigResponse(payload: unknown): GrafanaDa
   };
 }
 
+// parseSNMPProfileResponse parses one SNMP profile and keeps omitted secrets undefined.
 export function parseSNMPProfileResponse(payload: unknown): SNMPProfile {
   if (!isRecord(payload)) {
     throw new Error('invalid snmp profile response');
@@ -948,6 +973,7 @@ export interface VendorConfig {
   };
 }
 
+// parseCredentialProfilesResponse parses reusable credential profiles with legacy defaults.
 export function parseCredentialProfilesResponse(payload: unknown): CredentialProfile[] {
   if (!isRecord(payload)) {
     throw new Error('invalid credential profiles response');
@@ -973,6 +999,7 @@ export function parseCredentialProfilesResponse(payload: unknown): CredentialPro
   });
 }
 
+// parseCredentialProfileResponse parses one credential profile response envelope.
 export function parseCredentialProfileResponse(payload: unknown): CredentialProfile {
   if (!isRecord(payload)) {
     throw new Error('invalid credential profile response');
@@ -991,6 +1018,7 @@ export function parseCredentialProfileResponse(payload: unknown): CredentialProf
   };
 }
 
+// parseDeviceCredentialProfilesResponse parses credential profile assignments for one device.
 export function parseDeviceCredentialProfilesResponse(payload: unknown): DeviceCredentialProfile[] {
   if (!isRecord(payload)) {
     throw new Error('invalid device credential profiles response');
@@ -1012,6 +1040,7 @@ export function parseDeviceCredentialProfilesResponse(payload: unknown): DeviceC
   });
 }
 
+// parseWinBoxCredentialsResponse preserves empty strings when privileged credentials are absent.
 export function parseWinBoxCredentialsResponse(payload: unknown): WinBoxCredentials {
   if (!isRecord(payload)) return { ip: '', username: '', password: '' };
   return {
@@ -1021,6 +1050,7 @@ export function parseWinBoxCredentialsResponse(payload: unknown): WinBoxCredenti
   };
 }
 
+// parseAreasResponse parses area lists and drops malformed or ID-less entries.
 export function parseAreasResponse(payload: unknown): Area[] {
   if (!isRecord(payload)) return [];
   const data = payload.data;
@@ -1041,6 +1071,7 @@ export function parseAreasResponse(payload: unknown): Area[] {
     .filter((a): a is Area => a !== null && a.id !== '');
 }
 
+// parseAreaResponse parses one area from wrapped or direct payloads.
 export function parseAreaResponse(payload: unknown): Area {
   if (!isRecord(payload)) throw new Error('Invalid area response');
   const data = isRecord(payload.data) ? payload.data : payload;
@@ -1055,6 +1086,7 @@ export function parseAreaResponse(payload: unknown): Area {
   };
 }
 
+// parsePositionsResponse parses persisted canvas position rows.
 export function parsePositionsResponse(payload: unknown): DevicePosition[] {
   if (!isRecord(payload)) {
     throw new Error('invalid positions response');

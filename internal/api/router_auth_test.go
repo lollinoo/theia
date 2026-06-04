@@ -49,6 +49,301 @@ func TestNewRouterRequiresUserSessionForProtectedSurface(t *testing.T) {
 	}
 }
 
+func TestRequiredPermissionsForRegisteredProtectedRoutes(t *testing.T) {
+	id := "00000000-0000-0000-0000-000000000001"
+	roleID := "viewer"
+	routeTests := []struct {
+		name   string
+		method string
+		path   string
+		want   []string
+	}{
+		{name: "websocket", method: http.MethodGet, path: "/api/v1/ws", want: []string{domain.PermissionTopologyRead}},
+		{name: "health", method: http.MethodGet, path: "/api/v1/health", want: []string{domain.PermissionSettingsRead}},
+		{name: "prometheus health", method: http.MethodGet, path: "/api/v1/prometheus/health", want: []string{domain.PermissionSettingsRead}},
+
+		{name: "settings list", method: http.MethodGet, path: "/api/v1/settings", want: []string{domain.PermissionSettingsRead}},
+		{name: "settings key read", method: http.MethodGet, path: "/api/v1/settings/" + domain.SettingBridgePort, want: []string{domain.PermissionSettingsRead}},
+		{name: "settings key update", method: http.MethodPut, path: "/api/v1/settings/" + domain.SettingBridgePort, want: []string{domain.PermissionSettingsUpdate}},
+		{name: "account settings read", method: http.MethodGet, path: "/api/v1/settings/me", want: []string{domain.PermissionAccountManage}},
+		{name: "account settings update", method: http.MethodPatch, path: "/api/v1/settings/me", want: []string{domain.PermissionAccountManage}},
+		{name: "bridge settings read", method: http.MethodGet, path: "/api/v1/settings/bridge", want: []string{domain.PermissionAccountManage}},
+		{name: "bridge secret create", method: http.MethodPost, path: "/api/v1/settings/bridge/secret", want: []string{domain.PermissionAccountManage}},
+		{name: "bridge secret rotate", method: http.MethodPost, path: "/api/v1/settings/bridge/secret/rotate", want: []string{domain.PermissionAccountManage}},
+		{name: "bridge secret revoke", method: http.MethodPost, path: "/api/v1/settings/bridge/secret/revoke", want: []string{domain.PermissionAccountManage}},
+		{name: "bridge connector config", method: http.MethodGet, path: "/api/v1/settings/bridge/connector/config", want: []string{domain.PermissionAccountManage}},
+		{name: "bridge connector download", method: http.MethodGet, path: "/api/v1/settings/bridge/connector/download/linux/amd64", want: []string{domain.PermissionAccountManage}},
+
+		{name: "topology canvas", method: http.MethodGet, path: "/api/v1/topology/canvas", want: []string{domain.PermissionTopologyRead}},
+		{name: "canvas legacy", method: http.MethodGet, path: "/api/v1/canvas", want: []string{domain.PermissionTopologyRead}},
+		{name: "canvas maps list", method: http.MethodGet, path: "/api/v1/canvas/maps", want: []string{domain.PermissionTopologyRead}},
+		{name: "canvas maps create", method: http.MethodPost, path: "/api/v1/canvas/maps", want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map get", method: http.MethodGet, path: "/api/v1/canvas/maps/" + id, want: []string{domain.PermissionTopologyRead}},
+		{name: "canvas map patch", method: http.MethodPatch, path: "/api/v1/canvas/maps/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map delete", method: http.MethodDelete, path: "/api/v1/canvas/maps/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map duplicate", method: http.MethodPost, path: "/api/v1/canvas/maps/" + id + "/duplicate", want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map primary", method: http.MethodPost, path: "/api/v1/canvas/maps/" + id + "/primary", want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map topology", method: http.MethodGet, path: "/api/v1/canvas/maps/" + id + "/topology", want: []string{domain.PermissionTopologyRead}},
+		{name: "canvas map bootstrap", method: http.MethodGet, path: "/api/v1/canvas/maps/" + id + "/bootstrap", want: []string{domain.PermissionTopologyRead}},
+		{name: "canvas map positions read", method: http.MethodGet, path: "/api/v1/canvas/maps/" + id + "/positions", want: []string{domain.PermissionTopologyRead}},
+		{name: "canvas map positions update", method: http.MethodPut, path: "/api/v1/canvas/maps/" + id + "/positions", want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map device areas update", method: http.MethodPut, path: "/api/v1/canvas/maps/" + id + "/device-areas", want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map areas list", method: http.MethodGet, path: "/api/v1/canvas/maps/" + id + "/areas", want: []string{domain.PermissionTopologyRead}},
+		{name: "canvas map areas create", method: http.MethodPost, path: "/api/v1/canvas/maps/" + id + "/areas", want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map area update", method: http.MethodPut, path: "/api/v1/canvas/maps/" + id + "/areas/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map area delete", method: http.MethodDelete, path: "/api/v1/canvas/maps/" + id + "/areas/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map device add", method: http.MethodPost, path: "/api/v1/canvas/maps/" + id + "/devices/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map device patch", method: http.MethodPatch, path: "/api/v1/canvas/maps/" + id + "/devices/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map device remove", method: http.MethodDelete, path: "/api/v1/canvas/maps/" + id + "/devices/" + id, want: []string{domain.PermissionTopologyUpdate}},
+
+		{name: "devices list", method: http.MethodGet, path: "/api/v1/devices", want: []string{domain.PermissionDevicesRead}},
+		{name: "devices create", method: http.MethodPost, path: "/api/v1/devices", want: []string{domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate}},
+		{name: "devices batch", method: http.MethodPost, path: "/api/v1/devices/batch", want: []string{domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate}},
+		{name: "devices orphans", method: http.MethodGet, path: "/api/v1/devices/orphans", want: []string{domain.PermissionDevicesRead}},
+		{name: "device read", method: http.MethodGet, path: "/api/v1/devices/" + id, want: []string{domain.PermissionDevicesRead}},
+		{name: "device update", method: http.MethodPut, path: "/api/v1/devices/" + id, want: []string{domain.PermissionDevicesUpdate}},
+		{name: "device delete", method: http.MethodDelete, path: "/api/v1/devices/" + id, want: []string{domain.PermissionDevicesDelete}},
+		{name: "device interfaces", method: http.MethodGet, path: "/api/v1/devices/" + id + "/interfaces", want: []string{domain.PermissionTopologyRead}},
+		{name: "device probe", method: http.MethodPost, path: "/api/v1/devices/" + id + "/probe", want: []string{domain.PermissionDevicesUpdate}},
+		{name: "device snmp test", method: http.MethodPost, path: "/api/v1/devices/" + id + "/snmp-test", want: []string{domain.PermissionDevicesUpdate}},
+		{name: "device topology discovery", method: http.MethodPost, path: "/api/v1/devices/" + id + "/topology-discovery", want: []string{domain.PermissionTopologyUpdate}},
+		{name: "device ssh test", method: http.MethodPost, path: "/api/v1/devices/" + id + "/ssh-credentials/test", want: []string{domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate}},
+		{name: "device backup list", method: http.MethodGet, path: "/api/v1/devices/" + id + "/backups", want: []string{domain.PermissionBackupsRead}},
+		{name: "device backup trigger", method: http.MethodPost, path: "/api/v1/devices/" + id + "/backups", want: []string{domain.PermissionBackupsUpdate}},
+		{name: "device backup latest", method: http.MethodGet, path: "/api/v1/devices/" + id + "/backups/latest", want: []string{domain.PermissionBackupsRead}},
+		{name: "device credential assignments", method: http.MethodGet, path: "/api/v1/devices/" + id + "/credential-profiles", want: []string{domain.PermissionCredentialsRead}},
+		{name: "device credential assign", method: http.MethodPost, path: "/api/v1/devices/" + id + "/credential-profiles", want: []string{domain.PermissionCredentialsUpdate}},
+		{name: "device credential unassign", method: http.MethodDelete, path: "/api/v1/devices/" + id + "/credential-profiles/" + id, want: []string{domain.PermissionCredentialsUpdate}},
+		{name: "device winbox set", method: http.MethodPut, path: "/api/v1/devices/" + id + "/winbox-profile", want: []string{domain.PermissionCredentialsUpdate}},
+		{name: "device winbox clear", method: http.MethodDelete, path: "/api/v1/devices/" + id + "/winbox-profile", want: []string{domain.PermissionCredentialsUpdate}},
+		{name: "device winbox credentials legacy", method: http.MethodGet, path: "/api/v1/devices/" + id + "/winbox-credentials", want: []string{domain.PermissionCredentialsRead}},
+		{name: "device winbox credentials reveal", method: http.MethodPost, path: "/api/v1/devices/" + id + "/winbox-credentials/reveal", want: []string{domain.PermissionCredentialsReveal}},
+
+		{name: "links list", method: http.MethodGet, path: "/api/v1/links", want: []string{domain.PermissionTopologyRead}},
+		{name: "links create", method: http.MethodPost, path: "/api/v1/links", want: []string{domain.PermissionTopologyUpdate}},
+		{name: "link update", method: http.MethodPut, path: "/api/v1/links/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "link delete", method: http.MethodDelete, path: "/api/v1/links/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "positions list", method: http.MethodGet, path: "/api/v1/positions", want: []string{domain.PermissionTopologyRead}},
+		{name: "positions update", method: http.MethodPut, path: "/api/v1/positions", want: []string{domain.PermissionTopologyUpdate}},
+
+		{name: "grafana profiles list", method: http.MethodGet, path: "/api/v1/grafana/dashboard-profiles", want: []string{domain.PermissionSettingsRead}},
+		{name: "grafana profiles create", method: http.MethodPost, path: "/api/v1/grafana/dashboard-profiles", want: []string{domain.PermissionSettingsUpdate}},
+		{name: "grafana profile update", method: http.MethodPut, path: "/api/v1/grafana/dashboard-profiles/" + id, want: []string{domain.PermissionSettingsUpdate}},
+		{name: "grafana profile delete", method: http.MethodDelete, path: "/api/v1/grafana/dashboard-profiles/" + id, want: []string{domain.PermissionSettingsUpdate}},
+		{name: "grafana override update", method: http.MethodPut, path: "/api/v1/grafana/device-overrides/" + id, want: []string{domain.PermissionSettingsUpdate}},
+
+		{name: "snmp profiles list", method: http.MethodGet, path: "/api/v1/snmp-profiles", want: []string{domain.PermissionCredentialsRead}},
+		{name: "snmp profiles create", method: http.MethodPost, path: "/api/v1/snmp-profiles", want: []string{domain.PermissionCredentialsUpdate}},
+		{name: "snmp profile read", method: http.MethodGet, path: "/api/v1/snmp-profiles/" + id, want: []string{domain.PermissionCredentialsRead}},
+		{name: "snmp profile update", method: http.MethodPut, path: "/api/v1/snmp-profiles/" + id, want: []string{domain.PermissionCredentialsUpdate}},
+		{name: "snmp profile delete", method: http.MethodDelete, path: "/api/v1/snmp-profiles/" + id, want: []string{domain.PermissionCredentialsUpdate}},
+		{name: "snmp profile reveal", method: http.MethodPost, path: "/api/v1/snmp-profiles/" + id + "/reveal", want: []string{domain.PermissionCredentialsReveal}},
+		{name: "credential profiles list", method: http.MethodGet, path: "/api/v1/credential-profiles", want: []string{domain.PermissionCredentialsRead}},
+		{name: "credential profiles create", method: http.MethodPost, path: "/api/v1/credential-profiles", want: []string{domain.PermissionCredentialsUpdate}},
+		{name: "credential profile read", method: http.MethodGet, path: "/api/v1/credential-profiles/" + id, want: []string{domain.PermissionCredentialsRead}},
+		{name: "credential profile update", method: http.MethodPut, path: "/api/v1/credential-profiles/" + id, want: []string{domain.PermissionCredentialsUpdate}},
+		{name: "credential profile delete", method: http.MethodDelete, path: "/api/v1/credential-profiles/" + id, want: []string{domain.PermissionCredentialsUpdate}},
+		{name: "credential profile test", method: http.MethodPost, path: "/api/v1/credential-profiles/" + id + "/test", want: []string{domain.PermissionCredentialsUpdate}},
+
+		{name: "areas list", method: http.MethodGet, path: "/api/v1/areas", want: []string{domain.PermissionTopologyRead}},
+		{name: "areas create", method: http.MethodPost, path: "/api/v1/areas", want: []string{domain.PermissionTopologyUpdate}},
+		{name: "area read", method: http.MethodGet, path: "/api/v1/areas/" + id, want: []string{domain.PermissionTopologyRead}},
+		{name: "area update", method: http.MethodPut, path: "/api/v1/areas/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "area delete", method: http.MethodDelete, path: "/api/v1/areas/" + id, want: []string{domain.PermissionTopologyUpdate}},
+
+		{name: "backup bulk status", method: http.MethodGet, path: "/api/v1/backups/bulk/status", want: []string{domain.PermissionBackupsRead}},
+		{name: "backup bulk run latest", method: http.MethodGet, path: "/api/v1/backups/bulk-runs/latest", want: []string{domain.PermissionBackupsRead}},
+		{name: "backup bulk run start", method: http.MethodPost, path: "/api/v1/backups/bulk-runs", want: []string{domain.PermissionBackupsUpdate}},
+		{name: "backup bulk run get", method: http.MethodGet, path: "/api/v1/backups/bulk-runs/" + id, want: []string{domain.PermissionBackupsRead}},
+		{name: "backup bulk run pause", method: http.MethodPost, path: "/api/v1/backups/bulk-runs/" + id + "/pause", want: []string{domain.PermissionBackupsUpdate}},
+		{name: "backup bulk run resume", method: http.MethodPost, path: "/api/v1/backups/bulk-runs/" + id + "/resume", want: []string{domain.PermissionBackupsUpdate}},
+		{name: "backup bulk run cancel", method: http.MethodPost, path: "/api/v1/backups/bulk-runs/" + id + "/cancel", want: []string{domain.PermissionBackupsUpdate}},
+		{name: "backup bulk legacy", method: http.MethodPost, path: "/api/v1/backups/bulk", want: []string{domain.PermissionBackupsUpdate}},
+		{name: "backup bulk download", method: http.MethodPost, path: "/api/v1/backups/bulk-download", want: []string{domain.PermissionBackupsUpdate}},
+		{name: "backup job get", method: http.MethodGet, path: "/api/v1/backup-jobs/" + id, want: []string{domain.PermissionBackupsRead}},
+		{name: "backup job delete", method: http.MethodDelete, path: "/api/v1/backup-jobs/" + id, want: []string{domain.PermissionBackupsUpdate}},
+		{name: "backup file download", method: http.MethodGet, path: "/api/v1/backup-files/" + id + "/download", want: []string{domain.PermissionBackupsRead}},
+		{name: "backup file content", method: http.MethodGet, path: "/api/v1/backup-files/" + id + "/content", want: []string{domain.PermissionBackupsRead}},
+
+		{name: "vendors list", method: http.MethodGet, path: "/api/v1/vendors", want: []string{domain.PermissionSettingsRead}},
+		{name: "vendor read", method: http.MethodGet, path: "/api/v1/vendors/mikrotik", want: []string{domain.PermissionSettingsRead}},
+		{name: "vendor update", method: http.MethodPut, path: "/api/v1/vendors/mikrotik", want: []string{domain.PermissionSettingsUpdate}},
+
+		{name: "instance backups list", method: http.MethodGet, path: "/api/v1/instance-backups", want: []string{domain.PermissionBackupsRead}},
+		{name: "instance backup create", method: http.MethodPost, path: "/api/v1/instance-backups", want: []string{domain.PermissionBackupsUpdate}},
+		{name: "instance backup restore", method: http.MethodPost, path: "/api/v1/instance-backups/restore", want: []string{domain.PermissionBackupsUpdate}},
+		{name: "instance backup get", method: http.MethodGet, path: "/api/v1/instance-backups/" + id, want: []string{domain.PermissionBackupsRead}},
+		{name: "instance backup delete", method: http.MethodDelete, path: "/api/v1/instance-backups/" + id, want: []string{domain.PermissionBackupsUpdate}},
+		{name: "instance backup download", method: http.MethodGet, path: "/api/v1/instance-backups/" + id + "/download", want: []string{domain.PermissionBackupsRead}},
+		{name: "instance backup cancel", method: http.MethodPost, path: "/api/v1/instance-backups/" + id + "/cancel", want: []string{domain.PermissionBackupsUpdate}},
+
+		{name: "bridge binary download", method: http.MethodGet, path: "/api/v1/bridge/download/linux/amd64", want: []string{domain.PermissionSettingsRead}},
+		{name: "bridge launch request", method: http.MethodPost, path: "/api/v1/bridge/launch-requests/" + id, want: []string{domain.PermissionBridgeTokenCreate}},
+		{name: "bridge legacy token", method: http.MethodPost, path: "/api/v1/bridge/token/" + id, want: []string{domain.PermissionBridgeTokenCreate}},
+
+		{name: "admin dashboard", method: http.MethodGet, path: "/api/v1/admin/dashboard", want: []string{domain.PermissionAdminDashboard}},
+		{name: "admin users list", method: http.MethodGet, path: "/api/v1/admin/users", want: []string{domain.PermissionUsersRead}},
+		{name: "admin users create", method: http.MethodPost, path: "/api/v1/admin/users", want: []string{domain.PermissionUsersCreate, domain.PermissionUsersUpdate}},
+		{name: "admin user read", method: http.MethodGet, path: "/api/v1/admin/users/" + id, want: []string{domain.PermissionUsersRead}},
+		{name: "admin user update", method: http.MethodPatch, path: "/api/v1/admin/users/" + id, want: []string{domain.PermissionUsersUpdate}},
+		{name: "admin user status", method: http.MethodPatch, path: "/api/v1/admin/users/" + id + "/status", want: []string{domain.PermissionUsersUpdate}},
+		{name: "admin user role assign", method: http.MethodPost, path: "/api/v1/admin/users/" + id + "/roles", want: []string{domain.PermissionRolesAssign}},
+		{name: "admin user role remove", method: http.MethodDelete, path: "/api/v1/admin/users/" + id + "/roles/" + roleID, want: []string{domain.PermissionRolesAssign}},
+		{name: "admin user password reset", method: http.MethodPost, path: "/api/v1/admin/users/" + id + "/password-reset", want: []string{domain.PermissionUsersUpdate}},
+		{name: "admin roles list", method: http.MethodGet, path: "/api/v1/admin/roles", want: []string{domain.PermissionRolesRead}},
+		{name: "admin permissions list", method: http.MethodGet, path: "/api/v1/admin/permissions", want: []string{domain.PermissionRolesRead}},
+		{name: "admin audit logs", method: http.MethodGet, path: "/api/v1/admin/audit-logs", want: []string{domain.PermissionAuditLogsRead}},
+	}
+
+	for _, tt := range routeTests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, known := requiredPermissionsForRoute(tt.method, tt.path)
+			if !known {
+				t.Fatalf("route %s %s was not known", tt.method, tt.path)
+			}
+			if !sameStringSlice(got, tt.want) {
+				t.Fatalf("permissions = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRequiredPermissionsForUnknownProtectedRoutesFailClosed(t *testing.T) {
+	id := "00000000-0000-0000-0000-000000000001"
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "canvas unknown map action", method: http.MethodGet, path: "/api/v1/canvas/maps/" + id + "/unknown"},
+		{name: "canvas unknown area child", method: http.MethodPut, path: "/api/v1/canvas/maps/" + id + "/areas/" + id + "/children"},
+		{name: "device backup latest child", method: http.MethodGet, path: "/api/v1/devices/" + id + "/backups/latest/extra"},
+		{name: "device credential assignment child", method: http.MethodDelete, path: "/api/v1/devices/" + id + "/credential-profiles/" + id + "/extra"},
+		{name: "settings bridge unknown child", method: http.MethodPost, path: "/api/v1/settings/bridge/secret/extra"},
+		{name: "grafana profile child", method: http.MethodPut, path: "/api/v1/grafana/dashboard-profiles/" + id + "/extra"},
+		{name: "backup run unknown action", method: http.MethodPost, path: "/api/v1/backups/bulk-runs/" + id + "/unknown"},
+		{name: "backup file unknown action", method: http.MethodGet, path: "/api/v1/backup-files/" + id + "/metadata"},
+		{name: "instance backup download child", method: http.MethodGet, path: "/api/v1/instance-backups/" + id + "/download/extra"},
+		{name: "bridge download child", method: http.MethodGet, path: "/api/v1/bridge/download/linux/amd64/sha256"},
+		{name: "admin user role child", method: http.MethodDelete, path: "/api/v1/admin/users/" + id + "/roles/viewer/extra"},
+		{name: "top level users not registered", method: http.MethodGet, path: "/api/v1/users"},
+		{name: "top level users prefix", method: http.MethodGet, path: "/api/v1/usersettings"},
+		{name: "top level roles not registered", method: http.MethodGet, path: "/api/v1/roles"},
+		{name: "top level roles prefix", method: http.MethodGet, path: "/api/v1/roles-extra"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, known := requiredPermissionsForRoute(tt.method, tt.path); known {
+				t.Fatalf("permissions = %#v known=true for unknown route %s %s", got, tt.method, tt.path)
+			}
+		})
+	}
+}
+
+// TestRequiredPermissionsForUnsupportedRouteMethodsFailClosed prevents fixed path policies from granting unrelated methods.
+func TestRequiredPermissionsForUnsupportedRouteMethodsFailClosed(t *testing.T) {
+	id := "00000000-0000-0000-0000-000000000001"
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "topology canvas post", method: http.MethodPost, path: "/api/v1/topology/canvas"},
+		{name: "settings me delete", method: http.MethodDelete, path: "/api/v1/settings/me"},
+		{name: "settings bridge secret delete", method: http.MethodDelete, path: "/api/v1/settings/bridge/secret"},
+		{name: "device backup latest post", method: http.MethodPost, path: "/api/v1/devices/" + id + "/backups/latest"},
+		{name: "link read by id", method: http.MethodGet, path: "/api/v1/links/" + id},
+		{name: "instance backup download post", method: http.MethodPost, path: "/api/v1/instance-backups/" + id + "/download"},
+		{name: "bridge download post", method: http.MethodPost, path: "/api/v1/bridge/download/linux/amd64"},
+		{name: "bridge launch request get", method: http.MethodGet, path: "/api/v1/bridge/launch-requests/" + id},
+		{name: "bridge token get", method: http.MethodGet, path: "/api/v1/bridge/token/" + id},
+		{name: "admin user roles get", method: http.MethodGet, path: "/api/v1/admin/users/" + id + "/roles"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, known := requiredPermissionsForRoute(tt.method, tt.path)
+			if !known {
+				t.Fatalf("route %s %s was not known", tt.method, tt.path)
+			}
+			if len(got) != 0 {
+				t.Fatalf("permissions = %#v, want none for unsupported method", got)
+			}
+		})
+	}
+}
+
+func TestRoutePermissionRegistryRejectsShadowedStaticPatterns(t *testing.T) {
+	registry := newRoutePermissionRegistry([]routePermissionSpec{
+		{
+			pattern:     "/api/v1/devices/{deviceID}",
+			permissions: fixedRoutePermissions(domain.PermissionDevicesRead),
+		},
+		{
+			pattern:     "/api/v1/devices/batch",
+			permissions: fixedRoutePermissions(domain.PermissionDevicesCreate),
+		},
+	})
+
+	err := registry.validate()
+	if err == nil {
+		t.Fatal("registry.validate() error = nil, want shadowed pattern error")
+	}
+	if got, want := err.Error(), "route permission pattern /api/v1/devices/batch is shadowed by earlier pattern /api/v1/devices/{deviceID}"; got != want {
+		t.Fatalf("registry.validate() error = %q, want %q", got, want)
+	}
+}
+
+func TestRoutePermissionRegistryRejectsMissingPermissionPolicy(t *testing.T) {
+	registry := newRoutePermissionRegistry([]routePermissionSpec{
+		{pattern: "/api/v1/broken"},
+	})
+
+	err := registry.validate()
+	if err == nil {
+		t.Fatal("registry.validate() error = nil, want missing policy error")
+	}
+	if got, want := err.Error(), "route permission pattern /api/v1/broken has no permission policy"; got != want {
+		t.Fatalf("registry.validate() error = %q, want %q", got, want)
+	}
+}
+
+func TestProtectedRoutePermissionRegistryMetadataIsValid(t *testing.T) {
+	if err := protectedRoutePermissionRegistry.validate(); err != nil {
+		t.Fatalf("protected route permission registry invalid: %v", err)
+	}
+}
+
+func TestUserAuthRejectsUnknownProtectedRouteBeforeHandler(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("alice", false, allSystemPermissionKeys()...))
+	served := false
+	handler := UserAuth(auth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	addSessionCookie(req, testSessionToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if served {
+		t.Fatal("handler was called for an unknown protected route")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["code"] != "permission_denied" {
+		t.Fatalf("code = %q, want permission_denied", body["code"])
+	}
+}
+
 func TestUserSettingsRequiresAccountManagePermission(t *testing.T) {
 	auth := newFakeAPIAuthProvider()
 	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("alice", false, domain.PermissionSettingsRead))
@@ -763,6 +1058,27 @@ func addSessionCookie(req *http.Request, token string) {
 func addCSRFCookieAndHeader(req *http.Request, token string) {
 	req.AddCookie(&http.Cookie{Name: authCSRFCookieName, Value: token})
 	req.Header.Set(csrfHeaderName, token)
+}
+
+func allSystemPermissionKeys() []string {
+	permissions := domain.SystemPermissions()
+	keys := make([]string, 0, len(permissions))
+	for _, permission := range permissions {
+		keys = append(keys, permission.Key)
+	}
+	return keys
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func findCookie(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {

@@ -63,6 +63,7 @@ const migrationStatuses = new Set<ManualEdgeMigrationStatus>([
 ]);
 const retryLimitError = 'Manual edge migration retry limit reached';
 
+// idleManualEdgeMigrationState returns the persisted baseline when no migration state exists.
 function idleManualEdgeMigrationState(): ManualEdgeMigrationState {
   return {
     schema_version: 1,
@@ -77,22 +78,27 @@ function idleManualEdgeMigrationState(): ManualEdgeMigrationState {
   };
 }
 
+// isRecord narrows unknown localStorage JSON before migration parsing.
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+// isNonNegativeInteger validates persisted migration counters.
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
+// isStringArray validates persisted migration key arrays.
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
 }
 
+// sortedUniqueKeys canonicalizes persisted migration key lists.
 function sortedUniqueKeys(keys: Iterable<string>): string[] {
   return [...new Set(keys)].sort();
 }
 
+// buildMigrationState normalizes counters and optional timestamps before persistence.
 function buildMigrationState({
   status,
   attemptCount,
@@ -141,6 +147,7 @@ function buildMigrationState({
   return state;
 }
 
+// parseMigrationState accepts only the current schema and valid migration counters.
 function parseMigrationState(value: unknown): ManualEdgeMigrationState | null {
   if (!isRecord(value)) {
     return null;
@@ -176,6 +183,7 @@ function parseMigrationState(value: unknown): ManualEdgeMigrationState | null {
   return state;
 }
 
+// storedManualEdge strips runtime-only migration metadata before writing pending edges.
 function storedManualEdge(edge: LegacyManualEdge): StoredManualEdge {
   if (edge.id !== undefined) {
     return {
@@ -191,6 +199,7 @@ function storedManualEdge(edge: LegacyManualEdge): StoredManualEdge {
   };
 }
 
+// safeErrorMessage turns unknown rejection reasons into a stable persisted error string.
 function safeErrorMessage(reason: unknown): string {
   if (reason instanceof Error && reason.message.trim().length > 0) {
     return reason.message;
@@ -203,10 +212,12 @@ function safeErrorMessage(reason: unknown): string {
   return 'Unknown migration error';
 }
 
+// manualEdgeMigrationKey creates an undirected key for legacy manual edges.
 export function manualEdgeMigrationKey(source: string, target: string): string {
   return [source.trim(), target.trim()].sort().join('::');
 }
 
+// parseStoredManualEdges reads localStorage edges and drops malformed, duplicate, or self edges.
 export function parseStoredManualEdges(raw: string | null): LegacyManualEdge[] {
   if (raw === null) {
     return [];
@@ -259,6 +270,7 @@ export function parseStoredManualEdges(raw: string | null): LegacyManualEdge[] {
   return edges;
 }
 
+// readManualEdgeMigrationState loads persisted state and falls back to idle on corruption.
 export function readManualEdgeMigrationState(
   storage: Pick<Storage, 'getItem'>,
   stateStorageKey: string,
@@ -275,6 +287,7 @@ export function readManualEdgeMigrationState(
   }
 }
 
+// writeManualEdgeMigrationState persists normalized migration progress.
 export function writeManualEdgeMigrationState(
   storage: Pick<Storage, 'setItem'>,
   stateStorageKey: string,
@@ -283,6 +296,7 @@ export function writeManualEdgeMigrationState(
   storage.setItem(stateStorageKey, JSON.stringify(state));
 }
 
+// migrateStoredManualEdges migrates default-map localStorage edges with retry and skip accounting.
 export async function migrateStoredManualEdges({
   storage,
   pendingStorageKey,

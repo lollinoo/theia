@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"strings"
 )
 
+// terminatePostgresConnections disconnects active sessions before restoring a PostgreSQL dump.
 var terminatePostgresConnections = func(ctx context.Context, dsn string) error {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -29,6 +29,7 @@ var terminatePostgresConnections = func(ctx context.Context, dsn string) error {
 	return nil
 }
 
+// restoreCoordinatorAfterDBActivationHook lets tests inject post-database activation failures.
 var restoreCoordinatorAfterDBActivationHook func() error
 
 type restoreMarker struct {
@@ -41,6 +42,7 @@ type restoreMarker struct {
 	Timestamp        string `json:"timestamp"`
 }
 
+// newRestoreMarker records staged restore paths and runtime targets for restart-safe activation.
 func newRestoreMarker(
 	stagedDB string,
 	stagedBackups string,
@@ -68,6 +70,7 @@ type RestoreCoordinator struct {
 	knownHostsPath  string
 }
 
+// NewRestoreCoordinatorWithDSN builds a restore coordinator for pending restart-time activation.
 func NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath string) *RestoreCoordinator {
 	return &RestoreCoordinator{
 		stateDir:        stateDir,
@@ -85,31 +88,17 @@ func NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPa
 // removes both the marker and staging dir.
 func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	ctx := context.Background()
-	markerPath := filepath.Join(c.stateDir, ".theia-restore-pending")
-	markerData, err := os.ReadFile(markerPath)
+	markerPath := restoreMarkerFilePath(c.stateDir)
+	marker, exists, err := readRestoreMarker(markerPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("read restore marker: %w", err)
+		return false, err
 	}
-
-	var marker restoreMarker
-	if err := json.Unmarshal(markerData, &marker); err != nil {
-		return false, fmt.Errorf("parse restore marker: %w", err)
-	}
-	if marker.StagedDB == "" {
-		return false, fmt.Errorf("restore marker missing staged_db")
-	}
-
-	if filepath.Clean(marker.StateDir) != filepath.Clean(c.stateDir) ||
-		filepath.Clean(marker.DeviceBackupDir) != filepath.Clean(c.deviceBackupDir) ||
-		filepath.Clean(marker.KnownHostsPath) != filepath.Clean(c.knownHostsPath) {
-		return false, fmt.Errorf("restore marker targets do not match runtime paths")
+	if !exists {
+		return false, nil
 	}
 
 	stagingDir := filepath.Join(c.stateDir, ".restore-staging")
-	if err := c.validateStagedRestoreArtifacts(marker, stagingDir); err != nil {
+	if err := validatePendingRestoreMarker(*marker, c.stateDir, c.deviceBackupDir, c.knownHostsPath, stagingDir); err != nil {
 		return false, err
 	}
 
@@ -121,7 +110,7 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		return false, err
 	}
 
-	if err := c.applyPostgresRestore(ctx, marker.StagedDB); err != nil {
+	if err := runPostgresRestore(ctx, c.dbDSN, marker.StagedDB); err != nil {
 		return false, err
 	}
 
@@ -131,40 +120,12 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		}
 	}
 
-	if marker.StagedBackups != "" || marker.StagedKnownHosts != "" {
-		if err := validateRestoreStagingDir(stagingDir); err != nil {
-			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("validate restore staging dir: %w", err))
-		}
+	if err := activateOptionalRestoreArtifacts(*marker, stagingDir); err != nil {
+		return false, c.restoreRetryableError(marker.StagedDB, stagingDir, err)
 	}
 
-	if marker.StagedBackups != "" && marker.DeviceBackupDir != "" {
-		if _, err := os.Lstat(marker.StagedBackups); err == nil {
-			if err := validateOptionalStagedBackupDir(marker.StagedBackups); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("validate staged backup dir: %w", err))
-			}
-			if err := replaceDirForRestore(marker.StagedBackups, marker.DeviceBackupDir); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("activate staged backup dir: %w", err))
-			}
-		} else if !os.IsNotExist(err) {
-			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("stat staged backup dir: %w", err))
-		}
-	}
-
-	if marker.StagedKnownHosts != "" && marker.KnownHostsPath != "" {
-		if _, err := os.Lstat(marker.StagedKnownHosts); err == nil {
-			if err := validateOptionalStagedKnownHosts(marker.StagedKnownHosts); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("validate staged known_hosts: %w", err))
-			}
-			if err := replaceFileForRestore(marker.StagedKnownHosts, marker.KnownHostsPath); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("activate staged known_hosts: %w", err))
-			}
-		} else if !os.IsNotExist(err) {
-			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("stat staged known_hosts: %w", err))
-		}
-	}
-
-	if err := os.Remove(markerPath); err != nil && !os.IsNotExist(err) {
-		return false, fmt.Errorf("remove restore marker: %w", err)
+	if err := removeRestoreMarker(markerPath); err != nil {
+		return false, err
 	}
 
 	if stagingDir != "" && stagingDir != "." {
@@ -176,155 +137,7 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	return true, nil
 }
 
-func (c *RestoreCoordinator) validateStagedRestoreArtifacts(marker restoreMarker, stagingDir string) error {
-	if err := validateRestoreStagingDir(stagingDir); err != nil {
-		return err
-	}
-
-	expectedStagedDB := filepath.Join(stagingDir, "database.dump")
-	if marker.StagedDB != expectedStagedDB {
-		return fmt.Errorf("restore marker staged db path does not match runtime staging path")
-	}
-	if err := validateStagedDBFile(marker.StagedDB); err != nil {
-		return err
-	}
-
-	expectedStagedBackups := filepath.Join(stagingDir, "backups")
-	if marker.StagedBackups != "" {
-		if marker.StagedBackups != expectedStagedBackups {
-			return fmt.Errorf("restore marker staged backups path does not match runtime staging path")
-		}
-		if err := validateOptionalStagedBackupDir(marker.StagedBackups); err != nil {
-			return err
-		}
-	}
-
-	expectedStagedKnownHosts := filepath.Join(stagingDir, "known_hosts")
-	if marker.StagedKnownHosts != "" {
-		if marker.StagedKnownHosts != expectedStagedKnownHosts {
-			return fmt.Errorf("restore marker staged known_hosts path does not match runtime staging path")
-		}
-		if err := validateOptionalStagedKnownHosts(marker.StagedKnownHosts); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func validateStagedDBFile(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("stat staged db: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("staged db must be a regular file")
-	}
-	return nil
-}
-
-func validateRestoreStagingDir(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("stat restore staging dir: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("restore staging dir must not be a symlink")
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("restore staging dir must be a directory")
-	}
-	return nil
-}
-
-func validateOptionalStagedBackupDir(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("stat staged backup dir: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("staged backup dir must not be a symlink")
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("staged backup dir must be a directory")
-	}
-
-	return filepath.WalkDir(path, func(entryPath string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
-			return fmt.Errorf("staged backup entry must be a regular file or directory: %s", entryPath)
-		}
-		return nil
-	})
-}
-
-func validateOptionalStagedKnownHosts(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("stat staged known_hosts: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("staged known_hosts must be a regular file")
-	}
-	return nil
-}
-
-func (c *RestoreCoordinator) applyPostgresRestore(ctx context.Context, stagedDB string) error {
-	if strings.TrimSpace(c.dbDSN) == "" {
-		return fmt.Errorf("postgres restore requires db_dsn")
-	}
-	if err := ensureSupportedPostgresCLITools(ctx, "pg_restore", "psql"); err != nil {
-		return err
-	}
-	conn, err := postgresCLIConnInfo(c.dbDSN)
-	if err != nil {
-		return fmt.Errorf("build postgres conninfo: %w", err)
-	}
-	if err := terminatePostgresConnections(ctx, c.dbDSN); err != nil {
-		return err
-	}
-	if err := validateStagedDBFile(stagedDB); err != nil {
-		return err
-	}
-	if _, err := runExternalCommandWithEnv(
-		ctx,
-		conn.env,
-		"psql",
-		"--set", "ON_ERROR_STOP=1",
-		"--single-transaction",
-		"--dbname", conn.connInfo,
-		"--command", "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;",
-	); err != nil {
-		return fmt.Errorf("clean postgres schema before restore: %w", err)
-	}
-	if _, err := runExternalCommandWithEnv(
-		ctx,
-		conn.env,
-		"pg_restore",
-		"--no-owner",
-		"--no-privileges",
-		"--single-transaction",
-		"--exit-on-error",
-		"--dbname", conn.connInfo,
-		stagedDB,
-	); err != nil {
-		return fmt.Errorf("restore postgres database: %w", err)
-	}
-	return nil
-}
-
+// backupLiveDB captures the current database once before applying a staged restore.
 func (c *RestoreCoordinator) backupLiveDB() error {
 	bakPath := filepath.Join(c.stateDir, "postgres.pre-restore.dump")
 	if _, err := os.Stat(bakPath); err == nil {
@@ -338,32 +151,12 @@ func (c *RestoreCoordinator) backupLiveDB() error {
 	return nil
 }
 
+// dumpLivePostgresDatabase writes a custom-format PostgreSQL dump for restore retry or rollback support.
 func (c *RestoreCoordinator) dumpLivePostgresDatabase(ctx context.Context, destPath string) error {
-	if strings.TrimSpace(c.dbDSN) == "" {
-		return fmt.Errorf("postgres backup requires db_dsn")
-	}
-	if err := ensureSupportedPostgresCLITools(ctx, "pg_dump"); err != nil {
-		return err
-	}
-	conn, err := postgresCLIConnInfo(c.dbDSN)
-	if err != nil {
-		return fmt.Errorf("build postgres conninfo: %w", err)
-	}
-	if _, err := runExternalCommandWithEnv(
-		ctx,
-		conn.env,
-		"pg_dump",
-		"--format=custom",
-		"--no-owner",
-		"--no-privileges",
-		"--file", destPath,
-		"--dbname", conn.connInfo,
-	); err != nil {
-		return fmt.Errorf("pg_dump failed: %w", err)
-	}
-	return nil
+	return runPostgresDump(ctx, c.dbDSN, destPath)
 }
 
+// restoreRetryableError preserves staged retry data after post-database activation failures.
 func (c *RestoreCoordinator) restoreRetryableError(stagedDB string, stagingDir string, activationErr error) error {
 	if err := validateRetryStagedDBDestination(stagedDB, stagingDir); err != nil {
 		return fmt.Errorf("%w (skip restore staged db for retry: %v)", activationErr, err)
@@ -375,30 +168,7 @@ func (c *RestoreCoordinator) restoreRetryableError(stagedDB string, stagingDir s
 	return activationErr
 }
 
-func validateRetryStagedDBDestination(stagedDB string, stagingDir string) error {
-	if err := validateRestoreStagingDir(stagingDir); err != nil {
-		return err
-	}
-
-	expectedStagedDB := filepath.Join(stagingDir, "database.dump")
-	if stagedDB != expectedStagedDB {
-		return fmt.Errorf("restore marker staged db path does not match runtime staging path")
-	}
-
-	info, err := os.Lstat(stagedDB)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("stat staged db retry destination: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("staged db retry destination must be a regular file")
-	}
-
-	return nil
-}
-
+// copyFileForRestore copies a restore artifact into place with restricted file permissions.
 func copyFileForRestore(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -431,7 +201,9 @@ func copyFileForRestore(src, dst string) error {
 	return nil
 }
 
+// copyDirForRestore copies a restore directory while rejecting symlink and special-file entries.
 func copyDirForRestore(src, dst string) error {
+	// The walk callback enforces entry safety before copying each artifact.
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -454,6 +226,7 @@ func copyDirForRestore(src, dst string) error {
 	})
 }
 
+// replaceFileForRestore atomically swaps a staged file into its live restore destination.
 func replaceFileForRestore(src, dst string) error {
 	if err := validateOptionalStagedKnownHosts(src); err != nil {
 		return err
@@ -501,6 +274,7 @@ func replaceFileForRestore(src, dst string) error {
 	return nil
 }
 
+// replaceDirForRestore atomically swaps a staged directory into its live restore destination.
 func replaceDirForRestore(src, dst string) error {
 	if err := validateOptionalStagedBackupDir(src); err != nil {
 		return err

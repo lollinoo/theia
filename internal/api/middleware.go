@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -140,6 +141,7 @@ func AuthenticatedUserFromRequest(r *http.Request) (*service.AuthenticatedUser, 
 	return user, ok && user != nil
 }
 
+// withAuthenticatedUser stores the authenticated session user on the request context.
 func withAuthenticatedUser(ctx context.Context, user *service.AuthenticatedUser) context.Context {
 	return context.WithValue(ctx, authenticatedUserContextKey{}, user)
 }
@@ -153,6 +155,7 @@ func OperatorSubjectFromRequest(r *http.Request) security.OperatorSubject {
 	return security.OperatorSubject{Name: auditSubjectName(user), Authenticated: true}
 }
 
+// requireAuthenticatedOperator returns an audit subject or writes a forbidden response.
 func requireAuthenticatedOperator(w http.ResponseWriter, r *http.Request, action string) (security.OperatorSubject, bool) {
 	subject := OperatorSubjectFromRequest(r)
 	if subject.Authenticated {
@@ -162,6 +165,7 @@ func requireAuthenticatedOperator(w http.ResponseWriter, r *http.Request, action
 	return subject, false
 }
 
+// requireAuthenticatedUser returns the current user or writes a forbidden response.
 func requireAuthenticatedUser(w http.ResponseWriter, r *http.Request, action string) (*service.AuthenticatedUser, bool) {
 	user, ok := AuthenticatedUserFromRequest(r)
 	if ok {
@@ -171,6 +175,7 @@ func requireAuthenticatedUser(w http.ResponseWriter, r *http.Request, action str
 	return nil, false
 }
 
+// requirePermission enforces one permission and maps RBAC/service failures to HTTP errors.
 func requirePermission(w http.ResponseWriter, auth authProvider, user *service.AuthenticatedUser, permission string) bool {
 	if auth == nil {
 		writeError(w, http.StatusServiceUnavailable, "authentication service not configured")
@@ -187,6 +192,7 @@ func requirePermission(w http.ResponseWriter, auth authProvider, user *service.A
 	return true
 }
 
+// requireRole enforces one role and maps RBAC/service failures to HTTP errors.
 func requireRole(w http.ResponseWriter, auth authProvider, user *service.AuthenticatedUser, roleID string) bool {
 	if auth == nil {
 		writeError(w, http.StatusServiceUnavailable, "authentication service not configured")
@@ -203,6 +209,7 @@ func requireRole(w http.ResponseWriter, auth authProvider, user *service.Authent
 	return true
 }
 
+// requireAnyPermission allows any listed permission and rejects empty permission policies.
 func requireAnyPermission(w http.ResponseWriter, auth authProvider, user *service.AuthenticatedUser, permissions []string) bool {
 	if len(permissions) == 0 {
 		writeAuthCodeError(w, http.StatusForbidden, "permission_denied", "permission denied")
@@ -217,6 +224,7 @@ func requireAnyPermission(w http.ResponseWriter, auth authProvider, user *servic
 	return false
 }
 
+// sessionTokenFromRequest extracts the trimmed password-session cookie value.
 func sessionTokenFromRequest(r *http.Request) (string, bool) {
 	cookie, err := r.Cookie(authSessionCookieName)
 	if err != nil || strings.TrimSpace(cookie.Value) == "" {
@@ -225,6 +233,7 @@ func sessionTokenFromRequest(r *http.Request) (string, bool) {
 	return strings.TrimSpace(cookie.Value), true
 }
 
+// requiresCSRF marks mutating authenticated routes as CSRF-protected.
 func requiresCSRF(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
@@ -234,6 +243,7 @@ func requiresCSRF(r *http.Request) bool {
 	}
 }
 
+// validateRequestCSRF checks the CSRF header against the active session token.
 func validateRequestCSRF(w http.ResponseWriter, r *http.Request, auth authProvider, rawSessionToken string) bool {
 	csrfToken := strings.TrimSpace(r.Header.Get(csrfHeaderName))
 	if csrfToken == "" {
@@ -251,12 +261,14 @@ func validateRequestCSRF(w http.ResponseWriter, r *http.Request, auth authProvid
 	return true
 }
 
+// isInvalidCurrentUserError identifies service errors that invalidate a browser session.
 func isInvalidCurrentUserError(err error) bool {
 	return errors.Is(err, service.ErrInvalidSession) ||
 		errors.Is(err, service.ErrUserDisabled) ||
 		errors.Is(err, service.ErrUserLocked)
 }
 
+// passwordChangeAllowedPath permits only account-recovery routes while a password change is required.
 func passwordChangeAllowedPath(path string) bool {
 	switch path {
 	case "/api/v1/auth/me", "/api/v1/auth/logout", "/api/v1/auth/password/change":
@@ -266,6 +278,7 @@ func passwordChangeAllowedPath(path string) bool {
 	}
 }
 
+// writeAuthCodeError emits the stable JSON shape used by auth and RBAC errors.
 func writeAuthCodeError(w http.ResponseWriter, code int, errorCode, message string) {
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{
@@ -274,6 +287,7 @@ func writeAuthCodeError(w http.ResponseWriter, code int, errorCode, message stri
 	})
 }
 
+// auditSubjectName chooses a stable human-readable audit identity for a session user.
 func auditSubjectName(user *service.AuthenticatedUser) string {
 	if user == nil {
 		return "anonymous"
@@ -290,162 +304,402 @@ func auditSubjectName(user *service.AuthenticatedUser) string {
 	return "authenticated-user"
 }
 
+// requiredPermissionsForRoute is the auth adapter for protected route metadata.
 func requiredPermissionsForRoute(method, path string) ([]string, bool) {
 	if path == "/api/v1/ws" {
 		return []string{domain.PermissionTopologyRead}, true
 	}
-	if strings.HasPrefix(path, "/api/v1/auth/") || path == "/api/v1/session" {
+	if isAuthRoute(path) {
 		return nil, true
 	}
 	if path == "/api/v1/health" || path == "/api/v1/prometheus/health" {
 		return []string{domain.PermissionSettingsRead}, true
 	}
-	if path == "/api/v1/settings/me" || strings.HasPrefix(path, "/api/v1/settings/bridge") {
-		return []string{domain.PermissionAccountManage}, true
-	}
-	if strings.HasPrefix(path, "/api/v1/settings") {
-		return permissionsForMethod(method, domain.PermissionSettingsRead, "", domain.PermissionSettingsUpdate, ""), true
-	}
-	if path == "/api/v1/grafana/dashboard-profiles" ||
-		strings.HasPrefix(path, "/api/v1/grafana/dashboard-profiles/") ||
-		strings.HasPrefix(path, "/api/v1/grafana/device-overrides/") {
-		return permissionsForMethod(method, domain.PermissionSettingsRead, domain.PermissionSettingsUpdate, domain.PermissionSettingsUpdate, domain.PermissionSettingsUpdate), true
-	}
-	if path == "/api/v1/topology/canvas" || path == "/api/v1/canvas" {
-		return []string{domain.PermissionTopologyRead}, true
-	}
-	if strings.HasPrefix(path, "/api/v1/canvas/") || path == "/api/v1/canvas/maps" {
-		return permissionsForMethod(method, domain.PermissionTopologyRead, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate), true
-	}
-	if strings.HasPrefix(path, "/api/v1/devices/") {
-		return deviceRoutePermissions(method, path)
-	}
-	if path == "/api/v1/devices" || path == "/api/v1/devices/batch" || path == "/api/v1/devices/orphans" {
-		return permissionsForMethod(method, domain.PermissionDevicesRead, domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate, domain.PermissionDevicesDelete), true
-	}
-	if path == "/api/v1/links" || strings.HasPrefix(path, "/api/v1/links/") || path == "/api/v1/positions" {
-		return permissionsForMethod(method, domain.PermissionTopologyRead, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate), true
-	}
-	if path == "/api/v1/snmp-profiles" || strings.HasPrefix(path, "/api/v1/snmp-profiles/") ||
-		path == "/api/v1/credential-profiles" || strings.HasPrefix(path, "/api/v1/credential-profiles/") {
-		return credentialRoutePermissions(method, path), true
-	}
-	if path == "/api/v1/areas" || strings.HasPrefix(path, "/api/v1/areas/") {
-		return permissionsForMethod(method, domain.PermissionTopologyRead, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate), true
-	}
-	if strings.HasPrefix(path, "/api/v1/backups/") || strings.HasPrefix(path, "/api/v1/backup-jobs/") || strings.HasPrefix(path, "/api/v1/backup-files/") {
-		return backupRoutePermissions(method), true
-	}
-	if path == "/api/v1/vendors" || strings.HasPrefix(path, "/api/v1/vendors/") {
-		return permissionsForMethod(method, domain.PermissionSettingsRead, "", domain.PermissionSettingsUpdate, ""), true
-	}
-	if path == "/api/v1/instance-backups" || strings.HasPrefix(path, "/api/v1/instance-backups/") {
-		return backupRoutePermissions(method), true
-	}
-	if strings.HasPrefix(path, "/api/v1/bridge/token/") {
-		return []string{domain.PermissionBridgeTokenCreate}, true
-	}
-	if strings.HasPrefix(path, "/api/v1/bridge/launch-requests/") {
-		return []string{domain.PermissionBridgeTokenCreate}, true
-	}
-	if strings.HasPrefix(path, "/api/v1/bridge/download/") {
-		return []string{domain.PermissionSettingsRead}, true
-	}
-	if strings.HasPrefix(path, "/api/v1/users") {
-		return permissionsForMethod(method, domain.PermissionUsersRead, domain.PermissionUsersCreate, domain.PermissionUsersUpdate, domain.PermissionUsersDelete), true
-	}
-	if strings.HasPrefix(path, "/api/v1/roles") {
-		return permissionsForMethod(method, domain.PermissionRolesRead, domain.PermissionRolesAssign, domain.PermissionRolesUpdate, domain.PermissionRolesUpdate), true
-	}
-	if strings.HasPrefix(path, "/api/v1/admin") {
-		return adminRoutePermissions(method, path)
+	return protectedRoutePermissionRegistry.permissionsForRoute(method, path)
+}
+
+// routePermissionSpec binds one segment-exact route pattern to its method policy.
+type routePermissionSpec struct {
+	pattern     string
+	permissions routePermissionPolicy
+}
+
+// routePermissionPolicy resolves permissions for one HTTP method.
+type routePermissionPolicy func(method string) []string
+
+// routePermissionRegistry performs ordered, segment-exact route policy lookup.
+type routePermissionRegistry struct {
+	specs []routePermissionSpec
+}
+
+// matches reports whether a concrete path has the same segment shape as the route pattern.
+func (s routePermissionSpec) matches(path string) bool {
+	return matchRoutePattern(path, s.pattern)
+}
+
+// newRoutePermissionRegistry copies permission specs so tests cannot mutate the caller's slice.
+func newRoutePermissionRegistry(specs []routePermissionSpec) routePermissionRegistry {
+	return routePermissionRegistry{specs: append([]routePermissionSpec(nil), specs...)}
+}
+
+// permissionsForRoute returns the permissions for a known route and whether the route matched.
+func (r routePermissionRegistry) permissionsForRoute(method, path string) ([]string, bool) {
+	for _, spec := range r.specs {
+		if spec.matches(path) {
+			return spec.permissions(method), true
+		}
 	}
 	return nil, false
 }
 
-func adminRoutePermissions(method, path string) ([]string, bool) {
-	switch {
-	case path == "/api/v1/admin/dashboard":
-		return []string{domain.PermissionAdminDashboard}, true
-	case path == "/api/v1/admin/users":
-		return permissionsForMethod(method, domain.PermissionUsersRead, domain.PermissionUsersCreate, domain.PermissionUsersUpdate, ""), true
-	case strings.HasPrefix(path, "/api/v1/admin/users/"):
-		if strings.HasSuffix(path, "/password-reset") {
-			return []string{domain.PermissionUsersUpdate}, true
+// validate rejects duplicate, shadowed, or policy-less metadata before it can grant access.
+func (r routePermissionRegistry) validate() error {
+	seenPatterns := make(map[string]struct{}, len(r.specs))
+	for index, spec := range r.specs {
+		if _, exists := seenPatterns[spec.pattern]; exists {
+			return fmt.Errorf("duplicate route permission pattern %s", spec.pattern)
 		}
-		if strings.Contains(path, "/roles") {
-			return []string{domain.PermissionRolesAssign}, true
+		seenPatterns[spec.pattern] = struct{}{}
+		if spec.permissions == nil {
+			return fmt.Errorf("route permission pattern %s has no permission policy", spec.pattern)
 		}
-		if strings.HasSuffix(path, "/status") {
-			return permissionsForMethod(method, "", "", domain.PermissionUsersUpdate, ""), true
+
+		for _, previous := range r.specs[:index] {
+			if previous.matches(spec.pattern) {
+				return fmt.Errorf(
+					"route permission pattern %s is shadowed by earlier pattern %s",
+					spec.pattern,
+					previous.pattern,
+				)
+			}
 		}
-		return permissionsForMethod(method, domain.PermissionUsersRead, "", domain.PermissionUsersUpdate, ""), true
-	case path == "/api/v1/admin/roles" || path == "/api/v1/admin/permissions":
-		return []string{domain.PermissionRolesRead}, true
-	case path == "/api/v1/admin/audit-logs":
-		return []string{domain.PermissionAuditLogsRead}, true
-	default:
-		return nil, false
 	}
+	return nil
 }
 
-func deviceRoutePermissions(method, path string) ([]string, bool) {
-	switch {
-	case isWinboxCredentialsRevealPath(path):
-		return []string{domain.PermissionCredentialsReveal}, true
-	case strings.Contains(path, "/credential-profiles") || strings.HasSuffix(path, "/winbox-profile"):
-		return permissionsForMethod(method, domain.PermissionCredentialsRead, domain.PermissionCredentialsUpdate, domain.PermissionCredentialsUpdate, domain.PermissionCredentialsUpdate), true
-	case strings.HasSuffix(path, "/winbox-credentials"):
-		return []string{domain.PermissionCredentialsRead}, true
-	case strings.Contains(path, "/backups"):
-		return backupRoutePermissions(method), true
-	case strings.HasSuffix(path, "/interfaces"):
-		return []string{domain.PermissionTopologyRead}, true
-	case strings.HasSuffix(path, "/probe") || strings.HasSuffix(path, "/snmp-test"):
-		return []string{domain.PermissionDevicesUpdate}, true
-	case strings.HasSuffix(path, "/topology-discovery"):
-		return []string{domain.PermissionTopologyUpdate}, true
-	default:
-		return permissionsForMethod(method, domain.PermissionDevicesRead, domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate, domain.PermissionDevicesDelete), true
+var routePermissionSpecs = []routePermissionSpec{
+	{pattern: "/api/v1/settings/me", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:   {domain.PermissionAccountManage},
+		http.MethodHead:  {domain.PermissionAccountManage},
+		http.MethodPatch: {domain.PermissionAccountManage},
+	})},
+	{pattern: "/api/v1/settings/bridge", permissions: readOnlyRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge/secret", permissions: postOnlyRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge/secret/rotate", permissions: postOnlyRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge/secret/revoke", permissions: postOnlyRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge/connector/config", permissions: readOnlyRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge/connector/download/{os}/{arch}", permissions: readOnlyRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings", permissions: readOnlyRoutePermissions(domain.PermissionSettingsRead)},
+	{pattern: "/api/v1/settings/{key}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionSettingsRead},
+		http.MethodHead: {domain.PermissionSettingsRead},
+		http.MethodPut:  {domain.PermissionSettingsUpdate},
+	})},
+
+	{pattern: "/api/v1/topology/canvas", permissions: readOnlyRoutePermissions(domain.PermissionTopologyRead)},
+	{pattern: "/api/v1/canvas", permissions: readOnlyRoutePermissions(domain.PermissionTopologyRead)},
+	{pattern: "/api/v1/canvas/maps", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionTopologyRead},
+		http.MethodHead: {domain.PermissionTopologyRead},
+		http.MethodPost: {domain.PermissionTopologyUpdate},
+	})},
+	{pattern: "/api/v1/canvas/maps/{mapID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:    {domain.PermissionTopologyRead},
+		http.MethodHead:   {domain.PermissionTopologyRead},
+		http.MethodPatch:  {domain.PermissionTopologyUpdate},
+		http.MethodDelete: {domain.PermissionTopologyUpdate},
+	})},
+	{pattern: "/api/v1/canvas/maps/{mapID}/duplicate", permissions: postOnlyRoutePermissions(domain.PermissionTopologyUpdate)},
+	{pattern: "/api/v1/canvas/maps/{mapID}/primary", permissions: postOnlyRoutePermissions(domain.PermissionTopologyUpdate)},
+	{pattern: "/api/v1/canvas/maps/{mapID}/topology", permissions: readOnlyRoutePermissions(domain.PermissionTopologyRead)},
+	{pattern: "/api/v1/canvas/maps/{mapID}/bootstrap", permissions: readOnlyRoutePermissions(domain.PermissionTopologyRead)},
+	{pattern: "/api/v1/canvas/maps/{mapID}/positions", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionTopologyRead},
+		http.MethodHead: {domain.PermissionTopologyRead},
+		http.MethodPut:  {domain.PermissionTopologyUpdate},
+	})},
+	{pattern: "/api/v1/canvas/maps/{mapID}/device-areas", permissions: putOnlyRoutePermissions(domain.PermissionTopologyUpdate)},
+	{pattern: "/api/v1/canvas/maps/{mapID}/areas", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionTopologyRead},
+		http.MethodHead: {domain.PermissionTopologyRead},
+		http.MethodPost: {domain.PermissionTopologyUpdate},
+	})},
+	{pattern: "/api/v1/canvas/maps/{mapID}/areas/{areaID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodPut:    {domain.PermissionTopologyUpdate},
+		http.MethodDelete: {domain.PermissionTopologyUpdate},
+	})},
+	{pattern: "/api/v1/canvas/maps/{mapID}/devices/{deviceID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodPost:   {domain.PermissionTopologyUpdate},
+		http.MethodPatch:  {domain.PermissionTopologyUpdate},
+		http.MethodDelete: {domain.PermissionTopologyUpdate},
+	})},
+
+	{pattern: "/api/v1/devices", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionDevicesRead},
+		http.MethodHead: {domain.PermissionDevicesRead},
+		http.MethodPost: {domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate},
+	})},
+	{pattern: "/api/v1/devices/batch", permissions: postOnlyRoutePermissions(domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate)},
+	{pattern: "/api/v1/devices/orphans", permissions: readOnlyRoutePermissions(domain.PermissionDevicesRead)},
+	{pattern: "/api/v1/devices/{deviceID}/winbox-credentials/reveal", permissions: postOnlyRoutePermissions(domain.PermissionCredentialsReveal)},
+	{pattern: "/api/v1/devices/{deviceID}/credential-profiles/{profileID}", permissions: deleteOnlyRoutePermissions(domain.PermissionCredentialsUpdate)},
+	{pattern: "/api/v1/devices/{deviceID}/credential-profiles", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionCredentialsRead},
+		http.MethodHead: {domain.PermissionCredentialsRead},
+		http.MethodPost: {domain.PermissionCredentialsUpdate},
+	})},
+	{pattern: "/api/v1/devices/{deviceID}/winbox-profile", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodPut:    {domain.PermissionCredentialsUpdate},
+		http.MethodDelete: {domain.PermissionCredentialsUpdate},
+	})},
+	{pattern: "/api/v1/devices/{deviceID}/winbox-credentials", permissions: readOnlyRoutePermissions(domain.PermissionCredentialsRead)},
+	{pattern: "/api/v1/devices/{deviceID}/backups/latest", permissions: readOnlyRoutePermissions(domain.PermissionBackupsRead)},
+	{pattern: "/api/v1/devices/{deviceID}/backups", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionBackupsRead},
+		http.MethodHead: {domain.PermissionBackupsRead},
+		http.MethodPost: {domain.PermissionBackupsUpdate},
+	})},
+	{pattern: "/api/v1/devices/{deviceID}/interfaces", permissions: readOnlyRoutePermissions(domain.PermissionTopologyRead)},
+	{pattern: "/api/v1/devices/{deviceID}/probe", permissions: postOnlyRoutePermissions(domain.PermissionDevicesUpdate)},
+	{pattern: "/api/v1/devices/{deviceID}/snmp-test", permissions: postOnlyRoutePermissions(domain.PermissionDevicesUpdate)},
+	{pattern: "/api/v1/devices/{deviceID}/topology-discovery", permissions: postOnlyRoutePermissions(domain.PermissionTopologyUpdate)},
+	{pattern: "/api/v1/devices/{deviceID}/ssh-credentials/test", permissions: postOnlyRoutePermissions(domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate)},
+	{pattern: "/api/v1/devices/{deviceID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:    {domain.PermissionDevicesRead},
+		http.MethodHead:   {domain.PermissionDevicesRead},
+		http.MethodPut:    {domain.PermissionDevicesUpdate},
+		http.MethodDelete: {domain.PermissionDevicesDelete},
+	})},
+
+	{pattern: "/api/v1/links", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionTopologyRead},
+		http.MethodHead: {domain.PermissionTopologyRead},
+		http.MethodPost: {domain.PermissionTopologyUpdate},
+	})},
+	{pattern: "/api/v1/links/{linkID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodPut:    {domain.PermissionTopologyUpdate},
+		http.MethodDelete: {domain.PermissionTopologyUpdate},
+	})},
+	{pattern: "/api/v1/positions", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionTopologyRead},
+		http.MethodHead: {domain.PermissionTopologyRead},
+		http.MethodPut:  {domain.PermissionTopologyUpdate},
+	})},
+
+	{pattern: "/api/v1/grafana/dashboard-profiles", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionSettingsRead},
+		http.MethodHead: {domain.PermissionSettingsRead},
+		http.MethodPost: {domain.PermissionSettingsUpdate},
+	})},
+	{pattern: "/api/v1/grafana/dashboard-profiles/{profileID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodPut:    {domain.PermissionSettingsUpdate},
+		http.MethodDelete: {domain.PermissionSettingsUpdate},
+	})},
+	{pattern: "/api/v1/grafana/device-overrides/{deviceID}", permissions: putOnlyRoutePermissions(domain.PermissionSettingsUpdate)},
+
+	{pattern: "/api/v1/snmp-profiles/{profileID}/reveal", permissions: postOnlyRoutePermissions(domain.PermissionCredentialsReveal)},
+	{pattern: "/api/v1/snmp-profiles", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionCredentialsRead},
+		http.MethodHead: {domain.PermissionCredentialsRead},
+		http.MethodPost: {domain.PermissionCredentialsUpdate},
+	})},
+	{pattern: "/api/v1/snmp-profiles/{profileID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:    {domain.PermissionCredentialsRead},
+		http.MethodHead:   {domain.PermissionCredentialsRead},
+		http.MethodPut:    {domain.PermissionCredentialsUpdate},
+		http.MethodDelete: {domain.PermissionCredentialsUpdate},
+	})},
+	{pattern: "/api/v1/credential-profiles/{profileID}/test", permissions: postOnlyRoutePermissions(domain.PermissionCredentialsUpdate)},
+	{pattern: "/api/v1/credential-profiles", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionCredentialsRead},
+		http.MethodHead: {domain.PermissionCredentialsRead},
+		http.MethodPost: {domain.PermissionCredentialsUpdate},
+	})},
+	{pattern: "/api/v1/credential-profiles/{profileID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:    {domain.PermissionCredentialsRead},
+		http.MethodHead:   {domain.PermissionCredentialsRead},
+		http.MethodPut:    {domain.PermissionCredentialsUpdate},
+		http.MethodDelete: {domain.PermissionCredentialsUpdate},
+	})},
+
+	{pattern: "/api/v1/areas", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionTopologyRead},
+		http.MethodHead: {domain.PermissionTopologyRead},
+		http.MethodPost: {domain.PermissionTopologyUpdate},
+	})},
+	{pattern: "/api/v1/areas/{areaID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:    {domain.PermissionTopologyRead},
+		http.MethodHead:   {domain.PermissionTopologyRead},
+		http.MethodPut:    {domain.PermissionTopologyUpdate},
+		http.MethodDelete: {domain.PermissionTopologyUpdate},
+	})},
+
+	{pattern: "/api/v1/backups/bulk/status", permissions: readOnlyRoutePermissions(domain.PermissionBackupsRead)},
+	{pattern: "/api/v1/backups/bulk-runs/latest", permissions: readOnlyRoutePermissions(domain.PermissionBackupsRead)},
+	{pattern: "/api/v1/backups/bulk-runs", permissions: postOnlyRoutePermissions(domain.PermissionBackupsUpdate)},
+	{pattern: "/api/v1/backups/bulk-runs/{runID}/pause", permissions: postOnlyRoutePermissions(domain.PermissionBackupsUpdate)},
+	{pattern: "/api/v1/backups/bulk-runs/{runID}/resume", permissions: postOnlyRoutePermissions(domain.PermissionBackupsUpdate)},
+	{pattern: "/api/v1/backups/bulk-runs/{runID}/cancel", permissions: postOnlyRoutePermissions(domain.PermissionBackupsUpdate)},
+	{pattern: "/api/v1/backups/bulk-runs/{runID}", permissions: readOnlyRoutePermissions(domain.PermissionBackupsRead)},
+	{pattern: "/api/v1/backups/bulk", permissions: postOnlyRoutePermissions(domain.PermissionBackupsUpdate)},
+	{pattern: "/api/v1/backups/bulk-download", permissions: postOnlyRoutePermissions(domain.PermissionBackupsUpdate)},
+	{pattern: "/api/v1/backup-jobs/{jobID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:    {domain.PermissionBackupsRead},
+		http.MethodHead:   {domain.PermissionBackupsRead},
+		http.MethodDelete: {domain.PermissionBackupsUpdate},
+	})},
+	{pattern: "/api/v1/backup-files/{fileID}/download", permissions: readOnlyRoutePermissions(domain.PermissionBackupsRead)},
+	{pattern: "/api/v1/backup-files/{fileID}/content", permissions: readOnlyRoutePermissions(domain.PermissionBackupsRead)},
+
+	{pattern: "/api/v1/vendors", permissions: readOnlyRoutePermissions(domain.PermissionSettingsRead)},
+	{pattern: "/api/v1/vendors/{vendorID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionSettingsRead},
+		http.MethodHead: {domain.PermissionSettingsRead},
+		http.MethodPut:  {domain.PermissionSettingsUpdate},
+	})},
+
+	{pattern: "/api/v1/instance-backups", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionBackupsRead},
+		http.MethodHead: {domain.PermissionBackupsRead},
+		http.MethodPost: {domain.PermissionBackupsUpdate},
+	})},
+	{pattern: "/api/v1/instance-backups/restore", permissions: postOnlyRoutePermissions(domain.PermissionBackupsUpdate)},
+	{pattern: "/api/v1/instance-backups/{backupID}/download", permissions: readOnlyRoutePermissions(domain.PermissionBackupsRead)},
+	{pattern: "/api/v1/instance-backups/{backupID}/cancel", permissions: postOnlyRoutePermissions(domain.PermissionBackupsUpdate)},
+	{pattern: "/api/v1/instance-backups/{backupID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:    {domain.PermissionBackupsRead},
+		http.MethodHead:   {domain.PermissionBackupsRead},
+		http.MethodDelete: {domain.PermissionBackupsUpdate},
+	})},
+
+	{pattern: "/api/v1/bridge/download/{os}/{arch}", permissions: readOnlyRoutePermissions(domain.PermissionSettingsRead)},
+	{pattern: "/api/v1/bridge/launch-requests/{deviceID}", permissions: postOnlyRoutePermissions(domain.PermissionBridgeTokenCreate)},
+	{pattern: "/api/v1/bridge/token/{deviceID}", permissions: postOnlyRoutePermissions(domain.PermissionBridgeTokenCreate)},
+
+	{pattern: "/api/v1/admin/dashboard", permissions: readOnlyRoutePermissions(domain.PermissionAdminDashboard)},
+	{pattern: "/api/v1/admin/users", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:  {domain.PermissionUsersRead},
+		http.MethodHead: {domain.PermissionUsersRead},
+		http.MethodPost: {domain.PermissionUsersCreate, domain.PermissionUsersUpdate},
+	})},
+	{pattern: "/api/v1/admin/users/{userID}/status", permissions: patchOnlyRoutePermissions(domain.PermissionUsersUpdate)},
+	{pattern: "/api/v1/admin/users/{userID}/roles/{roleID}", permissions: deleteOnlyRoutePermissions(domain.PermissionRolesAssign)},
+	{pattern: "/api/v1/admin/users/{userID}/roles", permissions: postOnlyRoutePermissions(domain.PermissionRolesAssign)},
+	{pattern: "/api/v1/admin/users/{userID}/password-reset", permissions: postOnlyRoutePermissions(domain.PermissionUsersUpdate)},
+	{pattern: "/api/v1/admin/users/{userID}", permissions: routePermissionsByMethod(map[string][]string{
+		http.MethodGet:   {domain.PermissionUsersRead},
+		http.MethodHead:  {domain.PermissionUsersRead},
+		http.MethodPatch: {domain.PermissionUsersUpdate},
+	})},
+	{pattern: "/api/v1/admin/roles", permissions: readOnlyRoutePermissions(domain.PermissionRolesRead)},
+	{pattern: "/api/v1/admin/permissions", permissions: readOnlyRoutePermissions(domain.PermissionRolesRead)},
+	{pattern: "/api/v1/admin/audit-logs", permissions: readOnlyRoutePermissions(domain.PermissionAuditLogsRead)},
+}
+
+var protectedRoutePermissionRegistry = newRoutePermissionRegistry(routePermissionSpecs)
+
+// matchRoutePattern compares route patterns by path segment instead of raw string prefixes.
+func matchRoutePattern(path, pattern string) bool {
+	pathSegments := splitRouteSegments(path)
+	patternSegments := splitRouteSegments(pattern)
+	if len(pathSegments) != len(patternSegments) {
+		return false
 	}
-}
-
-func credentialRoutePermissions(method, path string) []string {
-	if strings.HasSuffix(path, "/reveal") {
-		return []string{domain.PermissionCredentialsReveal}
+	for i, patternSegment := range patternSegments {
+		if isRoutePlaceholder(patternSegment) {
+			if pathSegments[i] == "" {
+				return false
+			}
+			continue
+		}
+		if pathSegments[i] != patternSegment {
+			return false
+		}
 	}
-	return permissionsForMethod(method, domain.PermissionCredentialsRead, domain.PermissionCredentialsUpdate, domain.PermissionCredentialsUpdate, domain.PermissionCredentialsUpdate)
+	return true
 }
 
-func backupRoutePermissions(method string) []string {
-	return permissionsForMethod(method, domain.PermissionBackupsRead, domain.PermissionBackupsUpdate, domain.PermissionBackupsUpdate, domain.PermissionBackupsUpdate)
-}
-
-func permissionsForMethod(method, read, create, update, deletePermission string) []string {
-	switch method {
-	case http.MethodGet, http.MethodHead:
-		return nonEmptyPermissions(read)
-	case http.MethodPost:
-		return nonEmptyPermissions(create, update)
-	case http.MethodPut, http.MethodPatch:
-		return nonEmptyPermissions(update)
-	case http.MethodDelete:
-		return nonEmptyPermissions(deletePermission)
-	default:
+// splitRouteSegments normalizes a route path into slash-delimited segments.
+func splitRouteSegments(path string) []string {
+	trimmed := strings.Trim(path, "/")
+	if trimmed == "" {
 		return nil
 	}
+	return strings.Split(trimmed, "/")
 }
 
+// isRoutePlaceholder identifies pattern segments like {deviceID}.
+func isRoutePlaceholder(segment string) bool {
+	return strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") && len(segment) > 2
+}
+
+// routePermissionsByMethod returns a policy that grants permissions only for explicitly listed methods.
+func routePermissionsByMethod(methodPermissions map[string][]string) routePermissionPolicy {
+	return func(method string) []string {
+		return nonEmptyPermissions(methodPermissions[method]...)
+	}
+}
+
+// routePermissionsForMethods returns one permission set for a fixed set of supported methods.
+func routePermissionsForMethods(methods []string, permissions ...string) routePermissionPolicy {
+	methodPermissions := make(map[string][]string, len(methods))
+	for _, method := range methods {
+		methodPermissions[method] = append([]string(nil), permissions...)
+	}
+	return routePermissionsByMethod(methodPermissions)
+}
+
+// readOnlyRoutePermissions grants read permissions for GET and HEAD only.
+func readOnlyRoutePermissions(permissions ...string) routePermissionPolicy {
+	return routePermissionsForMethods([]string{http.MethodGet, http.MethodHead}, permissions...)
+}
+
+// postOnlyRoutePermissions grants permissions for POST only.
+func postOnlyRoutePermissions(permissions ...string) routePermissionPolicy {
+	return routePermissionsForMethods([]string{http.MethodPost}, permissions...)
+}
+
+// putOnlyRoutePermissions grants permissions for PUT only.
+func putOnlyRoutePermissions(permissions ...string) routePermissionPolicy {
+	return routePermissionsForMethods([]string{http.MethodPut}, permissions...)
+}
+
+// patchOnlyRoutePermissions grants permissions for PATCH only.
+func patchOnlyRoutePermissions(permissions ...string) routePermissionPolicy {
+	return routePermissionsForMethods([]string{http.MethodPatch}, permissions...)
+}
+
+// deleteOnlyRoutePermissions grants permissions for DELETE only.
+func deleteOnlyRoutePermissions(permissions ...string) routePermissionPolicy {
+	return routePermissionsForMethods([]string{http.MethodDelete}, permissions...)
+}
+
+// fixedRoutePermissions preserves registry validation tests that need a method-agnostic policy.
+func fixedRoutePermissions(permissions ...string) routePermissionPolicy {
+	return func(string) []string {
+		return nonEmptyPermissions(permissions...)
+	}
+}
+
+// nonEmptyPermissions trims, de-duplicates, and drops blank permission keys.
 func nonEmptyPermissions(values ...string) []string {
 	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			out = append(out, value)
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
 		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
 	}
 	return out
 }
 
+// applyMiddleware layers protected API middleware in the order expected by auth tests.
 func applyMiddleware(next http.Handler, config SecurityConfig, auth authProvider, includeJSON bool, bodyLimit int64) http.Handler {
 	handler := next
 	if includeJSON {
@@ -461,6 +715,7 @@ func applyMiddleware(next http.Handler, config SecurityConfig, auth authProvider
 	return handler
 }
 
+// applyPublicMiddleware layers origin, logging, and optional body limits for public routes.
 func applyPublicMiddleware(next http.Handler, config SecurityConfig, includeJSON bool, bodyLimit int64) http.Handler {
 	handler := next
 	if includeJSON {
@@ -492,6 +747,7 @@ type statusWriter struct {
 	status int
 }
 
+// WriteHeader records the response status before forwarding it to the wrapped writer.
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)

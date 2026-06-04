@@ -5,6 +5,9 @@ import type { AlertDTO, SnapshotPayload } from '../../types/metrics';
 import { buildRuntimeState } from './runtimeAdapters';
 import { composeCanvasTopology } from './topologyComposer';
 
+/**
+ * Builds a device fixture with complete API defaults and per-test overrides.
+ */
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
     id: 'dev-1',
@@ -29,6 +32,9 @@ function mockDevice(overrides: Partial<Device> = {}): Device {
   };
 }
 
+/**
+ * Builds a link fixture with complete API defaults and per-test overrides.
+ */
 function mockLink(overrides: Partial<Link> = {}): Link {
   return {
     id: 'link-1',
@@ -45,6 +51,9 @@ function mockLink(overrides: Partial<Link> = {}): Link {
   };
 }
 
+/**
+ * Builds a runtime snapshot fixture with device and link telemetry defaults.
+ */
 function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   return {
     devices: {
@@ -116,6 +125,10 @@ function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
   };
 }
 
+/**
+ * Composes the topology under test with representative devices, links,
+ * positions, and optional runtime inputs.
+ */
 function buildSubject(options: {
   snapshot?: SnapshotPayload | null;
   alerts?: AlertDTO[];

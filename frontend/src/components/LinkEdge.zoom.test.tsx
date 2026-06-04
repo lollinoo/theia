@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import type { CSSProperties, ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import LinkEdge from './LinkEdge';
@@ -7,7 +7,7 @@ import { clearLinkLabelRegistry } from './linkLabelRegistry';
 
 vi.mock('@xyflow/react', () => ({
   BaseEdge: ({ id, style }: { id: string; style?: CSSProperties }) => (
-    <div data-testid={id} style={style} />
+    <path data-testid={id} style={style} />
   ),
   EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
   getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
@@ -18,35 +18,39 @@ vi.mock('@xyflow/react', () => ({
 
 describe('LinkEdge zoom performance', () => {
   afterEach(() => {
-    clearLinkLabelRegistry();
+    act(() => {
+      clearLinkLabelRegistry();
+    });
   });
 
   it('uses canvas CSS variables for badge readability without subscribing each edge to zoom', () => {
     render(
       <>
-        <LinkEdge
-          {...({
-            id: 'edge-readable',
-            source: 'dev-1',
-            target: 'dev-2',
-            sourceX: 0,
-            sourceY: 0,
-            targetX: 100,
-            targetY: 100,
-            sourcePosition: 'right',
-            targetPosition: 'left',
-            selected: false,
-            data: {
-              bandwidthLabel: '1 Gbps',
-              throughputLabel: 'TX: 500M / RX: 300M',
-              negotiationState: 'matched',
-              sourceDeviceStatus: 'up',
-              targetDeviceStatus: 'up',
-              sourceIfStatus: 'up',
-              targetIfStatus: 'up',
-            },
-          } as never)}
-        />
+        <svg>
+          <LinkEdge
+            {...({
+              id: 'edge-readable',
+              source: 'dev-1',
+              target: 'dev-2',
+              sourceX: 0,
+              sourceY: 0,
+              targetX: 100,
+              targetY: 100,
+              sourcePosition: 'right',
+              targetPosition: 'left',
+              selected: false,
+              data: {
+                bandwidthLabel: '1 Gbps',
+                throughputLabel: 'TX: 500M / RX: 300M',
+                negotiationState: 'matched',
+                sourceDeviceStatus: 'up',
+                targetDeviceStatus: 'up',
+                sourceIfStatus: 'up',
+                targetIfStatus: 'up',
+              },
+            } as never)}
+          />
+        </svg>
         <LinkLabelLayer />
       </>,
     );

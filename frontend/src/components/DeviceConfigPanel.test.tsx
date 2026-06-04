@@ -5,66 +5,36 @@ import type { Device } from '../types/api';
 import { DeviceConfigPanel } from './DeviceConfigPanel';
 
 // Mock all API calls used in useEffect
-vi.mock('../api/client', () => ({
-  fetchSNMPProfiles: vi.fn().mockResolvedValue([]),
-  revealSNMPProfile: vi.fn(),
-  fetchCredentialProfiles: vi.fn().mockResolvedValue([
-    {
-      id: 'p1',
-      name: 'Admin SSH',
-      description: '',
-      username: 'admin',
-      port: 22,
-      auth_method: 'password',
-      role: 'Admin',
-      created_at: '',
-      updated_at: '',
-    },
-    {
-      id: 'p2',
-      name: 'Read SSH',
-      description: '',
-      username: 'read',
-      port: 22,
-      auth_method: 'password',
-      role: 'Read',
-      created_at: '',
-      updated_at: '',
-    },
-  ]),
-  fetchDeviceCredentialProfiles: vi.fn().mockResolvedValue([]),
-  fetchGrafanaDashboardConfig: vi.fn().mockResolvedValue({
-    profiles: [
-      {
-        id: 'grafana-profile-1',
-        name: 'RouterBoard shared',
-        url_template: 'https://grafana.example/d/router?var-device={{hostname}}',
-        variable_source: 'hostname',
-      },
-    ],
-    default_profile_id: '',
-    device_overrides: {},
-  }),
-  saveDeviceGrafanaDashboardOverride: vi.fn().mockResolvedValue({
-    profiles: [],
-    default_profile_id: '',
-    device_overrides: {},
-  }),
-  assignCredentialProfile: vi.fn().mockResolvedValue(undefined),
-  unassignCredentialProfile: vi.fn().mockResolvedValue(undefined),
-  setWinBoxProfile: vi.fn().mockResolvedValue(undefined),
-  clearWinBoxProfile: vi.fn().mockResolvedValue(undefined),
-  fetchAreas: vi.fn().mockResolvedValue([]),
-  updateCanvasMapDeviceAreas: vi.fn().mockResolvedValue({}),
-  updateCanvasMapDeviceVisualColor: vi.fn().mockResolvedValue({}),
-  fetchSettings: vi.fn().mockResolvedValue({}),
-  checkPrometheusHealth: vi.fn().mockResolvedValue({ available: false, url: '' }),
-  updateSetting: vi.fn().mockResolvedValue(undefined),
-  updateDevice: vi.fn().mockResolvedValue({}),
-  runTopologyDiscovery: vi.fn().mockResolvedValue(undefined),
-  deleteDevice: vi.fn().mockResolvedValue(undefined),
-  testSNMPConnection: vi.fn().mockResolvedValue({ success: true }),
-}));
+vi.mock('../api/client', () => {
+  const pendingApiCall = () => new Promise<never>(() => {});
+
+  return {
+    fetchSNMPProfiles: vi.fn().mockImplementation(pendingApiCall),
+    revealSNMPProfile: vi.fn(),
+    fetchCredentialProfiles: vi.fn().mockImplementation(pendingApiCall),
+    fetchDeviceCredentialProfiles: vi.fn().mockImplementation(pendingApiCall),
+    fetchGrafanaDashboardConfig: vi.fn().mockImplementation(pendingApiCall),
+    saveDeviceGrafanaDashboardOverride: vi.fn().mockResolvedValue({
+      profiles: [],
+      default_profile_id: '',
+      device_overrides: {},
+    }),
+    assignCredentialProfile: vi.fn().mockResolvedValue(undefined),
+    unassignCredentialProfile: vi.fn().mockResolvedValue(undefined),
+    setWinBoxProfile: vi.fn().mockResolvedValue(undefined),
+    clearWinBoxProfile: vi.fn().mockResolvedValue(undefined),
+    fetchAreas: vi.fn().mockImplementation(pendingApiCall),
+    updateCanvasMapDeviceAreas: vi.fn().mockResolvedValue({}),
+    updateCanvasMapDeviceVisualColor: vi.fn().mockResolvedValue({}),
+    fetchSettings: vi.fn().mockImplementation(pendingApiCall),
+    checkPrometheusHealth: vi.fn().mockImplementation(pendingApiCall),
+    updateSetting: vi.fn().mockResolvedValue(undefined),
+    updateDevice: vi.fn().mockResolvedValue({}),
+    runTopologyDiscovery: vi.fn().mockResolvedValue(undefined),
+    deleteDevice: vi.fn().mockResolvedValue(undefined),
+    testSNMPConnection: vi.fn().mockResolvedValue({ success: true }),
+  };
+});
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -1100,7 +1070,23 @@ describe('DeviceConfigPanel — Grafana URL autosave validation', () => {
   });
 
   it('saves device Grafana override with selected profile id', async () => {
-    const { saveDeviceGrafanaDashboardOverride } = await import('../api/client');
+    const { fetchGrafanaDashboardConfig, fetchSettings, saveDeviceGrafanaDashboardOverride } =
+      await import('../api/client');
+    (fetchSettings as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(async () => ({}))
+      .mockImplementationOnce(async () => ({}));
+    (fetchGrafanaDashboardConfig as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => ({
+      profiles: [
+        {
+          id: 'grafana-profile-1',
+          name: 'RouterBoard shared',
+          url_template: 'https://grafana.example/d/router?var-device={{hostname}}',
+          variable_source: 'hostname',
+        },
+      ],
+      default_profile_id: '',
+      device_overrides: {},
+    }));
 
     render(
       <DeviceConfigPanel
@@ -1112,7 +1098,9 @@ describe('DeviceConfigPanel — Grafana URL autosave validation', () => {
 
     await act(async () => {
       await Promise.resolve();
+      await Promise.resolve();
     });
+    expect(screen.getByText('RouterBoard shared')).toBeInTheDocument();
     const profileSelect = screen.getByRole('combobox', { name: /dashboard profile/i });
     await act(async () => {
       fireEvent.change(profileSelect, { target: { value: 'grafana-profile-1' } });

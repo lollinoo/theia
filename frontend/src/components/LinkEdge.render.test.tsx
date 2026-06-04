@@ -1,66 +1,66 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import type { CSSProperties, ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import LinkEdge from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
 import { clearLinkLabelRegistry } from './linkLabelRegistry';
 
-vi.mock('@xyflow/react', async () => {
-  const ReactModule = await import('react');
-
-  return {
-    BaseEdge: ({
-      id,
-      style,
-    }: {
-      id: string;
-      style?: CSSProperties;
-    }) => <div data-testid={id} style={style} />,
-    EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
-    getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
-  };
-});
+vi.mock('@xyflow/react', () => ({
+  BaseEdge: ({
+    id,
+    style,
+  }: {
+    id: string;
+    style?: CSSProperties;
+  }) => <path data-testid={id} style={style} />,
+  EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
+  getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
+}));
 
 function renderEdge(
   overrides: Record<string, unknown> = {},
   dataOverrides: Record<string, unknown> = {},
 ) {
   return render(
-    <div>
-      <LinkEdge
-        {...({
-          id: 'edge-1',
-          source: 'dev-1',
-          target: 'dev-2',
-          sourceX: 0,
-          sourceY: 0,
-          targetX: 100,
-          targetY: 100,
-          sourcePosition: 'right',
-          targetPosition: 'left',
-          selected: false,
-          data: {
-            bandwidthLabel: '1 Gbps',
-            speedLabel: 'SPD 1 Gbps',
-            negotiationState: 'matched',
-            speedMismatch: false,
-            sourceDeviceStatus: 'up',
-            targetDeviceStatus: 'up',
-            sourceIfStatus: 'up',
-            targetIfStatus: 'up',
-            ...dataOverrides,
-          },
-          ...overrides,
-        } as never)}
-      />
+    <>
+      <svg>
+        <LinkEdge
+          {...({
+            id: 'edge-1',
+            source: 'dev-1',
+            target: 'dev-2',
+            sourceX: 0,
+            sourceY: 0,
+            targetX: 100,
+            targetY: 100,
+            sourcePosition: 'right',
+            targetPosition: 'left',
+            selected: false,
+            data: {
+              bandwidthLabel: '1 Gbps',
+              speedLabel: 'SPD 1 Gbps',
+              negotiationState: 'matched',
+              speedMismatch: false,
+              sourceDeviceStatus: 'up',
+              targetDeviceStatus: 'up',
+              sourceIfStatus: 'up',
+              targetIfStatus: 'up',
+              ...dataOverrides,
+            },
+            ...overrides,
+          } as never)}
+        />
+      </svg>
       <LinkLabelLayer />
-    </div>,
+    </>,
   );
 }
 
 describe('LinkEdge render', () => {
   afterEach(() => {
-    clearLinkLabelRegistry();
+    act(() => {
+      clearLinkLabelRegistry();
+    });
   });
 
   it('shows stacked rate and throughput badges without a standalone AUTO pill', () => {

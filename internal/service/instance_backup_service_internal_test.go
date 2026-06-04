@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -74,6 +75,9 @@ func (r *instanceBackupCancelTestRepo) ListSuccessfulOldest() ([]domain.Instance
 			backups = append(backups, *backup)
 		}
 	}
+	sort.Slice(backups, func(i, j int) bool {
+		return backups[i].CreatedAt.Before(backups[j].CreatedAt)
+	})
 	return backups, nil
 }
 
@@ -86,6 +90,107 @@ func (r *instanceBackupCancelTestRepo) DeleteFailedOlderThan(cutoff time.Time) (
 		}
 	}
 	return deleted, nil
+}
+
+func TestInstanceBackupCleanupRetentionDeletesOldSuccessfulBackupsAndFailedRecords(t *testing.T) {
+	backupRoot := t.TempDir()
+	base := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	successful := make([]*domain.InstanceBackup, 0, 5)
+	for i := 0; i < 5; i++ {
+		successful = append(successful, successfulInstanceBackupForRetentionTest(t, backupRoot, base.Add(time.Duration(i)*time.Hour)))
+	}
+	failedOld := &domain.InstanceBackup{
+		ID:        uuid.New(),
+		Status:    domain.InstanceBackupStatusFailed,
+		CreatedAt: base.Add(-10 * 24 * time.Hour),
+	}
+	failedFresh := &domain.InstanceBackup{
+		ID:        uuid.New(),
+		Status:    domain.InstanceBackupStatusFailed,
+		CreatedAt: base.Add(-24 * time.Hour),
+	}
+	repo := newInstanceBackupCancelTestRepo(append(successful, failedOld, failedFresh)...)
+	svc := NewInstanceBackupService(nil, repo, nil, backupRoot, "", "", "", "", nil)
+
+	result, err := svc.CleanupRetention(context.Background(), 2, base.Add(-7*24*time.Hour))
+
+	if err != nil {
+		t.Fatalf("CleanupRetention: %v", err)
+	}
+	if result.SuccessfulDeleted != 3 {
+		t.Fatalf("successful deleted = %d, want 3", result.SuccessfulDeleted)
+	}
+	if result.FailedDeleted != 1 {
+		t.Fatalf("failed deleted = %d, want 1", result.FailedDeleted)
+	}
+	for _, backup := range successful[:3] {
+		persisted, err := repo.GetByID(backup.ID)
+		if err != nil {
+			t.Fatalf("GetByID(%s): %v", backup.ID, err)
+		}
+		if persisted != nil {
+			t.Fatalf("backup %s should have been deleted", backup.ID)
+		}
+		assertPathRemoved(t, filepath.Dir(backup.FilePath))
+	}
+	for _, backup := range successful[3:] {
+		persisted, err := repo.GetByID(backup.ID)
+		if err != nil {
+			t.Fatalf("GetByID(%s): %v", backup.ID, err)
+		}
+		if persisted == nil {
+			t.Fatalf("backup %s should have been retained", backup.ID)
+		}
+		assertPathExists(t, filepath.Dir(backup.FilePath))
+	}
+	persistedFailedOld, err := repo.GetByID(failedOld.ID)
+	if err != nil {
+		t.Fatalf("GetByID(failedOld): %v", err)
+	}
+	if persistedFailedOld != nil {
+		t.Fatal("old failed backup should have been deleted")
+	}
+	persistedFailedFresh, err := repo.GetByID(failedFresh.ID)
+	if err != nil {
+		t.Fatalf("GetByID(failedFresh): %v", err)
+	}
+	if persistedFailedFresh == nil {
+		t.Fatal("fresh failed backup should have been retained")
+	}
+}
+
+func successfulInstanceBackupForRetentionTest(t *testing.T, backupRoot string, createdAt time.Time) *domain.InstanceBackup {
+	t.Helper()
+	id := uuid.New()
+	dir := filepath.Join(backupRoot, id.String())
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("creating backup dir: %v", err)
+	}
+	archivePath := filepath.Join(dir, "instance.tar.gz")
+	if err := os.WriteFile(archivePath, []byte("archive"), 0600); err != nil {
+		t.Fatalf("writing archive: %v", err)
+	}
+	return &domain.InstanceBackup{
+		ID:        id,
+		FileName:  "instance.tar.gz",
+		FilePath:  archivePath,
+		Status:    domain.InstanceBackupStatusSuccess,
+		CreatedAt: createdAt,
+	}
+}
+
+func assertPathRemoved(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("path %s should be removed, stat err = %v", path, err)
+	}
+}
+
+func assertPathExists(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("path %s should exist: %v", path, err)
+	}
 }
 
 func TestInstanceBackupCancelActiveOperationKeepsCapacityUntilWorkerStops(t *testing.T) {

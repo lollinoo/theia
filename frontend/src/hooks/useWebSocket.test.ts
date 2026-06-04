@@ -56,6 +56,62 @@ function makeLinkRuntime(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function makeRuntimeSnapshot(cpuPercent: number, timestamp: string) {
+  return {
+    devices: {
+      'dev-1': makeDeviceRuntime({
+        cpu_percent: cpuPercent,
+        last_collected_at: timestamp,
+        last_polled_at: timestamp,
+      }),
+    },
+    links: {},
+  };
+}
+
+function spyOnDispatchEvent() {
+  return vi.spyOn(window, 'dispatchEvent');
+}
+
+function expectDeviceCpuPercent(
+  snapshot: ReturnType<typeof useWebSocket>['snapshot'],
+  value: number,
+) {
+  if (!snapshot) {
+    throw new Error('expected snapshot to be populated');
+  }
+  expect(snapshot.devices['dev-1'].cpu_percent).toBe(value);
+}
+
+function getWebSocketDiagnostics() {
+  return exportCanvasDiagnostics().diagnostics.websocket;
+}
+
+function publishRuntimeBootstrapSnapshot(
+  snapshot: ReturnType<typeof makeRuntimeSnapshot>,
+  runtimeVersion: number,
+  runtimeIdentity: string,
+) {
+  act(() => {
+    publishCanvasRuntimeBootstrap({
+      snapshot,
+      runtimeVersion,
+      runtimeIdentity,
+    });
+  });
+}
+
+const PRIMARY_DETAIL_DEVICE_ID = 'dev-1';
+const NEXT_DETAIL_DEVICE_ID = 'dev-2';
+const NEWER_RUNTIME_CPU_PERCENT = 70;
+const FRESH_RUNTIME_CPU_PERCENT = 99;
+const NEWER_RUNTIME_TIMESTAMP = '2026-01-01T00:02:00Z';
+const FRESH_RUNTIME_TIMESTAMP = '2026-01-01T00:03:00Z';
+const BACKEND_RESYNC_REQUIRED_EVENT = 'backend-resync-required';
+const OVERVIEW_RESYNC_SCOPE = 'overview';
+const CLIENT_RESYNC_SCHEDULED_REASON = 'client_resync_scheduled';
+const BASE_VERSION_MISMATCH_REASON = 'base_version_mismatch';
+
 class MockWebSocket {
   static CONNECTING = 0;
   static OPEN = 1;
@@ -395,7 +451,7 @@ describe('useWebSocket', () => {
   });
 
   it('requests resync when ready arrives before any base snapshot exists', () => {
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const dispatchSpy = spyOnDispatchEvent();
     renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
     act(() => {
@@ -550,7 +606,7 @@ describe('useWebSocket', () => {
   });
 
   it('dispatches backend-resync-required when resync_required arrives', () => {
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const dispatchSpy = spyOnDispatchEvent();
     renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
     act(() => {
@@ -577,7 +633,7 @@ describe('useWebSocket', () => {
   });
 
   it('forwards hub_buffer_full resync detail unchanged', () => {
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const dispatchSpy = spyOnDispatchEvent();
     renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
     act(() => {
@@ -603,7 +659,7 @@ describe('useWebSocket', () => {
   });
 
   it('dispatches topology-changed with versioned invalidation detail', () => {
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const dispatchSpy = spyOnDispatchEvent();
     renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
     act(() => {
@@ -651,11 +707,15 @@ describe('useWebSocket', () => {
     });
 
     expect(result.current.snapshot).not.toBeNull();
-    expect(result.current.snapshot!.devices).toEqual({});
-    expect((result.current.snapshot! as Record<string, unknown>).alerts).toBeUndefined();
-    expect((result.current.snapshot! as Record<string, unknown>).device_metrics).toBeUndefined();
-    expect((result.current.snapshot! as Record<string, unknown>).link_metrics).toBeUndefined();
-    expect((result.current.snapshot! as Record<string, unknown>).device_statuses).toBeUndefined();
+    const snapshot = result.current.snapshot;
+    if (!snapshot) {
+      throw new Error('expected snapshot to be populated');
+    }
+    expect(snapshot.devices).toEqual({});
+    expect(snapshot).not.toHaveProperty('alerts');
+    expect(snapshot).not.toHaveProperty('device_metrics');
+    expect(snapshot).not.toHaveProperty('link_metrics');
+    expect(snapshot).not.toHaveProperty('device_statuses');
   });
 
   it('closes WebSocket on unmount', () => {
@@ -725,7 +785,7 @@ describe('useWebSocket', () => {
       });
     });
 
-    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(90);
+    expectDeviceCpuPercent(result.current.snapshot, 90);
     expect(result.current.snapshot!.devices['dev-2'].cpu_percent).toBe(75);
   });
 
@@ -839,7 +899,7 @@ describe('useWebSocket', () => {
       });
     });
 
-    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(50);
+    expectDeviceCpuPercent(result.current.snapshot, 50);
     expect(exportCanvasDiagnostics().diagnostics.websocket.lastAppliedDeltaVersion).toBe('3');
 
     act(() => {
@@ -1043,7 +1103,7 @@ describe('useWebSocket', () => {
   });
 
   it('sends subscribe_detail on open when detailDeviceId is preset', () => {
-    renderHook(() => useWebSocket('ws://localhost:8080/ws', 'dev-1'));
+    renderHook(() => useWebSocket('ws://localhost:8080/ws', PRIMARY_DETAIL_DEVICE_ID));
 
     act(() => {
       mockInstance.simulateOpen();
@@ -1052,7 +1112,7 @@ describe('useWebSocket', () => {
     expect(mockInstance.send).toHaveBeenCalledWith(
       JSON.stringify({
         type: 'subscribe_detail',
-        payload: { device_id: 'dev-1' },
+        payload: { device_id: PRIMARY_DETAIL_DEVICE_ID },
       }),
     );
   });
@@ -1322,7 +1382,7 @@ describe('useWebSocket', () => {
     const { rerender } = renderHook(
       ({ detailDeviceId }: { detailDeviceId: string | null }) =>
         useWebSocket('ws://localhost:8080/ws', detailDeviceId),
-      { initialProps: { detailDeviceId: 'dev-1' } },
+      { initialProps: { detailDeviceId: PRIMARY_DETAIL_DEVICE_ID } },
     );
 
     act(() => {
@@ -1338,7 +1398,7 @@ describe('useWebSocket', () => {
     expect(mockInstance.send).toHaveBeenCalledWith(
       JSON.stringify({
         type: 'unsubscribe_detail',
-        payload: { device_id: 'dev-1' },
+        payload: { device_id: PRIMARY_DETAIL_DEVICE_ID },
       }),
     );
   });
@@ -1347,7 +1407,7 @@ describe('useWebSocket', () => {
     const { rerender } = renderHook(
       ({ detailDeviceId }: { detailDeviceId: string | null }) =>
         useWebSocket('ws://localhost:8080/ws', detailDeviceId),
-      { initialProps: { detailDeviceId: 'dev-1' } },
+      { initialProps: { detailDeviceId: PRIMARY_DETAIL_DEVICE_ID } },
     );
 
     act(() => {
@@ -1357,21 +1417,21 @@ describe('useWebSocket', () => {
     mockInstance.send.mockClear();
 
     act(() => {
-      rerender({ detailDeviceId: 'dev-2' });
+      rerender({ detailDeviceId: NEXT_DETAIL_DEVICE_ID });
     });
 
     expect(mockInstance.send).toHaveBeenNthCalledWith(
       1,
       JSON.stringify({
         type: 'unsubscribe_detail',
-        payload: { device_id: 'dev-1' },
+        payload: { device_id: PRIMARY_DETAIL_DEVICE_ID },
       }),
     );
     expect(mockInstance.send).toHaveBeenNthCalledWith(
       2,
       JSON.stringify({
         type: 'subscribe_detail',
-        payload: { device_id: 'dev-2' },
+        payload: { device_id: NEXT_DETAIL_DEVICE_ID },
       }),
     );
   });
@@ -1409,7 +1469,7 @@ describe('useWebSocket', () => {
   });
 
   it('dispatches backend-reconnected after reconnect', () => {
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const dispatchSpy = spyOnDispatchEvent();
     renderHook(() => useWebSocket('ws://localhost:8080/ws', 'dev-1'));
 
     act(() => {
@@ -1471,7 +1531,7 @@ describe('useWebSocket', () => {
       });
     });
 
-    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(50);
+    expectDeviceCpuPercent(result.current.snapshot, 50);
 
     act(() => {
       mockInstance.simulateMessage({
@@ -1639,6 +1699,7 @@ describe('useWebSocket', () => {
   });
 
   it('does not crash when receiving an unknown message type', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
     act(() => {
@@ -1657,10 +1718,16 @@ describe('useWebSocket', () => {
 
     // snapshot must remain null — no state mutation from the unknown message.
     expect(result.current.snapshot).toBeNull();
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to parse WebSocket message',
+      expect.objectContaining({
+        message: 'unsupported websocket message type: unknown_type',
+      }),
+    );
   });
 
   it('requests resync when a runtime_delta payload cannot be parsed', () => {
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const dispatchSpy = spyOnDispatchEvent();
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
@@ -1787,7 +1854,7 @@ describe('useWebSocket', () => {
       });
     });
 
-    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(90);
+    expectDeviceCpuPercent(result.current.snapshot, 90);
   });
 
   it('ignores versioned snapshot_delta when base_version does not match local version', () => {
@@ -1834,31 +1901,20 @@ describe('useWebSocket', () => {
       });
     });
 
-    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(50);
+    expectDeviceCpuPercent(result.current.snapshot, 50);
   });
 
   it('ignores stale runtime deltas after a newer HTTP bootstrap without reconnecting', () => {
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const dispatchSpy = spyOnDispatchEvent();
     const { result } = renderHook(() =>
       useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
     );
 
-    act(() => {
-      publishCanvasRuntimeBootstrap({
-        snapshot: {
-          devices: {
-            'dev-1': makeDeviceRuntime({
-              cpu_percent: 70,
-              last_collected_at: '2026-01-01T00:02:00Z',
-              last_polled_at: '2026-01-01T00:02:00Z',
-            }),
-          },
-          links: {},
-        },
-        runtimeVersion: 10,
-        runtimeIdentity: 'rt-sha256:newer',
-      });
-    });
+    publishRuntimeBootstrapSnapshot(
+      makeRuntimeSnapshot(NEWER_RUNTIME_CPU_PERCENT, NEWER_RUNTIME_TIMESTAMP),
+      10,
+      'rt-sha256:newer',
+    );
 
     act(() => {
       mockInstance.simulateOpen();
@@ -1881,36 +1937,25 @@ describe('useWebSocket', () => {
       });
     });
 
-    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(70);
+    expectDeviceCpuPercent(result.current.snapshot, NEWER_RUNTIME_CPU_PERCENT);
     expect(mockInstance.close).not.toHaveBeenCalled();
     expect(dispatchSpy).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'backend-resync-required' }),
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
     );
-    expect(exportCanvasDiagnostics().diagnostics.websocket.resyncRequiredCount).toBe(0);
+    expect(getWebSocketDiagnostics().resyncRequiredCount).toBe(0);
   });
 
   it('ignores stale full snapshots after a newer HTTP bootstrap without reconnecting', () => {
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const dispatchSpy = spyOnDispatchEvent();
     const { result } = renderHook(() =>
       useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
     );
 
-    act(() => {
-      publishCanvasRuntimeBootstrap({
-        snapshot: {
-          devices: {
-            'dev-1': makeDeviceRuntime({
-              cpu_percent: 70,
-              last_collected_at: '2026-01-01T00:02:00Z',
-              last_polled_at: '2026-01-01T00:02:00Z',
-            }),
-          },
-          links: {},
-        },
-        runtimeVersion: 10,
-        runtimeIdentity: 'rt-sha256:newer',
-      });
-    });
+    publishRuntimeBootstrapSnapshot(
+      makeRuntimeSnapshot(NEWER_RUNTIME_CPU_PERCENT, NEWER_RUNTIME_TIMESTAMP),
+      10,
+      'rt-sha256:newer',
+    );
 
     act(() => {
       mockInstance.simulateOpen();
@@ -1933,36 +1978,25 @@ describe('useWebSocket', () => {
       });
     });
 
-    expect(result.current.snapshot!.devices['dev-1'].cpu_percent).toBe(70);
+    expectDeviceCpuPercent(result.current.snapshot, NEWER_RUNTIME_CPU_PERCENT);
     expect(mockInstance.close).not.toHaveBeenCalled();
     expect(dispatchSpy).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'backend-resync-required' }),
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
     );
-    expect(exportCanvasDiagnostics().diagnostics.websocket.lastAppliedSnapshotVersion).toBe('10');
+    expect(getWebSocketDiagnostics().lastAppliedSnapshotVersion).toBe('10');
   });
 
   it('keeps HTTP-bootstrap socket open while requesting resync for future runtime delta base', () => {
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const dispatchSpy = spyOnDispatchEvent();
     renderHook(() =>
       useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
     );
 
-    act(() => {
-      publishCanvasRuntimeBootstrap({
-        snapshot: {
-          devices: {
-            'dev-1': makeDeviceRuntime({
-              cpu_percent: 70,
-              last_collected_at: '2026-01-01T00:02:00Z',
-              last_polled_at: '2026-01-01T00:02:00Z',
-            }),
-          },
-          links: {},
-        },
-        runtimeVersion: 10,
-        runtimeIdentity: 'rt-sha256:base',
-      });
-    });
+    publishRuntimeBootstrapSnapshot(
+      makeRuntimeSnapshot(NEWER_RUNTIME_CPU_PERCENT, NEWER_RUNTIME_TIMESTAMP),
+      10,
+      'rt-sha256:base',
+    );
 
     act(() => {
       mockInstance.simulateOpen();
@@ -1993,33 +2027,20 @@ describe('useWebSocket', () => {
     expect(mockInstance.close).not.toHaveBeenCalled();
     expect(dispatchSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: 'backend-resync-required',
+        type: BACKEND_RESYNC_REQUIRED_EVENT,
         detail: {
-          scope: 'overview',
-          reason: 'client_resync_scheduled',
+          scope: OVERVIEW_RESYNC_SCOPE,
+          reason: CLIENT_RESYNC_SCHEDULED_REASON,
         },
       }),
     );
-    expect(exportCanvasDiagnostics().diagnostics.websocket.lastRejectedDeltaReason).toBe(
-      'base_version_mismatch',
-    );
+    expect(getWebSocketDiagnostics().lastRejectedDeltaReason).toBe(BASE_VERSION_MISMATCH_REASON);
 
-    act(() => {
-      publishCanvasRuntimeBootstrap({
-        snapshot: {
-          devices: {
-            'dev-1': makeDeviceRuntime({
-              cpu_percent: 99,
-              last_collected_at: '2026-01-01T00:03:00Z',
-              last_polled_at: '2026-01-01T00:03:00Z',
-            }),
-          },
-          links: {},
-        },
-        runtimeVersion: 13,
-        runtimeIdentity: 'rt-sha256:fresh',
-      });
-    });
+    publishRuntimeBootstrapSnapshot(
+      makeRuntimeSnapshot(FRESH_RUNTIME_CPU_PERCENT, FRESH_RUNTIME_TIMESTAMP),
+      13,
+      'rt-sha256:fresh',
+    );
 
     expect(mockInstance.send).toHaveBeenCalledWith(
       JSON.stringify({
@@ -2042,7 +2063,7 @@ describe('useWebSocket', () => {
   });
 
   it('requests a fresh websocket snapshot when a versioned delta base is ahead of the local base', () => {
-    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const dispatchSpy = spyOnDispatchEvent();
     renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
     act(() => {
