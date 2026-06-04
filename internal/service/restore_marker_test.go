@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// TestRestoreMarkerReadWriteRemoveRoundTrip characterizes restore marker persistence and cleanup.
 func TestRestoreMarkerReadWriteRemoveRoundTrip(t *testing.T) {
 	stateDir := t.TempDir()
 	markerPath := restoreMarkerFilePath(stateDir)
@@ -51,6 +52,7 @@ func TestRestoreMarkerReadWriteRemoveRoundTrip(t *testing.T) {
 	}
 }
 
+// TestReadRestoreMarkerMissingIsNoOp preserves missing-marker startup as a safe no-op.
 func TestReadRestoreMarkerMissingIsNoOp(t *testing.T) {
 	got, exists, err := readRestoreMarker(restoreMarkerFilePath(t.TempDir()))
 	if err != nil {
@@ -64,6 +66,7 @@ func TestReadRestoreMarkerMissingIsNoOp(t *testing.T) {
 	}
 }
 
+// TestValidateRestoreMarkerRuntimeTargetsFailsClosed keeps runtime target mismatches fail-closed.
 func TestValidateRestoreMarkerRuntimeTargetsFailsClosed(t *testing.T) {
 	stateDir := t.TempDir()
 	marker := newRestoreMarker(
@@ -99,5 +102,34 @@ func TestValidateRestoreMarkerRuntimeTargetsFailsClosed(t *testing.T) {
 	}
 	if got := err.Error(); got != "restore marker targets do not match runtime paths" {
 		t.Fatalf("validateRestoreMarkerRuntimeTargets() error = %q, want stable API error", got)
+	}
+}
+
+// TestValidatePendingRestoreMarkerChecksRuntimeTargetsBeforeStagingLayout locks the safety preflight order.
+func TestValidatePendingRestoreMarkerChecksRuntimeTargetsBeforeStagingLayout(t *testing.T) {
+	stateDir := t.TempDir()
+	stagingDir := filepath.Join(stateDir, ".restore-staging")
+	marker := newRestoreMarker(
+		filepath.Join(stagingDir, postgresArchiveDBEntry),
+		"",
+		"",
+		stateDir,
+		filepath.Join(stateDir, "device-backups"),
+		filepath.Join(stateDir, "known_hosts"),
+		"2026-04-23T00:00:00Z",
+	)
+
+	err := validatePendingRestoreMarker(
+		marker,
+		stateDir,
+		filepath.Join(stateDir, "other-device-backups"),
+		filepath.Join(stateDir, "known_hosts"),
+		stagingDir,
+	)
+	if err == nil {
+		t.Fatal("validatePendingRestoreMarker() error = nil, want target mismatch")
+	}
+	if !errors.Is(err, errRestoreMarkerTargetMismatch) {
+		t.Fatalf("validatePendingRestoreMarker() error = %v, want errRestoreMarkerTargetMismatch", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 )
 
+// terminatePostgresConnections disconnects active sessions before restoring a PostgreSQL dump.
 var terminatePostgresConnections = func(ctx context.Context, dsn string) error {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -28,6 +29,7 @@ var terminatePostgresConnections = func(ctx context.Context, dsn string) error {
 	return nil
 }
 
+// restoreCoordinatorAfterDBActivationHook lets tests inject post-database activation failures.
 var restoreCoordinatorAfterDBActivationHook func() error
 
 type restoreMarker struct {
@@ -40,6 +42,7 @@ type restoreMarker struct {
 	Timestamp        string `json:"timestamp"`
 }
 
+// newRestoreMarker records staged restore paths and runtime targets for restart-safe activation.
 func newRestoreMarker(
 	stagedDB string,
 	stagedBackups string,
@@ -67,6 +70,7 @@ type RestoreCoordinator struct {
 	knownHostsPath  string
 }
 
+// NewRestoreCoordinatorWithDSN builds a restore coordinator for pending restart-time activation.
 func NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath string) *RestoreCoordinator {
 	return &RestoreCoordinator{
 		stateDir:        stateDir,
@@ -93,12 +97,8 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		return false, nil
 	}
 
-	if err := validateRestoreMarkerRuntimeTargets(*marker, c.stateDir, c.deviceBackupDir, c.knownHostsPath); err != nil {
-		return false, err
-	}
-
 	stagingDir := filepath.Join(c.stateDir, ".restore-staging")
-	if err := validateRestoreStagingLayout(*marker, stagingDir); err != nil {
+	if err := validatePendingRestoreMarker(*marker, c.stateDir, c.deviceBackupDir, c.knownHostsPath, stagingDir); err != nil {
 		return false, err
 	}
 
@@ -137,6 +137,7 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	return true, nil
 }
 
+// backupLiveDB captures the current database once before applying a staged restore.
 func (c *RestoreCoordinator) backupLiveDB() error {
 	bakPath := filepath.Join(c.stateDir, "postgres.pre-restore.dump")
 	if _, err := os.Stat(bakPath); err == nil {
@@ -150,10 +151,12 @@ func (c *RestoreCoordinator) backupLiveDB() error {
 	return nil
 }
 
+// dumpLivePostgresDatabase writes a custom-format PostgreSQL dump for restore retry or rollback support.
 func (c *RestoreCoordinator) dumpLivePostgresDatabase(ctx context.Context, destPath string) error {
 	return runPostgresDump(ctx, c.dbDSN, destPath)
 }
 
+// restoreRetryableError preserves staged retry data after post-database activation failures.
 func (c *RestoreCoordinator) restoreRetryableError(stagedDB string, stagingDir string, activationErr error) error {
 	if err := validateRetryStagedDBDestination(stagedDB, stagingDir); err != nil {
 		return fmt.Errorf("%w (skip restore staged db for retry: %v)", activationErr, err)
@@ -165,6 +168,7 @@ func (c *RestoreCoordinator) restoreRetryableError(stagedDB string, stagingDir s
 	return activationErr
 }
 
+// copyFileForRestore copies a restore artifact into place with restricted file permissions.
 func copyFileForRestore(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -197,7 +201,9 @@ func copyFileForRestore(src, dst string) error {
 	return nil
 }
 
+// copyDirForRestore copies a restore directory while rejecting symlink and special-file entries.
 func copyDirForRestore(src, dst string) error {
+	// The walk callback enforces entry safety before copying each artifact.
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -220,6 +226,7 @@ func copyDirForRestore(src, dst string) error {
 	})
 }
 
+// replaceFileForRestore atomically swaps a staged file into its live restore destination.
 func replaceFileForRestore(src, dst string) error {
 	if err := validateOptionalStagedKnownHosts(src); err != nil {
 		return err
@@ -267,6 +274,7 @@ func replaceFileForRestore(src, dst string) error {
 	return nil
 }
 
+// replaceDirForRestore atomically swaps a staged directory into its live restore destination.
 func replaceDirForRestore(src, dst string) error {
 	if err := validateOptionalStagedBackupDir(src); err != nil {
 		return err

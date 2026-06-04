@@ -12,10 +12,12 @@ const restoreMarkerFileName = ".theia-restore-pending"
 
 var errRestoreMarkerTargetMismatch = errors.New("restore marker targets do not match runtime paths")
 
+// restoreMarkerFilePath returns the pending-restore marker location for a state directory.
 func restoreMarkerFilePath(stateDir string) string {
 	return filepath.Join(stateDir, restoreMarkerFileName)
 }
 
+// readRestoreMarker loads a pending restore marker while treating absence as a no-op.
 func readRestoreMarker(path string) (*restoreMarker, bool, error) {
 	markerData, err := os.ReadFile(path)
 	if err != nil {
@@ -35,6 +37,7 @@ func readRestoreMarker(path string) (*restoreMarker, bool, error) {
 	return &marker, true, nil
 }
 
+// writeRestoreMarker persists a pending restore marker with owner-only permissions.
 func writeRestoreMarker(path string, marker restoreMarker) error {
 	markerJSON, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
@@ -49,6 +52,7 @@ func writeRestoreMarker(path string, marker restoreMarker) error {
 	return nil
 }
 
+// removeRestoreMarker clears a pending restore marker while preserving missing-marker no-op behavior.
 func removeRestoreMarker(path string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove restore marker: %w", err)
@@ -56,6 +60,15 @@ func removeRestoreMarker(path string) error {
 	return nil
 }
 
+// validatePendingRestoreMarker checks runtime ownership and staged artifact layout before restore side effects.
+func validatePendingRestoreMarker(marker restoreMarker, stateDir string, deviceBackupDir string, knownHostsPath string, stagingDir string) error {
+	if err := validateRestoreMarkerRuntimeTargets(marker, stateDir, deviceBackupDir, knownHostsPath); err != nil {
+		return err
+	}
+	return validateRestoreStagingLayout(marker, stagingDir)
+}
+
+// validateRestoreMarkerRuntimeTargets ensures the marker belongs to the current runtime paths.
 func validateRestoreMarkerRuntimeTargets(marker restoreMarker, stateDir string, deviceBackupDir string, knownHostsPath string) error {
 	if filepath.Clean(marker.StateDir) != filepath.Clean(stateDir) ||
 		filepath.Clean(marker.DeviceBackupDir) != filepath.Clean(deviceBackupDir) ||
