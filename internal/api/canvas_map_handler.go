@@ -1516,30 +1516,12 @@ func canvasMapAreaMembershipFromRequest(
 	w http.ResponseWriter,
 	req areaRequest,
 ) (domain.CanvasMapAreaMembership, bool) {
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+	area, err := canvasmap.AreaMembershipFromInput(req.Name, req.Description, req.Color)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return domain.CanvasMapAreaMembership{}, false
 	}
-	if len(name) > 100 {
-		writeError(w, http.StatusBadRequest, "area name too long (max 100 characters)")
-		return domain.CanvasMapAreaMembership{}, false
-	}
-
-	color := strings.TrimSpace(req.Color)
-	if color == "" {
-		color = "#00E676"
-	}
-	if !strings.HasPrefix(color, "#") || len(color) != 7 {
-		writeError(w, http.StatusBadRequest, "invalid color format (must be #RRGGBB)")
-		return domain.CanvasMapAreaMembership{}, false
-	}
-
-	return domain.CanvasMapAreaMembership{
-		Name:        name,
-		Description: strings.TrimSpace(req.Description),
-		Color:       color,
-	}, true
+	return area, true
 }
 
 func applyCanvasMapDeviceVisualColors(
