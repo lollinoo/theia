@@ -31,6 +31,7 @@ type CanvasMapHandler struct {
 	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64)
 }
 
+// NewCanvasMapHandler wires the HTTP adapter to saved-map repositories and topology collaborators.
 func NewCanvasMapHandler(
 	mapRepo domain.CanvasMapRepository,
 	mapPositionRepo domain.CanvasMapPositionRepository,
@@ -73,6 +74,7 @@ type nullableCanvasMapString struct {
 	Value   *string
 }
 
+// UnmarshalJSON records whether a nullable string field was present and whether it was null.
 func (v *nullableCanvasMapString) UnmarshalJSON(data []byte) error {
 	v.Present = true
 	if strings.TrimSpace(string(data)) == "null" {
@@ -112,6 +114,7 @@ type canvasMapAreaRepository interface {
 	DeleteArea(uuid.UUID, uuid.UUID) error
 }
 
+// HandleList encodes all saved maps for the current operator.
 func (h *CanvasMapHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -131,6 +134,7 @@ func (h *CanvasMapHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": responses})
 }
 
+// HandleCreate decodes saved-map creation input and delegates materialization rules to canvasmap services.
 func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -202,6 +206,7 @@ func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(canvasMap)})
 }
 
+// HandleGet parses the map path and returns one saved-map DTO.
 func (h *CanvasMapHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -214,6 +219,7 @@ func (h *CanvasMapHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(canvasMap)})
 }
 
+// HandlePatch applies DTO field presence semantics and refreshes materialized membership when needed.
 func (h *CanvasMapHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -284,6 +290,7 @@ func (h *CanvasMapHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
 }
 
+// HandleDelete rejects default-map deletion and maps repository delete errors to HTTP responses.
 func (h *CanvasMapHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -309,6 +316,7 @@ func (h *CanvasMapHandler) HandleDelete(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleDuplicate clones a saved map through repository duplication while preserving HTTP error mapping.
 func (h *CanvasMapHandler) HandleDuplicate(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -351,6 +359,7 @@ func (h *CanvasMapHandler) HandleDuplicate(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(duplicate)})
 }
 
+// HandleSetPrimary promotes a map to primary and returns the updated map DTO.
 func (h *CanvasMapHandler) HandleSetPrimary(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -374,6 +383,7 @@ func (h *CanvasMapHandler) HandleSetPrimary(w http.ResponseWriter, r *http.Reque
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
 }
 
+// HandleRemoveDevice removes one map-local device membership parsed from the route action.
 func (h *CanvasMapHandler) HandleRemoveDevice(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -462,6 +472,7 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
 }
 
+// HandlePatchDevice applies map-local device metadata updates such as visual_color.
 func (h *CanvasMapHandler) HandlePatchDevice(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -530,6 +541,7 @@ func (h *CanvasMapHandler) HandlePatchDevice(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
 }
 
+// HandleListAreas returns map-local areas with their saved-map member counts.
 func (h *CanvasMapHandler) HandleListAreas(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -557,6 +569,7 @@ func (h *CanvasMapHandler) HandleListAreas(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": response})
 }
 
+// HandleCreateArea decodes and persists one map-local area.
 func (h *CanvasMapHandler) HandleCreateArea(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -590,6 +603,7 @@ func (h *CanvasMapHandler) HandleCreateArea(w http.ResponseWriter, r *http.Reque
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": areaToResponse(&created.Area, created.DeviceCount)})
 }
 
+// HandleUpdateArea parses the map-local area route and persists area metadata changes.
 func (h *CanvasMapHandler) HandleUpdateArea(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -625,6 +639,7 @@ func (h *CanvasMapHandler) HandleUpdateArea(w http.ResponseWriter, r *http.Reque
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": areaToResponse(&updated.Area, updated.DeviceCount)})
 }
 
+// HandleDeleteArea deletes one map-local area and its saved-map device assignments.
 func (h *CanvasMapHandler) HandleDeleteArea(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -650,6 +665,7 @@ func (h *CanvasMapHandler) HandleDeleteArea(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// HandleUpdateDeviceAreas replaces area assignments for selected saved-map member devices.
 func (h *CanvasMapHandler) HandleUpdateDeviceAreas(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -693,6 +709,7 @@ func (h *CanvasMapHandler) HandleUpdateDeviceAreas(w http.ResponseWriter, r *htt
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
 }
 
+// HandleTopology returns the saved-map topology response for React Flow.
 func (h *CanvasMapHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	response, ok := h.buildMapTopologyResponse(w, r)
@@ -712,6 +729,7 @@ func (h *CanvasMapHandler) HandleTopology(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(response)
 }
 
+// HandleBootstrap returns topology plus optional runtime bootstrap payload.
 func (h *CanvasMapHandler) HandleBootstrap(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	response, ok := h.buildMapTopologyResponse(w, r)
@@ -731,6 +749,7 @@ func (h *CanvasMapHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(response)
 }
 
+// HandleListPositions encodes all saved positions for one map.
 func (h *CanvasMapHandler) HandleListPositions(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -749,6 +768,7 @@ func (h *CanvasMapHandler) HandleListPositions(w http.ResponseWriter, r *http.Re
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": positions})
 }
 
+// HandleSavePositions validates finite coordinates and persists map-local positions.
 func (h *CanvasMapHandler) HandleSavePositions(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMapRepos(w) {
 		return
@@ -850,6 +870,7 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 	return response, true
 }
 
+// loadMapFromRequest parses the map ID from the path and loads the map or writes an HTTP error.
 func (h *CanvasMapHandler) loadMapFromRequest(w http.ResponseWriter, r *http.Request) (domain.CanvasMap, bool) {
 	mapID, _, ok := parseCanvasMapRoute(r.URL.Path)
 	if !ok {
@@ -868,6 +889,7 @@ func (h *CanvasMapHandler) loadMapFromRequest(w http.ResponseWriter, r *http.Req
 	return canvasMap, true
 }
 
+// validateSourceAreaID parses and verifies a source area identifier from a create or patch DTO.
 func (h *CanvasMapHandler) validateSourceAreaID(w http.ResponseWriter, raw *string) (*uuid.UUID, bool) {
 	if raw == nil {
 		return nil, true
@@ -897,6 +919,7 @@ func (h *CanvasMapHandler) validateSourceAreaID(w http.ResponseWriter, raw *stri
 	return &areaID, true
 }
 
+// validateCreateSourceAreaID applies create-only source-area rules including source-map checks.
 func (h *CanvasMapHandler) validateCreateSourceAreaID(
 	w http.ResponseWriter,
 	raw *string,
@@ -935,6 +958,7 @@ func (h *CanvasMapHandler) validateCreateSourceAreaID(
 	return nil, false
 }
 
+// validateSourceMapID parses and verifies a source saved-map identifier.
 func (h *CanvasMapHandler) validateSourceMapID(w http.ResponseWriter, raw *string) (*uuid.UUID, bool) {
 	if raw == nil {
 		return nil, true
@@ -1016,6 +1040,7 @@ func (h *CanvasMapHandler) copyDefaultCanvasMapPositionsForMaterializedMembershi
 	return true
 }
 
+// isolateCanvasMapVirtualDevices delegates virtual-device isolation after membership materialization.
 func (h *CanvasMapHandler) isolateCanvasMapVirtualDevices(ctx context.Context, mapID uuid.UUID) error {
 	var deviceService canvasmap.VirtualIsolationDeviceService
 	if h.deviceService != nil {
@@ -1033,10 +1058,12 @@ type canvasMapVirtualIsolationDeviceService struct {
 	service *service.DeviceService
 }
 
+// GetDevicesByIDs adapts the full device service to the canvasmap isolation dependency.
 func (s canvasMapVirtualIsolationDeviceService) GetDevicesByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Device, error) {
 	return s.service.GetDevicesByIDs(ctx, ids)
 }
 
+// AddDevice adapts virtual clone creation while preserving device-service defaults.
 func (s canvasMapVirtualIsolationDeviceService) AddDevice(
 	ctx context.Context,
 	ip string,
@@ -1069,6 +1096,7 @@ func (s canvasMapVirtualIsolationDeviceService) AddDevice(
 	)
 }
 
+// UpdateClonedVirtualDevice adapts clone-only mutable field persistence.
 func (s canvasMapVirtualIsolationDeviceService) UpdateClonedVirtualDevice(
 	ctx context.Context,
 	id uuid.UUID,
@@ -1080,10 +1108,12 @@ func (s canvasMapVirtualIsolationDeviceService) UpdateClonedVirtualDevice(
 	})
 }
 
+// GetDevice adapts clone reloads for isolation workflows.
 func (s canvasMapVirtualIsolationDeviceService) GetDevice(ctx context.Context, id uuid.UUID) (*domain.Device, error) {
 	return s.service.GetDevice(ctx, id)
 }
 
+// requireMapRepos writes a service-unavailable response when saved-map repositories are missing.
 func (h *CanvasMapHandler) requireMapRepos(w http.ResponseWriter) bool {
 	if h.mapRepo == nil || h.mapPositionRepo == nil {
 		writeError(w, http.StatusNotImplemented, "canvas map repository unavailable")
@@ -1092,6 +1122,7 @@ func (h *CanvasMapHandler) requireMapRepos(w http.ResponseWriter) bool {
 	return true
 }
 
+// requireTopologyDeps writes an error when topology collaborators are missing.
 func (h *CanvasMapHandler) requireTopologyDeps(w http.ResponseWriter) bool {
 	if h.canvasTopology == nil || h.deviceService == nil || h.linkRepo == nil || h.areaRepo == nil {
 		writeError(w, http.StatusInternalServerError, "canvas topology dependencies unavailable")
@@ -1100,6 +1131,7 @@ func (h *CanvasMapHandler) requireTopologyDeps(w http.ResponseWriter) bool {
 	return true
 }
 
+// mapAreaRepo narrows the map repository to area mutation support for area endpoints.
 func (h *CanvasMapHandler) mapAreaRepo(w http.ResponseWriter) (canvasMapAreaRepository, bool) {
 	areaRepo, ok := h.mapRepo.(canvasMapAreaRepository)
 	if !ok {
@@ -1109,6 +1141,7 @@ func (h *CanvasMapHandler) mapAreaRepo(w http.ResponseWriter) (canvasMapAreaRepo
 	return areaRepo, true
 }
 
+// writeMapRepoMutationError preserves saved-map mutation error status mapping.
 func (h *CanvasMapHandler) writeMapRepoMutationError(w http.ResponseWriter, err error) {
 	switch {
 	case isCanvasMapConflictError(err):
@@ -1218,6 +1251,7 @@ func (h *CanvasMapHandler) writeCanvasMapAddDeviceWorkflowError(w http.ResponseW
 	}
 }
 
+// writeCanvasMapAreaMutationError maps map-local area persistence errors to stable HTTP statuses.
 func (h *CanvasMapHandler) writeCanvasMapAreaMutationError(w http.ResponseWriter, err error) {
 	switch {
 	case isCanvasMapNotFoundError(err), isAreaNotFoundError(err):
@@ -1231,6 +1265,7 @@ func (h *CanvasMapHandler) writeCanvasMapAreaMutationError(w http.ResponseWriter
 	}
 }
 
+// writeCanvasMapAddDevicePlanError maps pure add-device planning errors to HTTP responses.
 func (h *CanvasMapHandler) writeCanvasMapAddDevicePlanError(w http.ResponseWriter, err error) {
 	var duplicateAddress canvasmap.DuplicateDeviceAddressError
 	switch {
@@ -1268,6 +1303,7 @@ func (h *CanvasMapHandler) writeCanvasMapTopologyLoadError(w http.ResponseWriter
 	}
 }
 
+// parseCanvasMapDeviceAction extracts the trailing device ID from map device actions.
 func parseCanvasMapDeviceAction(action string) (uuid.UUID, bool) {
 	rawDeviceID, ok := strings.CutPrefix(action, "devices/")
 	if !ok || rawDeviceID == "" || strings.Contains(rawDeviceID, "/") {
@@ -1280,6 +1316,7 @@ func parseCanvasMapDeviceAction(action string) (uuid.UUID, bool) {
 	return deviceID, true
 }
 
+// parseCanvasMapRequestUUIDs decodes UUID arrays from request DTOs and writes field-specific errors.
 func parseCanvasMapRequestUUIDs(w http.ResponseWriter, rawIDs []string, fieldName string) ([]uuid.UUID, bool) {
 	ids := make([]uuid.UUID, 0, len(rawIDs))
 	for _, rawID := range rawIDs {
@@ -1298,6 +1335,7 @@ func parseCanvasMapRequestUUIDs(w http.ResponseWriter, rawIDs []string, fieldNam
 	return ids, true
 }
 
+// parseCanvasMapAreaActionID extracts the map-local area ID from the current route action.
 func parseCanvasMapAreaActionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	_, action, ok := parseCanvasMapRoute(r.URL.Path)
 	if !ok {
@@ -1317,6 +1355,7 @@ func parseCanvasMapAreaActionID(w http.ResponseWriter, r *http.Request) (uuid.UU
 	return areaID, true
 }
 
+// canvasMapAreaMembershipFromRequest validates area DTO metadata through the canvasmap service helper.
 func canvasMapAreaMembershipFromRequest(
 	w http.ResponseWriter,
 	req areaRequest,
@@ -1329,6 +1368,7 @@ func canvasMapAreaMembershipFromRequest(
 	return area, true
 }
 
+// applyCanvasMapDeviceVisualColors overlays map-local visual metadata onto topology devices.
 func applyCanvasMapDeviceVisualColors(
 	devices []jsonAPIResource,
 	visualColors map[uuid.UUID]string,
@@ -1352,6 +1392,7 @@ func applyCanvasMapDeviceVisualColors(
 	}
 }
 
+// buildCanvasMapTopologyVersion hashes the response content into a stable topology version token.
 func buildCanvasMapTopologyVersion(response canvasTopologyResponse) string {
 	versionInput := buildCanvasTopologyVersionInput(
 		response.Devices,
@@ -1376,18 +1417,22 @@ func buildCanvasMapTopologyVersion(response canvasTopologyResponse) string {
 	return "topo-" + hex.EncodeToString(sum[:])[:16]
 }
 
+// isFiniteCoordinate rejects NaN and infinity in persisted canvas positions.
 func isFiniteCoordinate(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
+// isCanvasMapNotFoundError detects repository not-found errors without exposing storage details.
 func isCanvasMapNotFoundError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "canvas map not found")
 }
 
+// isAreaNotFoundError detects area-not-found errors for map-local area endpoints.
 func isAreaNotFoundError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "area not found")
 }
 
+// isCanvasMapConflictError detects saved-map uniqueness and membership conflicts.
 func isCanvasMapConflictError(err error) bool {
 	if err == nil {
 		return false
@@ -1399,6 +1444,7 @@ func isCanvasMapConflictError(err error) bool {
 		strings.Contains(message, "already exists")
 }
 
+// isCanvasMapValidationError detects saved-map validation errors that should remain 400 responses.
 func isCanvasMapValidationError(err error) bool {
 	if err == nil {
 		return false
