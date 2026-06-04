@@ -43,12 +43,7 @@ import {
 } from './manualEdgeMigrationDiagnostics';
 import { buildAlertsPanelModel } from './panelAdapters';
 import { buildRuntimeState } from './runtimeAdapters';
-import {
-  buildRuntimePatchPlan,
-  hasRuntimePatchWork,
-  patchRuntimeEdges,
-  patchRuntimeNodes,
-} from './runtimePatches';
+import { applyRuntimeSnapshotPatch } from './runtimeSnapshotPatch';
 import { refreshCanvasSettings } from './canvasSettingsRefresh';
 import {
   createStructuralRefreshQueue,
@@ -975,49 +970,18 @@ export function useCanvasData({
       return;
     }
 
-    measureCanvasWork('theia:canvas:snapshot-apply', 'snapshot', () => {
-      if (devicesRef.current.length === 0) {
-        return;
-      }
-
-      const patchPlan = buildRuntimePatchPlan({
-        previousSnapshot: lastAppliedRuntimeSnapshotRef.current,
-        nextSnapshot: snapshot,
-        links: topologyLinksRef.current,
-      });
-      lastAppliedRuntimeSnapshotRef.current = snapshot;
-
-      if (!hasRuntimePatchWork(patchPlan)) {
-        return;
-      }
-
-      const runtimeState = buildRuntimeState({
-        devices: devicesRef.current,
-        links: topologyLinksRef.current,
-        snapshot,
-        alerts: alertsRef.current,
-        prometheusStatus,
-      });
-
-      setNodes((currentNodes) =>
-        patchRuntimeNodes({
-          nodes: currentNodes,
-          runtimeState,
-          plan: patchPlan,
-          nodeIndexById: nodeIndexByIdRef?.current,
-        }),
-      );
-      setEdges((currentEdges) =>
-        patchRuntimeEdges({
-          edges: currentEdges,
-          links: topologyLinksRef.current,
-          runtimeState,
-          alerts: alertsRef.current,
-          onEdgeContextMenu: openEdgeMenu,
-          plan: patchPlan,
-          edgeIndexById: edgeIndexByIdRef?.current,
-        }),
-      );
+    lastAppliedRuntimeSnapshotRef.current = applyRuntimeSnapshotPatch({
+      previousSnapshot: lastAppliedRuntimeSnapshotRef.current,
+      snapshot,
+      devices: devicesRef.current,
+      links: topologyLinksRef.current,
+      alerts: alertsRef.current,
+      prometheusStatus,
+      setNodes,
+      setEdges,
+      openEdgeMenu,
+      nodeIndexById: nodeIndexByIdRef?.current,
+      edgeIndexById: edgeIndexByIdRef?.current,
     });
   }, [
     edgeIndexByIdRef,
