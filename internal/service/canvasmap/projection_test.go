@@ -254,6 +254,19 @@ func TestDefaultPositionsForMembershipPrunesNonMembers(t *testing.T) {
 	}
 }
 
+func TestValidateDeleteRejectsDefaultMap(t *testing.T) {
+	err := ValidateDelete(domain.CanvasMap{IsDefault: true})
+	if err == nil {
+		t.Fatal("ValidateDelete() error = nil, want default map conflict")
+	}
+	if got, want := err.Error(), "cannot delete default canvas map"; got != want {
+		t.Fatalf("ValidateDelete() error = %q, want %q", got, want)
+	}
+	if err := ValidateDelete(domain.CanvasMap{IsDefault: false}); err != nil {
+		t.Fatalf("ValidateDelete() non-default error = %v", err)
+	}
+}
+
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false

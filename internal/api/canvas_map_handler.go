@@ -296,8 +296,8 @@ func (h *CanvasMapHandler) HandleDelete(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if canvasMap.IsDefault {
-		writeError(w, http.StatusConflict, "cannot delete default canvas map")
+	if err := canvasmap.ValidateDelete(canvasMap); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 

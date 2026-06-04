@@ -1,6 +1,7 @@
 package canvasmap
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -14,6 +15,16 @@ type TopologyProjection struct {
 	Devices      []domain.Device
 	Links        []domain.Link
 	GhostDevices []domain.Device
+}
+
+var ErrDefaultMapDelete = errors.New("cannot delete default canvas map")
+
+// ValidateDelete rejects attempts to delete the default saved map.
+func ValidateDelete(canvasMap domain.CanvasMap) error {
+	if canvasMap.IsDefault {
+		return ErrDefaultMapDelete
+	}
+	return nil
 }
 
 // ProjectionFilterForMap returns the filter used to project a persisted canvas map.
