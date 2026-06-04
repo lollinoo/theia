@@ -545,64 +545,6 @@ func (s *InstanceBackupService) hasRunningInstanceBackup() (bool, error) {
 	return false, nil
 }
 
-func (s *InstanceBackupService) hasActiveInstanceBackupOperation() bool {
-	return s.operations.hasActive()
-}
-
-func (s *InstanceBackupService) beginInstanceBackupOperation(id uuid.UUID, cancel context.CancelFunc, progress domain.InstanceBackupProgress) {
-	s.operations.begin(id, cancel, progress)
-}
-
-func (s *InstanceBackupService) endInstanceBackupOperation(id uuid.UUID) {
-	s.operations.end(id)
-}
-
-func (s *InstanceBackupService) updateInstanceBackupProgress(id uuid.UUID, progress domain.InstanceBackupProgress) {
-	s.operations.updateProgress(id, progress)
-}
-
-func (s *InstanceBackupService) instanceBackupCancellationRequested(id uuid.UUID) bool {
-	return s.operations.cancellationRequested(id)
-}
-
-// GetProgress returns best-effort in-memory progress for a running instance backup.
-func (s *InstanceBackupService) GetProgress(id uuid.UUID) (domain.InstanceBackupProgress, bool) {
-	return s.operations.getProgress(id)
-}
-
-// Cancel requests cancellation of a running instance backup.
-func (s *InstanceBackupService) Cancel(ctx context.Context, id uuid.UUID) (*domain.InstanceBackup, error) {
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-	}
-
-	if backup, active, err := s.operations.requestCancel(id, func() (*domain.InstanceBackup, error) {
-		return s.repo.GetByID(id)
-	}); active || err != nil {
-		return backup, err
-	}
-
-	backup, err := s.repo.GetByID(id)
-	if err != nil {
-		return nil, fmt.Errorf("getting backup for cancel: %w", err)
-	}
-	if backup == nil {
-		return nil, ErrInstanceBackupNotFound
-	}
-	if backup.Status != domain.InstanceBackupStatusRunning {
-		return nil, ErrInstanceBackupNotRunning
-	}
-
-	backup.Status = domain.InstanceBackupStatusCancelled
-	backup.ErrorMessage = "cancelled by user"
-	if err := s.repo.Update(backup); err != nil {
-		return nil, fmt.Errorf("updating cancelled backup: %w", err)
-	}
-	return backup, nil
-}
-
 func checkBackupArchiveEntryQuota(name string, size int64, limits BackupArchiveLimits) error {
 	if size > limits.MaxEntryBytes {
 		return newRestoreLimitError("backup archive entry %s exceeds per-entry backup limit: %d bytes > %d bytes", name, size, limits.MaxEntryBytes)
