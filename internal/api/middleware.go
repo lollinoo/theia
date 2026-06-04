@@ -294,127 +294,197 @@ func requiredPermissionsForRoute(method, path string) ([]string, bool) {
 	if path == "/api/v1/ws" {
 		return []string{domain.PermissionTopologyRead}, true
 	}
-	if strings.HasPrefix(path, "/api/v1/auth/") || path == "/api/v1/session" {
+	if isAuthRoute(path) {
 		return nil, true
 	}
 	if path == "/api/v1/health" || path == "/api/v1/prometheus/health" {
 		return []string{domain.PermissionSettingsRead}, true
 	}
-	if path == "/api/v1/settings/me" || strings.HasPrefix(path, "/api/v1/settings/bridge") {
-		return []string{domain.PermissionAccountManage}, true
-	}
-	if strings.HasPrefix(path, "/api/v1/settings") {
-		return permissionsForMethod(method, domain.PermissionSettingsRead, "", domain.PermissionSettingsUpdate, ""), true
-	}
-	if path == "/api/v1/grafana/dashboard-profiles" ||
-		strings.HasPrefix(path, "/api/v1/grafana/dashboard-profiles/") ||
-		strings.HasPrefix(path, "/api/v1/grafana/device-overrides/") {
-		return permissionsForMethod(method, domain.PermissionSettingsRead, domain.PermissionSettingsUpdate, domain.PermissionSettingsUpdate, domain.PermissionSettingsUpdate), true
-	}
-	if path == "/api/v1/topology/canvas" || path == "/api/v1/canvas" {
-		return []string{domain.PermissionTopologyRead}, true
-	}
-	if strings.HasPrefix(path, "/api/v1/canvas/") || path == "/api/v1/canvas/maps" {
-		return permissionsForMethod(method, domain.PermissionTopologyRead, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate), true
-	}
-	if strings.HasPrefix(path, "/api/v1/devices/") {
-		return deviceRoutePermissions(method, path)
-	}
-	if path == "/api/v1/devices" || path == "/api/v1/devices/batch" || path == "/api/v1/devices/orphans" {
-		return permissionsForMethod(method, domain.PermissionDevicesRead, domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate, domain.PermissionDevicesDelete), true
-	}
-	if path == "/api/v1/links" || strings.HasPrefix(path, "/api/v1/links/") || path == "/api/v1/positions" {
-		return permissionsForMethod(method, domain.PermissionTopologyRead, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate), true
-	}
-	if path == "/api/v1/snmp-profiles" || strings.HasPrefix(path, "/api/v1/snmp-profiles/") ||
-		path == "/api/v1/credential-profiles" || strings.HasPrefix(path, "/api/v1/credential-profiles/") {
-		return credentialRoutePermissions(method, path), true
-	}
-	if path == "/api/v1/areas" || strings.HasPrefix(path, "/api/v1/areas/") {
-		return permissionsForMethod(method, domain.PermissionTopologyRead, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate), true
-	}
-	if strings.HasPrefix(path, "/api/v1/backups/") || strings.HasPrefix(path, "/api/v1/backup-jobs/") || strings.HasPrefix(path, "/api/v1/backup-files/") {
-		return backupRoutePermissions(method), true
-	}
-	if path == "/api/v1/vendors" || strings.HasPrefix(path, "/api/v1/vendors/") {
-		return permissionsForMethod(method, domain.PermissionSettingsRead, "", domain.PermissionSettingsUpdate, ""), true
-	}
-	if path == "/api/v1/instance-backups" || strings.HasPrefix(path, "/api/v1/instance-backups/") {
-		return backupRoutePermissions(method), true
-	}
-	if strings.HasPrefix(path, "/api/v1/bridge/token/") {
-		return []string{domain.PermissionBridgeTokenCreate}, true
-	}
-	if strings.HasPrefix(path, "/api/v1/bridge/launch-requests/") {
-		return []string{domain.PermissionBridgeTokenCreate}, true
-	}
-	if strings.HasPrefix(path, "/api/v1/bridge/download/") {
-		return []string{domain.PermissionSettingsRead}, true
-	}
-	if strings.HasPrefix(path, "/api/v1/users") {
-		return permissionsForMethod(method, domain.PermissionUsersRead, domain.PermissionUsersCreate, domain.PermissionUsersUpdate, domain.PermissionUsersDelete), true
-	}
-	if strings.HasPrefix(path, "/api/v1/roles") {
-		return permissionsForMethod(method, domain.PermissionRolesRead, domain.PermissionRolesAssign, domain.PermissionRolesUpdate, domain.PermissionRolesUpdate), true
-	}
-	if strings.HasPrefix(path, "/api/v1/admin") {
-		return adminRoutePermissions(method, path)
+	for _, spec := range routePermissionSpecs {
+		if spec.matches(path) {
+			return spec.permissions(method), true
+		}
 	}
 	return nil, false
 }
 
-func adminRoutePermissions(method, path string) ([]string, bool) {
-	switch {
-	case path == "/api/v1/admin/dashboard":
-		return []string{domain.PermissionAdminDashboard}, true
-	case path == "/api/v1/admin/users":
-		return permissionsForMethod(method, domain.PermissionUsersRead, domain.PermissionUsersCreate, domain.PermissionUsersUpdate, ""), true
-	case strings.HasPrefix(path, "/api/v1/admin/users/"):
-		if strings.HasSuffix(path, "/password-reset") {
-			return []string{domain.PermissionUsersUpdate}, true
+type routePermissionSpec struct {
+	pattern     string
+	permissions routePermissionPolicy
+}
+
+type routePermissionPolicy func(method string) []string
+
+func (s routePermissionSpec) matches(path string) bool {
+	return matchRoutePattern(path, s.pattern)
+}
+
+var routePermissionSpecs = []routePermissionSpec{
+	{pattern: "/api/v1/settings/me", permissions: fixedRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge", permissions: fixedRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge/secret", permissions: fixedRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge/secret/rotate", permissions: fixedRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge/secret/revoke", permissions: fixedRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge/connector/config", permissions: fixedRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings/bridge/connector/download/{os}/{arch}", permissions: fixedRoutePermissions(domain.PermissionAccountManage)},
+	{pattern: "/api/v1/settings", permissions: settingsRoutePermissions},
+	{pattern: "/api/v1/settings/{key}", permissions: settingsRoutePermissions},
+
+	{pattern: "/api/v1/topology/canvas", permissions: fixedRoutePermissions(domain.PermissionTopologyRead)},
+	{pattern: "/api/v1/canvas", permissions: fixedRoutePermissions(domain.PermissionTopologyRead)},
+	{pattern: "/api/v1/canvas/maps", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/canvas/maps/{mapID}", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/canvas/maps/{mapID}/duplicate", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/canvas/maps/{mapID}/primary", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/canvas/maps/{mapID}/topology", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/canvas/maps/{mapID}/bootstrap", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/canvas/maps/{mapID}/positions", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/canvas/maps/{mapID}/device-areas", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/canvas/maps/{mapID}/areas", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/canvas/maps/{mapID}/areas/{areaID}", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/canvas/maps/{mapID}/devices/{deviceID}", permissions: topologyRoutePermissions},
+
+	{pattern: "/api/v1/devices", permissions: deviceCollectionRoutePermissions},
+	{pattern: "/api/v1/devices/batch", permissions: deviceCollectionRoutePermissions},
+	{pattern: "/api/v1/devices/orphans", permissions: deviceCollectionRoutePermissions},
+	{pattern: "/api/v1/devices/{deviceID}/winbox-credentials/reveal", permissions: fixedRoutePermissions(domain.PermissionCredentialsReveal)},
+	{pattern: "/api/v1/devices/{deviceID}/credential-profiles/{profileID}", permissions: credentialRoutePermissions},
+	{pattern: "/api/v1/devices/{deviceID}/credential-profiles", permissions: credentialRoutePermissions},
+	{pattern: "/api/v1/devices/{deviceID}/winbox-profile", permissions: credentialRoutePermissions},
+	{pattern: "/api/v1/devices/{deviceID}/winbox-credentials", permissions: fixedRoutePermissions(domain.PermissionCredentialsRead)},
+	{pattern: "/api/v1/devices/{deviceID}/backups/latest", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/devices/{deviceID}/backups", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/devices/{deviceID}/interfaces", permissions: fixedRoutePermissions(domain.PermissionTopologyRead)},
+	{pattern: "/api/v1/devices/{deviceID}/probe", permissions: fixedRoutePermissions(domain.PermissionDevicesUpdate)},
+	{pattern: "/api/v1/devices/{deviceID}/snmp-test", permissions: fixedRoutePermissions(domain.PermissionDevicesUpdate)},
+	{pattern: "/api/v1/devices/{deviceID}/topology-discovery", permissions: fixedRoutePermissions(domain.PermissionTopologyUpdate)},
+	{pattern: "/api/v1/devices/{deviceID}/ssh-credentials/test", permissions: deviceCollectionRoutePermissions},
+	{pattern: "/api/v1/devices/{deviceID}", permissions: deviceCollectionRoutePermissions},
+
+	{pattern: "/api/v1/links", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/links/{linkID}", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/positions", permissions: topologyRoutePermissions},
+
+	{pattern: "/api/v1/grafana/dashboard-profiles", permissions: grafanaRoutePermissions},
+	{pattern: "/api/v1/grafana/dashboard-profiles/{profileID}", permissions: grafanaRoutePermissions},
+	{pattern: "/api/v1/grafana/device-overrides/{deviceID}", permissions: grafanaRoutePermissions},
+
+	{pattern: "/api/v1/snmp-profiles/{profileID}/reveal", permissions: fixedRoutePermissions(domain.PermissionCredentialsReveal)},
+	{pattern: "/api/v1/snmp-profiles", permissions: credentialRoutePermissions},
+	{pattern: "/api/v1/snmp-profiles/{profileID}", permissions: credentialRoutePermissions},
+	{pattern: "/api/v1/credential-profiles/{profileID}/test", permissions: credentialRoutePermissions},
+	{pattern: "/api/v1/credential-profiles", permissions: credentialRoutePermissions},
+	{pattern: "/api/v1/credential-profiles/{profileID}", permissions: credentialRoutePermissions},
+
+	{pattern: "/api/v1/areas", permissions: topologyRoutePermissions},
+	{pattern: "/api/v1/areas/{areaID}", permissions: topologyRoutePermissions},
+
+	{pattern: "/api/v1/backups/bulk/status", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backups/bulk-runs/latest", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backups/bulk-runs", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backups/bulk-runs/{runID}/pause", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backups/bulk-runs/{runID}/resume", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backups/bulk-runs/{runID}/cancel", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backups/bulk-runs/{runID}", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backups/bulk", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backups/bulk-download", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backup-jobs/{jobID}", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backup-files/{fileID}/download", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/backup-files/{fileID}/content", permissions: backupRoutePermissions},
+
+	{pattern: "/api/v1/vendors", permissions: settingsRoutePermissions},
+	{pattern: "/api/v1/vendors/{vendorID}", permissions: settingsRoutePermissions},
+
+	{pattern: "/api/v1/instance-backups", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/instance-backups/restore", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/instance-backups/{backupID}/download", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/instance-backups/{backupID}/cancel", permissions: backupRoutePermissions},
+	{pattern: "/api/v1/instance-backups/{backupID}", permissions: backupRoutePermissions},
+
+	{pattern: "/api/v1/bridge/download/{os}/{arch}", permissions: fixedRoutePermissions(domain.PermissionSettingsRead)},
+	{pattern: "/api/v1/bridge/launch-requests/{deviceID}", permissions: fixedRoutePermissions(domain.PermissionBridgeTokenCreate)},
+	{pattern: "/api/v1/bridge/token/{deviceID}", permissions: fixedRoutePermissions(domain.PermissionBridgeTokenCreate)},
+
+	{pattern: "/api/v1/admin/dashboard", permissions: fixedRoutePermissions(domain.PermissionAdminDashboard)},
+	{pattern: "/api/v1/admin/users", permissions: adminUsersRoutePermissions},
+	{pattern: "/api/v1/admin/users/{userID}/status", permissions: adminUserStatusRoutePermissions},
+	{pattern: "/api/v1/admin/users/{userID}/roles/{roleID}", permissions: fixedRoutePermissions(domain.PermissionRolesAssign)},
+	{pattern: "/api/v1/admin/users/{userID}/roles", permissions: fixedRoutePermissions(domain.PermissionRolesAssign)},
+	{pattern: "/api/v1/admin/users/{userID}/password-reset", permissions: fixedRoutePermissions(domain.PermissionUsersUpdate)},
+	{pattern: "/api/v1/admin/users/{userID}", permissions: adminUserRoutePermissions},
+	{pattern: "/api/v1/admin/roles", permissions: fixedRoutePermissions(domain.PermissionRolesRead)},
+	{pattern: "/api/v1/admin/permissions", permissions: fixedRoutePermissions(domain.PermissionRolesRead)},
+	{pattern: "/api/v1/admin/audit-logs", permissions: fixedRoutePermissions(domain.PermissionAuditLogsRead)},
+}
+
+func matchRoutePattern(path, pattern string) bool {
+	pathSegments := splitRouteSegments(path)
+	patternSegments := splitRouteSegments(pattern)
+	if len(pathSegments) != len(patternSegments) {
+		return false
+	}
+	for i, patternSegment := range patternSegments {
+		if isRoutePlaceholder(patternSegment) {
+			if pathSegments[i] == "" {
+				return false
+			}
+			continue
 		}
-		if strings.Contains(path, "/roles") {
-			return []string{domain.PermissionRolesAssign}, true
+		if pathSegments[i] != patternSegment {
+			return false
 		}
-		if strings.HasSuffix(path, "/status") {
-			return permissionsForMethod(method, "", "", domain.PermissionUsersUpdate, ""), true
-		}
-		return permissionsForMethod(method, domain.PermissionUsersRead, "", domain.PermissionUsersUpdate, ""), true
-	case path == "/api/v1/admin/roles" || path == "/api/v1/admin/permissions":
-		return []string{domain.PermissionRolesRead}, true
-	case path == "/api/v1/admin/audit-logs":
-		return []string{domain.PermissionAuditLogsRead}, true
-	default:
-		return nil, false
+	}
+	return true
+}
+
+func splitRouteSegments(path string) []string {
+	trimmed := strings.Trim(path, "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
+}
+
+func isRoutePlaceholder(segment string) bool {
+	return strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") && len(segment) > 2
+}
+
+func fixedRoutePermissions(permissions ...string) routePermissionPolicy {
+	return func(string) []string {
+		return nonEmptyPermissions(permissions...)
 	}
 }
 
-func deviceRoutePermissions(method, path string) ([]string, bool) {
-	switch {
-	case isWinboxCredentialsRevealPath(path):
-		return []string{domain.PermissionCredentialsReveal}, true
-	case strings.Contains(path, "/credential-profiles") || strings.HasSuffix(path, "/winbox-profile"):
-		return permissionsForMethod(method, domain.PermissionCredentialsRead, domain.PermissionCredentialsUpdate, domain.PermissionCredentialsUpdate, domain.PermissionCredentialsUpdate), true
-	case strings.HasSuffix(path, "/winbox-credentials"):
-		return []string{domain.PermissionCredentialsRead}, true
-	case strings.Contains(path, "/backups"):
-		return backupRoutePermissions(method), true
-	case strings.HasSuffix(path, "/interfaces"):
-		return []string{domain.PermissionTopologyRead}, true
-	case strings.HasSuffix(path, "/probe") || strings.HasSuffix(path, "/snmp-test"):
-		return []string{domain.PermissionDevicesUpdate}, true
-	case strings.HasSuffix(path, "/topology-discovery"):
-		return []string{domain.PermissionTopologyUpdate}, true
-	default:
-		return permissionsForMethod(method, domain.PermissionDevicesRead, domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate, domain.PermissionDevicesDelete), true
-	}
+func settingsRoutePermissions(method string) []string {
+	return permissionsForMethod(method, domain.PermissionSettingsRead, "", domain.PermissionSettingsUpdate, "")
 }
 
-func credentialRoutePermissions(method, path string) []string {
-	if strings.HasSuffix(path, "/reveal") {
-		return []string{domain.PermissionCredentialsReveal}
-	}
+func topologyRoutePermissions(method string) []string {
+	return permissionsForMethod(method, domain.PermissionTopologyRead, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate, domain.PermissionTopologyUpdate)
+}
+
+func deviceCollectionRoutePermissions(method string) []string {
+	return permissionsForMethod(method, domain.PermissionDevicesRead, domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate, domain.PermissionDevicesDelete)
+}
+
+func grafanaRoutePermissions(method string) []string {
+	return permissionsForMethod(method, domain.PermissionSettingsRead, domain.PermissionSettingsUpdate, domain.PermissionSettingsUpdate, domain.PermissionSettingsUpdate)
+}
+
+func credentialRoutePermissions(method string) []string {
 	return permissionsForMethod(method, domain.PermissionCredentialsRead, domain.PermissionCredentialsUpdate, domain.PermissionCredentialsUpdate, domain.PermissionCredentialsUpdate)
+}
+
+func adminUsersRoutePermissions(method string) []string {
+	return permissionsForMethod(method, domain.PermissionUsersRead, domain.PermissionUsersCreate, domain.PermissionUsersUpdate, "")
+}
+
+func adminUserRoutePermissions(method string) []string {
+	return permissionsForMethod(method, domain.PermissionUsersRead, "", domain.PermissionUsersUpdate, "")
+}
+
+func adminUserStatusRoutePermissions(method string) []string {
+	return permissionsForMethod(method, "", "", domain.PermissionUsersUpdate, "")
 }
 
 func backupRoutePermissions(method string) []string {
@@ -438,10 +508,17 @@ func permissionsForMethod(method, read, create, update, deletePermission string)
 
 func nonEmptyPermissions(values ...string) []string {
 	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			out = append(out, value)
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
 		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
 	}
 	return out
 }
