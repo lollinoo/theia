@@ -1,16 +1,12 @@
 import {
   type Area,
   type CredentialProfile,
-  type SNMPProfile,
   type VendorConfig,
   parseAreaResponse,
   parseAreasResponse,
   parseCredentialProfileResponse,
   parseCredentialProfilesResponse,
-  parseSNMPProfileResponse,
-  parseSNMPProfilesResponse,
 } from '../types/api';
-import { type SNMPPayload } from './device';
 import { ServerError, ValidationError } from './errors';
 import { requestJSON, requestJSONWithBody } from './transport';
 
@@ -23,36 +19,8 @@ export * from './device';
 export * from './grafana';
 export * from './instanceBackup';
 export * from './settings';
+export * from './snmp';
 export { headersWithCsrf } from './transport';
-
-export interface SNMPProfilePayload {
-  name: string;
-  description?: string;
-  snmp: SNMPPayload;
-}
-
-export async function fetchSNMPProfiles(): Promise<SNMPProfile[]> {
-  return parseSNMPProfilesResponse(await requestJSON('/api/v1/snmp-profiles'));
-}
-
-export async function createSNMPProfile(payload: SNMPProfilePayload): Promise<SNMPProfile> {
-  return parseSNMPProfileResponse(
-    await requestJSONWithBody('/api/v1/snmp-profiles', 'POST', payload),
-  );
-}
-
-export async function updateSNMPProfile(
-  id: string,
-  payload: SNMPProfilePayload,
-): Promise<SNMPProfile> {
-  return parseSNMPProfileResponse(
-    await requestJSONWithBody(`/api/v1/snmp-profiles/${encodeURIComponent(id)}`, 'PUT', payload),
-  );
-}
-
-export async function deleteSNMPProfile(id: string): Promise<void> {
-  await requestJSONWithBody(`/api/v1/snmp-profiles/${encodeURIComponent(id)}`, 'DELETE');
-}
 
 // --- Credential Profiles ---
 
@@ -93,14 +61,6 @@ export async function updateCredentialProfile(
 
 export async function deleteCredentialProfile(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/credential-profiles/${encodeURIComponent(id)}`, 'DELETE');
-}
-
-export async function revealSNMPProfile(id: string, reason: string): Promise<SNMPProfile> {
-  return parseSNMPProfileResponse(
-    await requestJSONWithBody(`/api/v1/snmp-profiles/${encodeURIComponent(id)}/reveal`, 'POST', {
-      reason,
-    }),
-  );
 }
 
 // --- Areas ---
