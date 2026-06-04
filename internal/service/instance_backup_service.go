@@ -39,8 +39,7 @@ type InstanceBackupService struct {
 	restoreLimits   RestoreArchiveLimits
 	backupLimits    BackupArchiveLimits
 	createMu        sync.Mutex
-	operationMu     sync.Mutex
-	operations      map[uuid.UUID]*instanceBackupOperation
+	operations      *instanceBackupOperationTracker
 }
 
 // backupManifest describes the contents and metadata of an instance backup archive.
@@ -103,12 +102,6 @@ type archiveSourceFile struct {
 	sizeBytes   int64
 }
 
-type instanceBackupOperation struct {
-	cancel          context.CancelFunc
-	progress        domain.InstanceBackupProgress
-	cancelRequested bool
-}
-
 // BackupArchiveLimits defines defensive quotas for instance backup archive creation.
 type BackupArchiveLimits struct {
 	MaxTotalBytes  int64
@@ -158,7 +151,7 @@ func NewInstanceBackupService(
 		encryptionKey:   encryptionKey,
 		restoreLimits:   DefaultRestoreArchiveLimits,
 		backupLimits:    DefaultBackupArchiveLimits,
-		operations:      make(map[uuid.UUID]*instanceBackupOperation),
+		operations:      newInstanceBackupOperationTracker(),
 	}
 }
 
@@ -507,27 +500,9 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 }
 
 func (s *InstanceBackupService) completeInstanceBackupSuccess(backup *domain.InstanceBackup, totalSize int64, ownOperation bool) error {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-
-	if op := s.operations[backup.ID]; op != nil && op.cancelRequested {
-		return context.Canceled
-	}
-	if err := s.repo.Update(backup); err != nil {
-		return err
-	}
-	if ownOperation {
-		if op := s.operations[backup.ID]; op != nil {
-			op.progress = domain.InstanceBackupProgress{
-				Phase:   "complete",
-				Message: "Backup complete",
-				Current: totalSize,
-				Total:   totalSize,
-			}
-		}
-	}
-	delete(s.operations, backup.ID)
-	return nil
+	return s.operations.completeSuccess(backup.ID, totalSize, ownOperation, func() error {
+		return s.repo.Update(backup)
+	})
 }
 
 func (s *InstanceBackupService) cleanupFailedInstanceBackup(backup *domain.InstanceBackup, backupSubDir string, errMsg string, err error) {
@@ -574,50 +549,28 @@ func (s *InstanceBackupService) hasRunningInstanceBackup() (bool, error) {
 }
 
 func (s *InstanceBackupService) hasActiveInstanceBackupOperation() bool {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	return len(s.operations) > 0
+	return s.operations.hasActive()
 }
 
 func (s *InstanceBackupService) beginInstanceBackupOperation(id uuid.UUID, cancel context.CancelFunc, progress domain.InstanceBackupProgress) {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	s.operations[id] = &instanceBackupOperation{
-		cancel:   cancel,
-		progress: progress,
-	}
+	s.operations.begin(id, cancel, progress)
 }
 
 func (s *InstanceBackupService) endInstanceBackupOperation(id uuid.UUID) {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	delete(s.operations, id)
+	s.operations.end(id)
 }
 
 func (s *InstanceBackupService) updateInstanceBackupProgress(id uuid.UUID, progress domain.InstanceBackupProgress) {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	if op := s.operations[id]; op != nil {
-		op.progress = progress
-	}
+	s.operations.updateProgress(id, progress)
 }
 
 func (s *InstanceBackupService) instanceBackupCancellationRequested(id uuid.UUID) bool {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	op := s.operations[id]
-	return op != nil && op.cancelRequested
+	return s.operations.cancellationRequested(id)
 }
 
 // GetProgress returns best-effort in-memory progress for a running instance backup.
 func (s *InstanceBackupService) GetProgress(id uuid.UUID) (domain.InstanceBackupProgress, bool) {
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	op := s.operations[id]
-	if op == nil {
-		return domain.InstanceBackupProgress{}, false
-	}
-	return op.progress, true
+	return s.operations.getProgress(id)
 }
 
 // Cancel requests cancellation of a running instance backup.
@@ -628,33 +581,11 @@ func (s *InstanceBackupService) Cancel(ctx context.Context, id uuid.UUID) (*doma
 		}
 	}
 
-	s.operationMu.Lock()
-	op := s.operations[id]
-	if op != nil {
-		backup, err := s.repo.GetByID(id)
-		if err != nil {
-			s.operationMu.Unlock()
-			return nil, fmt.Errorf("getting backup for cancel: %w", err)
-		}
-		if backup == nil {
-			s.operationMu.Unlock()
-			return nil, ErrInstanceBackupNotFound
-		}
-		if backup.Status != domain.InstanceBackupStatusRunning {
-			s.operationMu.Unlock()
-			return nil, ErrInstanceBackupNotRunning
-		}
-		op.cancelRequested = true
-		op.cancel()
-		op.progress = domain.InstanceBackupProgress{
-			Phase:   "cancelling",
-			Message: "Cancellation requested",
-		}
-		s.operationMu.Unlock()
-		backup.ErrorMessage = "cancellation requested"
-		return backup, nil
+	if backup, active, err := s.operations.requestCancel(id, func() (*domain.InstanceBackup, error) {
+		return s.repo.GetByID(id)
+	}); active || err != nil {
+		return backup, err
 	}
-	s.operationMu.Unlock()
 
 	backup, err := s.repo.GetByID(id)
 	if err != nil {
