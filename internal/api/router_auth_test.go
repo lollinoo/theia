@@ -241,6 +241,39 @@ func TestRequiredPermissionsForUnknownProtectedRoutesFailClosed(t *testing.T) {
 	}
 }
 
+// TestRequiredPermissionsForUnsupportedRouteMethodsFailClosed prevents fixed path policies from granting unrelated methods.
+func TestRequiredPermissionsForUnsupportedRouteMethodsFailClosed(t *testing.T) {
+	id := "00000000-0000-0000-0000-000000000001"
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "topology canvas post", method: http.MethodPost, path: "/api/v1/topology/canvas"},
+		{name: "settings me delete", method: http.MethodDelete, path: "/api/v1/settings/me"},
+		{name: "settings bridge secret delete", method: http.MethodDelete, path: "/api/v1/settings/bridge/secret"},
+		{name: "device backup latest post", method: http.MethodPost, path: "/api/v1/devices/" + id + "/backups/latest"},
+		{name: "link read by id", method: http.MethodGet, path: "/api/v1/links/" + id},
+		{name: "instance backup download post", method: http.MethodPost, path: "/api/v1/instance-backups/" + id + "/download"},
+		{name: "bridge download post", method: http.MethodPost, path: "/api/v1/bridge/download/linux/amd64"},
+		{name: "bridge launch request get", method: http.MethodGet, path: "/api/v1/bridge/launch-requests/" + id},
+		{name: "bridge token get", method: http.MethodGet, path: "/api/v1/bridge/token/" + id},
+		{name: "admin user roles get", method: http.MethodGet, path: "/api/v1/admin/users/" + id + "/roles"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, known := requiredPermissionsForRoute(tt.method, tt.path)
+			if !known {
+				t.Fatalf("route %s %s was not known", tt.method, tt.path)
+			}
+			if len(got) != 0 {
+				t.Fatalf("permissions = %#v, want none for unsupported method", got)
+			}
+		})
+	}
+}
+
 func TestRoutePermissionRegistryRejectsShadowedStaticPatterns(t *testing.T) {
 	registry := newRoutePermissionRegistry([]routePermissionSpec{
 		{

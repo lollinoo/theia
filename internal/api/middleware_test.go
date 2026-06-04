@@ -177,17 +177,21 @@ func TestUserAuthDeviceDeleteRejectsUpdateWithoutDelete(t *testing.T) {
 	}
 }
 
-func TestPermissionsForMethodDeleteRequiresExplicitDeletePermission(t *testing.T) {
-	permissions := permissionsForMethod(
-		http.MethodDelete,
-		domain.PermissionDevicesRead,
-		domain.PermissionDevicesCreate,
-		domain.PermissionDevicesUpdate,
-		domain.PermissionDevicesDelete,
-	)
+// TestRoutePermissionsByMethodDeleteRequiresExplicitDeletePermission preserves delete-specific RBAC grants.
+func TestRoutePermissionsByMethodDeleteRequiresExplicitDeletePermission(t *testing.T) {
+	policy := routePermissionsByMethod(map[string][]string{
+		http.MethodGet:    {domain.PermissionDevicesRead},
+		http.MethodPost:   {domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate},
+		http.MethodPut:    {domain.PermissionDevicesUpdate},
+		http.MethodDelete: {domain.PermissionDevicesDelete},
+	})
+	permissions := policy(http.MethodDelete)
 
 	if len(permissions) != 1 || permissions[0] != domain.PermissionDevicesDelete {
 		t.Fatalf("permissions = %#v, want only %q", permissions, domain.PermissionDevicesDelete)
+	}
+	if permissions := policy(http.MethodPatch); len(permissions) != 0 {
+		t.Fatalf("patch permissions = %#v, want none for unsupported method", permissions)
 	}
 }
 
