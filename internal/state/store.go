@@ -221,12 +221,34 @@ func (s *Store) Snapshot() map[uuid.UUID]DeviceState {
 	defer s.mu.RUnlock()
 	out := make(map[uuid.UUID]DeviceState, len(s.devices))
 	for id, ds := range s.devices {
-		cp := ds
-		cp.Metrics = cloneMetrics(ds.Metrics)
-		cp.LinkMetrics = cloneLinkMetrics(ds.LinkMetrics)
-		cp.FieldStates = cloneFieldStates(ds.FieldStates)
-		cp.RuntimeFlags = cloneRuntimeFlags(ds.RuntimeFlags)
-		out[id] = cp
+		out[id] = cloneDeviceState(ds)
+	}
+	return out
+}
+
+// SnapshotFor returns a deep copy of the requested device states. Unknown IDs
+// are ignored. It preserves Snapshot's clone semantics while avoiding a full
+// store clone for callers that already have a bounded changed-device set.
+func (s *Store) SnapshotFor(ids []uuid.UUID) map[uuid.UUID]DeviceState {
+	out := make(map[uuid.UUID]DeviceState, len(ids))
+	if len(ids) == 0 {
+		return out
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		if _, alreadyCloned := out[id]; alreadyCloned {
+			continue
+		}
+		ds, ok := s.devices[id]
+		if !ok {
+			continue
+		}
+		out[id] = cloneDeviceState(ds)
 	}
 	return out
 }
@@ -239,11 +261,7 @@ func (s *Store) GetDevice(id uuid.UUID) (DeviceState, bool) {
 	if !ok {
 		return DeviceState{}, false
 	}
-	ds.Metrics = cloneMetrics(ds.Metrics)
-	ds.LinkMetrics = cloneLinkMetrics(ds.LinkMetrics)
-	ds.FieldStates = cloneFieldStates(ds.FieldStates)
-	ds.RuntimeFlags = cloneRuntimeFlags(ds.RuntimeFlags)
-	return ds, true
+	return cloneDeviceState(ds), true
 }
 
 // Remove deletes a device from the store and emits its ID on the Changes
@@ -377,12 +395,63 @@ func (s *Store) emitChanges(ids []uuid.UUID) {
 	select {
 	case s.changes <- ids:
 	default:
-		s.mu.Lock()
-		s.overflowed = true
-		s.mu.Unlock()
-		observability.Default().AddDroppedStateChanges(len(ids))
-		log.Printf("state: changes channel full, %d device change(s) dropped", len(ids))
+		merged, dropped := s.coalesceQueuedChanges(ids)
+		if len(merged) > 0 {
+			select {
+			case s.changes <- merged:
+			default:
+				dropped += len(merged)
+				merged = nil
+			}
+		}
+		if dropped > 0 {
+			s.markChangesOverflowed(dropped)
+			log.Printf("state: changes channel full, %d device change(s) dropped", dropped)
+		}
 	}
+}
+
+func (s *Store) coalesceQueuedChanges(ids []uuid.UUID) ([]uuid.UUID, int) {
+	limit := cap(s.changes)
+	if limit <= 0 {
+		return nil, len(ids)
+	}
+
+	seen := make(map[uuid.UUID]struct{}, limit)
+	merged := make([]uuid.UUID, 0, limit)
+	dropped := 0
+	add := func(batch []uuid.UUID) {
+		for _, id := range batch {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			if len(merged) >= limit {
+				dropped++
+				continue
+			}
+			seen[id] = struct{}{}
+			merged = append(merged, id)
+		}
+	}
+
+	for drainedBatches := 0; drainedBatches < limit; drainedBatches++ {
+		select {
+		case queued := <-s.changes:
+			add(queued)
+		default:
+			add(ids)
+			return merged, dropped
+		}
+	}
+	add(ids)
+	return merged, dropped
+}
+
+func (s *Store) markChangesOverflowed(dropped int) {
+	s.mu.Lock()
+	s.overflowed = true
+	s.mu.Unlock()
+	observability.Default().AddDroppedStateChanges(dropped)
 }
 
 // cloneMetrics returns a deep copy of DeviceMetrics with independently
@@ -407,6 +476,15 @@ func cloneMetrics(m domain.DeviceMetrics) domain.DeviceMetrics {
 		out.UptimeSecs = &v
 	}
 	return out
+}
+
+func cloneDeviceState(ds DeviceState) DeviceState {
+	cp := ds
+	cp.Metrics = cloneMetrics(ds.Metrics)
+	cp.LinkMetrics = cloneLinkMetrics(ds.LinkMetrics)
+	cp.FieldStates = cloneFieldStates(ds.FieldStates)
+	cp.RuntimeFlags = cloneRuntimeFlags(ds.RuntimeFlags)
+	return cp
 }
 
 func applyFreshnessMetadata(next *DeviceState, update StateUpdate) {

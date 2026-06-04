@@ -184,7 +184,7 @@ jobs:
 
   branch-images:
     name: Branch Images
-    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/master' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     needs: [changes, backend-fast, frontend-fast, browser-e2e]
     runs-on: ubuntu-latest
     concurrency:

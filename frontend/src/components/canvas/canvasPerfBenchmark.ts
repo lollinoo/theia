@@ -32,6 +32,7 @@ import {
 } from './runtimePatches';
 import { composeCanvasTopology } from './topologyComposer';
 import {
+  type BuildCanvasTopologyCompositionCacheKeyInput,
   buildCanvasTopologyCompositionCacheKey,
   createCanvasTopologyCompositionCache,
 } from './topologyCompositionCache';
@@ -40,6 +41,8 @@ import { buildTopologyIdentity } from './topologyIdentity';
 export const CANVAS_PERF_BENCHMARK_METRICS = [
   'buildTopologyNodes',
   'buildTopologyEdges',
+  'buildCanvasTopologyCompositionCacheKey',
+  'buildCanvasTopologyCompositionCacheKeyLegacy',
   'composeCanvasTopology',
   'composeCanvasTopologyCached',
   'areaProjection',
@@ -61,6 +64,7 @@ export interface CanvasPerfBenchmarkResult {
   version: 1;
   generatedAt: string;
   iterations: number;
+  iterationsByScenario?: Partial<Record<CanvasPerfScenarioName, number>>;
   scenarios: Record<CanvasPerfScenarioName, CanvasPerfBenchmarkScenarioResult>;
 }
 
@@ -77,6 +81,17 @@ const defaultIterationsByScenario: Record<CanvasPerfScenarioName, number> = {
   large: 15,
   stress: 5,
 };
+
+function iterationsForScenario(
+  options: RunCanvasPerfBenchmarkOptions,
+  scenarioName: CanvasPerfScenarioName,
+): number {
+  return (
+    options.iterationsByScenario?.[scenarioName] ??
+    options.iterations ??
+    defaultIterationsByScenario[scenarioName]
+  );
+}
 
 const prometheusStatus: PrometheusStatusPayload = {
   enabled: true,
@@ -117,6 +132,62 @@ function measureLocalMetric<T>(
       timestamp: Date.now(),
     });
   }
+}
+
+function legacyPositionEntries(
+  positions: Map<string, { x: number; y: number; pinned?: boolean }>,
+): unknown[] {
+  return [...positions.entries()]
+    .map(([deviceId, position]) => ({
+      deviceId,
+      x: position.x,
+      y: position.y,
+      pinned: position.pinned === true,
+    }))
+    .sort((left, right) => left.deviceId.localeCompare(right.deviceId));
+}
+
+function buildLegacyStructuralCompositionCacheSignature(
+  input: BuildCanvasTopologyCompositionCacheKeyInput,
+): string {
+  return JSON.stringify({
+    mapKey: input.mapKey,
+    topologySignature: input.topologySignature,
+    topologyVersion: input.topologyVersion ?? null,
+    topologyEtag: input.topologyEtag ?? null,
+    schemaVersion: input.schemaVersion ?? null,
+    devices: input.devices
+      .map((device) => ({
+        ...device,
+        tags: Object.entries(device.tags ?? {}).sort(([left], [right]) =>
+          left.localeCompare(right),
+        ),
+        interfaces: device.interfaces.map((iface) => ({ ...iface })),
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    links: input.links
+      .map((link) => ({ ...link }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    savedPositions: legacyPositionEntries(input.savedPositions),
+    computedPositions: legacyPositionEntries(input.computedPositions),
+    currentPositions: legacyPositionEntries(input.currentPositions),
+    defaultPosition: input.defaultPosition ?? null,
+    editMode: input.editMode,
+    placementDeviceIds: [...input.placementDeviceIds].sort((left, right) =>
+      left.localeCompare(right),
+    ),
+    runtimeIdentity: input.runtimeIdentity ?? null,
+    runtimeVersion: input.runtimeVersion ?? null,
+    runtimeSnapshot: input.runtimeSnapshot ?? null,
+    alerts: input.alerts
+      .map((alert) => ({ ...alert }))
+      .sort((left, right) =>
+        `${left.device_id}:${left.severity}:${left.alert_name}:${left.state}:${left.summary}`.localeCompare(
+          `${right.device_id}:${right.severity}:${right.alert_name}:${right.state}:${right.summary}`,
+        ),
+      ),
+    prometheusStatus: input.prometheusStatus,
+  });
 }
 
 function buildCurrentPositions(
@@ -319,9 +390,12 @@ function benchmarkOperations(
   );
 
   const compositionCache = createCanvasTopologyCompositionCache();
-  const compositionCacheKey = buildCanvasTopologyCompositionCacheKey({
+  const topologySignature = buildTopologyIdentity(scenario.devices, scenario.links).signature;
+  const buildCompositionCacheKeyInput = (): BuildCanvasTopologyCompositionCacheKeyInput => ({
     mapKey: `benchmark:${scenarioName}`,
-    topologySignature: buildTopologyIdentity(scenario.devices, scenario.links).signature,
+    topologySignature,
+    topologyVersion: `benchmark-topology:${scenarioName}`,
+    topologyEtag: `"benchmark-${scenarioName}"`,
     schemaVersion: 1,
     devices: scenario.devices,
     links: scenario.links,
@@ -332,13 +406,25 @@ function benchmarkOperations(
     editMode: compositionInput.editMode,
     placementDeviceIds,
     runtimeIdentity: `benchmark:${scenarioName}`,
+    runtimeVersion: 1,
     runtimeSnapshot: scenario.runtimeSnapshot,
     alerts: scenario.alerts,
     prometheusStatus,
     openDeviceMenu: noopDeviceMenu,
     openEdgeMenu: noopEdgeMenu,
   });
+  const buildCompositionCacheKey = () =>
+    buildCanvasTopologyCompositionCacheKey(buildCompositionCacheKeyInput());
+  const buildLegacyCompositionCacheSignature = () =>
+    buildLegacyStructuralCompositionCacheSignature(buildCompositionCacheKeyInput());
+  const compositionCacheKey = buildCompositionCacheKey();
   compositionCache.compose(compositionInput, compositionCacheKey);
+  measureLocalMetric(samples, scenarioName, 'buildCanvasTopologyCompositionCacheKey', () =>
+    buildCompositionCacheKey(),
+  );
+  measureLocalMetric(samples, scenarioName, 'buildCanvasTopologyCompositionCacheKeyLegacy', () =>
+    buildLegacyCompositionCacheSignature(),
+  );
   measureLocalMetric(samples, scenarioName, 'composeCanvasTopologyCached', () =>
     compositionCache.compose(compositionInput, compositionCacheKey),
   );
@@ -479,17 +565,17 @@ export function runCanvasPerfBenchmark(
   const scenarioNames =
     options.scenarioNames ?? (Object.keys(CANVAS_PERF_SCENARIOS) as CanvasPerfScenarioName[]);
   const warmupIterations = options.warmupIterations ?? 3;
-  const benchmarkIterations = options.iterations ?? 20;
+  let benchmarkIterations = 0;
+  const iterationsByScenario: Partial<Record<CanvasPerfScenarioName, number>> = {};
   const scenarios = {} as Record<CanvasPerfScenarioName, CanvasPerfBenchmarkScenarioResult>;
 
   for (const scenarioName of scenarioNames) {
     const scenario = generateCanvasPerfScenario(scenarioName);
     const measuredSamples: CanvasMetricSample[] = [];
     const warmupSamples: CanvasMetricSample[] = [];
-    const iterations =
-      options.iterationsByScenario?.[scenarioName] ??
-      options.iterations ??
-      defaultIterationsByScenario[scenarioName];
+    const iterations = iterationsForScenario(options, scenarioName);
+    iterationsByScenario[scenarioName] = iterations;
+    benchmarkIterations = Math.max(benchmarkIterations, iterations);
 
     for (let index = 0; index < warmupIterations; index += 1) {
       benchmarkOperations(warmupSamples, scenarioName, scenario);
@@ -509,6 +595,7 @@ export function runCanvasPerfBenchmark(
     version: 1,
     generatedAt: new Date().toISOString(),
     iterations: benchmarkIterations,
+    iterationsByScenario,
     scenarios,
   };
 }

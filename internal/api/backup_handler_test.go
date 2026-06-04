@@ -3,6 +3,7 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/vendor"
 	gossh "golang.org/x/crypto/ssh"
@@ -945,7 +947,83 @@ func TestBackupHandlerStartBulkBackupRunReturnsPersistedRun(t *testing.T) {
 	}
 }
 
+func TestBackupHandlerStartBulkBackupRunRecordsAuthenticatedActor(t *testing.T) {
+	handler, _, _, deviceRepo, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.11", SysName: "actor-core",
+		Managed: true, Status: domain.DeviceStatusDown,
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := withTestOperator(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs", strings.NewReader(body)))
+	rec := httptest.NewRecorder()
+	handler.HandleStartBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			CreatedBy string `json:"created_by"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Data.CreatedBy != "test-operator" {
+		t.Fatalf("created_by = %q, want test-operator", resp.Data.CreatedBy)
+	}
+}
+
+func TestBackupHandlerStartBulkBackupRunPersistsAuditLog(t *testing.T) {
+	handler, _, _, deviceRepo, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	auditRepo := newBackupAuditRepoForHandler()
+	WithBackupAuditLogs(auditRepo)(handler)
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "10.0.0.12", SysName: "audit-core",
+		Managed: true, Status: domain.DeviceStatusDown,
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := withTestOperator(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs", strings.NewReader(body)))
+	rec := httptest.NewRecorder()
+	handler.HandleStartBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	logs := auditRepo.auditLogs()
+	if len(logs) != 1 {
+		t.Fatalf("audit log count = %d, want 1", len(logs))
+	}
+	logEntry := logs[0]
+	if logEntry.Action != "backup.bulk_run_started" {
+		t.Fatalf("audit action = %q, want backup.bulk_run_started", logEntry.Action)
+	}
+	if logEntry.Resource != "backup_bulk_run" || logEntry.ResourceID == "" {
+		t.Fatalf("audit resource = %q/%q, want backup bulk run with id", logEntry.Resource, logEntry.ResourceID)
+	}
+	if logEntry.ActorUserID == nil || *logEntry.ActorUserID == uuid.Nil {
+		t.Fatalf("ActorUserID = %#v, want authenticated actor", logEntry.ActorUserID)
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	assertAuditNumber(t, metadata, "requested_device_count", 1)
+	assertAuditNumber(t, metadata, "total_count", 1)
+	assertAuditNumber(t, metadata, "skipped_count", 1)
+}
+
 func TestBackupHandlerStartBulkBackupRunMapsActiveRunToConflict(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
 	handler, _, _, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
 	runID := uuid.New()
 	if err := runRepo.CreateRun(&domain.BulkBackupRun{
@@ -976,6 +1054,147 @@ func TestBackupHandlerStartBulkBackupRunMapsActiveRunToConflict(t *testing.T) {
 	if resp.Code != "bulk_backup_run_active" || resp.Data.ID != runID.String() {
 		t.Fatalf("unexpected conflict response: %#v", resp)
 	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_run",reason="active_run",source="local"} 1`) {
+		t.Fatalf("expected active bulk run rejection metric, got:\n%s", metrics)
+	}
+}
+
+func TestBackupHandlerStartBulkBackupRunReportsLimitRejection(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	handler, _, _, deviceRepo, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	handler.svc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    1,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	firstID := uuid.New()
+	secondID := uuid.New()
+	for i, id := range []uuid.UUID{firstID, secondID} {
+		if err := deviceRepo.Create(&domain.Device{
+			ID: id, IP: fmt.Sprintf("10.0.1.%d", i+1), SysName: fmt.Sprintf("bulk-run-%d", i+1),
+			Managed: true, Status: domain.DeviceStatusDown,
+		}); err != nil {
+			t.Fatalf("Create device: %v", err)
+		}
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q,%q]}`, firstID.String(), secondID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-runs", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleStartBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_run",reason="device_count_limit",source="local"} 1`) {
+		t.Fatalf("expected bulk run limit rejection metric, got:\n%s", metrics)
+	}
+}
+
+func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilities(t *testing.T) {
+	handler, _, _, _, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	handler.svc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:              11,
+		BulkBackupMaxQueuedJobs:           12,
+		BulkDownloadMaxDevices:            13,
+		BulkDownloadMaxFiles:              14,
+		BulkDownloadMaxBytes:              15,
+		BulkDownloadMaxConcurrentPerActor: 2,
+		BulkDownloadMaxConcurrentGlobal:   3,
+	})
+	handler.svc.SetBulkOperationLeaseRepository(newBulkOperationLeaseRepoForHandler())
+	WithBulkDownloadLeaseRepository(newBulkOperationLeaseRepoForHandler())(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backups/bulk/status", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetBulkOperationStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			BulkBackup struct {
+				MaxDevices    int `json:"max_devices"`
+				MaxQueuedJobs int `json:"max_queued_jobs"`
+				Concurrency   struct {
+					MaxConcurrent            int  `json:"max_concurrent"`
+					Configurable             bool `json:"configurable"`
+					Distributed              bool `json:"distributed"`
+					DistributedMaxConcurrent int  `json:"distributed_max_concurrent"`
+				} `json:"concurrency"`
+				LegacyEndpoint struct {
+					Path       string `json:"path"`
+					Deprecated bool   `json:"deprecated"`
+				} `json:"legacy_endpoint"`
+			} `json:"bulk_backup"`
+			BulkBackupRun struct {
+				MaxDevices               int  `json:"max_devices"`
+				MaxQueuedJobs            int  `json:"max_queued_jobs"`
+				BatchSize                int  `json:"batch_size"`
+				MaxActiveRuns            int  `json:"max_active_runs"`
+				Configurable             bool `json:"configurable_concurrency"`
+				Distributed              bool `json:"distributed"`
+				DistributedMaxActiveRuns int  `json:"distributed_max_active_runs"`
+				CanPause                 bool `json:"can_pause"`
+				CanResume                bool `json:"can_resume"`
+				CanCancel                bool `json:"can_cancel"`
+			} `json:"bulk_backup_run"`
+			BulkDownload struct {
+				MaxDevices                       int   `json:"max_devices"`
+				MaxFiles                         int   `json:"max_files"`
+				MaxBytes                         int64 `json:"max_bytes"`
+				MaxConcurrentPerActor            int   `json:"max_concurrent_per_actor"`
+				MaxConcurrentGlobal              int   `json:"max_concurrent_global"`
+				Distributed                      bool  `json:"distributed"`
+				DistributedMaxConcurrentPerActor int   `json:"distributed_max_concurrent_per_actor"`
+				DistributedMaxConcurrentGlobal   int   `json:"distributed_max_concurrent_global"`
+			} `json:"bulk_download"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+
+	if resp.Data.BulkBackup.MaxDevices != 11 || resp.Data.BulkBackup.MaxQueuedJobs != 12 {
+		t.Fatalf("bulk backup limits = %#v", resp.Data.BulkBackup)
+	}
+	if resp.Data.BulkBackup.Concurrency.MaxConcurrent != 1 ||
+		resp.Data.BulkBackup.Concurrency.Configurable ||
+		!resp.Data.BulkBackup.Concurrency.Distributed ||
+		resp.Data.BulkBackup.Concurrency.DistributedMaxConcurrent != 1 {
+		t.Fatalf("legacy backup concurrency = %#v", resp.Data.BulkBackup.Concurrency)
+	}
+	if resp.Data.BulkBackup.LegacyEndpoint.Path != "/api/v1/backups/bulk" || !resp.Data.BulkBackup.LegacyEndpoint.Deprecated {
+		t.Fatalf("legacy endpoint metadata = %#v", resp.Data.BulkBackup.LegacyEndpoint)
+	}
+	if resp.Data.BulkBackupRun.MaxDevices != 11 ||
+		resp.Data.BulkBackupRun.MaxQueuedJobs != 12 ||
+		resp.Data.BulkBackupRun.BatchSize != 10 ||
+		resp.Data.BulkBackupRun.MaxActiveRuns != 1 ||
+		resp.Data.BulkBackupRun.Configurable ||
+		!resp.Data.BulkBackupRun.Distributed ||
+		resp.Data.BulkBackupRun.DistributedMaxActiveRuns != 1 ||
+		!resp.Data.BulkBackupRun.CanPause ||
+		!resp.Data.BulkBackupRun.CanResume ||
+		!resp.Data.BulkBackupRun.CanCancel {
+		t.Fatalf("bulk backup run status = %#v", resp.Data.BulkBackupRun)
+	}
+	if resp.Data.BulkDownload.MaxDevices != 13 ||
+		resp.Data.BulkDownload.MaxFiles != 14 ||
+		resp.Data.BulkDownload.MaxBytes != 15 ||
+		resp.Data.BulkDownload.MaxConcurrentPerActor != 2 ||
+		resp.Data.BulkDownload.MaxConcurrentGlobal != 3 ||
+		!resp.Data.BulkDownload.Distributed ||
+		resp.Data.BulkDownload.DistributedMaxConcurrentPerActor != 1 ||
+		resp.Data.BulkDownload.DistributedMaxConcurrentGlobal != 3 {
+		t.Fatalf("bulk download limits = %#v", resp.Data.BulkDownload)
+	}
 }
 
 func TestBackupHandlerGetLatestBulkBackupRunReturnsNullWhenMissing(t *testing.T) {
@@ -994,6 +1213,99 @@ func TestBackupHandlerGetLatestBulkBackupRunReturnsNullWhenMissing(t *testing.T)
 	}
 	if _, ok := resp["data"]; !ok || resp["data"] != nil {
 		t.Fatalf("expected data null, got %#v", resp)
+	}
+}
+
+func TestBackupHandlerBulkBackupRunReportsAggregateProgressAndCurrentJob(t *testing.T) {
+	handler, _, fileRepo, _, runRepo := setupBackupHandlerForBulkRunTests(t, t.TempDir())
+	runID := uuid.New()
+	jobID := uuid.New()
+	if err := runRepo.CreateRun(&domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusRunning,
+		BatchSize: 10,
+		CreatedAt: time.Now().UTC(),
+	}, []domain.BulkBackupRunItem{
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "queued-router", Status: domain.BulkBackupRunItemStatusQueued},
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "running-router", Status: domain.BulkBackupRunItemStatusRunning, BackupJobID: &jobID},
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "active-router", Status: domain.BulkBackupRunItemStatusActive},
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "ok-router", Status: domain.BulkBackupRunItemStatusSuccess},
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "bad-router", Status: domain.BulkBackupRunItemStatusFailed},
+		{ID: uuid.New(), DeviceID: uuid.New(), DeviceName: "skipped-router", Status: domain.BulkBackupRunItemStatusSkipped},
+	}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if _, err := runRepo.RecalculateRunCounters(runID); err != nil {
+		t.Fatalf("RecalculateRunCounters: %v", err)
+	}
+	for _, file := range []domain.BackupFile{
+		{ID: uuid.New(), JobID: jobID, FileName: "running.rsc", SizeBytes: 123},
+		{ID: uuid.New(), JobID: jobID, FileName: "compact.rsc", SizeBytes: 456},
+	} {
+		file := file
+		if err := fileRepo.Create(&file); err != nil {
+			t.Fatalf("Create file: %v", err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backups/bulk-runs/"+runID.String(), nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetBulkBackupRun(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			TotalCount        int    `json:"total_count"`
+			QueuedCount       int    `json:"queued_count"`
+			RunningCount      int    `json:"running_count"`
+			CompletedCount    int    `json:"completed_count"`
+			SuccessCount      int    `json:"success_count"`
+			FailedCount       int    `json:"failed_count"`
+			SkippedCount      int    `json:"skipped_count"`
+			FileCount         int    `json:"file_count"`
+			ByteCount         int64  `json:"byte_count"`
+			CurrentDeviceName string `json:"current_device_name"`
+			CurrentJobID      string `json:"current_job_id"`
+			Items             []struct {
+				DeviceName string `json:"device_name"`
+				FileCount  int    `json:"file_count"`
+				ByteCount  int64  `json:"byte_count"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.Data.TotalCount != 6 ||
+		resp.Data.QueuedCount != 3 ||
+		resp.Data.RunningCount != 2 ||
+		resp.Data.CompletedCount != 3 ||
+		resp.Data.SuccessCount != 1 ||
+		resp.Data.FailedCount != 1 ||
+		resp.Data.SkippedCount != 1 {
+		t.Fatalf("unexpected aggregate counts: %#v", resp.Data)
+	}
+	if resp.Data.FileCount != 2 || resp.Data.ByteCount != 579 {
+		t.Fatalf("unexpected aggregate file totals: %#v", resp.Data)
+	}
+	if resp.Data.CurrentDeviceName != "running-router" || resp.Data.CurrentJobID != jobID.String() {
+		t.Fatalf("unexpected current job details: %#v", resp.Data)
+	}
+	var runningItem *struct {
+		DeviceName string `json:"device_name"`
+		FileCount  int    `json:"file_count"`
+		ByteCount  int64  `json:"byte_count"`
+	}
+	for index := range resp.Data.Items {
+		if resp.Data.Items[index].DeviceName == "running-router" {
+			runningItem = &resp.Data.Items[index]
+			break
+		}
+	}
+	if runningItem == nil || runningItem.FileCount != 2 || runningItem.ByteCount != 579 {
+		t.Fatalf("unexpected running item file totals: %#v", resp.Data.Items)
 	}
 }
 
@@ -1098,6 +1410,10 @@ func TestBackupHandlerResumeBulkBackupRunMarksRunning(t *testing.T) {
 }
 
 func TestBackupHandlerBulkBackupMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
 	handler, _, _, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
 	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
 		BulkBackupMaxDevices:    1,
@@ -1129,9 +1445,54 @@ func TestBackupHandlerBulkBackupMapsLimitErrorToRequestEntityTooLarge(t *testing
 	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
 		t.Fatalf("limit response must not be a zip response; headers: %#v", rec.Header())
 	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_legacy",reason="device_count_limit",source="local"} 1`) {
+		t.Fatalf("expected legacy bulk backup limit rejection metric, got:\n%s", metrics)
+	}
+}
+
+func TestBackupHandlerBulkBackupMapsActiveLegacyBulkLeaseToTooManyRequests(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+	handler, _, _, _, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
+	leaseRepo := newBulkOperationLeaseRepoForHandler()
+	lease, acquired, err := leaseRepo.TryAcquireBulkOperationLease(context.Background(), "backup.bulk_backup:legacy")
+	if err != nil {
+		t.Fatalf("TryAcquireBulkOperationLease: %v", err)
+	}
+	if !acquired {
+		t.Fatal("expected test lease acquisition")
+	}
+	t.Cleanup(func() {
+		if err := lease.Release(); err != nil {
+			t.Fatalf("Release lease: %v", err)
+		}
+	})
+	backupSvc.SetBulkOperationLeaseRepository(leaseRepo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkBackup(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("expected Retry-After header, got headers: %#v", rec.Header())
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_legacy",reason="global_concurrency_limit",source="local"} 1`) {
+		t.Fatalf("expected legacy bulk backup active rejection metric, got:\n%s", metrics)
+	}
 }
 
 func TestBackupHandlerBulkDownloadMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
 	backupDir := t.TempDir()
 	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
 	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
@@ -1154,6 +1515,666 @@ func TestBackupHandlerBulkDownloadMapsLimitErrorToRequestEntityTooLarge(t *testi
 	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
 		t.Fatalf("limit response must not be a zip response; headers: %#v", rec.Header())
 	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_download",reason="byte_limit",source="local"} 1`) {
+		t.Fatalf("expected bulk download byte limit rejection metric, got:\n%s", metrics)
+	}
+}
+
+func TestBackupHandlerBulkDownloadReportsQuotaRejectionMetrics(t *testing.T) {
+	tests := []struct {
+		name   string
+		limits service.BulkOperationLimits
+		reason string
+	}{
+		{
+			name: "device limit",
+			limits: service.BulkOperationLimits{
+				BulkBackupMaxDevices:    10,
+				BulkBackupMaxQueuedJobs: 10,
+				BulkDownloadMaxDevices:  1,
+				BulkDownloadMaxFiles:    10,
+				BulkDownloadMaxBytes:    1024,
+			},
+			reason: "device_count_limit",
+		},
+		{
+			name: "file limit",
+			limits: service.BulkOperationLimits{
+				BulkBackupMaxDevices:    10,
+				BulkBackupMaxQueuedJobs: 10,
+				BulkDownloadMaxDevices:  10,
+				BulkDownloadMaxFiles:    1,
+				BulkDownloadMaxBytes:    1024,
+			},
+			reason: "file_limit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := observability.ResetDefaultForTest()
+			t.Cleanup(func() {
+				observability.ResetDefaultForTest()
+			})
+
+			backupDir := t.TempDir()
+			handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+			backupSvc.SetBulkOperationLimits(tt.limits)
+			firstID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "first.rsc", []byte("12345"))
+			secondID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "second.rsc", []byte("67890"))
+			body := fmt.Sprintf(`{"device_ids":[%q,%q]}`, firstID.String(), secondID.String())
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body))
+			rec := httptest.NewRecorder()
+			handler.HandleBulkDownload(rec, req)
+
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+			metrics := string(registry.MarshalPrometheus())
+			needle := fmt.Sprintf(`theia_bulk_operation_rejections_total{operation="bulk_download",reason="%s",source="local"} 1`, tt.reason)
+			if !strings.Contains(metrics, needle) {
+				t.Fatalf("expected bulk download quota rejection metric %q, got:\n%s", needle, metrics)
+			}
+		})
+	}
+}
+
+func TestBackupHandlerBulkDownloadReportsSelectedFileAndByteTotals(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	firstID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "first.rsc", []byte("12345"))
+	secondID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "second.rsc", []byte("abcdefg"))
+	body := fmt.Sprintf(`{"device_ids":[%q,%q]}`, firstID.String(), secondID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkDownload(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Bulk-Download-File-Count"); got != "2" {
+		t.Fatalf("X-Bulk-Download-File-Count = %q, want 2", got)
+	}
+	if got := rec.Header().Get("X-Bulk-Download-Size-Bytes"); got != "12" {
+		t.Fatalf("X-Bulk-Download-Size-Bytes = %q, want 12", got)
+	}
+	if got := rec.Header().Get("X-Bulk-Download-Device-Count"); got != "2" {
+		t.Fatalf("X-Bulk-Download-Device-Count = %q, want 2", got)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	for _, needle := range []string{
+		`theia_bulk_operation_completions_total{operation="bulk_download",result="success",source="local"} 1`,
+		`theia_bulk_operation_duration_seconds_count{operation="bulk_download",result="success",source="local"} 1`,
+		`theia_bulk_operation_selected_devices_total{operation="bulk_download",result="success",source="local"} 2`,
+		`theia_bulk_operation_selected_files_total{operation="bulk_download",result="success",source="local"} 2`,
+		`theia_bulk_operation_selected_bytes_total{operation="bulk_download",result="success",source="local"} 12`,
+	} {
+		if !strings.Contains(metrics, needle) {
+			t.Fatalf("expected bulk download metric %q, got:\n%s", needle, metrics)
+		}
+	}
+}
+
+func TestBackupHandlerBulkDownloadStreamsSelectedFilesAndKeepsPrevalidatedTotalsOnFileError(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	goodContent := []byte("streamed-good")
+	missingContent := []byte("selected-then-removed")
+	goodID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "good.rsc", goodContent)
+	missingID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "missing-after-selection.rsc", missingContent)
+	unselectedID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: unselectedID, IP: "10.0.0.200", SysName: "empty",
+		Tags: map[string]string{"display_name": "Empty"},
+	}); err != nil {
+		t.Fatalf("Create unselected device: %v", err)
+	}
+
+	missingPath := filepath.Join(backupDir, "missing-after-selection.rsc")
+	handler.settingsRepo = &bulkDownloadDeletingSettingsRepo{
+		mockSettingsRepo: newMockSettingsRepo(),
+		path:             missingPath,
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q,%q,%q]}`, goodID.String(), missingID.String(), unselectedID.String())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkDownload(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Bulk-Download-File-Count"); got != "2" {
+		t.Fatalf("X-Bulk-Download-File-Count = %q, want 2", got)
+	}
+	if got := rec.Header().Get("X-Bulk-Download-Size-Bytes"); got != fmt.Sprint(len(goodContent)+len(missingContent)) {
+		t.Fatalf("X-Bulk-Download-Size-Bytes = %q, want %d", got, len(goodContent)+len(missingContent))
+	}
+
+	zipEntries := readZipEntriesForBulkDownloadTest(t, rec.Body.Bytes())
+	if got := zipEntries["Core/good.rsc"]; got != string(goodContent) {
+		t.Fatalf("Core/good.rsc = %q, want %q", got, goodContent)
+	}
+	if _, ok := zipEntries["Core/missing-after-selection.rsc"]; ok {
+		t.Fatal("removed file must not be included as a partial zip entry")
+	}
+	errorManifest, ok := zipEntries["_errors.txt"]
+	if !ok {
+		t.Fatal("expected _errors.txt for removed selected file")
+	}
+	if !strings.Contains(errorManifest, "Core/missing-after-selection.rsc") {
+		t.Fatalf("_errors.txt = %q, want selected zip path", errorManifest)
+	}
+	if got := rec.Header().Get("X-Bulk-Download-Device-Count"); got != "2" {
+		t.Fatalf("X-Bulk-Download-Device-Count = %q, want 2 selected devices", got)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	for _, needle := range []string{
+		`theia_bulk_operation_completions_total{operation="bulk_download",result="partial",source="local"} 1`,
+		`theia_bulk_operation_duration_seconds_count{operation="bulk_download",result="partial",source="local"} 1`,
+		fmt.Sprintf(`theia_bulk_operation_selected_bytes_total{operation="bulk_download",result="partial",source="local"} %d`, len(goodContent)+len(missingContent)),
+	} {
+		if !strings.Contains(metrics, needle) {
+			t.Fatalf("expected partial bulk download metric %q, got:\n%s", needle, metrics)
+		}
+	}
+}
+
+func TestBackupHandlerBulkDownloadPersistsAuditLogWithPartialStreamErrors(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	auditRepo := newBackupAuditRepoForHandler()
+	WithBackupAuditLogs(auditRepo)(handler)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	goodContent := []byte("streamed-good")
+	missingContent := []byte("selected-then-removed")
+	goodID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "good.rsc", goodContent)
+	missingID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "missing-after-selection.rsc", missingContent)
+	unselectedID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: unselectedID, IP: "10.0.0.200", SysName: "empty",
+		Tags: map[string]string{"display_name": "Empty"},
+	}); err != nil {
+		t.Fatalf("Create unselected device: %v", err)
+	}
+
+	missingPath := filepath.Join(backupDir, "missing-after-selection.rsc")
+	handler.settingsRepo = &bulkDownloadDeletingSettingsRepo{
+		mockSettingsRepo: newMockSettingsRepo(),
+		path:             missingPath,
+	}
+
+	body := fmt.Sprintf(`{"device_ids":[%q,%q,%q]}`, goodID.String(), missingID.String(), unselectedID.String())
+	req := withTestOperator(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)))
+	rec := httptest.NewRecorder()
+	handler.HandleBulkDownload(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	logs := auditRepo.auditLogs()
+	if len(logs) != 1 {
+		t.Fatalf("audit log count = %d, want 1", len(logs))
+	}
+	logEntry := logs[0]
+	if logEntry.Action != "backup.bulk_download_completed" {
+		t.Fatalf("audit action = %q, want backup.bulk_download_completed", logEntry.Action)
+	}
+	if logEntry.ActorUserID == nil || *logEntry.ActorUserID == uuid.Nil {
+		t.Fatalf("ActorUserID = %#v, want authenticated actor", logEntry.ActorUserID)
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	assertAuditNumber(t, metadata, "requested_device_count", 3)
+	assertAuditNumber(t, metadata, "selected_device_count", 2)
+	assertAuditNumber(t, metadata, "selected_file_count", 2)
+	assertAuditNumber(t, metadata, "selected_bytes", float64(len(goodContent)+len(missingContent)))
+	assertAuditNumber(t, metadata, "stream_error_count", 1)
+	if partial, ok := metadata["partial"].(bool); !ok || !partial {
+		t.Fatalf("metadata partial = %#v, want true", metadata["partial"])
+	}
+}
+
+func TestBackupHandlerBulkDownloadRejectsConcurrentRequestForSameActor(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	actorID := uuid.New()
+
+	firstReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	firstRec := newBlockingResponseWriterForBulkDownloadTest()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		handler.HandleBulkDownload(firstRec, firstReq)
+	}()
+
+	select {
+	case <-firstRec.firstWrite:
+	case <-time.After(time.Second):
+		close(firstRec.release)
+		<-firstDone
+		t.Fatal("first bulk download did not start streaming")
+	}
+
+	secondReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	secondRec := httptest.NewRecorder()
+	handler.HandleBulkDownload(secondRec, secondReq)
+
+	close(firstRec.release)
+	<-firstDone
+
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second response status = %d, want 429; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+	if strings.Contains(secondRec.Header().Get("Content-Type"), "application/zip") {
+		t.Fatalf("rejected concurrent request must not start a zip response; headers: %#v", secondRec.Header())
+	}
+}
+
+func TestBackupHandlerBulkDownloadReportsLocalInFlightAndLimits(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, _ := setupBackupHandlerForBulkDownloadConcurrencyTest(t, backupDir, service.BulkOperationLimits{
+		BulkBackupMaxDevices:              10,
+		BulkBackupMaxQueuedJobs:           10,
+		BulkDownloadMaxDevices:            10,
+		BulkDownloadMaxFiles:              10,
+		BulkDownloadMaxBytes:              1024,
+		BulkDownloadMaxConcurrentPerActor: 2,
+		BulkDownloadMaxConcurrentGlobal:   3,
+	})
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	rec := newBlockingResponseWriterForBulkDownloadTest()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.HandleBulkDownload(rec, req)
+	}()
+
+	select {
+	case <-rec.firstWrite:
+	case <-time.After(time.Second):
+		close(rec.release)
+		<-done
+		t.Fatal("bulk download did not start streaming")
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_in_flight{operation="bulk_download",source="local"} 1`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected in-flight metric while streaming, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_bulk_operation_concurrency_limit{operation="bulk_download",scope="per_actor",source="local"} 2`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected per-actor limit metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_bulk_operation_concurrency_limit{operation="bulk_download",scope="global",source="local"} 3`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected global limit metric, got:\n%s", metrics)
+	}
+
+	close(rec.release)
+	<-done
+	metrics = string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_in_flight{operation="bulk_download",source="local"} 0`) {
+		t.Fatalf("expected in-flight metric to return to zero, got:\n%s", metrics)
+	}
+}
+
+func TestBackupHandlerBulkDownloadReportsDistributedInFlightAndLimits(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, _ := setupBackupHandlerForBulkDownloadConcurrencyTest(t, backupDir, service.BulkOperationLimits{
+		BulkBackupMaxDevices:              10,
+		BulkBackupMaxQueuedJobs:           10,
+		BulkDownloadMaxDevices:            10,
+		BulkDownloadMaxFiles:              10,
+		BulkDownloadMaxBytes:              1024,
+		BulkDownloadMaxConcurrentPerActor: 1,
+		BulkDownloadMaxConcurrentGlobal:   2,
+	})
+	WithBulkDownloadLeaseRepository(newBulkOperationLeaseRepoForHandler())(handler)
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	req := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	rec := newBlockingResponseWriterForBulkDownloadTest()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.HandleBulkDownload(rec, req)
+	}()
+
+	select {
+	case <-rec.firstWrite:
+	case <-time.After(time.Second):
+		close(rec.release)
+		<-done
+		t.Fatal("bulk download did not start streaming")
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_in_flight{operation="bulk_download",source="distributed"} 1`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected distributed in-flight metric while streaming, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_bulk_operation_concurrency_limit{operation="bulk_download",scope="per_actor",source="distributed"} 1`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected distributed per-actor limit metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_bulk_operation_concurrency_limit{operation="bulk_download",scope="global",source="distributed"} 2`) {
+		close(rec.release)
+		<-done
+		t.Fatalf("expected distributed global limit metric, got:\n%s", metrics)
+	}
+
+	close(rec.release)
+	<-done
+	metrics = string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_in_flight{operation="bulk_download",source="distributed"} 0`) {
+		t.Fatalf("expected distributed in-flight metric to return to zero, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_bulk_operation_completions_total{operation="bulk_download",result="success",source="distributed"} 1`) {
+		t.Fatalf("expected distributed completion metric, got:\n%s", metrics)
+	}
+}
+
+func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAcrossHandlersForSameActor(t *testing.T) {
+	backupDir := t.TempDir()
+	firstHandler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	leaseRepo := newBulkOperationLeaseRepoForHandler()
+	auditRepo := newBackupAuditRepoForHandler()
+	WithBulkDownloadLeaseRepository(leaseRepo)(firstHandler)
+	WithBackupAuditLogs(auditRepo)(firstHandler)
+	secondHandler := NewBackupHandler(backupSvc, firstHandler.settingsRepo, WithBulkDownloadLeaseRepository(leaseRepo), WithBackupAuditLogs(auditRepo))
+
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	actorID := uuid.New()
+	firstReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	firstRec := newBlockingResponseWriterForBulkDownloadTest()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		firstHandler.HandleBulkDownload(firstRec, firstReq)
+	}()
+
+	select {
+	case <-firstRec.firstWrite:
+	case <-time.After(time.Second):
+		close(firstRec.release)
+		<-firstDone
+		t.Fatal("first bulk download did not start streaming")
+	}
+
+	secondReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	secondRec := httptest.NewRecorder()
+	secondHandler.HandleBulkDownload(secondRec, secondReq)
+	if secondRec.Code != http.StatusTooManyRequests {
+		close(firstRec.release)
+		<-firstDone
+		t.Fatalf("second status = %d, want 429; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+	if got := secondRec.Header().Get("Retry-After"); got != fmt.Sprint(bulkOperationRetryAfterSeconds) {
+		close(firstRec.release)
+		<-firstDone
+		t.Fatalf("Retry-After = %q, want %d", got, bulkOperationRetryAfterSeconds)
+	}
+	logEntry, ok := findBackupAuditAction(auditRepo.auditLogs(), "backup.bulk_download_rejected")
+	if !ok {
+		close(firstRec.release)
+		<-firstDone
+		t.Fatalf("expected backup.bulk_download_rejected audit log, got %#v", auditRepo.auditLogs())
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		close(firstRec.release)
+		<-firstDone
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	if reason, ok := metadata["reason"].(string); !ok || reason != "distributed_actor_concurrency_limit" {
+		close(firstRec.release)
+		<-firstDone
+		t.Fatalf("metadata reason = %#v, want distributed_actor_concurrency_limit", metadata["reason"])
+	}
+
+	close(firstRec.release)
+	<-firstDone
+
+	thirdReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	thirdRec := httptest.NewRecorder()
+	secondHandler.HandleBulkDownload(thirdRec, thirdReq)
+	if thirdRec.Code != http.StatusOK {
+		t.Fatalf("third status after release = %d, want 200; body: %s", thirdRec.Code, thirdRec.Body.String())
+	}
+}
+
+func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAtGlobalLimit(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, _ := setupBackupHandlerForBulkDownloadConcurrencyTest(t, backupDir, service.BulkOperationLimits{
+		BulkBackupMaxDevices:              10,
+		BulkBackupMaxQueuedJobs:           10,
+		BulkDownloadMaxDevices:            10,
+		BulkDownloadMaxFiles:              10,
+		BulkDownloadMaxBytes:              1024,
+		BulkDownloadMaxConcurrentPerActor: 10,
+		BulkDownloadMaxConcurrentGlobal:   1,
+	})
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+
+	firstReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	firstRec := newBlockingResponseWriterForBulkDownloadTest()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		handler.HandleBulkDownload(firstRec, firstReq)
+	}()
+	select {
+	case <-firstRec.firstWrite:
+	case <-time.After(time.Second):
+		close(firstRec.release)
+		<-firstDone
+		t.Fatal("first bulk download did not start streaming")
+	}
+
+	secondReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	secondRec := httptest.NewRecorder()
+	handler.HandleBulkDownload(secondRec, secondReq)
+	close(firstRec.release)
+	<-firstDone
+
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429 at global limit; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+	if got := secondRec.Header().Get("Retry-After"); got != fmt.Sprint(bulkOperationRetryAfterSeconds) {
+		t.Fatalf("Retry-After = %q, want %d", got, bulkOperationRetryAfterSeconds)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_download",reason="global_concurrency_limit",source="local"} 1`) {
+		t.Fatalf("expected local global-limit rejection metric, got:\n%s", metrics)
+	}
+}
+
+func TestBackupHandlerBulkDownloadRejectsConcurrentRequestAcrossHandlersAtGlobalLimit(t *testing.T) {
+	backupDir := t.TempDir()
+	limits := service.BulkOperationLimits{
+		BulkBackupMaxDevices:              10,
+		BulkBackupMaxQueuedJobs:           10,
+		BulkDownloadMaxDevices:            10,
+		BulkDownloadMaxFiles:              10,
+		BulkDownloadMaxBytes:              1024,
+		BulkDownloadMaxConcurrentPerActor: 10,
+		BulkDownloadMaxConcurrentGlobal:   1,
+	}
+	firstHandler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkDownloadConcurrencyTest(t, backupDir, limits)
+	leaseRepo := newBulkOperationLeaseRepoForHandler()
+	auditRepo := newBackupAuditRepoForHandler()
+	WithBulkDownloadLeaseRepository(leaseRepo)(firstHandler)
+	WithBackupAuditLogs(auditRepo)(firstHandler)
+	secondHandler := NewBackupHandler(backupSvc, firstHandler.settingsRepo, WithBulkDownloadLeaseRepository(leaseRepo), WithBackupAuditLogs(auditRepo))
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+
+	firstReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	firstRec := newBlockingResponseWriterForBulkDownloadTest()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		firstHandler.HandleBulkDownload(firstRec, firstReq)
+	}()
+	select {
+	case <-firstRec.firstWrite:
+	case <-time.After(time.Second):
+		close(firstRec.release)
+		<-firstDone
+		t.Fatal("first bulk download did not start streaming")
+	}
+
+	secondReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), uuid.New())
+	secondRec := httptest.NewRecorder()
+	secondHandler.HandleBulkDownload(secondRec, secondReq)
+	close(firstRec.release)
+	<-firstDone
+
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want 429 at distributed global limit; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+	logEntry, ok := findBackupAuditAction(auditRepo.auditLogs(), "backup.bulk_download_rejected")
+	if !ok {
+		t.Fatalf("expected backup.bulk_download_rejected audit log, got %#v", auditRepo.auditLogs())
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	if reason, ok := metadata["reason"].(string); !ok || reason != "distributed_global_concurrency_limit" {
+		t.Fatalf("metadata reason = %#v, want distributed_global_concurrency_limit", metadata["reason"])
+	}
+}
+
+func TestBackupHandlerBulkDownloadAuditsConcurrentRequestRejection(t *testing.T) {
+	backupDir := t.TempDir()
+	handler, jobRepo, fileRepo, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, backupDir)
+	auditRepo := newBackupAuditRepoForHandler()
+	WithBackupAuditLogs(auditRepo)(handler)
+	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	deviceID := seedBulkDownloadBackupFile(t, backupDir, jobRepo, fileRepo, deviceRepo, "running.rsc", []byte("streamed-content"))
+	body := fmt.Sprintf(`{"device_ids":[%q]}`, deviceID.String())
+	actorID := uuid.New()
+
+	firstReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	firstRec := newBlockingResponseWriterForBulkDownloadTest()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		handler.HandleBulkDownload(firstRec, firstReq)
+	}()
+
+	select {
+	case <-firstRec.firstWrite:
+	case <-time.After(time.Second):
+		close(firstRec.release)
+		<-firstDone
+		t.Fatal("first bulk download did not start streaming")
+	}
+
+	secondReq := withBulkDownloadTestActor(httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk-download", strings.NewReader(body)), actorID)
+	secondRec := httptest.NewRecorder()
+	handler.HandleBulkDownload(secondRec, secondReq)
+
+	close(firstRec.release)
+	<-firstDone
+
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second response status = %d, want 429; body: %s", secondRec.Code, secondRec.Body.String())
+	}
+
+	logEntry, ok := findBackupAuditAction(auditRepo.auditLogs(), "backup.bulk_download_rejected")
+	if !ok {
+		t.Fatalf("expected backup.bulk_download_rejected audit log, got %#v", auditRepo.auditLogs())
+	}
+	if logEntry.ActorUserID == nil || *logEntry.ActorUserID != actorID {
+		t.Fatalf("ActorUserID = %#v, want %s", logEntry.ActorUserID, actorID)
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	if reason, ok := metadata["reason"].(string); !ok || reason != "actor_concurrency_limit" {
+		t.Fatalf("metadata reason = %#v, want actor_concurrency_limit", metadata["reason"])
+	}
+	assertAuditNumber(t, metadata, "requested_device_count", 1)
+	assertAuditNumber(t, metadata, "per_actor_limit", 1)
 }
 
 func TestBackupHandlerBulkDownloadMapsUnsafePathToBadRequest(t *testing.T) {
@@ -1246,6 +2267,185 @@ func setupBackupHandlerForBulkLimitTests(
 	return handler, jobRepo, fileRepo, deviceRepo, backupSvc
 }
 
+func setupBackupHandlerForBulkDownloadConcurrencyTest(
+	t *testing.T,
+	backupDir string,
+	limits service.BulkOperationLimits,
+) (*BackupHandler, *backupJobRepoForHandler, *backupFileRepoForHandler, *mockDeviceRepo, *service.BackupService) {
+	t.Helper()
+
+	jobRepo := newBackupJobRepoForHandler()
+	fileRepo := newBackupFileRepoForHandler()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockSettingsRepo()
+	encKey := crypto.DeriveKey("test-backup-bulk-concurrency-key")
+
+	defaultCfg := vendor.DBVendorRecord{
+		Name: "default",
+		ConfigJSON: `{
+			"vendor": {"name": "default", "display_name": "Generic"},
+			"detection": {},
+			"backup": {"supported": false}
+		}`,
+	}
+	reg, err := vendor.LoadRegistryFromDB([]vendor.DBVendorRecord{defaultCfg})
+	if err != nil {
+		t.Fatalf("building vendor registry: %v", err)
+	}
+
+	backupSvc := service.NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		reg, &mockSSHDialerForBackup{}, encKey, backupDir,
+		gossh.InsecureIgnoreHostKey(),
+	)
+	backupSvc.SetBulkOperationLimits(limits)
+	handler := NewBackupHandler(backupSvc, settingsRepo)
+	return handler, jobRepo, fileRepo, deviceRepo, backupSvc
+}
+
+type backupAuditRepoForHandler struct {
+	mu   sync.Mutex
+	logs []domain.AuditLog
+}
+
+func newBackupAuditRepoForHandler() *backupAuditRepoForHandler {
+	return &backupAuditRepoForHandler{}
+}
+
+func (r *backupAuditRepoForHandler) AppendAuditLog(_ context.Context, log *domain.AuditLog) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if log == nil {
+		return nil
+	}
+	r.logs = append(r.logs, *log)
+	return nil
+}
+
+func (r *backupAuditRepoForHandler) ListAuditLogs(_ context.Context, _ domain.AuditLogFilter) ([]domain.AuditLog, error) {
+	return r.auditLogs(), nil
+}
+
+func (r *backupAuditRepoForHandler) DashboardStats(context.Context) (*domain.AdminDashboardStats, error) {
+	return &domain.AdminDashboardStats{}, nil
+}
+
+func (r *backupAuditRepoForHandler) auditLogs() []domain.AuditLog {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]domain.AuditLog, len(r.logs))
+	copy(out, r.logs)
+	return out
+}
+
+func assertAuditNumber(t *testing.T, metadata map[string]interface{}, key string, want float64) {
+	t.Helper()
+	got, ok := metadata[key].(float64)
+	if !ok || got != want {
+		t.Fatalf("metadata[%q] = %#v, want %v", key, metadata[key], want)
+	}
+}
+
+func findBackupAuditAction(logs []domain.AuditLog, action string) (domain.AuditLog, bool) {
+	for _, logEntry := range logs {
+		if logEntry.Action == action {
+			return logEntry, true
+		}
+	}
+	return domain.AuditLog{}, false
+}
+
+type bulkOperationLeaseRepoForHandler struct {
+	mu     sync.Mutex
+	active map[string]struct{}
+}
+
+func newBulkOperationLeaseRepoForHandler() *bulkOperationLeaseRepoForHandler {
+	return &bulkOperationLeaseRepoForHandler{
+		active: make(map[string]struct{}),
+	}
+}
+
+func (r *bulkOperationLeaseRepoForHandler) TryAcquireBulkOperationLease(_ context.Context, key string) (domain.BulkOperationLease, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.active[key]; ok {
+		return nil, false, nil
+	}
+	r.active[key] = struct{}{}
+	return bulkOperationLeaseForHandler{release: func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		delete(r.active, key)
+	}}, true, nil
+}
+
+type bulkOperationLeaseForHandler struct {
+	release func()
+}
+
+func (l bulkOperationLeaseForHandler) Release() error {
+	if l.release != nil {
+		l.release()
+	}
+	return nil
+}
+
+type blockingResponseWriterForBulkDownloadTest struct {
+	header     http.Header
+	firstWrite chan struct{}
+	release    chan struct{}
+	once       sync.Once
+	body       bytes.Buffer
+	code       int
+}
+
+func newBlockingResponseWriterForBulkDownloadTest() *blockingResponseWriterForBulkDownloadTest {
+	return &blockingResponseWriterForBulkDownloadTest{
+		header:     http.Header{},
+		firstWrite: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+}
+
+func (w *blockingResponseWriterForBulkDownloadTest) Header() http.Header {
+	return w.header
+}
+
+func (w *blockingResponseWriterForBulkDownloadTest) WriteHeader(code int) {
+	w.code = code
+}
+
+func (w *blockingResponseWriterForBulkDownloadTest) Write(p []byte) (int, error) {
+	w.once.Do(func() {
+		close(w.firstWrite)
+		<-w.release
+	})
+	if w.code == 0 {
+		w.code = http.StatusOK
+	}
+	return w.body.Write(p)
+}
+
+func withBulkDownloadTestActor(req *http.Request, userID uuid.UUID) *http.Request {
+	return req.WithContext(withAuthenticatedUser(req.Context(), &service.AuthenticatedUser{
+		User: domain.UserWithRolesAndPermissions{
+			User: domain.User{
+				ID:          userID,
+				Username:    "bulk-operator",
+				Email:       "bulk-operator@example.test",
+				DisplayName: "Bulk Operator",
+				Status:      domain.UserStatusActive,
+			},
+		},
+		Session: service.AuthenticatedSession{
+			ID:     uuid.New(),
+			UserID: userID,
+		},
+	}))
+}
+
 func setupBackupHandlerForBulkRunTests(
 	t *testing.T,
 	backupDir string,
@@ -1296,7 +2496,7 @@ func seedBulkDownloadBackupFile(
 
 	deviceID := uuid.New()
 	if err := deviceRepo.Create(&domain.Device{
-		ID: deviceID, IP: "10.0.0.1", SysName: "core",
+		ID: deviceID, IP: fmt.Sprintf("10.%d.%d.%d", deviceID[0], deviceID[1], deviceID[2]), SysName: "core",
 		Tags: map[string]string{"display_name": "Core"},
 	}); err != nil {
 		t.Fatalf("Create device: %v", err)
@@ -1323,6 +2523,42 @@ func seedBulkDownloadBackupFile(
 		t.Fatalf("Create file: %v", err)
 	}
 	return deviceID
+}
+
+type bulkDownloadDeletingSettingsRepo struct {
+	*mockSettingsRepo
+	path string
+	once sync.Once
+}
+
+func (r *bulkDownloadDeletingSettingsRepo) Get(key string) (string, error) {
+	r.once.Do(func() {
+		_ = os.Remove(r.path)
+	})
+	return r.mockSettingsRepo.Get(key)
+}
+
+func readZipEntriesForBulkDownloadTest(t *testing.T, body []byte) map[string]string {
+	t.Helper()
+
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("read zip response: %v", err)
+	}
+	entries := make(map[string]string, len(zr.File))
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open zip entry %s: %v", f.Name, err)
+		}
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("read zip entry %s: %v", f.Name, err)
+		}
+		entries[f.Name] = string(content)
+	}
+	return entries
 }
 
 // =============================================================================

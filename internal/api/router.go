@@ -19,6 +19,7 @@ type routerOptions struct {
 	security      SecurityConfig
 	auth          authProvider
 	bridgeService *service.BridgeService
+	auditLogs     domain.AuditLogRepository
 }
 
 // RouterOption customizes router middleware behavior.
@@ -41,6 +42,12 @@ func WithAuthService(authService *service.AuthService) RouterOption {
 func WithBridgeService(bridgeService *service.BridgeService) RouterOption {
 	return func(options *routerOptions) {
 		options.bridgeService = bridgeService
+	}
+}
+
+func WithAuditLogRepository(auditLogs domain.AuditLogRepository) RouterOption {
+	return func(options *routerOptions) {
+		options.auditLogs = auditLogs
 	}
 }
 
@@ -114,7 +121,15 @@ func NewRouter(
 	grafanaDashboardHandler := NewGrafanaDashboardHandler(settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
 	areaHandler := NewAreaHandler(areaRepo)
-	backupHandler := NewBackupHandler(backupService, settingsRepo)
+	backupHandlerOptions := []BackupHandlerOption{WithBackupAuditLogs(routerOpts.auditLogs)}
+	if db != nil {
+		bulkOperationLeaseRepo := postgres.NewBulkOperationLeaseRepo(db)
+		if backupService != nil {
+			backupService.SetBulkOperationLeaseRepository(bulkOperationLeaseRepo)
+		}
+		backupHandlerOptions = append(backupHandlerOptions, WithBulkDownloadLeaseRepository(bulkOperationLeaseRepo))
+	}
+	backupHandler := NewBackupHandler(backupService, settingsRepo, backupHandlerOptions...)
 	credentialProfileHandler := NewCredentialProfileHandler(backupService, credentialProfileRepo)
 	deviceCredHandler := NewDeviceCredentialProfileHandler(backupService, credentialProfileRepo)
 	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)
@@ -566,6 +581,14 @@ func NewRouter(
 	})
 
 	// Bulk backup routes
+	mux.HandleFunc("/api/v1/backups/bulk/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		backupHandler.HandleGetBulkOperationStatus(w, r)
+	})
+
 	mux.HandleFunc("/api/v1/backups/bulk-runs/latest", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")

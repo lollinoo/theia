@@ -479,7 +479,7 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 			TargetDeviceID: uuid.New(),
 			TargetIfName:   "ether9",
 		}}),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -575,7 +575,7 @@ func TestPipelineOrchestratorPerformanceTaskCompletionUsesWallClockFinish(t *tes
 		sched,
 		state.NewStore(),
 		newPipelineTestCache([]domain.Device{task.Device}, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		performance,
 		newOperationalTestCollector(t),
@@ -639,7 +639,7 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 		sched,
 		store,
 		nil,
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -766,7 +766,7 @@ func TestPipelineOrchestratorBootstrapTaskUsesBootstrapLaneAndPersistsTopology(t
 		sched,
 		store,
 		nil,
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		nil,
 		nil,
@@ -915,7 +915,7 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		newPipelineTestScheduler(),
 		state.NewStore(),
 		cache,
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -986,7 +986,7 @@ func TestPipelineOrchestratorWorkerCount_UsesVolatilityBudgets(t *testing.T) {
 		newPipelineTestScheduler(),
 		state.NewStore(),
 		nil,
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -1010,7 +1010,7 @@ func TestPipelineOrchestratorStatusReflectsLifecycle(t *testing.T) {
 		sched,
 		state.NewStore(),
 		newPipelineTestCache(nil, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -1048,7 +1048,7 @@ func TestPipelineOrchestratorStartReturnsErrAlreadyStarted(t *testing.T) {
 		sched,
 		state.NewStore(),
 		newPipelineTestCache(nil, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -1080,7 +1080,7 @@ func TestPipelineOrchestratorStopIsIdempotent(t *testing.T) {
 		sched,
 		state.NewStore(),
 		newPipelineTestCache(nil, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -1130,7 +1130,7 @@ func TestPipelineOrchestratorStartRollsBackStoreWhenSchedulerStartFails(t *testi
 		sched,
 		store,
 		newPipelineTestCache(nil, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		newOperationalTestCollector(t),
@@ -1199,7 +1199,7 @@ func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachabilit
 		sched,
 		store,
 		newPipelineTestCache([]domain.Device{task.Device}, nil),
-		ws.NewHub(),
+		ws.NewHub(ws.WithBroadcastRecorder()),
 		nil,
 		newPerformanceTestCollector(t),
 		operational,
@@ -1299,7 +1299,7 @@ func newBroadcastTestPipeline(t *testing.T) (*PipelineOrchestrator, *ws.Hub, *st
 		Timestamp:        time.Date(2026, 4, 13, 12, 0, 1, 0, time.UTC),
 	})
 
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	topologyNotify := make(chan struct{}, 4)
 	pipeline := NewPipelineOrchestrator(
 		newPipelineTestScheduler(),
@@ -1411,6 +1411,15 @@ type wsVersionedSnapshotDeltaMessage struct {
 		BaseVersion uint64              `json:"base_version"`
 		Version     uint64              `json:"version"`
 		Delta       *ws.SnapshotPayload `json:"delta"`
+	} `json:"payload"`
+}
+
+type wsVersionedRuntimeDeltaMessage struct {
+	Type    string `json:"type"`
+	Payload struct {
+		BaseVersion uint64                 `json:"base_version"`
+		Version     uint64                 `json:"version"`
+		Delta       ws.RuntimeDeltaPayload `json:"delta"`
 	} `json:"payload"`
 }
 
@@ -1745,6 +1754,25 @@ func TestPipelineOrchestratorBuildDirtyOverviewDelta_AlertOnlyChangeIncludesAler
 		}},
 	}
 
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	var requestedIDs []uuid.UUID
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		requestedIDs = append([]uuid.UUID(nil), ids...)
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
 	delta, requireFull, err := pipeline.buildDirtyOverviewDelta(nil, true)
 	if err != nil {
 		t.Fatalf("buildDirtyOverviewDelta returned error: %v", err)
@@ -1766,6 +1794,214 @@ func TestPipelineOrchestratorBuildDirtyOverviewDelta_AlertOnlyChangeIncludesAler
 	if deviceRuntime.FiringAlertCount != 1 {
 		t.Fatalf("FiringAlertCount = %d, want 1", deviceRuntime.FiringAlertCount)
 	}
+	if fullSnapshotCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 1 {
+		t.Fatalf("narrow state snapshot calls = %d, want 1", narrowSnapshotCalls)
+	}
+	assertUUIDSliceSetEqual(t, requestedIDs, map[uuid.UUID]struct{}{deviceID: {}})
+}
+
+func TestPipelineOrchestratorBuildDirtyOverviewDelta_AlertResolutionUsesNarrowStateSnapshotForPreviouslyAlertingDevice(t *testing.T) {
+	pipeline, _, store, _, deviceID := newBroadcastTestPipeline(t)
+
+	devices, err := pipeline.cache.GetDevices()
+	if err != nil {
+		t.Fatalf("GetDevices returned error: %v", err)
+	}
+	links, err := pipeline.cache.GetLinks()
+	if err != nil {
+		t.Fatalf("GetLinks returned error: %v", err)
+	}
+
+	firingAlerts := map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "HighCPU",
+			State:     "firing",
+		}},
+	}
+	firingSnapshot := buildPipelineSnapshot(devices, links, store.Snapshot(), firingAlerts, ws.PrometheusStatusPayload{})
+	pipeline.runtime.lastSnapshot = firingSnapshot
+	pipeline.runtime.prevHashes = computeSnapshotHashes(firingSnapshot)
+	pipeline.runtime.alerts = map[uuid.UUID][]domain.AlertState{}
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	var requestedIDs []uuid.UUID
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		requestedIDs = append([]uuid.UUID(nil), ids...)
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	delta, requireFull, err := pipeline.buildDirtyOverviewDelta(nil, true)
+	if err != nil {
+		t.Fatalf("buildDirtyOverviewDelta returned error: %v", err)
+	}
+	if requireFull {
+		t.Fatal("requireFull = true, want false")
+	}
+	if delta == nil {
+		t.Fatal("expected alert resolution dirty delta")
+	}
+
+	deviceRuntime, ok := delta.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected devices[%s] in alert resolution delta", deviceID)
+	}
+	if deviceRuntime.AlertStatus != string(domain.AlertStatusNormal) {
+		t.Fatalf("AlertStatus = %q, want %q", deviceRuntime.AlertStatus, domain.AlertStatusNormal)
+	}
+	if deviceRuntime.FiringAlertCount != 0 {
+		t.Fatalf("FiringAlertCount = %d, want 0", deviceRuntime.FiringAlertCount)
+	}
+	if fullSnapshotCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 1 {
+		t.Fatalf("narrow state snapshot calls = %d, want 1", narrowSnapshotCalls)
+	}
+	assertUUIDSliceSetEqual(t, requestedIDs, map[uuid.UUID]struct{}{deviceID: {}})
+}
+
+func TestPipelineOrchestratorBuildDirtyOverviewDelta_AlertResolutionRebuildsMissingHashesFromPreviousSnapshot(t *testing.T) {
+	pipeline, _, store, _, deviceID := newBroadcastTestPipeline(t)
+
+	devices, err := pipeline.cache.GetDevices()
+	if err != nil {
+		t.Fatalf("GetDevices returned error: %v", err)
+	}
+	links, err := pipeline.cache.GetLinks()
+	if err != nil {
+		t.Fatalf("GetLinks returned error: %v", err)
+	}
+
+	firingAlerts := map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "HighCPU",
+			State:     "firing",
+		}},
+	}
+	firingSnapshot := buildPipelineSnapshot(devices, links, store.Snapshot(), firingAlerts, ws.PrometheusStatusPayload{})
+	pipeline.runtime.lastSnapshot = firingSnapshot
+	pipeline.runtime.prevHashes = nil
+	pipeline.runtime.alerts = map[uuid.UUID][]domain.AlertState{}
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	var requestedIDs []uuid.UUID
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		requestedIDs = append([]uuid.UUID(nil), ids...)
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	delta, requireFull, err := pipeline.buildDirtyOverviewDelta(nil, true)
+	if err != nil {
+		t.Fatalf("buildDirtyOverviewDelta returned error: %v", err)
+	}
+	if requireFull {
+		t.Fatal("requireFull = true, want false")
+	}
+	if delta == nil {
+		t.Fatal("expected alert resolution dirty delta")
+	}
+
+	deviceRuntime, ok := delta.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected devices[%s] in alert resolution delta", deviceID)
+	}
+	if deviceRuntime.AlertStatus != string(domain.AlertStatusNormal) {
+		t.Fatalf("AlertStatus = %q, want %q", deviceRuntime.AlertStatus, domain.AlertStatusNormal)
+	}
+	if deviceRuntime.FiringAlertCount != 0 {
+		t.Fatalf("FiringAlertCount = %d, want 0", deviceRuntime.FiringAlertCount)
+	}
+	if fullSnapshotCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 1 {
+		t.Fatalf("narrow state snapshot calls = %d, want 1", narrowSnapshotCalls)
+	}
+	assertUUIDSliceSetEqual(t, requestedIDs, map[uuid.UUID]struct{}{deviceID: {}})
+}
+
+func TestPipelineOrchestratorBuildDirtyOverviewDelta_UsesNarrowStateSnapshotForDeviceOnlyChange(t *testing.T) {
+	pipeline, _, _, _, deviceID := newBroadcastTestPipeline(t)
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	var requestedIDs []uuid.UUID
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		requestedIDs = append([]uuid.UUID(nil), ids...)
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	delta, requireFull, err := pipeline.buildDirtyOverviewDelta(map[uuid.UUID]struct{}{deviceID: {}}, false)
+	if err != nil {
+		t.Fatalf("buildDirtyOverviewDelta returned error: %v", err)
+	}
+	if requireFull {
+		t.Fatal("requireFull = true, want false")
+	}
+	if delta == nil {
+		t.Fatal("expected dirty overview delta")
+	}
+	if fullSnapshotCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 1 {
+		t.Fatalf("narrow state snapshot calls = %d, want 1", narrowSnapshotCalls)
+	}
+
+	links, err := pipeline.cache.GetLinks()
+	if err != nil {
+		t.Fatalf("GetLinks returned error: %v", err)
+	}
+	wantIDs := map[uuid.UUID]struct{}{deviceID: {}}
+	for _, link := range links {
+		if link.SourceDeviceID == deviceID || link.TargetDeviceID == deviceID {
+			wantIDs[link.SourceDeviceID] = struct{}{}
+			wantIDs[link.TargetDeviceID] = struct{}{}
+		}
+	}
+	assertUUIDSliceSetEqual(t, requestedIDs, wantIDs)
 }
 
 func TestPipelineOrchestratorBuildDirtyOverviewDelta_PreservesPeerContextForLinks(t *testing.T) {
@@ -2012,6 +2248,220 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshBroadcastsAlertMessage(t 
 	}
 }
 
+func TestPipelineOrchestratorBroadcastDirty_AlertResolutionWithoutRuntimeBaseUsesNarrowPatch(t *testing.T) {
+	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+			Summary:   "device down",
+		}},
+	})
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = nil
+	pipeline.runtime.prevHashes = nil
+	pipeline.runtime.mu.Unlock()
+	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{})
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	var requestedIDs []uuid.UUID
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		requestedIDs = append([]uuid.UUID(nil), ids...)
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), nil, true, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	messages := drainBroadcastCh(hub)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) != 2 || types[0] != ws.MessageTypeRuntimeDelta || types[1] != ws.MessageTypeAlert {
+		t.Fatalf("expected alert resolution to broadcast runtime_delta then alert, got %v", types)
+	}
+
+	var deltaMessage wsVersionedRuntimeDeltaMessage
+	if err := json.Unmarshal(messages[0], &deltaMessage); err != nil {
+		t.Fatalf("decode alert resolution delta: %v", err)
+	}
+	deviceRuntime, ok := deltaMessage.Payload.Delta.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected alert resolution delta for device %s", deviceID)
+	}
+	if got, ok := deviceRuntime["alert_status"]; !ok || got != string(domain.AlertStatusNormal) {
+		t.Fatalf("alert_status patch = %#v, want %q", deviceRuntime["alert_status"], domain.AlertStatusNormal)
+	}
+	if got, ok := deviceRuntime["firing_alert_count"]; !ok || got != float64(0) {
+		t.Fatalf("firing_alert_count patch = %#v, want explicit 0", deviceRuntime["firing_alert_count"])
+	}
+	if fullSnapshotCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 1 {
+		t.Fatalf("narrow state snapshot calls = %d, want 1", narrowSnapshotCalls)
+	}
+	assertUUIDSliceSetEqual(t, requestedIDs, map[uuid.UUID]struct{}{deviceID: {}})
+}
+
+func TestPipelineOrchestratorBroadcastDirty_DeviceOnlyWithoutRuntimeBaseFallsBackToFullSnapshot(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+	peerID := uuid.New()
+	pipeline.cache = newPipelineTestCache([]domain.Device{
+		{
+			ID:            deviceID,
+			IP:            "192.0.2.40",
+			Status:        domain.DeviceStatusProbing,
+			SysName:       "dist-sw-1",
+			HardwareModel: "CRS328-24P-4S+",
+			Interfaces:    []domain.Interface{{IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000}},
+		},
+		{
+			ID:            peerID,
+			IP:            "192.0.2.41",
+			Status:        domain.DeviceStatusProbing,
+			SysName:       "edge-sw-1",
+			HardwareModel: "CRS326-24G-2S+",
+			Interfaces:    []domain.Interface{{IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000}},
+		},
+	}, nil)
+	store.Update(state.StateUpdate{
+		DeviceID:        peerID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    peerID,
+			CPUPercent:  floatPtr(18),
+			CollectedAt: time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC),
+	})
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = nil
+	pipeline.runtime.prevHashes = nil
+	pipeline.runtime.mu.Unlock()
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	messages := drainBroadcastCh(hub)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) != 1 || types[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected dirty device without runtime base to broadcast full snapshot, got %v", types)
+	}
+
+	var snapshotMessage wsVersionedSnapshotMessage
+	if err := json.Unmarshal(messages[0], &snapshotMessage); err != nil {
+		t.Fatalf("decode dirty-device fallback snapshot: %v", err)
+	}
+	if snapshotMessage.Payload.Snapshot == nil {
+		t.Fatal("expected fallback snapshot payload")
+	}
+	if _, ok := snapshotMessage.Payload.Snapshot.Devices[deviceID.String()]; !ok {
+		t.Fatalf("expected fallback snapshot to include dirty device %s", deviceID)
+	}
+	if _, ok := snapshotMessage.Payload.Snapshot.Devices[peerID.String()]; !ok {
+		t.Fatalf("expected fallback snapshot to include non-dirty peer device %s", peerID)
+	}
+	if len(snapshotMessage.Payload.Snapshot.Devices) != 2 {
+		t.Fatalf("fallback snapshot device count = %d, want 2", len(snapshotMessage.Payload.Snapshot.Devices))
+	}
+	if fullSnapshotCalls != 1 {
+		t.Fatalf("full state snapshot calls = %d, want 1", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", narrowSnapshotCalls)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_DeviceAndAlertWithoutRuntimeBaseFallsBackToFullSnapshotAndAlert(t *testing.T) {
+	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+			Summary:   "device down",
+		}},
+	})
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = nil
+	pipeline.runtime.prevHashes = nil
+	pipeline.runtime.mu.Unlock()
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, true, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	messages := drainBroadcastCh(hub)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) != 2 || types[0] != ws.MessageTypeSnapshot || types[1] != ws.MessageTypeAlert {
+		t.Fatalf("expected dirty device and alert without runtime base to broadcast snapshot then alert, got %v", types)
+	}
+	if fullSnapshotCalls != 1 {
+		t.Fatalf("full state snapshot calls = %d, want 1", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", narrowSnapshotCalls)
+	}
+}
+
 func TestPipelineOrchestratorBroadcastLoop_DisabledFullResyncDoesNotSendSnapshot(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
@@ -2074,7 +2524,7 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 		TargetIfName:   "ether2",
 	}
 
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	store := state.NewStore()
 	pipeline := NewPipelineOrchestrator(
 		newPipelineTestScheduler(),
@@ -2256,7 +2706,7 @@ func TestPipelineOrchestratorBroadcastDirtyRecordsFullSnapshotReasons(t *testing
 	})
 }
 
-func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredThenSnapshot(t *testing.T) {
+func TestPipelineOrchestratorBroadcastDirty_DuplicateStateBurstBroadcastsRuntimeDelta(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
 	pipeline.broadcaster.broadcastOnce(context.Background())
@@ -2285,59 +2735,42 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowTriggersResyncRequiredT
 
 	messages := drainBroadcastCh(hub)
 	types := broadcastMessageTypes(t, messages)
-	if len(types) < 2 {
-		t.Fatalf("expected resync_required and snapshot, got %v", types)
-	}
-	if types[0] != ws.MessageTypeResyncRequired || types[1] != ws.MessageTypeSnapshot {
-		t.Fatalf("expected resync_required before snapshot, got %v", types)
-	}
-
-	var message struct {
-		Type    string                   `json:"type"`
-		Payload ws.ResyncRequiredPayload `json:"payload"`
-	}
-	if err := json.Unmarshal(messages[0], &message); err != nil {
-		t.Fatalf("decode resync_required message: %v", err)
-	}
-	if message.Payload.Scope != ws.ResyncScopeOverview {
-		t.Fatalf("resync scope = %q, want %q", message.Payload.Scope, ws.ResyncScopeOverview)
-	}
-	if message.Payload.Reason != ws.ResyncReasonStateChangesDrop {
-		t.Fatalf("resync reason = %q, want %q", message.Payload.Reason, ws.ResyncReasonStateChangesDrop)
+	if len(types) != 1 || types[0] != ws.MessageTypeRuntimeDelta {
+		t.Fatalf("expected duplicate state burst to broadcast runtime_delta, got %v", types)
 	}
 }
 
-func TestPipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay(t *testing.T) {
+func TestPipelineDuplicateStateBurstSequenceStaysStableAcrossReplay(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
 	pipeline.broadcaster.broadcastOnce(context.Background())
 	drainBroadcastCh(hub)
 
-	first := forcePipelineOverviewOverflow(t, pipeline, store, deviceID, 12, time.Date(2026, 4, 18, 12, 20, 0, 0, time.UTC))
-	second := forcePipelineOverviewOverflow(t, pipeline, store, deviceID, 12, time.Date(2026, 4, 18, 12, 21, 0, 0, time.UTC))
+	first := forcePipelineDuplicateStateBurst(t, pipeline, store, deviceID, 12, time.Date(2026, 4, 18, 12, 20, 0, 0, time.UTC))
+	second := forcePipelineDuplicateStateBurst(t, pipeline, store, deviceID, 12, time.Date(2026, 4, 18, 12, 21, 0, 0, time.UTC))
 
-	if len(first) < 2 {
-		t.Fatalf("first overflow sequence too short: %v", first)
+	if len(first) != 1 {
+		t.Fatalf("first duplicate-burst sequence = %v, want [runtime_delta]", first)
 	}
-	if len(second) < 2 {
-		t.Fatalf("second overflow sequence too short: %v", second)
+	if len(second) != 1 {
+		t.Fatalf("second duplicate-burst sequence = %v, want [runtime_delta]", second)
 	}
-	if first[0] != ws.MessageTypeResyncRequired || first[1] != ws.MessageTypeSnapshot {
-		t.Fatalf("first overflow ordering = %v, want [resync_required snapshot ...]", first)
+	if first[0] != ws.MessageTypeRuntimeDelta {
+		t.Fatalf("first duplicate-burst ordering = %v, want [runtime_delta]", first)
 	}
-	if second[0] != ws.MessageTypeResyncRequired || second[1] != ws.MessageTypeSnapshot {
-		t.Fatalf("second overflow ordering = %v, want [resync_required snapshot ...]", second)
+	if second[0] != ws.MessageTypeRuntimeDelta {
+		t.Fatalf("second duplicate-burst ordering = %v, want [runtime_delta]", second)
 	}
-	if first[0] != second[0] || first[1] != second[1] {
-		t.Fatalf("overflow ordering changed across bursts: first=%v second=%v", first, second)
+	if first[0] != second[0] {
+		t.Fatalf("duplicate-burst ordering changed across bursts: first=%v second=%v", first, second)
 	}
 }
 
-func forcePipelineOverviewOverflow(t *testing.T, pipeline *PipelineOrchestrator, store *state.Store, deviceID uuid.UUID, updates int, startedAt time.Time) []string {
+func forcePipelineDuplicateStateBurst(t *testing.T, pipeline *PipelineOrchestrator, store *state.Store, deviceID uuid.UUID, updates int, startedAt time.Time) []string {
 	t.Helper()
 
-	// Overflow the state change mailbox without timing assumptions by issuing
-	// more updates than the buffered channel can hold before any consumer drains it.
+	// Issue more updates than the buffered channel can hold. Repeated updates
+	// for one device should coalesce to one dirty ID instead of forcing resync.
 	for i := 0; i < 32+updates; i++ {
 		cpu := float64(110 + i)
 		at := startedAt.Add(time.Duration(i) * time.Second)
@@ -2374,7 +2807,27 @@ func clearBufferedStateChanges(store *state.Store) {
 	}
 }
 
-func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreservesOrdering(t *testing.T) {
+func assertUUIDSliceSetEqual(t *testing.T, got []uuid.UUID, want map[uuid.UUID]struct{}) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("UUID set length = %d, want %d: got=%v want=%v", len(got), len(want), got, want)
+	}
+	seen := make(map[uuid.UUID]struct{}, len(got))
+	for _, id := range got {
+		if _, ok := want[id]; !ok {
+			t.Fatalf("unexpected UUID %s in set %v, want %v", id, got, want)
+		}
+		seen[id] = struct{}{}
+	}
+	for id := range want {
+		if _, ok := seen[id]; !ok {
+			t.Fatalf("missing UUID %s from set %v", id, got)
+		}
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_DuplicateStateBurstWithTopologyDirtyInvalidatesTopology(t *testing.T) {
 	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
 
 	pipeline.broadcaster.broadcastOnce(context.Background())
@@ -2402,11 +2855,11 @@ func TestPipelineOrchestratorBroadcastDirty_StateOverflowWithTopologyDirtyPreser
 	}
 
 	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
-	if len(types) < 3 {
-		t.Fatalf("expected resync_required, snapshot, and topology_changed, got %v", types)
+	if len(types) != 1 {
+		t.Fatalf("expected topology_changed only for topology-dirty duplicate burst, got %v", types)
 	}
-	if types[0] != ws.MessageTypeResyncRequired || types[1] != ws.MessageTypeSnapshot || types[2] != ws.MessageTypeTopologyChanged {
-		t.Fatalf("expected resync_required before snapshot before topology_changed, got %v", types)
+	if types[0] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected topology_changed for topology-dirty duplicate burst, got %v", types)
 	}
 }
 
@@ -2477,7 +2930,7 @@ func TestPipelineOrchestratorPrometheusStatusOnlyBroadcastsOnTransition(t *testi
 }
 
 func TestPipelineOrchestratorRunTask_PerformancePollSendsOnlySelectedDeviceLinkMetricsToSubscribedClient(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
 	device.MetricsSource = domain.MetricsSourcePrometheus
@@ -2555,7 +3008,7 @@ func TestPipelineOrchestratorRunTask_PerformancePollSendsOnlySelectedDeviceLinkM
 func assertOperationalDetailDeltaKeepsPerformanceMetricTimestamp(t *testing.T) {
 	t.Helper()
 
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
 	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
@@ -2640,7 +3093,7 @@ func TestPipelineOrchestratorRunTask_OperationalPollSendsDetailDeltaToSubscribed
 }
 
 func TestPipelineOrchestratorRunTask_DetailDeltaDoesNotReachUnsubscribedClient(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
 	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
@@ -2683,7 +3136,7 @@ func TestPipelineOrchestratorRunTask_DetailDeltaDoesNotReachUnsubscribedClient(t
 }
 
 func TestPipelineOrchestratorPublishSubscribedDetailDeltaJSONIncludesDetailOnlyDeviceMetricFields(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
 	pipeline.cache, _ = attachDetailSubscriptionTopology(device)
@@ -2796,7 +3249,7 @@ func TestPipelineOrchestratorPublishSubscribedDetailDeltaJSONIncludesDetailOnlyD
 }
 
 func TestPipelineOrchestratorPublishSubscribedDetailDelta_UsesPrometheusStatusAndAlerts(t *testing.T) {
-	hub := ws.NewHub()
+	hub := ws.NewHub(ws.WithBroadcastRecorder())
 	pipeline := newDetailSubscriptionTestPipeline(t, hub)
 	device := newDetailSubscriptionTestDevice()
 	device.MetricsSource = domain.MetricsSourcePrometheus

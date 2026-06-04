@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelBulkBackupRun,
+  fetchBackupJob,
   fetchBulkBackupRun,
+  fetchBulkOperationStatus,
   fetchLatestBulkBackupRun,
   pauseBulkBackupRun,
   resumeBulkBackupRun,
@@ -10,9 +12,11 @@ import {
 } from '../../api/client';
 import { ServerError, ValidationError } from '../../api/errors';
 import type {
+  BackupJob,
   BulkBackupRun,
   BulkBackupRunItem,
   BulkBackupRunStatus,
+  BulkOperationStatus,
   Device,
 } from '../../types/api';
 
@@ -36,15 +40,52 @@ type DeviceEntry = {
   phase: DevicePhase;
   reason?: string;
   jobId?: string;
+  fileCount: number;
+  byteCount: number;
+};
+
+type BulkBackupReport = {
+  totalCount: number;
+  queuedCount: number;
+  runningCount: number;
+  completedCount: number;
+  successCount: number;
+  failedCount: number;
+  skippedCount: number;
+  stoppedCount: number;
+  fileCount: number;
+  byteCount: number;
+  currentDeviceName?: string;
+  currentJobId?: string;
 };
 
 type BulkBackupSession = {
   phase: 'idle' | 'running' | 'done';
   runId?: string;
   runStatus?: BulkBackupRunStatus;
+  startedBy?: string;
   entries: DeviceEntry[];
+  report?: BulkBackupReport;
   error: string;
   downloading: boolean;
+};
+
+type BulkDownloadCandidate = {
+  deviceId: string;
+  fileCount: number;
+  byteCount: number;
+  hasMetadata: boolean;
+};
+
+type BulkDownloadLimits = {
+  maxDevices: number;
+  maxFiles: number;
+  maxBytes: number;
+};
+
+type BulkDownloadBatchPlan = {
+  batches: string[][];
+  error?: string;
 };
 
 const BULK_BACKUP_GROUP_SIZE = 10;
@@ -111,12 +152,115 @@ function backupRequestErrorMessage(err: unknown): string {
         : msg;
 }
 
-function chunkArray<T>(items: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
+function positiveIntegerOrFallback(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) && value !== undefined && value > 0 ? Math.floor(value) : fallback;
+}
+
+function backupJobByteCount(job: BackupJob): number {
+  return job.files.reduce((sum, file) => {
+    return sum + (Number.isFinite(file.size_bytes) && file.size_bytes > 0 ? file.size_bytes : 0);
+  }, 0);
+}
+
+function formatByteCount(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatFileCount(count: number): string {
+  return `${count} file${count === 1 ? '' : 's'}`;
+}
+
+async function loadBulkDownloadCandidates(
+  entries: DeviceEntry[],
+): Promise<BulkDownloadCandidate[]> {
+  const successEntries = entries.filter((entry) => entry.phase === 'success');
+  return Promise.all(
+    successEntries.map(async (entry) => {
+      if (!entry.jobId) {
+        return {
+          deviceId: entry.deviceId,
+          fileCount: 0,
+          byteCount: 0,
+          hasMetadata: false,
+        };
+      }
+      try {
+        const job = await fetchBackupJob(entry.jobId);
+        return {
+          deviceId: entry.deviceId,
+          fileCount: job.files.length,
+          byteCount: backupJobByteCount(job),
+          hasMetadata: true,
+        };
+      } catch {
+        return {
+          deviceId: entry.deviceId,
+          fileCount: 0,
+          byteCount: 0,
+          hasMetadata: false,
+        };
+      }
+    }),
+  );
+}
+
+function planBulkDownloadBatches(
+  candidates: BulkDownloadCandidate[],
+  limits: BulkDownloadLimits,
+): BulkDownloadBatchPlan {
+  const batches: string[][] = [];
+  let currentBatch: string[] = [];
+  let currentFiles = 0;
+  let currentBytes = 0;
+
+  const flush = () => {
+    if (currentBatch.length === 0) return;
+    batches.push(currentBatch);
+    currentBatch = [];
+    currentFiles = 0;
+    currentBytes = 0;
+  };
+
+  for (const candidate of candidates) {
+    if (candidate.hasMetadata && limits.maxFiles > 0 && candidate.fileCount > limits.maxFiles) {
+      return {
+        batches: [],
+        error: `Too many backup files selected for bulk download. Maximum ${limits.maxFiles}, selected ${candidate.fileCount}.`,
+      };
+    }
+    if (candidate.hasMetadata && limits.maxBytes > 0 && candidate.byteCount > limits.maxBytes) {
+      return {
+        batches: [],
+        error: `Bulk download is too large. Maximum ${limits.maxBytes} bytes, selected ${candidate.byteCount} bytes.`,
+      };
+    }
+
+    const exceedsDeviceLimit = limits.maxDevices > 0 && currentBatch.length + 1 > limits.maxDevices;
+    const exceedsFileLimit =
+      candidate.hasMetadata &&
+      limits.maxFiles > 0 &&
+      currentFiles + candidate.fileCount > limits.maxFiles;
+    const exceedsByteLimit =
+      candidate.hasMetadata &&
+      limits.maxBytes > 0 &&
+      currentBytes + candidate.byteCount > limits.maxBytes;
+
+    if (currentBatch.length > 0 && (exceedsDeviceLimit || exceedsFileLimit || exceedsByteLimit)) {
+      flush();
+    }
+
+    currentBatch.push(candidate.deviceId);
+    if (candidate.hasMetadata) {
+      currentFiles += candidate.fileCount;
+      currentBytes += candidate.byteCount;
+    }
   }
-  return chunks;
+
+  flush();
+  return { batches };
 }
 
 function itemToEntry(item: BulkBackupRunItem): DeviceEntry {
@@ -126,15 +270,74 @@ function itemToEntry(item: BulkBackupRunItem): DeviceEntry {
     phase: item.status,
     reason: item.reason,
     jobId: item.backup_job_id,
+    fileCount: Number.isFinite(item.file_count) ? item.file_count : 0,
+    byteCount: Number.isFinite(item.byte_count) ? item.byte_count : 0,
+  };
+}
+
+function isRunningResource(entry: DeviceEntry): boolean {
+  return entry.phase === 'active' || entry.phase === 'running';
+}
+
+function reportFromEntries(entries: DeviceEntry[]): BulkBackupReport {
+  const runningEntry =
+    entries.find((entry) => entry.phase === 'running') ??
+    entries.find((entry) => entry.phase === 'active');
+  const successCount = entries.filter((entry) => entry.phase === 'success').length;
+  const failedCount = entries.filter((entry) => entry.phase === 'failed').length;
+  const skippedCount = entries.filter((entry) => entry.phase === 'skipped').length;
+  const stoppedCount = entries.filter((entry) => entry.phase === 'cancelled').length;
+  const completedCount = successCount + failedCount + skippedCount + stoppedCount;
+  const fileCount = entries.reduce((sum, entry) => sum + entry.fileCount, 0);
+  const byteCount = entries.reduce((sum, entry) => sum + entry.byteCount, 0);
+
+  return {
+    totalCount: entries.length,
+    queuedCount: entries.filter(isPendingControlDevice).length,
+    runningCount: entries.filter(isRunningResource).length,
+    completedCount,
+    successCount,
+    failedCount,
+    skippedCount,
+    stoppedCount,
+    fileCount,
+    byteCount,
+    currentDeviceName: runningEntry?.deviceName,
+    currentJobId: runningEntry?.jobId,
+  };
+}
+
+function reportFromRun(run: BulkBackupRun, entries: DeviceEntry[]): BulkBackupReport {
+  const entryReport = reportFromEntries(entries);
+  const runningCount = run.running_count || entryReport.runningCount;
+  const completedCount =
+    run.completed_count ||
+    run.success_count + run.failed_count + run.skipped_count + run.cancelled_count;
+  return {
+    totalCount: run.total_count || entryReport.totalCount,
+    queuedCount: Math.max(entryReport.queuedCount, run.queued_count - runningCount),
+    runningCount,
+    completedCount,
+    successCount: run.success_count,
+    failedCount: run.failed_count,
+    skippedCount: run.skipped_count,
+    stoppedCount: run.cancelled_count,
+    fileCount: run.file_count || entryReport.fileCount,
+    byteCount: run.byte_count || entryReport.byteCount,
+    currentDeviceName: run.current_device_name || entryReport.currentDeviceName,
+    currentJobId: run.current_job_id || entryReport.currentJobId,
   };
 }
 
 function sessionFromRun(run: BulkBackupRun): BulkBackupSession {
+  const entries = run.items.map(itemToEntry);
   return {
     phase: RUN_TERMINAL.has(run.status) ? 'done' : 'running',
     runId: run.id,
     runStatus: run.status,
-    entries: run.items.map(itemToEntry),
+    startedBy: run.created_by || undefined,
+    entries,
+    report: reportFromRun(run, entries),
     error: run.error_message,
     downloading: bulkBackupSession.downloading,
   };
@@ -252,6 +455,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<string>>(
     () => new Set(devices.map((d) => d.id)),
   );
+  const [bulkOperationStatus, setBulkOperationStatus] = useState<BulkOperationStatus | null>(null);
   const [controlBusy, setControlBusy] = useState<'pause' | 'resume' | 'stop' | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const entriesRef = useRef<DeviceEntry[]>([]);
@@ -312,6 +516,20 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   }, [startPolling]);
 
   useEffect(() => {
+    let active = true;
+    void fetchBulkOperationStatus()
+      .then((status) => {
+        if (active) {
+          setBulkOperationStatus(status);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     entriesRef.current = entries;
     runIdRef.current = session.runId;
   }, [entries, session.runId]);
@@ -350,6 +568,10 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
 
   const selectedDevices = devices.filter((device) => selectedDeviceIds.has(device.id));
   const selectedCount = selectedDeviceIds.size;
+  const bulkBackupMaxDeviceCount = positiveIntegerOrFallback(
+    bulkOperationStatus?.bulk_backup_run.max_devices,
+    0,
+  );
 
   const setAllDevicesSelected = () => {
     setSelectedDeviceIds(new Set(devices.map((device) => device.id)));
@@ -382,17 +604,27 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       }));
       return;
     }
+    if (bulkBackupMaxDeviceCount > 0 && selectedDevices.length > bulkBackupMaxDeviceCount) {
+      setBulkBackupSession((current) => ({
+        ...current,
+        error: `Too many devices selected for bulk backup. Maximum ${bulkBackupMaxDeviceCount}, selected ${selectedDevices.length}.`,
+      }));
+      return;
+    }
     const preliminaryEntries: DeviceEntry[] = selectedDevices.map((device) => {
       return {
         deviceId: device.id,
         deviceName: getDeviceName(device),
         phase: 'checking' as const,
+        fileCount: 0,
+        byteCount: 0,
       };
     });
     entriesRef.current = preliminaryEntries;
     setBulkBackupSession({
       phase: 'running',
       entries: preliminaryEntries,
+      report: reportFromEntries(preliminaryEntries),
       error: '',
       downloading: false,
     });
@@ -417,17 +649,41 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     }
   };
 
-  const successCount = entries.filter((e) => e.phase === 'success').length;
-  const failedCount = entries.filter((e) => e.phase === 'failed').length;
-  const skippedCount = entries.filter((e) => e.phase === 'skipped').length;
-  const stoppedCount = entries.filter((e) => e.phase === 'cancelled').length;
-  const doneCount = entries.filter((e) => TERMINAL.has(e.phase)).length;
-  const activeCount = entries.length - doneCount;
-  const downloadBatchCount = Math.ceil(successCount / BULK_DEVICE_BATCH_SIZE);
+  const report = session.report ?? reportFromEntries(entries);
+  const successCount = report.successCount;
+  const failedCount = report.failedCount;
+  const skippedCount = report.skippedCount;
+  const stoppedCount = report.stoppedCount;
+  const doneCount = report.completedCount;
+  const activeCount = Math.max(report.totalCount - report.completedCount, 0);
+  const downloadableSuccessCount = entries.filter((e) => e.phase === 'success').length;
+  const bulkBackupGroupSize = positiveIntegerOrFallback(
+    bulkOperationStatus?.bulk_backup_run.batch_size,
+    BULK_BACKUP_GROUP_SIZE,
+  );
+  const bulkDownloadBatchSize = positiveIntegerOrFallback(
+    bulkOperationStatus?.bulk_download.max_devices,
+    BULK_DEVICE_BATCH_SIZE,
+  );
+  const bulkDownloadMaxFiles = positiveIntegerOrFallback(
+    bulkOperationStatus?.bulk_download.max_files,
+    0,
+  );
+  const bulkDownloadMaxBytes = positiveIntegerOrFallback(
+    bulkOperationStatus?.bulk_download.max_bytes,
+    0,
+  );
+  const downloadBatchCount = Math.ceil(downloadableSuccessCount / bulkDownloadBatchSize);
   const controlSummary = controlProgressSummary(entries, session.runStatus);
-  const canPause = phase === 'running' && session.runId && session.runStatus === 'running';
-  const canResume = phase === 'running' && session.runId && session.runStatus === 'paused';
+  const pauseSupported = bulkOperationStatus?.bulk_backup_run.can_pause !== false;
+  const resumeSupported = bulkOperationStatus?.bulk_backup_run.can_resume !== false;
+  const cancelSupported = bulkOperationStatus?.bulk_backup_run.can_cancel !== false;
+  const canPause =
+    pauseSupported && phase === 'running' && session.runId && session.runStatus === 'running';
+  const canResume =
+    resumeSupported && phase === 'running' && session.runId && session.runStatus === 'paused';
   const canStop =
+    cancelSupported &&
     phase === 'running' &&
     session.runId &&
     (session.runStatus === 'running' ||
@@ -487,8 +743,16 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const handleDownloadZip = async () => {
     setBulkBackupSession((current) => ({ ...current, downloading: true, error: '' }));
     try {
-      const ids = entries.filter((e) => e.phase === 'success').map((e) => e.deviceId);
-      const batches = chunkArray(ids, BULK_DEVICE_BATCH_SIZE);
+      const candidates = await loadBulkDownloadCandidates(entries);
+      const { batches, error } = planBulkDownloadBatches(candidates, {
+        maxDevices: bulkDownloadBatchSize,
+        maxFiles: bulkDownloadMaxFiles,
+        maxBytes: bulkDownloadMaxBytes,
+      });
+      if (error) {
+        setBulkBackupSession((current) => ({ ...current, error }));
+        return;
+      }
       for (let index = 0; index < batches.length; index++) {
         const result = await triggerBulkDownload(batches[index], {
           filename:
@@ -516,7 +780,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
         {phase === 'idle' && (
           <>
             {' '}
-            · {selectedCount} selected · groups of {BULK_BACKUP_GROUP_SIZE}
+            · {selectedCount} selected · groups of {bulkBackupGroupSize}
           </>
         )}
       </div>
@@ -588,7 +852,7 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
           <div className="flex items-center justify-between text-xs text-on-bg-secondary">
             <span>
               {phase === 'running'
-                ? `Processing... ${doneCount}/${entries.length}`
+                ? `Processing... ${doneCount}/${report.totalCount}`
                 : `Complete — ${successCount} succeeded, ${failedCount} failed, ${skippedCount} skipped${
                     stoppedCount > 0 ? `, ${stoppedCount} stopped` : ''
                   }`}
@@ -603,6 +867,28 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
               >
                 {runStatusLabel(session.runStatus)}
               </span>
+            )}
+          </div>
+          <div className="rounded-md border border-outline bg-surface px-3 py-2 text-xs text-on-bg-secondary">
+            <div>
+              Queued {report.queuedCount} · Running {report.runningCount} · Completed{' '}
+              {report.completedCount} · Failed {report.failedCount} · Skipped {report.skippedCount}
+            </div>
+            {(report.fileCount > 0 || report.byteCount > 0) && (
+              <div className="mt-1 text-[10px] text-on-bg">
+                Files {report.fileCount} · {formatByteCount(report.byteCount)}
+              </div>
+            )}
+            {session.startedBy && (
+              <div className="mt-1 truncate text-[10px] text-on-bg">
+                Started by {session.startedBy}
+              </div>
+            )}
+            {report.currentDeviceName && (
+              <div className="mt-1 truncate text-[10px] text-on-bg">
+                Current {report.currentDeviceName}
+                {report.currentJobId ? ` · job ${report.currentJobId}` : ''}
+              </div>
             )}
           </div>
           {phase === 'running' && controlSummary && (
@@ -660,7 +946,9 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
               className={`h-full transition-all duration-300 ${
                 failedCount > 0 && successCount === 0 ? 'bg-status-down' : 'bg-primary'
               }`}
-              style={{ width: `${entries.length > 0 ? (doneCount / entries.length) * 100 : 0}%` }}
+              style={{
+                width: `${report.totalCount > 0 ? (doneCount / report.totalCount) * 100 : 0}%`,
+              }}
             />
           </div>
 
@@ -693,6 +981,11 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
                         {e.reason}
                       </span>
                     )}
+                    {e.fileCount > 0 && (
+                      <span className="text-[9px] text-on-bg-secondary">
+                        {formatFileCount(e.fileCount)} · {formatByteCount(e.byteCount)}
+                      </span>
+                    )}
                     <span
                       className={`text-[10px] font-medium ${deviceStatusClassName(
                         e,
@@ -710,11 +1003,11 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       )}
 
       {/* Done: download */}
-      {phase === 'done' && successCount > 0 && (
+      {phase === 'done' && downloadableSuccessCount > 0 && (
         <div className="space-y-2">
           <p className="text-xs text-on-bg-secondary">
             {downloadBatchCount > 1
-              ? `Downloads will be split into ${downloadBatchCount} ZIP files of up to ${BULK_DEVICE_BATCH_SIZE} devices each.`
+              ? `Downloads will be split into ${downloadBatchCount} ZIP files of up to ${bulkDownloadBatchSize} devices each.`
               : "Download files individually from each device's backup history, or download all as a zip."}
           </p>
           <button

@@ -33,6 +33,10 @@ volumes:
   theia-prod-postgres-data:
     name: theia-prod-postgres-data
 
+secrets:
+  theia_metrics_token:
+    environment: THEIA_METRICS_TOKEN
+
 services:
   # ---------------------------------------------------------------------------
   # Backend -- Go API server (pulled from GHCR)
@@ -114,7 +118,8 @@ services:
     profiles: ["metrics"]
     container_name: theia-snmp-exporter
     restart: unless-stopped
-    network_mode: host
+    networks:
+      - theia-net
     volumes:
       - "./docker/prometheus/snmp.yml:/etc/snmp_exporter/snmp.yml:ro"
     healthcheck:
@@ -129,17 +134,28 @@ services:
     profiles: ["metrics"]
     container_name: theia-prometheus
     restart: unless-stopped
-    network_mode: host
+    networks:
+      - theia-net
+    ports:
+      - "${PROMETHEUS_BIND_ADDR:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
+    secrets:
+      - theia_metrics_token
+    entrypoint:
+      - /bin/sh
+      - -c
     volumes:
       - "./docker/prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro"
       - "./docker/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro"
       - prometheus-data:/prometheus
     command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=30d"
-      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
-      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - |
+        sed "s/backend:8080/backend:${BACKEND_PORT:-8080}/g" /etc/prometheus/prometheus.yml > /tmp/prometheus.yml
+        exec /bin/prometheus \
+          --config.file=/tmp/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=30d \
+          --web.console.libraries=/usr/share/prometheus/console_libraries \
+          --web.console.templates=/usr/share/prometheus/consoles
     depends_on:
       snmp-exporter:
         condition: service_healthy

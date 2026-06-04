@@ -264,7 +264,6 @@ func TestCanvasTopologyHandlerTopologyVersionIgnoresVolatileRuntimeFields(t *tes
 	updatedSource.TopologyBootstrapState = domain.TopologyBootstrapStateCompleted
 	updatedSource.LastTopologyDiscoveryAt = &updatedDiscoveryAt
 	updatedSource.LastTopologyDiscoveryResult = "no new neighbors"
-	updatedSource.Interfaces[0].OperStatus = "down"
 	if err := deviceRepo.Update(updatedSource); err != nil {
 		t.Fatalf("update source device: %v", err)
 	}
@@ -279,6 +278,166 @@ func TestCanvasTopologyHandlerTopologyVersionIgnoresVolatileRuntimeFields(t *tes
 
 	if first.TopologyVersion != second.TopologyVersion {
 		t.Fatalf("topology version changed for volatile runtime fields: first=%s second=%s", first.TopologyVersion, second.TopologyVersion)
+	}
+}
+
+func TestCanvasTopologyHandlerTopologyVersionChangesForRenderedLinkOperStatus(t *testing.T) {
+	handler, deviceRepo, linkRepo, positionRepo, areaRepo := newTestCanvasTopologyHandler(t)
+
+	sourceID := uuid.New()
+	targetID := uuid.New()
+	linkID := uuid.New()
+	source := &domain.Device{
+		ID:         sourceID,
+		Hostname:   "router-01",
+		IP:         "10.0.0.1",
+		DeviceType: domain.DeviceTypeRouter,
+		Status:     domain.DeviceStatusUp,
+		SysName:    "router-01",
+		Vendor:     "default",
+		Managed:    true,
+		Tags:       map[string]string{},
+		Interfaces: []domain.Interface{
+			{IfName: "ether1", Speed: 1000000000, OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(source); err != nil {
+		t.Fatalf("seed source device: %v", err)
+	}
+	target := &domain.Device{
+		ID:         targetID,
+		Hostname:   "router-02",
+		IP:         "10.0.0.2",
+		DeviceType: domain.DeviceTypeRouter,
+		Status:     domain.DeviceStatusUp,
+		SysName:    "router-02",
+		Vendor:     "default",
+		Managed:    true,
+		Tags:       map[string]string{},
+		Interfaces: []domain.Interface{
+			{IfName: "ether2", Speed: 100000000, OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(target); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+	if err := linkRepo.Create(&domain.Link{
+		ID:                linkID,
+		SourceDeviceID:    sourceID,
+		SourceIfName:      "ether1",
+		TargetDeviceID:    targetID,
+		TargetIfName:      "ether2",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+
+	first := handler.buildResponse(
+		mustGetAllDevices(t, deviceRepo),
+		mustGetAllLinks(t, linkRepo),
+		positionRepo.positions,
+		mustGetAllAreas(t, areaRepo),
+	)
+
+	updatedSource, err := deviceRepo.GetByID(sourceID)
+	if err != nil {
+		t.Fatalf("load source device: %v", err)
+	}
+	updatedSource.Interfaces[0].OperStatus = "down"
+	if err := deviceRepo.Update(updatedSource); err != nil {
+		t.Fatalf("update source device: %v", err)
+	}
+	second := handler.buildResponse(
+		mustGetAllDevices(t, deviceRepo),
+		mustGetAllLinks(t, linkRepo),
+		positionRepo.positions,
+		mustGetAllAreas(t, areaRepo),
+	)
+
+	if first.TopologyVersion == second.TopologyVersion {
+		t.Fatalf("topology version did not change for rendered link oper status: %s", first.TopologyVersion)
+	}
+}
+
+func TestBuildCanvasMapTopologyVersionIgnoresRuntimeBootstrapFields(t *testing.T) {
+	runtimeVersionA := uint64(7)
+	runtimeVersionB := uint64(8)
+	deviceID := uuid.New().String()
+	mapID := uuid.New().String()
+
+	base := canvasTopologyResponse{
+		SchemaVersion:   2,
+		RuntimeVersion:  &runtimeVersionA,
+		RuntimeIdentity: "rt-sha256:old",
+		RuntimeSnapshot: &ws.SnapshotPayload{
+			Devices: map[string]ws.DeviceRuntimeDTO{
+				deviceID: {
+					DeviceID:          deviceID,
+					OperationalStatus: "up",
+				},
+			},
+		},
+		GeneratedAt: "2026-05-01T10:00:00Z",
+		Map: &canvasMapResponse{
+			ID:            mapID,
+			Name:          "Operations",
+			Description:   "Backbone map",
+			Filter:        domain.CanvasMapFilter{},
+			DeviceCount:   1,
+			PositionCount: 1,
+			CreatedAt:     "2026-05-01T09:00:00Z",
+			UpdatedAt:     "2026-05-01T09:00:00Z",
+		},
+		Devices: []jsonAPIResource{{
+			Type: "device",
+			ID:   deviceID,
+			Attributes: map[string]interface{}{
+				"hostname": "router-01",
+				"status":   "up",
+			},
+		}},
+		Positions: map[string]canvasPosition{
+			deviceID: {
+				DeviceID: deviceID,
+				X:        10,
+				Y:        20,
+				Pinned:   true,
+			},
+		},
+		Capabilities: canvasTopologyCapabilities{
+			SupportsTopologyDelta:    true,
+			SupportsPositionRevision: true,
+			SupportsAreaFiltering:    true,
+		},
+		Settings: canvasTopologyCanvasSettings{Layout: canvasTopologyLayoutSettings{Version: 1}},
+	}
+
+	withNewRuntime := base
+	withNewRuntime.RuntimeVersion = &runtimeVersionB
+	withNewRuntime.RuntimeIdentity = "rt-sha256:new"
+	withNewRuntime.RuntimeSnapshot = &ws.SnapshotPayload{
+		Devices: map[string]ws.DeviceRuntimeDTO{
+			deviceID: {
+				DeviceID:          deviceID,
+				OperationalStatus: "down",
+				PrimaryHealth:     "unreachable",
+				FiringAlertCount:  1,
+			},
+		},
+	}
+	withNewRuntime.GeneratedAt = "2026-05-01T10:01:00Z"
+
+	if got, want := buildCanvasMapTopologyVersion(withNewRuntime), buildCanvasMapTopologyVersion(base); got != want {
+		t.Fatalf("map topology version changed for runtime bootstrap fields: got %s want %s", got, want)
+	}
+
+	withStructuralChange := base
+	changedMap := *base.Map
+	changedMap.Name = "Operations - changed"
+	withStructuralChange.Map = &changedMap
+
+	if got, want := buildCanvasMapTopologyVersion(withStructuralChange), buildCanvasMapTopologyVersion(base); got == want {
+		t.Fatalf("map topology version did not change for structural map metadata: got %s", got)
 	}
 }
 

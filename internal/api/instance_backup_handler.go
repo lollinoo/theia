@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/service"
 )
 
@@ -254,6 +255,7 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	file, fileName, err := restoreUploadPart(r)
 	if err != nil {
 		if isRequestBodyTooLarge(err) {
+			recordInstanceRestoreRejection("compressed_size_limit")
 			writeError(w, http.StatusRequestEntityTooLarge, "restore upload exceeds maximum compressed size")
 			return
 		}
@@ -281,6 +283,7 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	written, err := copyRestoreUpload(tmpFile, file, compressedLimit)
 	if err != nil {
 		if isRequestBodyTooLarge(err) {
+			recordInstanceRestoreRejection("compressed_size_limit")
 			writeError(w, http.StatusRequestEntityTooLarge, "restore upload exceeds maximum compressed size")
 			return
 		}
@@ -288,6 +291,7 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if compressedLimit > 0 && written > compressedLimit {
+		recordInstanceRestoreRejection("compressed_size_limit")
 		writeError(w, http.StatusRequestEntityTooLarge, "restore upload exceeds maximum compressed size")
 		return
 	}
@@ -298,6 +302,7 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		var limitErr *service.RestoreLimitError
 		if errors.As(err, &limitErr) {
+			recordInstanceRestoreRejection("archive_quota_limit")
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
 		}
@@ -315,6 +320,10 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	if !dryRun && report.Valid {
 		go h.restarter()
 	}
+}
+
+func recordInstanceRestoreRejection(reason string) {
+	observability.Default().IncBulkOperationRejection("instance_restore", reason, "local")
 }
 
 func isRequestBodyTooLarge(err error) bool {

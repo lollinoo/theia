@@ -527,7 +527,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		})
 	}
 
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService))
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService), api.WithAuditLogRepository(authRepo))
 	metricsHandler := observability.Handler()
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{
@@ -577,11 +577,13 @@ func configureBackupServiceBulkOperationLimits(backupService *service.BackupServ
 		return
 	}
 	backupService.SetBulkOperationLimits(service.BulkOperationLimits{
-		BulkBackupMaxDevices:    cfg.BulkBackupLimits.MaxDevices,
-		BulkBackupMaxQueuedJobs: cfg.BulkBackupLimits.MaxQueuedJobs,
-		BulkDownloadMaxDevices:  cfg.BulkDownloadLimits.MaxDevices,
-		BulkDownloadMaxFiles:    cfg.BulkDownloadLimits.MaxFiles,
-		BulkDownloadMaxBytes:    cfg.BulkDownloadLimits.MaxBytes,
+		BulkBackupMaxDevices:              cfg.BulkBackupLimits.MaxDevices,
+		BulkBackupMaxQueuedJobs:           cfg.BulkBackupLimits.MaxQueuedJobs,
+		BulkDownloadMaxDevices:            cfg.BulkDownloadLimits.MaxDevices,
+		BulkDownloadMaxFiles:              cfg.BulkDownloadLimits.MaxFiles,
+		BulkDownloadMaxBytes:              cfg.BulkDownloadLimits.MaxBytes,
+		BulkDownloadMaxConcurrentPerActor: cfg.BulkDownloadLimits.MaxConcurrentPerActor,
+		BulkDownloadMaxConcurrentGlobal:   cfg.BulkDownloadLimits.MaxConcurrentGlobal,
 	})
 }
 

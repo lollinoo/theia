@@ -390,6 +390,74 @@ func TestStoreConsumeOverflowed_IsStickyUntilConsumed(t *testing.T) {
 	}
 }
 
+func TestStoreEmitChangesCoalescesDuplicateQueuedIDsWhenChannelFull(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	s := NewStore()
+	id := uuid.New()
+	for i := 0; i < cap(s.changes); i++ {
+		s.changes <- []uuid.UUID{id}
+	}
+
+	s.emitChanges([]uuid.UUID{id})
+
+	if s.ConsumeOverflowed() {
+		t.Fatal("duplicate-only coalescing should not mark overflowed")
+	}
+
+	select {
+	case batch := <-s.Changes():
+		if len(batch) != 1 || batch[0] != id {
+			t.Fatalf("coalesced batch = %v, want [%s]", batch, id)
+		}
+	default:
+		t.Fatal("expected coalesced state-change batch")
+	}
+	if len(s.changes) != 0 {
+		t.Fatalf("expected only one coalesced batch, found %d queued batches", len(s.changes)+1)
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if strings.Contains(metrics, `theia_state_changes_dropped_total`) &&
+		!strings.Contains(metrics, `theia_state_changes_dropped_total 0`) {
+		t.Fatalf("duplicate-only coalescing should not record dropped changes, got:\n%s", metrics)
+	}
+}
+
+func TestStoreEmitChangesKeepsOverflowWhenUniqueCoalescedIDsExceedCapacity(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	s := NewStore()
+	for i := 0; i < cap(s.changes); i++ {
+		s.changes <- []uuid.UUID{uuid.New()}
+	}
+
+	s.emitChanges([]uuid.UUID{uuid.New()})
+
+	if !s.ConsumeOverflowed() {
+		t.Fatal("expected overflow marker when unique coalesced IDs exceed capacity")
+	}
+	select {
+	case batch := <-s.Changes():
+		if len(batch) != cap(s.changes) {
+			t.Fatalf("coalesced unique batch length = %d, want %d", len(batch), cap(s.changes))
+		}
+	default:
+		t.Fatal("expected bounded coalesced state-change batch")
+	}
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_state_changes_dropped_total 1`) {
+		t.Fatalf("expected one dropped state change, got:\n%s", metrics)
+	}
+}
+
 func TestStoreUpdate_OperationalPollDoesNotOverwritePerformanceFreshnessMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -709,6 +777,75 @@ func TestStoreSnapshot_ClonesLinkMetrics(t *testing.T) {
 		t.Fatal("device missing from second GetDevice")
 	}
 	assertFloatPtrEqual(t, deviceAgain.LinkMetrics[0].RxBps, rx, "GetDevice LinkMetrics[0].RxBps")
+}
+
+func TestStoreSnapshotFor_ClonesOnlyRequestedDevices(t *testing.T) {
+	t.Parallel()
+
+	s := NewStore()
+	requestedID := uuid.New()
+	otherID := uuid.New()
+	unknownID := uuid.New()
+	cpu := 35.0
+	tx := 500.0
+	otherCPU := 90.0
+
+	s.mu.Lock()
+	s.devices[requestedID] = DeviceState{
+		Metrics: domain.DeviceMetrics{
+			DeviceID:   requestedID,
+			CPUPercent: &cpu,
+		},
+		LinkMetrics: []domain.LinkMetrics{{
+			DeviceID: requestedID,
+			IfName:   "ether1",
+			TxBps:    &tx,
+		}},
+		FieldStates: map[string]polling.FieldState{
+			"cpu": polling.FieldStateOK,
+		},
+		RuntimeFlags: map[polling.RuntimeFlag]bool{
+			polling.FlagDeadlineMissed: true,
+		},
+	}
+	s.devices[otherID] = DeviceState{
+		Metrics: domain.DeviceMetrics{
+			DeviceID:   otherID,
+			CPUPercent: &otherCPU,
+		},
+	}
+	s.mu.Unlock()
+
+	snap := s.SnapshotFor([]uuid.UUID{requestedID, unknownID, requestedID})
+	if len(snap) != 1 {
+		t.Fatalf("SnapshotFor returned %d device(s), want 1", len(snap))
+	}
+	if _, ok := snap[unknownID]; ok {
+		t.Fatalf("SnapshotFor included unknown device %s", unknownID)
+	}
+	if _, ok := snap[otherID]; ok {
+		t.Fatalf("SnapshotFor included unrequested device %s", otherID)
+	}
+
+	got, ok := snap[requestedID]
+	if !ok {
+		t.Fatalf("SnapshotFor missing requested device %s", requestedID)
+	}
+	*got.Metrics.CPUPercent = 99
+	*got.LinkMetrics[0].TxBps = 999
+	got.FieldStates["cpu"] = polling.FieldStateError
+	delete(got.RuntimeFlags, polling.FlagDeadlineMissed)
+
+	again := s.SnapshotFor([]uuid.UUID{requestedID, otherID})
+	assertFloatPtrEqual(t, again[requestedID].Metrics.CPUPercent, cpu, "SnapshotFor Metrics.CPUPercent")
+	assertFloatPtrEqual(t, again[requestedID].LinkMetrics[0].TxBps, tx, "SnapshotFor LinkMetrics[0].TxBps")
+	if again[requestedID].FieldStates["cpu"] != polling.FieldStateOK {
+		t.Fatalf("SnapshotFor mutation corrupted FieldStates: cpu = %q, want ok", again[requestedID].FieldStates["cpu"])
+	}
+	if !again[requestedID].RuntimeFlags[polling.FlagDeadlineMissed] {
+		t.Fatalf("SnapshotFor mutation corrupted RuntimeFlags: %#v", again[requestedID].RuntimeFlags)
+	}
+	assertFloatPtrEqual(t, again[otherID].Metrics.CPUPercent, otherCPU, "SnapshotFor other Metrics.CPUPercent")
 }
 
 func TestStoreUpdate_LinkMetricDiffTriggersChange(t *testing.T) {

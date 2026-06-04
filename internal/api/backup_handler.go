@@ -2,18 +2,22 @@ package api
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/service"
 )
 
@@ -22,15 +26,57 @@ import (
 // the download endpoint.
 const maxInlineBackupContentBytes int64 = 1 << 20
 
+const bulkOperationRetryAfterSeconds = 30
+
+var bulkDownloadDistributedInFlight = newBulkOperationInFlightTracker("bulk_download", "distributed")
+
 // BackupHandler provides HTTP handlers for SSH credentials and config backups.
 type BackupHandler struct {
-	svc          *service.BackupService
-	settingsRepo domain.SettingsRepository
+	svc                   *service.BackupService
+	settingsRepo          domain.SettingsRepository
+	auditLogs             domain.AuditLogRepository
+	bulkDownloadLimiter   *bulkOperationLimiter
+	bulkDownloadLeaseRepo domain.BulkOperationLeaseRepository
+}
+
+type BackupHandlerOption func(*BackupHandler)
+
+func WithBackupAuditLogs(auditLogs domain.AuditLogRepository) BackupHandlerOption {
+	return func(h *BackupHandler) {
+		h.auditLogs = auditLogs
+	}
+}
+
+func WithBulkDownloadLeaseRepository(repo domain.BulkOperationLeaseRepository) BackupHandlerOption {
+	return func(h *BackupHandler) {
+		h.bulkDownloadLeaseRepo = repo
+		if repo != nil {
+			recordBulkDownloadDistributedConcurrencyLimits(h.bulkOperationLimits())
+		}
+	}
 }
 
 // NewBackupHandler creates a new BackupHandler.
-func NewBackupHandler(svc *service.BackupService, settingsRepo domain.SettingsRepository) *BackupHandler {
-	return &BackupHandler{svc: svc, settingsRepo: settingsRepo}
+func NewBackupHandler(svc *service.BackupService, settingsRepo domain.SettingsRepository, opts ...BackupHandlerOption) *BackupHandler {
+	bulkLimits := service.DefaultBulkOperationLimits
+	if svc != nil {
+		bulkLimits = svc.BulkOperationLimits()
+	}
+	handler := &BackupHandler{
+		svc:          svc,
+		settingsRepo: settingsRepo,
+		bulkDownloadLimiter: newBulkOperationLimiter(
+			bulkLimits.BulkDownloadMaxConcurrentPerActor,
+			bulkLimits.BulkDownloadMaxConcurrentGlobal,
+		),
+	}
+	recordBulkDownloadConcurrencyLimits(bulkLimits)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(handler)
+		}
+	}
+	return handler
 }
 
 // HandleTestSSH handles POST /api/v1/devices/{id}/ssh-credentials/test
@@ -304,9 +350,14 @@ func (h *BackupHandler) HandleStartBulkBackupRun(w http.ResponseWriter, r *http.
 		deviceIDs = append(deviceIDs, parsed)
 	}
 
-	run, err := h.svc.StartBulkBackupRun(r.Context(), deviceIDs, "")
+	createdBy := ""
+	if subject := OperatorSubjectFromRequest(r); subject.Authenticated {
+		createdBy = subject.Name
+	}
+	run, err := h.svc.StartBulkBackupRun(r.Context(), deviceIDs, createdBy)
 	if err != nil {
 		if errors.Is(err, service.ErrBulkBackupRunAlreadyActive) {
+			observability.Default().IncBulkOperationRejection("bulk_backup_run", "active_run", "local")
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"code":  "bulk_backup_run_active",
@@ -316,6 +367,7 @@ func (h *BackupHandler) HandleStartBulkBackupRun(w http.ResponseWriter, r *http.
 			return
 		}
 		if service.IsBulkLimitError(err) {
+			observability.Default().IncBulkOperationRejection("bulk_backup_run", bulkLimitRejectionReason(err), "local")
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
 		}
@@ -323,8 +375,67 @@ func (h *BackupHandler) HandleStartBulkBackupRun(w http.ResponseWriter, r *http.
 		return
 	}
 
+	if err := h.auditBulkRunStarted(r, len(deviceIDs), run); err != nil {
+		log.Printf("backup: failed to append bulk run audit log: %v", err)
+	}
+
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
+}
+
+func (h *BackupHandler) HandleGetBulkOperationStatus(w http.ResponseWriter, r *http.Request) {
+	limits := service.DefaultBulkOperationLimits
+	batchSize := 10
+	legacyBackupDistributed := false
+	bulkBackupRunDistributed := false
+	if h.svc != nil {
+		limits = h.svc.BulkOperationLimits()
+		batchSize = h.svc.BulkBackupRunBatchSize()
+		legacyBackupDistributed = h.svc.BulkOperationLeaseRepositoryConfigured()
+		bulkBackupRunDistributed = h.svc.BulkBackupRunRepositoryConfigured()
+	}
+	bulkDownloadDistributed := h.bulkDownloadLeaseRepo != nil
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data": map[string]interface{}{
+			"bulk_backup": map[string]interface{}{
+				"max_devices":     limits.BulkBackupMaxDevices,
+				"max_queued_jobs": limits.BulkBackupMaxQueuedJobs,
+				"concurrency": map[string]interface{}{
+					"max_concurrent":             1,
+					"configurable":               false,
+					"distributed":                legacyBackupDistributed,
+					"distributed_max_concurrent": 1,
+				},
+				"legacy_endpoint": map[string]interface{}{
+					"path":       "/api/v1/backups/bulk",
+					"deprecated": true,
+				},
+			},
+			"bulk_backup_run": map[string]interface{}{
+				"max_devices":                 limits.BulkBackupMaxDevices,
+				"max_queued_jobs":             limits.BulkBackupMaxQueuedJobs,
+				"batch_size":                  batchSize,
+				"max_active_runs":             1,
+				"configurable_concurrency":    false,
+				"distributed":                 bulkBackupRunDistributed,
+				"distributed_max_active_runs": 1,
+				"can_pause":                   true,
+				"can_resume":                  true,
+				"can_cancel":                  true,
+			},
+			"bulk_download": map[string]interface{}{
+				"max_devices":                          limits.BulkDownloadMaxDevices,
+				"max_files":                            limits.BulkDownloadMaxFiles,
+				"max_bytes":                            limits.BulkDownloadMaxBytes,
+				"max_concurrent_per_actor":             limits.BulkDownloadMaxConcurrentPerActor,
+				"max_concurrent_global":                limits.BulkDownloadMaxConcurrentGlobal,
+				"distributed":                          bulkDownloadDistributed,
+				"distributed_max_concurrent_per_actor": 1,
+				"distributed_max_concurrent_global":    limits.BulkDownloadMaxConcurrentGlobal,
+			},
+		},
+	})
 }
 
 // HandleGetLatestBulkBackupRun handles GET /api/v1/backups/bulk-runs/latest.
@@ -450,7 +561,18 @@ func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request)
 
 	results, err := h.svc.TriggerBulkBackup(r.Context(), deviceIDs...)
 	if err != nil {
+		if errors.Is(err, service.ErrBulkBackupAlreadyActive) {
+			observability.Default().IncBulkOperationRejection("bulk_backup_legacy", "global_concurrency_limit", "local")
+			w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
+			writeError(w, http.StatusTooManyRequests, "bulk backup already in progress")
+			return
+		}
+		if errors.Is(err, service.ErrBulkOperationLimiterUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "bulk backup limiter unavailable")
+			return
+		}
 		if service.IsBulkLimitError(err) {
+			observability.Default().IncBulkOperationRejection("bulk_backup_legacy", bulkLimitRejectionReason(err), "local")
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
 		}
@@ -482,6 +604,7 @@ func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request)
 // Body: {"device_ids": ["uuid", ...]}
 // Returns a zip file containing the latest successful backup files for each device.
 func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
 	var req struct {
 		DeviceIDs []string `json:"device_ids"`
 	}
@@ -504,9 +627,49 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	actorKey := bulkDownloadActorKey(r)
+	if h.bulkDownloadLimiter != nil {
+		acquired, reason := h.bulkDownloadLimiter.TryAcquire(actorKey)
+		if !acquired {
+			if err := h.auditBulkDownloadRejected(r, len(deviceIDs), reason); err != nil {
+				log.Printf("backup: failed to append bulk download rejection audit log: %v", err)
+			}
+			w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
+			writeError(w, http.StatusTooManyRequests, "bulk download already in progress")
+			return
+		}
+		defer h.bulkDownloadLimiter.Release(actorKey)
+	}
+	if h.bulkDownloadLeaseRepo != nil {
+		lease, rejectionReason, err := h.acquireBulkDownloadDistributedLeases(r.Context(), actorKey)
+		if err != nil {
+			if auditErr := h.auditBulkDownloadRejected(r, len(deviceIDs), "distributed_limiter_unavailable"); auditErr != nil {
+				log.Printf("backup: failed to append bulk download rejection audit log: %v", auditErr)
+			}
+			writeError(w, http.StatusServiceUnavailable, "bulk download limiter unavailable")
+			return
+		}
+		if rejectionReason != "" {
+			if err := h.auditBulkDownloadRejected(r, len(deviceIDs), rejectionReason); err != nil {
+				log.Printf("backup: failed to append bulk download rejection audit log: %v", err)
+			}
+			w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
+			writeError(w, http.StatusTooManyRequests, "bulk download already in progress")
+			return
+		}
+		bulkDownloadDistributedInFlight.Acquire()
+		defer func() {
+			if err := lease.Release(); err != nil {
+				log.Printf("backup: failed to release bulk download lease: %v", err)
+			}
+			bulkDownloadDistributedInFlight.Release()
+		}()
+	}
+
 	entries, err := h.svc.GetBulkDownloadFiles(r.Context(), deviceIDs)
 	if err != nil {
 		if service.IsBulkLimitError(err) {
+			observability.Default().IncBulkOperationRejection("bulk_download", bulkLimitRejectionReason(err), "local")
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
 		}
@@ -521,6 +684,11 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "no backup files found for the given devices")
 		return
 	}
+	completionSource := h.bulkDownloadCompletionSource()
+	var totalBytes int64
+	for _, entry := range entries {
+		totalBytes += entry.SizeBytes
+	}
 
 	now := time.Now().UTC()
 	if tzName, err := h.settingsRepo.Get(domain.SettingTimezone); err == nil && tzName != "" {
@@ -531,9 +699,11 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 	zipName := now.Format("20060102_150405") + "_THEIA_BACKUPS.zip"
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
+	w.Header().Set("X-Bulk-Download-Device-Count", fmt.Sprint(bulkDownloadSelectedDeviceCount(entries)))
+	w.Header().Set("X-Bulk-Download-File-Count", fmt.Sprint(len(entries)))
+	w.Header().Set("X-Bulk-Download-Size-Bytes", fmt.Sprint(totalBytes))
 
 	zw := zip.NewWriter(w)
-	defer zw.Close()
 
 	zipErrors := writeBulkZipEntries(zw, entries, h.svc.OpenBulkDownloadEntry)
 	if len(zipErrors) > 0 {
@@ -541,8 +711,36 @@ func (h *BackupHandler) HandleBulkDownload(w http.ResponseWriter, r *http.Reques
 			for _, e := range zipErrors {
 				fmt.Fprintln(w, e)
 			}
+		} else {
+			zipErrors = append(zipErrors, fmt.Sprintf("_errors.txt: zip entry creation failed: %v", err))
 		}
 	}
+	if err := zw.Close(); err != nil {
+		zipErrors = append(zipErrors, fmt.Sprintf("zip close failed: %v", err))
+	}
+	result := "success"
+	if len(zipErrors) > 0 {
+		result = "partial"
+	}
+	observability.Default().ObserveBulkOperationCompletion(
+		"bulk_download",
+		completionSource,
+		result,
+		time.Since(startedAt),
+		bulkDownloadSelectedDeviceCount(entries),
+		len(entries),
+		totalBytes,
+	)
+	if err := h.auditBulkDownloadCompleted(r, len(deviceIDs), entries, totalBytes, len(zipErrors)); err != nil {
+		log.Printf("backup: failed to append bulk download audit log: %v", err)
+	}
+}
+
+func (h *BackupHandler) bulkDownloadCompletionSource() string {
+	if h != nil && h.bulkDownloadLeaseRepo != nil {
+		return "distributed"
+	}
+	return "local"
 }
 
 // writeBulkZipEntries writes backup file entries into a zip writer using
@@ -602,12 +800,376 @@ func writeBulkZipEntries(zw *zip.Writer, entries []service.BulkDownloadEntry, op
 	return zipErrors
 }
 
+func (h *BackupHandler) auditBulkDownloadCompleted(
+	r *http.Request,
+	requestedDeviceCount int,
+	entries []service.BulkDownloadEntry,
+	totalBytes int64,
+	streamErrorCount int,
+) error {
+	if h.auditLogs == nil {
+		return nil
+	}
+
+	metadata := map[string]interface{}{
+		"requested_device_count": requestedDeviceCount,
+		"selected_device_count":  bulkDownloadSelectedDeviceCount(entries),
+		"selected_file_count":    len(entries),
+		"selected_bytes":         totalBytes,
+		"stream_error_count":     streamErrorCount,
+		"partial":                streamErrorCount > 0,
+	}
+	return h.appendBackupAuditLog(
+		r,
+		"backup.bulk_download_completed",
+		"backup_bulk_download",
+		"bulk-download",
+		metadata,
+	)
+}
+
+func (h *BackupHandler) auditBulkDownloadRejected(r *http.Request, requestedDeviceCount int, reason string) error {
+	observability.Default().IncBulkOperationRejection("bulk_download", reason, bulkOperationRejectionSource(reason))
+	if h.auditLogs == nil {
+		return nil
+	}
+
+	metadata := map[string]interface{}{
+		"requested_device_count": requestedDeviceCount,
+		"reason":                 reason,
+		"retry_after_seconds":    bulkOperationRetryAfterSeconds,
+	}
+	if h.bulkDownloadLimiter != nil {
+		metadata["per_actor_limit"] = h.bulkDownloadLimiter.PerKeyLimit()
+		metadata["global_limit"] = h.bulkDownloadLimiter.GlobalLimit()
+	}
+	return h.appendBackupAuditLog(
+		r,
+		"backup.bulk_download_rejected",
+		"backup_bulk_download",
+		"bulk-download",
+		metadata,
+	)
+}
+
+func (h *BackupHandler) auditBulkRunStarted(r *http.Request, requestedDeviceCount int, run *domain.BulkBackupRun) error {
+	if h.auditLogs == nil || run == nil {
+		return nil
+	}
+
+	metadata := map[string]interface{}{
+		"requested_device_count": requestedDeviceCount,
+		"total_count":            run.TotalCount,
+		"queued_count":           run.QueuedCount,
+		"skipped_count":          run.SkippedCount,
+		"batch_size":             run.BatchSize,
+	}
+	return h.appendBackupAuditLog(
+		r,
+		"backup.bulk_run_started",
+		"backup_bulk_run",
+		run.ID.String(),
+		metadata,
+	)
+}
+
+func bulkOperationRejectionSource(reason string) string {
+	if strings.HasPrefix(reason, "distributed_") {
+		return "distributed"
+	}
+	return "local"
+}
+
+func bulkLimitRejectionReason(err error) string {
+	var limitErr *service.BulkLimitError
+	if !errors.As(err, &limitErr) || strings.TrimSpace(limitErr.Limit) == "" {
+		return "limit"
+	}
+	limit := strings.ToLower(strings.TrimSpace(limitErr.Limit))
+	limit = strings.ReplaceAll(limit, " ", "_")
+	if limit == "devices" {
+		return "device_count_limit"
+	}
+	return strings.TrimSuffix(limit, "s") + "_limit"
+}
+
+func (h *BackupHandler) appendBackupAuditLog(
+	r *http.Request,
+	action string,
+	resource string,
+	resourceID string,
+	metadata map[string]interface{},
+) error {
+	if h.auditLogs == nil {
+		return nil
+	}
+
+	metadataJSON := "{}"
+	if len(metadata) > 0 {
+		data, err := json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("marshalling backup audit metadata: %w", err)
+		}
+		metadataJSON = string(data)
+	}
+
+	var actorUserID *uuid.UUID
+	if user, ok := AuthenticatedUserFromRequest(r); ok && user.User.User.ID != uuid.Nil {
+		id := user.User.User.ID
+		actorUserID = &id
+	}
+
+	logEntry := domain.AuditLog{
+		ID:           uuid.New(),
+		ActorUserID:  actorUserID,
+		TargetUserID: actorUserID,
+		Action:       action,
+		Resource:     resource,
+		ResourceID:   resourceID,
+		MetadataJSON: metadataJSON,
+		IPAddress:    clientIPAddress(r),
+		UserAgent:    r.UserAgent(),
+		CreatedAt:    time.Now().UTC(),
+	}
+	if err := h.auditLogs.AppendAuditLog(context.WithoutCancel(r.Context()), &logEntry); err != nil {
+		return fmt.Errorf("appending backup audit log: %w", err)
+	}
+	return nil
+}
+
 // --- Helpers ---
 
 func extractDeviceIDForBackup(path, suffix string) (uuid.UUID, error) {
 	// Path: /api/v1/devices/{id}/suffix
 	trimmed := strings.TrimSuffix(path, suffix)
 	return extractIDFromPath(trimmed, "/api/v1/devices/")
+}
+
+type bulkOperationLimiter struct {
+	mu          sync.Mutex
+	perKeyLimit int
+	globalLimit int
+	totalActive int
+	active      map[string]int
+}
+
+func newBulkOperationLimiter(perKeyLimit, globalLimit int) *bulkOperationLimiter {
+	if perKeyLimit <= 0 {
+		perKeyLimit = 1
+	}
+	if globalLimit <= 0 {
+		globalLimit = 1
+	}
+	return &bulkOperationLimiter{
+		perKeyLimit: perKeyLimit,
+		globalLimit: globalLimit,
+		active:      make(map[string]int),
+	}
+}
+
+func (l *bulkOperationLimiter) PerKeyLimit() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.perKeyLimit
+}
+
+func (l *bulkOperationLimiter) GlobalLimit() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.globalLimit
+}
+
+func (l *bulkOperationLimiter) TryAcquire(key string) (bool, string) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		key = "anonymous"
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.active[key] >= l.perKeyLimit {
+		return false, "actor_concurrency_limit"
+	}
+	if l.totalActive >= l.globalLimit {
+		return false, "global_concurrency_limit"
+	}
+	l.active[key]++
+	l.totalActive++
+	observability.Default().SetBulkOperationInFlight("bulk_download", "local", l.totalActive)
+	return true, ""
+}
+
+func (l *bulkOperationLimiter) Release(key string) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		key = "anonymous"
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.active[key] <= 1 {
+		delete(l.active, key)
+	} else {
+		l.active[key]--
+	}
+	if l.totalActive > 0 {
+		l.totalActive--
+	}
+	observability.Default().SetBulkOperationInFlight("bulk_download", "local", l.totalActive)
+}
+
+func recordBulkDownloadConcurrencyLimits(limits service.BulkOperationLimits) {
+	observability.Default().SetBulkOperationConcurrencyLimit("bulk_download", "per_actor", "local", limits.BulkDownloadMaxConcurrentPerActor)
+	observability.Default().SetBulkOperationConcurrencyLimit("bulk_download", "global", "local", limits.BulkDownloadMaxConcurrentGlobal)
+}
+
+func recordBulkDownloadDistributedConcurrencyLimits(limits service.BulkOperationLimits) {
+	observability.Default().SetBulkOperationConcurrencyLimit("bulk_download", "per_actor", "distributed", 1)
+	observability.Default().SetBulkOperationConcurrencyLimit("bulk_download", "global", "distributed", limits.BulkDownloadMaxConcurrentGlobal)
+}
+
+func (h *BackupHandler) bulkOperationLimits() service.BulkOperationLimits {
+	if h == nil || h.svc == nil {
+		return service.DefaultBulkOperationLimits
+	}
+	return h.svc.BulkOperationLimits()
+}
+
+type bulkOperationInFlightTracker struct {
+	mu        sync.Mutex
+	operation string
+	source    string
+	active    int
+}
+
+func newBulkOperationInFlightTracker(operation, source string) *bulkOperationInFlightTracker {
+	return &bulkOperationInFlightTracker{
+		operation: operation,
+		source:    source,
+	}
+}
+
+func (t *bulkOperationInFlightTracker) Acquire() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.active++
+	observability.Default().SetBulkOperationInFlight(t.operation, t.source, t.active)
+}
+
+func (t *bulkOperationInFlightTracker) Release() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.active > 0 {
+		t.active--
+	}
+	observability.Default().SetBulkOperationInFlight(t.operation, t.source, t.active)
+}
+
+func bulkDownloadActorKey(r *http.Request) string {
+	if user, ok := AuthenticatedUserFromRequest(r); ok {
+		if id := user.User.User.ID; id != uuid.Nil {
+			return "user:" + id.String()
+		}
+		if username := strings.TrimSpace(user.User.User.UsernameNormalized); username != "" {
+			return "user:" + strings.ToLower(username)
+		}
+		if username := strings.TrimSpace(user.User.User.Username); username != "" {
+			return "user:" + strings.ToLower(username)
+		}
+	}
+	if ip := strings.TrimSpace(clientIPAddress(r)); ip != "" {
+		return "ip:" + ip
+	}
+	return "anonymous"
+}
+
+func bulkDownloadLeaseKey(actorKey string) string {
+	actorKey = strings.TrimSpace(actorKey)
+	if actorKey == "" {
+		actorKey = "anonymous"
+	}
+	return "backup.bulk_download:" + actorKey
+}
+
+func (h *BackupHandler) acquireBulkDownloadDistributedLeases(ctx context.Context, actorKey string) (domain.BulkOperationLease, string, error) {
+	globalLease, acquired, err := h.acquireBulkDownloadGlobalSlotLease(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if !acquired {
+		return nil, "distributed_global_concurrency_limit", nil
+	}
+
+	actorLease, acquired, err := h.bulkDownloadLeaseRepo.TryAcquireBulkOperationLease(ctx, bulkDownloadLeaseKey(actorKey))
+	if err != nil {
+		if releaseErr := globalLease.Release(); releaseErr != nil {
+			log.Printf("backup: failed to release bulk download global slot lease after actor limiter error: %v", releaseErr)
+		}
+		return nil, "", err
+	}
+	if !acquired {
+		if releaseErr := globalLease.Release(); releaseErr != nil {
+			log.Printf("backup: failed to release bulk download global slot lease after actor limiter rejection: %v", releaseErr)
+		}
+		return nil, "distributed_actor_concurrency_limit", nil
+	}
+	return &bulkDownloadCompositeLease{leases: []domain.BulkOperationLease{globalLease, actorLease}}, "", nil
+}
+
+func (h *BackupHandler) acquireBulkDownloadGlobalSlotLease(ctx context.Context) (domain.BulkOperationLease, bool, error) {
+	limit := service.DefaultBulkOperationLimits.BulkDownloadMaxConcurrentGlobal
+	if h.svc != nil {
+		limit = h.svc.BulkOperationLimits().BulkDownloadMaxConcurrentGlobal
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	for slot := 0; slot < limit; slot++ {
+		lease, acquired, err := h.bulkDownloadLeaseRepo.TryAcquireBulkOperationLease(ctx, bulkDownloadGlobalLeaseKey(slot))
+		if err != nil {
+			return nil, false, err
+		}
+		if acquired {
+			return lease, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func bulkDownloadGlobalLeaseKey(slot int) string {
+	if slot < 0 {
+		slot = 0
+	}
+	return fmt.Sprintf("backup.bulk_download:global:%d", slot)
+}
+
+type bulkDownloadCompositeLease struct {
+	once   sync.Once
+	leases []domain.BulkOperationLease
+}
+
+func (l *bulkDownloadCompositeLease) Release() error {
+	var releaseErr error
+	l.once.Do(func() {
+		for i := len(l.leases) - 1; i >= 0; i-- {
+			if l.leases[i] == nil {
+				continue
+			}
+			if err := l.leases[i].Release(); err != nil && releaseErr == nil {
+				releaseErr = err
+			}
+		}
+	})
+	return releaseErr
+}
+
+func bulkDownloadSelectedDeviceCount(entries []service.BulkDownloadEntry) int {
+	seen := make(map[uuid.UUID]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.DeviceID == uuid.Nil {
+			continue
+		}
+		seen[entry.DeviceID] = struct{}{}
+	}
+	return len(seen)
 }
 
 func jobToMap(j domain.BackupJob) map[string]interface{} {
@@ -640,6 +1202,11 @@ func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
 	}
 
 	items := make([]map[string]interface{}, 0, len(run.Items))
+	runningCount := 0
+	completedCount := 0
+	currentDeviceID := ""
+	currentDeviceName := ""
+	currentJobID := ""
 	for _, item := range run.Items {
 		entry := map[string]interface{}{
 			"id":          item.ID.String(),
@@ -647,6 +1214,8 @@ func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
 			"device_id":   item.DeviceID.String(),
 			"device_name": item.DeviceName,
 			"status":      string(item.Status),
+			"file_count":  item.FileCount,
+			"byte_count":  item.ByteCount,
 			"created_at":  item.CreatedAt,
 			"updated_at":  item.UpdatedAt,
 		}
@@ -660,6 +1229,24 @@ func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
 			entry["completed_at"] = item.CompletedAt
 		}
 		items = append(items, entry)
+
+		switch item.Status {
+		case domain.BulkBackupRunItemStatusActive,
+			domain.BulkBackupRunItemStatusRunning:
+			runningCount++
+			if currentDeviceID == "" {
+				currentDeviceID = item.DeviceID.String()
+				currentDeviceName = item.DeviceName
+				if item.BackupJobID != nil {
+					currentJobID = item.BackupJobID.String()
+				}
+			}
+		case domain.BulkBackupRunItemStatusSuccess,
+			domain.BulkBackupRunItemStatusFailed,
+			domain.BulkBackupRunItemStatusSkipped,
+			domain.BulkBackupRunItemStatusCancelled:
+			completedCount++
+		}
 	}
 
 	data := map[string]interface{}{
@@ -668,15 +1255,26 @@ func bulkBackupRunToMap(run *domain.BulkBackupRun) map[string]interface{} {
 		"batch_size":       run.BatchSize,
 		"total_count":      run.TotalCount,
 		"queued_count":     run.QueuedCount,
+		"running_count":    runningCount,
+		"completed_count":  completedCount,
 		"success_count":    run.SuccessCount,
 		"failed_count":     run.FailedCount,
 		"skipped_count":    run.SkippedCount,
 		"cancelled_count":  run.CancelledCount,
+		"file_count":       run.FileCount,
+		"byte_count":       run.ByteCount,
 		"error_message":    run.ErrorMessage,
 		"cancel_requested": run.CancelRequested,
 		"created_by":       run.CreatedBy,
 		"created_at":       run.CreatedAt,
 		"items":            items,
+	}
+	if currentDeviceID != "" {
+		data["current_device_id"] = currentDeviceID
+		data["current_device_name"] = currentDeviceName
+	}
+	if currentJobID != "" {
+		data["current_job_id"] = currentJobID
 	}
 	if run.StartedAt != nil {
 		data["started_at"] = run.StartedAt

@@ -14,31 +14,33 @@ import (
 )
 
 type pipelineRuntimeState struct {
-	mu                  sync.RWMutex
-	lastSnapshot        *ws.SnapshotPayload
-	overviewVersion     uint64
-	topologyVersion     uint64
-	alertVersion        uint64
-	promStatus          ws.PrometheusStatusPayload
-	hostnames           map[uuid.UUID]string
-	hostnameObservedAt  map[uuid.UUID]time.Time
-	alerts              map[uuid.UUID][]domain.AlertState
-	lastPollingHealth   polling.HealthSnapshot
-	lastPollingHealthAt time.Time
-	prevCounters        map[uuid.UUID]map[string]collector.CounterBaseline
-	prevHashes          *sectionHashes
-	now                 func() time.Time
+	mu                   sync.RWMutex
+	lastSnapshot         *ws.SnapshotPayload
+	overviewVersion      uint64
+	topologyVersion      uint64
+	alertVersion         uint64
+	promStatus           ws.PrometheusStatusPayload
+	hostnames            map[uuid.UUID]string
+	hostnameObservedAt   map[uuid.UUID]time.Time
+	alerts               map[uuid.UUID][]domain.AlertState
+	previousAlertRuntime map[uuid.UUID]ws.DeviceRuntimeDTO
+	lastPollingHealth    polling.HealthSnapshot
+	lastPollingHealthAt  time.Time
+	prevCounters         map[uuid.UUID]map[string]collector.CounterBaseline
+	prevHashes           *sectionHashes
+	now                  func() time.Time
 }
 
 func newPipelineRuntimeState(initialPromStatus ws.PrometheusStatusPayload) *pipelineRuntimeState {
 	return &pipelineRuntimeState{
-		lastSnapshot:       ws.EmptySnapshot(),
-		promStatus:         initialPromStatus,
-		hostnames:          make(map[uuid.UUID]string),
-		hostnameObservedAt: make(map[uuid.UUID]time.Time),
-		alerts:             make(map[uuid.UUID][]domain.AlertState),
-		prevCounters:       make(map[uuid.UUID]map[string]collector.CounterBaseline),
-		now:                time.Now,
+		lastSnapshot:         ws.EmptySnapshot(),
+		promStatus:           initialPromStatus,
+		hostnames:            make(map[uuid.UUID]string),
+		hostnameObservedAt:   make(map[uuid.UUID]time.Time),
+		alerts:               make(map[uuid.UUID][]domain.AlertState),
+		previousAlertRuntime: make(map[uuid.UUID]ws.DeviceRuntimeDTO),
+		prevCounters:         make(map[uuid.UUID]map[string]collector.CounterBaseline),
+		now:                  time.Now,
 	}
 }
 

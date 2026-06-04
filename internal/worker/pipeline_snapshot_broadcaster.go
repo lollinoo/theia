@@ -14,12 +14,22 @@ import (
 	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/polling"
+	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/ws"
 )
 
 type pipelineSnapshotBroadcaster struct {
 	pipeline *PipelineOrchestrator
 }
+
+var (
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		return store.SnapshotFor(ids)
+	}
+)
 
 func (b *pipelineSnapshotBroadcaster) broadcastLoop(ctx context.Context) {
 	p := b.pipeline
@@ -149,7 +159,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 	p.runtime.mu.RUnlock()
 
 	startedAt := time.Now()
-	snapshot := buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, promStatus)
+	snapshot := buildPipelineSnapshot(devices, links, snapshotAllPipelineState(p.stateStore), alerts, promStatus)
 	observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeFull, time.Since(startedAt), true)
 	currentHashes := computeSnapshotHashes(snapshot)
 	drainedTopology := drainTopologyNotify(p.topologyNotify)
@@ -157,6 +167,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 	p.runtime.mu.Lock()
 	p.runtime.lastSnapshot = snapshot
 	p.runtime.prevHashes = currentHashes
+	p.runtime.previousAlertRuntime = alertRuntimeSummaryFromSnapshot(snapshot)
 	currentVersion := p.runtime.overviewVersion
 	p.runtime.mu.Unlock()
 
@@ -218,6 +229,17 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 		return nil
 	}
 
+	p.runtime.mu.RLock()
+	missingDirtyDeviceRuntimeBase := len(dirtyDevices) > 0 && snapshotPayloadEmpty(p.runtime.lastSnapshot)
+	p.runtime.mu.RUnlock()
+	if missingDirtyDeviceRuntimeBase {
+		if err := b.broadcastFullSnapshot(ctx, refreshReloadReasonDirtyDeltaFallback, false); err != nil {
+			return err
+		}
+		b.broadcastAlertsIfDirty(alertsDirty)
+		return nil
+	}
+
 	startedAt := time.Now()
 	delta, requireFullSnapshot, err := b.buildDirtyOverviewDelta(dirtyDevices, alertsDirty)
 	observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeDirty, time.Since(startedAt), err == nil)
@@ -237,7 +259,11 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 	}
 
 	p.runtime.mu.Lock()
-	patch := buildRuntimeDeltaPatch(delta, p.runtime.lastSnapshot)
+	previousSnapshotForPatch := p.runtime.lastSnapshot
+	if previousSnapshotForPatch == nil && alertsDirty {
+		previousSnapshotForPatch = previousAlertRuntimePatchBase(delta, p.runtime.previousAlertRuntime)
+	}
+	patch := buildRuntimeDeltaPatch(delta, previousSnapshotForPatch)
 	if patch == nil {
 		p.runtime.mu.Unlock()
 		b.broadcastAlertsIfDirty(alertsDirty)
@@ -247,6 +273,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 	merged := mergeSnapshotPayload(p.runtime.lastSnapshot, delta)
 	p.runtime.lastSnapshot = merged
 	p.runtime.prevHashes = computeSnapshotHashes(merged)
+	p.runtime.previousAlertRuntime = alertRuntimeSummaryFromSnapshot(merged)
 	p.runtime.overviewVersion++
 	version := p.runtime.overviewVersion
 	p.runtime.mu.Unlock()
@@ -409,6 +436,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshot(_ context.Context, r
 	p.runtime.mu.Lock()
 	p.runtime.lastSnapshot = snapshot
 	p.runtime.prevHashes = computeSnapshotHashes(snapshot)
+	p.runtime.previousAlertRuntime = alertRuntimeSummaryFromSnapshot(snapshot)
 	p.runtime.overviewVersion++
 	version := p.runtime.overviewVersion
 	p.runtime.mu.Unlock()
@@ -433,6 +461,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotWithResync(_ context.
 	p.runtime.mu.Lock()
 	p.runtime.lastSnapshot = snapshot
 	p.runtime.prevHashes = computeSnapshotHashes(snapshot)
+	p.runtime.previousAlertRuntime = alertRuntimeSummaryFromSnapshot(snapshot)
 	p.runtime.overviewVersion++
 	version := p.runtime.overviewVersion
 	p.runtime.mu.Unlock()
@@ -481,7 +510,7 @@ func (b *pipelineSnapshotBroadcaster) buildFullOverviewSnapshot() (_ *ws.Snapsho
 	promStatus := p.runtime.promStatus
 	p.runtime.mu.RUnlock()
 
-	return buildPipelineSnapshot(devices, links, p.stateStore.Snapshot(), alerts, promStatus), nil
+	return buildPipelineSnapshot(devices, links, snapshotAllPipelineState(p.stateStore), alerts, promStatus), nil
 }
 
 func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[uuid.UUID]struct{}, alertsDirty bool) (*ws.SnapshotPayload, bool, error) {
@@ -504,23 +533,38 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 	alerts := cloneAlertGroups(p.runtime.alerts)
 	promStatus := p.runtime.promStatus
 	previousHashes := p.runtime.prevHashes
+	previousAlertRuntime := cloneAlertRuntimeSummary(p.runtime.previousAlertRuntime)
+	var previousSnapshotForHash *ws.SnapshotPayload
+	previousSnapshotAvailable := false
+	previousAlertDeviceIDs := make(map[uuid.UUID]struct{})
+	if alertsDirty {
+		previousSnapshotAvailable = p.runtime.lastSnapshot != nil
+		if previousSnapshotAvailable {
+			addPreviousAlertRuntimeDeviceIDs(previousAlertDeviceIDs, p.runtime.lastSnapshot)
+			if previousHashes == nil {
+				previousSnapshotForHash = ws.CloneSnapshot(p.runtime.lastSnapshot)
+			}
+		} else if len(dirtyDevices) == 0 {
+			addPreviousAlertRuntimeSummaryDeviceIDs(previousAlertDeviceIDs, previousAlertRuntime)
+			previousSnapshotAvailable = len(previousAlertDeviceIDs) > 0
+		}
+	}
 	p.runtime.mu.RUnlock()
-	states := p.stateStore.Snapshot()
 
 	if alertsDirty {
-		if previousHashes == nil {
+		if !previousSnapshotAvailable {
 			return nil, true, nil
 		}
-		current := buildPipelineSnapshot(devices, links, states, alerts, promStatus)
-		currentHashes := computeSnapshotHashes(current)
-		return buildDelta(current, currentHashes, previousHashes), false, nil
+		if previousHashes == nil && previousSnapshotForHash != nil {
+			previousHashes = computeSnapshotHashes(previousSnapshotForHash)
+		}
 	}
 
 	delta := ws.EmptySnapshot()
 	filteredDevices := filterDevicesByID(devices, dirtyDevices)
 	filteredLinks := filterLinksByDeviceID(links, dirtyDevices)
+	contextIDs := make(map[uuid.UUID]struct{}, len(dirtyDevices)+len(filteredLinks))
 	if len(filteredDevices) > 0 {
-		contextIDs := make(map[uuid.UUID]struct{}, len(dirtyDevices)+len(filteredLinks))
 		for id := range dirtyDevices {
 			contextIDs[id] = struct{}{}
 		}
@@ -528,8 +572,27 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 			contextIDs[link.SourceDeviceID] = struct{}{}
 			contextIDs[link.TargetDeviceID] = struct{}{}
 		}
+	}
 
-		partial := buildPipelineSnapshot(filterDevicesByID(devices, contextIDs), filteredLinks, states, alerts, promStatus)
+	alertDeviceIDs := make(map[uuid.UUID]struct{})
+	if alertsDirty {
+		addCurrentAlertRuntimeDeviceIDs(alertDeviceIDs, alerts)
+		for id := range previousAlertDeviceIDs {
+			alertDeviceIDs[id] = struct{}{}
+		}
+		for id := range alertDeviceIDs {
+			contextIDs[id] = struct{}{}
+		}
+	}
+
+	if len(contextIDs) == 0 {
+		return nil, false, nil
+	}
+
+	states := snapshotPipelineStateFor(p.stateStore, deviceIDSetToSlice(contextIDs))
+	partial := buildPipelineSnapshot(filterDevicesByID(devices, contextIDs), filteredLinks, states, alerts, promStatus)
+
+	if len(filteredDevices) > 0 {
 		for id := range dirtyDevices {
 			deviceRuntime, ok := partial.Devices[id.String()]
 			if !ok {
@@ -541,10 +604,152 @@ func (b *pipelineSnapshotBroadcaster) buildDirtyOverviewDelta(dirtyDevices map[u
 			delta.Links[id] = linkRuntime
 		}
 	}
+	if alertsDirty {
+		partialHashes := computeSnapshotHashes(partial)
+		for id := range alertDeviceIDs {
+			deviceID := id.String()
+			currentHash, ok := partialHashes.devices[deviceID]
+			if !ok {
+				continue
+			}
+			if previousHashes == nil {
+				if alertRuntimeFieldsChanged(partial.Devices[deviceID], previousAlertRuntime[id]) {
+					delta.Devices[deviceID] = partial.Devices[deviceID]
+				}
+				continue
+			}
+			if previousHash, ok := previousHashes.devices[deviceID]; !ok || previousHash != currentHash {
+				delta.Devices[deviceID] = partial.Devices[deviceID]
+			}
+		}
+	}
 
 	if snapshotPayloadEmpty(delta) {
 		return nil, false, nil
 	}
 
 	return delta, false, nil
+}
+
+func deviceIDSetToSlice(ids map[uuid.UUID]struct{}) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(ids))
+	for id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].String() < out[j].String()
+	})
+	return out
+}
+
+func addCurrentAlertRuntimeDeviceIDs(target map[uuid.UUID]struct{}, alerts map[uuid.UUID][]domain.AlertState) {
+	for id, grouped := range alerts {
+		if id == uuid.Nil || !alertStatesAffectRuntime(grouped) {
+			continue
+		}
+		target[id] = struct{}{}
+	}
+}
+
+func addPreviousAlertRuntimeDeviceIDs(target map[uuid.UUID]struct{}, snapshot *ws.SnapshotPayload) {
+	if snapshot == nil {
+		return
+	}
+
+	for id, runtime := range snapshot.Devices {
+		if !deviceRuntimeHadAlertEffect(runtime) {
+			continue
+		}
+		deviceID, err := uuid.Parse(id)
+		if err != nil || deviceID == uuid.Nil {
+			continue
+		}
+		target[deviceID] = struct{}{}
+	}
+}
+
+func alertStatesAffectRuntime(alerts []domain.AlertState) bool {
+	status, firingCount := summarizeAlerts(alerts)
+	return firingCount > 0 || status != domain.AlertStatusNormal
+}
+
+func deviceRuntimeHadAlertEffect(runtime ws.DeviceRuntimeDTO) bool {
+	if runtime.FiringAlertCount > 0 {
+		return true
+	}
+	return runtime.AlertStatus != "" && !strings.EqualFold(runtime.AlertStatus, string(domain.AlertStatusNormal))
+}
+
+func alertRuntimeSummaryFromSnapshot(snapshot *ws.SnapshotPayload) map[uuid.UUID]ws.DeviceRuntimeDTO {
+	summary := make(map[uuid.UUID]ws.DeviceRuntimeDTO)
+	if snapshot == nil {
+		return summary
+	}
+	for id, runtime := range snapshot.Devices {
+		if !deviceRuntimeHadAlertEffect(runtime) {
+			continue
+		}
+		deviceID, err := uuid.Parse(id)
+		if err != nil || deviceID == uuid.Nil {
+			continue
+		}
+		summary[deviceID] = ws.DeviceRuntimeDTO{
+			DeviceID:         runtime.DeviceID,
+			AlertStatus:      runtime.AlertStatus,
+			FiringAlertCount: runtime.FiringAlertCount,
+		}
+	}
+	return summary
+}
+
+func cloneAlertRuntimeSummary(summary map[uuid.UUID]ws.DeviceRuntimeDTO) map[uuid.UUID]ws.DeviceRuntimeDTO {
+	if len(summary) == 0 {
+		return nil
+	}
+	cloned := make(map[uuid.UUID]ws.DeviceRuntimeDTO, len(summary))
+	for id, runtime := range summary {
+		cloned[id] = runtime
+	}
+	return cloned
+}
+
+func addPreviousAlertRuntimeSummaryDeviceIDs(target map[uuid.UUID]struct{}, summary map[uuid.UUID]ws.DeviceRuntimeDTO) {
+	for id, runtime := range summary {
+		if id == uuid.Nil || !deviceRuntimeHadAlertEffect(runtime) {
+			continue
+		}
+		target[id] = struct{}{}
+	}
+}
+
+func alertRuntimeFieldsChanged(current, previous ws.DeviceRuntimeDTO) bool {
+	return current.AlertStatus != previous.AlertStatus || current.FiringAlertCount != previous.FiringAlertCount
+}
+
+func previousAlertRuntimePatchBase(delta *ws.SnapshotPayload, summary map[uuid.UUID]ws.DeviceRuntimeDTO) *ws.SnapshotPayload {
+	if delta == nil || len(summary) == 0 {
+		return nil
+	}
+	previous := ws.EmptySnapshot()
+	for id, current := range delta.Devices {
+		deviceID, err := uuid.Parse(id)
+		if err != nil || deviceID == uuid.Nil {
+			continue
+		}
+		alertRuntime, ok := summary[deviceID]
+		if !ok {
+			continue
+		}
+		base := current
+		base.AlertStatus = alertRuntime.AlertStatus
+		base.FiringAlertCount = alertRuntime.FiringAlertCount
+		previous.Devices[id] = base
+	}
+	if len(previous.Devices) == 0 {
+		return nil
+	}
+	return previous
 }

@@ -365,7 +365,10 @@ describe('useCanvasData', () => {
 
   it('uses saved map topology on silent refresh when mapId is set', async () => {
     vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
-    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce(canvasTopologyOkResponse());
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce({
+      status: 'not-modified',
+      etag: '"topo-abc123"',
+    });
     const { result } = renderUseCanvasData(null, null, {
       mapId: 'map-1',
       mapName: 'Core Map',
@@ -376,12 +379,15 @@ describe('useCanvasData', () => {
       await Promise.resolve();
     });
 
+    const edgeBuildCallsAfterBootstrap = vi.mocked(buildTopologyEdges).mock.calls.length;
+
     await act(async () => {
       await result.current.loadTopology(true);
     });
 
-    expect(fetchCanvasMapTopology).toHaveBeenCalledWith('map-1', undefined);
+    expect(fetchCanvasMapTopology).toHaveBeenCalledWith('map-1', '"topo-abc123"');
     expect(fetchCanvasTopology).not.toHaveBeenCalled();
+    expect(buildTopologyEdges).toHaveBeenCalledTimes(edgeBuildCallsAfterBootstrap);
   });
 
   it('reuses composed topology when repeated forced bootstraps return the same canvas input', async () => {
@@ -560,7 +566,7 @@ describe('useCanvasData', () => {
       await result.current.loadTopology(true);
     });
 
-    expect(fetchCanvasTopology).toHaveBeenCalledWith(undefined);
+    expect(fetchCanvasTopology).toHaveBeenCalledWith('"topo-abc123"');
     expect(fetchCanvasMapTopology).toHaveBeenNthCalledWith(1, 'map-1', undefined);
     expect(fetchCanvasMapTopology).toHaveBeenNthCalledWith(2, 'map-1', '"map-etag"');
   });
@@ -2018,6 +2024,71 @@ describe('useCanvasData', () => {
     expect(getCanvasRuntimeBootstrap()).toMatchObject({
       runtimeVersion: 2,
       runtimeIdentity: 'rt-sha256:resynced',
+    });
+    expect(result.current.nodes.find((node) => node.id === 'dev-1')?.data.runtime.metrics).toEqual(
+      expect.objectContaining({ cpu_percent: 84 }),
+    );
+  });
+
+  it('refreshes composed runtime data when backend resync changes only runtime identity', async () => {
+    const bootstrapResponse = (runtimeIdentity: string, cpu: number) => ({
+      topology: {
+        schema_version: 1,
+        topology_version: 'topo-stable',
+        runtime_version: 1,
+        runtime_identity: runtimeIdentity,
+        runtime_snapshot: mockSnapshot({
+          devices: {
+            'dev-1': {
+              ...mockSnapshot().devices['dev-1'],
+              cpu_percent: cpu,
+            },
+          },
+        }),
+        generated_at: '2026-04-30T12:00:00Z',
+        devices: [mockDevice()],
+        links: [],
+        positions: {},
+        areas: [],
+        capabilities: {
+          supports_topology_delta: false,
+          supports_position_revision: false,
+          supports_area_filtering: true,
+        },
+        settings: { layout: { version: 1 } },
+      },
+    });
+    vi.mocked(fetchCanvasBootstrap)
+      .mockResolvedValueOnce(bootstrapResponse('rt-sha256:before-restart', 42))
+      .mockResolvedValueOnce(bootstrapResponse('rt-sha256:after-restart', 84));
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasBootstrap).toHaveBeenNthCalledWith(1, { force: false });
+    expect(getCanvasRuntimeBootstrap()).toMatchObject({
+      runtimeVersion: 1,
+      runtimeIdentity: 'rt-sha256:before-restart',
+    });
+    expect(result.current.nodes.find((node) => node.id === 'dev-1')?.data.runtime.metrics).toEqual(
+      expect.objectContaining({ cpu_percent: 42 }),
+    );
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-resync-required'));
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasBootstrap).toHaveBeenNthCalledWith(2, { force: true });
+    expect(getCanvasRuntimeBootstrap()).toMatchObject({
+      runtimeVersion: 1,
+      runtimeIdentity: 'rt-sha256:after-restart',
     });
     expect(result.current.nodes.find((node) => node.id === 'dev-1')?.data.runtime.metrics).toEqual(
       expect.objectContaining({ cpu_percent: 84 }),

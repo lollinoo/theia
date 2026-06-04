@@ -32,3 +32,101 @@ groups:
           severity: warning
         annotations:
           summary: "High utilization on {{ $labels.ifDescr }} of {{ $labels.instance }}"
+
+  - name: theia_runtime_alerts
+    rules:
+      - alert: BulkOperationRejections
+        expr: sum by (job, instance, operation, reason, source) (increase(theia_bulk_operation_rejections_total[5m])) > 5
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bulk {{ $labels.operation }} requests are being rejected"
+
+      - alert: BulkOperationSaturated
+        expr: (theia_bulk_operation_in_flight / on(job, instance, operation, source) group_left(scope) theia_bulk_operation_concurrency_limit{scope="global"}) >= 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bulk {{ $labels.operation }} concurrency is saturated"
+
+      - alert: WebSocketBackpressure
+        expr: sum by (job, instance, scope, reason) (increase(theia_ws_backpressure_total[5m])) > 25
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket backpressure is dropping {{ $labels.scope }} messages"
+
+      - alert: WebSocketResyncRequired
+        expr: sum by (job, instance, scope, reason, bootstrap) (increase(theia_ws_client_resync_required_total[5m])) > 10
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket clients require repeated {{ $labels.scope }} resyncs"
+
+      - alert: PollingEssentialOverloaded
+        expr: theia_polling_essential_overloaded == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Essential polling lane is overloaded"
+
+      - alert: PollingDeadlineMisses
+        expr: increase(theia_polling_deadline_miss_total[5m]) > 0
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Essential polling deadlines are being missed"
+
+      - alert: PollingFailuresHigh
+        expr: sum by (job, instance, volatility_class) (increase(theia_poll_results_total{outcome="failure"}[5m])) > 5
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Polling failures are elevated for {{ $labels.volatility_class }} tasks"
+
+      - alert: SchedulerQueueLagHigh
+        expr: max by (job, instance, volatility_class) (theia_scheduler_queue_lag_seconds) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler {{ $labels.volatility_class }} queue lag is high"
+
+      - alert: SchedulerBackpressure
+        expr: sum by (job, instance, volatility_class, reason) (increase(theia_scheduler_backpressure_total[5m])) > 10
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler {{ $labels.volatility_class }} backpressure is recurring"
+
+      - alert: SchedulerTaskDurationHigh
+        expr: histogram_quantile(0.95, sum by (job, instance, volatility_class, le) (rate(theia_scheduler_task_duration_seconds_bucket[5m]))) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduler {{ $labels.volatility_class }} task duration is high"
+
+      - alert: SNMPBulkWalkErrors
+        expr: sum by (job, instance, collector, result) (increase(theia_snmp_collector_operations_total{operation="bulk_walk",result=~"timeout|error"}[5m])) > 3
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "SNMP bulk walk failures detected for {{ $labels.collector }}"
+
+      - alert: SNMPBulkWalkSlow
+        expr: histogram_quantile(0.95, sum by (job, instance, collector, le) (rate(theia_snmp_collector_operation_seconds_bucket{operation="bulk_walk"}[5m]))) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SNMP bulk walk latency is high for {{ $labels.collector }}"

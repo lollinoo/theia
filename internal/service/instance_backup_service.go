@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -131,6 +132,8 @@ var (
 	ErrInstanceBackupNotFound       = errors.New("instance backup not found")
 	ErrInstanceBackupNotRunning     = errors.New("instance backup is not running")
 )
+
+var renameRestoreStagingPath = os.Rename
 
 // NewInstanceBackupService creates a new InstanceBackupService.
 func NewInstanceBackupService(
@@ -1285,23 +1288,24 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	stagedDBName := filepath.Base(dbEntryName)
 	stagedDBPath := filepath.Join(stagingDir, stagedDBName)
 
-	// Copy the database payload to staging.
-	if err := copyFileContext(ctx, extractedDBPath, stagedDBPath); err != nil {
+	// Move the database payload into staging when possible; copy only when the
+	// extraction and staging directories live on different filesystems.
+	if err := moveOrCopyFileForRestoreStagingContext(ctx, extractedDBPath, stagedDBPath); err != nil {
 		return nil, cleanupStagingOnError(fmt.Errorf("staging database: %w", err))
 	}
 
-	// Copy backups/ directory if it exists
+	// Stage backups/ directory if it exists.
 	srcBackups := filepath.Join(tempDir, "backups")
 	if info, err := os.Stat(srcBackups); err == nil && info.IsDir() {
-		if err := copyDirContext(ctx, srcBackups, filepath.Join(stagingDir, "backups")); err != nil {
+		if err := moveOrCopyDirForRestoreStagingContext(ctx, srcBackups, filepath.Join(stagingDir, "backups")); err != nil {
 			return nil, cleanupStagingOnError(fmt.Errorf("staging backup files: %w", err))
 		}
 	}
 
-	// Copy known_hosts if it exists
+	// Stage known_hosts if it exists.
 	srcKnownHosts := filepath.Join(tempDir, "known_hosts")
 	if _, err := os.Stat(srcKnownHosts); err == nil {
-		if err := copyFileContext(ctx, srcKnownHosts, filepath.Join(stagingDir, "known_hosts")); err != nil {
+		if err := moveOrCopyFileForRestoreStagingContext(ctx, srcKnownHosts, filepath.Join(stagingDir, "known_hosts")); err != nil {
 			return nil, cleanupStagingOnError(fmt.Errorf("staging known_hosts: %w", err))
 		}
 	}
@@ -1516,6 +1520,9 @@ func copyFile(src, dst string) error {
 }
 
 func copyFileContext(ctx context.Context, src, dst string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", src, err)
@@ -1537,6 +1544,89 @@ func copyFileContext(ctx context.Context, src, dst string) error {
 	}
 
 	return os.Chmod(dst, 0600)
+}
+
+func moveOrCopyFileForRestoreStagingContext(ctx context.Context, src, dst string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateRestoreStagingSourceFile(src); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
+		return fmt.Errorf("creating parent directory for %s: %w", dst, err)
+	}
+	if err := renameRestoreStagingPath(src, dst); err == nil {
+		return os.Chmod(dst, 0600)
+	} else if !isCrossDeviceRenameError(err) {
+		return fmt.Errorf("moving %s to %s: %w", src, dst, err)
+	}
+	return copyFileContext(ctx, src, dst)
+}
+
+func moveOrCopyDirForRestoreStagingContext(ctx context.Context, srcDir, dstDir string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateRestoreStagingSourceDir(ctx, srcDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dstDir), 0700); err != nil {
+		return fmt.Errorf("creating parent directory for %s: %w", dstDir, err)
+	}
+	if err := renameRestoreStagingPath(srcDir, dstDir); err == nil {
+		return nil
+	} else if !isCrossDeviceRenameError(err) {
+		return fmt.Errorf("moving %s to %s: %w", srcDir, dstDir, err)
+	}
+	return copyDirContext(ctx, srcDir, dstDir)
+}
+
+func validateRestoreStagingSourceFile(src string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return fmt.Errorf("stat restore staging source %s: %w", src, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("restore staging source must be a regular file: %s", src)
+	}
+	return nil
+}
+
+func validateRestoreStagingSourceDir(ctx context.Context, srcDir string) error {
+	info, err := os.Lstat(srcDir)
+	if err != nil {
+		return fmt.Errorf("stat restore staging source dir %s: %w", srcDir, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("restore staging source must be a directory: %s", srcDir)
+	}
+	return filepath.WalkDir(srcDir, func(entryPath string, entry os.DirEntry, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+			return fmt.Errorf("restore staging source entry must be a regular file or directory: %s", entryPath)
+		}
+		return nil
+	})
+}
+
+func isCrossDeviceRenameError(err error) bool {
+	return errors.Is(err, syscall.EXDEV)
 }
 
 // copyDir recursively copies a directory from srcDir to dstDir.

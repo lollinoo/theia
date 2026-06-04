@@ -27,6 +27,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	internalssh "github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/vendor"
 	"github.com/pkg/sftp"
@@ -1068,6 +1069,77 @@ func TestTriggerBulkBackupDeduplicatesRequestedDeviceIDs(t *testing.T) {
 	}
 }
 
+func TestTriggerBulkBackupRejectsConcurrentLegacyBulkBackupAcrossServices(t *testing.T) {
+	port := listenOnRandomPort(t)
+	leaseRepo := newMockBulkOperationLeaseRepo()
+	firstSvc, firstJobRepo, firstDeviceID := setupLegacyBulkBackupService(t, port, leaseRepo, 400*time.Millisecond)
+	secondSvc, secondJobRepo, secondDeviceID := setupLegacyBulkBackupService(t, port, leaseRepo, 0)
+
+	if _, err := firstSvc.TriggerBulkBackup(context.Background(), firstDeviceID); err != nil {
+		t.Fatalf("first TriggerBulkBackup: %v", err)
+	}
+	waitForCondition(t, time.Second, func() bool {
+		return mockBackupJobCount(firstJobRepo) == 1 && leaseRepo.isActive(legacyBulkBackupLeaseKey)
+	})
+
+	_, err := secondSvc.TriggerBulkBackup(context.Background(), secondDeviceID)
+	if !errors.Is(err, ErrBulkBackupAlreadyActive) {
+		t.Fatalf("second TriggerBulkBackup error = %v, want ErrBulkBackupAlreadyActive", err)
+	}
+	if got := mockBackupJobCount(secondJobRepo); got != 0 {
+		t.Fatalf("second service queued jobs = %d, want 0 while lease is held", got)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !leaseRepo.isActive(legacyBulkBackupLeaseKey)
+	})
+	if _, err := secondSvc.TriggerBulkBackup(context.Background(), secondDeviceID); err != nil {
+		t.Fatalf("third TriggerBulkBackup after lease release: %v", err)
+	}
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !leaseRepo.isActive(legacyBulkBackupLeaseKey)
+	})
+}
+
+func TestTriggerBulkBackupReportsLegacyBulkGateMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	port := listenOnRandomPort(t)
+	leaseRepo := newMockBulkOperationLeaseRepo()
+	svc, jobRepo, deviceID := setupLegacyBulkBackupService(t, port, leaseRepo, 400*time.Millisecond)
+
+	if _, err := svc.TriggerBulkBackup(context.Background(), deviceID); err != nil {
+		t.Fatalf("TriggerBulkBackup: %v", err)
+	}
+	waitForCondition(t, time.Second, func() bool {
+		return mockBackupJobCount(jobRepo) == 1 && leaseRepo.isActive(legacyBulkBackupLeaseKey)
+	})
+
+	metrics := string(registry.MarshalPrometheus())
+	for _, want := range []string{
+		`theia_bulk_operation_in_flight{operation="bulk_backup_legacy",source="local"} 1`,
+		`theia_bulk_operation_in_flight{operation="bulk_backup_legacy",source="distributed"} 1`,
+		`theia_bulk_operation_concurrency_limit{operation="bulk_backup_legacy",scope="global",source="local"} 1`,
+		`theia_bulk_operation_concurrency_limit{operation="bulk_backup_legacy",scope="global",source="distributed"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("expected metric %q while legacy bulk backup is running, got:\n%s", want, metrics)
+		}
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !leaseRepo.isActive(legacyBulkBackupLeaseKey)
+	})
+	metrics = string(registry.MarshalPrometheus())
+	for _, want := range []string{
+		`theia_bulk_operation_in_flight{operation="bulk_backup_legacy",source="local"} 0`,
+		`theia_bulk_operation_in_flight{operation="bulk_backup_legacy",source="distributed"} 0`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("expected metric %q after legacy bulk backup releases, got:\n%s", want, metrics)
+		}
+	}
+}
+
 func TestTriggerBulkBackupRejectsQueuedJobCountOverLimitBeforeCreatingJobs(t *testing.T) {
 	port := listenOnRandomPort(t)
 	jobRepo := newMockBackupJobRepo()
@@ -1155,6 +1227,72 @@ func TestStartBulkBackupRunCreatesPersistentItemsAndSkipsDownDevices(t *testing.
 	}
 	if got := mockBackupJobCount(jobRepo); got != 0 {
 		t.Fatalf("queued jobs = %d, want 0 for down device", got)
+	}
+}
+
+func TestGetBulkBackupRunHydratesFileAndByteTotals(t *testing.T) {
+	runID := uuid.New()
+	jobID := uuid.New()
+	runRepo := newMockBulkBackupRunRepo()
+	fileRepo := newMockBackupFileRepo()
+	svc := NewBackupService(
+		newMockBackupJobRepo(),
+		fileRepo,
+		newMockCredentialProfileRepo(),
+		newMockDeviceRepo(),
+		newMockBackupSettingsRepo(),
+		nil,
+		nil,
+		[]byte("0123456789abcdef"),
+		t.TempDir(),
+		nil,
+		WithBulkBackupRunRepo(runRepo),
+	)
+	if err := runRepo.CreateRun(
+		&domain.BulkBackupRun{ID: runID, Status: domain.BulkBackupRunStatusSuccess, BatchSize: 10},
+		[]domain.BulkBackupRunItem{
+			{
+				ID:          uuid.New(),
+				RunID:       runID,
+				DeviceID:    uuid.New(),
+				DeviceName:  "router-01",
+				Status:      domain.BulkBackupRunItemStatusSuccess,
+				BackupJobID: &jobID,
+			},
+			{
+				ID:         uuid.New(),
+				RunID:      runID,
+				DeviceID:   uuid.New(),
+				DeviceName: "router-02",
+				Status:     domain.BulkBackupRunItemStatusSkipped,
+			},
+		},
+	); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	for _, file := range []domain.BackupFile{
+		{JobID: jobID, FileName: "running.rsc", SizeBytes: 123},
+		{JobID: jobID, FileName: "compact.rsc", SizeBytes: 456},
+	} {
+		file := file
+		if err := fileRepo.Create(&file); err != nil {
+			t.Fatalf("Create file: %v", err)
+		}
+	}
+
+	run, err := svc.GetBulkBackupRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("GetBulkBackupRun: %v", err)
+	}
+
+	if run.FileCount != 2 || run.ByteCount != 579 {
+		t.Fatalf("run totals = files %d bytes %d, want 2/579", run.FileCount, run.ByteCount)
+	}
+	if run.Items[0].FileCount != 2 || run.Items[0].ByteCount != 579 {
+		t.Fatalf("item totals = files %d bytes %d, want 2/579", run.Items[0].FileCount, run.Items[0].ByteCount)
+	}
+	if run.Items[1].FileCount != 0 || run.Items[1].ByteCount != 0 {
+		t.Fatalf("skipped item totals = files %d bytes %d, want 0/0", run.Items[1].FileCount, run.Items[1].ByteCount)
 	}
 }
 
@@ -1253,6 +1391,68 @@ func TestPrepareBulkRunBatchMarksClaimedItemsActive(t *testing.T) {
 	items, _ := runRepo.ListRunItems(runID)
 	if items[0].Status != domain.BulkBackupRunItemStatusActive || items[0].BackupJobID == nil {
 		t.Fatalf("item = %+v, want active with backup job", items[0])
+	}
+}
+
+func TestWaitForBulkRunBatchPreservesBackupJobIDForHydration(t *testing.T) {
+	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusRunning)
+	jobRepo := svc.jobRepo.(*mockBackupJobRepo)
+	fileRepo := svc.fileRepo.(*mockBackupFileRepo)
+	itemID := uuid.New()
+	deviceID := uuid.New()
+	jobID := uuid.New()
+
+	if err := jobRepo.Create(&domain.BackupJob{
+		ID:       jobID,
+		DeviceID: deviceID,
+		Status:   domain.BackupStatusSuccess,
+	}); err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+	for _, file := range []domain.BackupFile{
+		{JobID: jobID, FileName: "running.rsc", SizeBytes: 123},
+		{JobID: jobID, FileName: "compact.rsc", SizeBytes: 456},
+	} {
+		file := file
+		if err := fileRepo.Create(&file); err != nil {
+			t.Fatalf("Create file: %v", err)
+		}
+	}
+	runRepo.mu.Lock()
+	runRepo.items[runID] = []domain.BulkBackupRunItem{{
+		ID:          itemID,
+		RunID:       runID,
+		DeviceID:    deviceID,
+		Status:      domain.BulkBackupRunItemStatusActive,
+		BackupJobID: &jobID,
+	}}
+	runRepo.mu.Unlock()
+
+	svc.waitForBulkRunBatch(runID, []domain.BulkBackupRunItem{{
+		ID:          itemID,
+		RunID:       runID,
+		DeviceID:    deviceID,
+		Status:      domain.BulkBackupRunItemStatusActive,
+		BackupJobID: &jobID,
+	}})
+
+	run, err := svc.GetBulkBackupRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("GetBulkBackupRun: %v", err)
+	}
+	if len(run.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(run.Items))
+	}
+	item := run.Items[0]
+	if item.Status != domain.BulkBackupRunItemStatusSuccess {
+		t.Fatalf("item status = %s, want success", item.Status)
+	}
+	if item.BackupJobID == nil || *item.BackupJobID != jobID {
+		t.Fatalf("item backup job id = %v, want %s", item.BackupJobID, jobID)
+	}
+	if run.FileCount != 2 || run.ByteCount != 579 || item.FileCount != 2 || item.ByteCount != 579 {
+		t.Fatalf("hydrated totals = run %d/%d item %d/%d, want 2/579",
+			run.FileCount, run.ByteCount, item.FileCount, item.ByteCount)
 	}
 }
 
@@ -1399,7 +1599,56 @@ func TestCancelPendingBulkRunItemsKeepsActiveItemsCompleting(t *testing.T) {
 	}
 }
 
-func TestStartBulkBackupRunAcceptsMoreDevicesThanLegacyBulkRequestLimit(t *testing.T) {
+func TestFinishBulkBackupRunRecordsCompletionMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusRunning)
+	fileRepo := svc.fileRepo.(*mockBackupFileRepo)
+	startedAt := time.Now().UTC().Add(-2 * time.Second)
+	jobID := uuid.New()
+	runRepo.mu.Lock()
+	runRepo.runs[runID].StartedAt = &startedAt
+	runRepo.items[runID] = []domain.BulkBackupRunItem{
+		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusSuccess, BackupJobID: &jobID},
+		{ID: uuid.New(), RunID: runID, DeviceID: uuid.New(), Status: domain.BulkBackupRunItemStatusSkipped},
+	}
+	runRepo.mu.Unlock()
+	for _, file := range []domain.BackupFile{
+		{JobID: jobID, FileName: "running.rsc", SizeBytes: 123},
+		{JobID: jobID, FileName: "compact.rsc", SizeBytes: 456},
+	} {
+		file := file
+		if err := fileRepo.Create(&file); err != nil {
+			t.Fatalf("Create file: %v", err)
+		}
+	}
+
+	svc.finishBulkBackupRun(runID)
+
+	stored, err := runRepo.GetRun(runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if stored.Status != domain.BulkBackupRunStatusPartial {
+		t.Fatalf("run status = %s, want partial", stored.Status)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	for _, needle := range []string{
+		`theia_bulk_operation_completions_total{operation="bulk_backup_run",result="partial",source="distributed"} 1`,
+		`theia_bulk_operation_duration_seconds_count{operation="bulk_backup_run",result="partial",source="distributed"} 1`,
+		`theia_bulk_operation_selected_devices_total{operation="bulk_backup_run",result="partial",source="distributed"} 2`,
+		`theia_bulk_operation_selected_files_total{operation="bulk_backup_run",result="partial",source="distributed"} 2`,
+		`theia_bulk_operation_selected_bytes_total{operation="bulk_backup_run",result="partial",source="distributed"} 579`,
+	} {
+		if !strings.Contains(metrics, needle) {
+			t.Fatalf("expected bulk backup run metric %q, got:\n%s", needle, metrics)
+		}
+	}
+}
+
+func TestStartBulkBackupRunRejectsDeviceCountOverLimit(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
 	credentialProfileRepo := newMockCredentialProfileRepo()
@@ -1433,14 +1682,76 @@ func TestStartBulkBackupRunAcceptsMoreDevicesThanLegacyBulkRequestLimit(t *testi
 	})
 
 	run, err := svc.StartBulkBackupRun(context.Background(), nil, "operator")
-	if err != nil {
-		t.Fatalf("StartBulkBackupRun returned error: %v", err)
+	if err == nil {
+		t.Fatal("StartBulkBackupRun error = nil, want bulk limit error")
 	}
-	if run.TotalCount != 105 {
-		t.Fatalf("run.TotalCount = %d, want 105", run.TotalCount)
+	var limitErr *BulkLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("StartBulkBackupRun error = %v, want bulk limit error", err)
 	}
-	if run.SkippedCount != 105 {
-		t.Fatalf("run.SkippedCount = %d, want 105", run.SkippedCount)
+	if limitErr.Limit != "devices" || limitErr.Max != 100 || limitErr.Actual != 105 {
+		t.Fatalf("limit error = %+v, want devices max=100 actual=105", limitErr)
+	}
+	if run != nil {
+		t.Fatalf("run = %#v, want nil on limit error", run)
+	}
+	if active, activeErr := runRepo.GetActiveRun(); activeErr != nil || active != nil {
+		t.Fatalf("active run after limit error = %#v, err=%v; want none", active, activeErr)
+	}
+}
+
+func TestStartBulkBackupRunRejectsQueuedJobCountOverLimit(t *testing.T) {
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	runRepo := newMockBulkBackupRunRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	encKey := crypto.DeriveKey("bulk-run-queued-limit")
+
+	for i := 0; i < 2; i++ {
+		id := uuid.New()
+		if err := deviceRepo.Create(&domain.Device{
+			ID: id, IP: fmt.Sprintf("10.1.0.%d", i+1), SysName: fmt.Sprintf("router-%d", i+1),
+			Vendor: "testvendor", Status: domain.DeviceStatusDown,
+		}); err != nil {
+			t.Fatalf("Create device: %v", err)
+		}
+	}
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, encKey, t.TempDir(), ssh.InsecureIgnoreHostKey(),
+		WithBulkBackupRunRepo(runRepo),
+	)
+	svc.SetBulkOperationLimits(BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 1,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	run, err := svc.StartBulkBackupRun(context.Background(), nil, "operator")
+	if err == nil {
+		t.Fatal("StartBulkBackupRun error = nil, want queued job limit error")
+	}
+	var limitErr *BulkLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("StartBulkBackupRun error = %v, want bulk limit error", err)
+	}
+	if limitErr.Limit != "queued jobs" || limitErr.Max != 1 || limitErr.Actual != 2 {
+		t.Fatalf("limit error = %+v, want queued jobs max=1 actual=2", limitErr)
+	}
+	if run != nil {
+		t.Fatalf("run = %#v, want nil on limit error", run)
+	}
+	if active, activeErr := runRepo.GetActiveRun(); activeErr != nil || active != nil {
+		t.Fatalf("active run after limit error = %#v, err=%v; want none", active, activeErr)
+	}
+	if got := mockBackupJobCount(jobRepo); got != 0 {
+		t.Fatalf("queued jobs = %d, want 0 after limit error", got)
 	}
 }
 
@@ -1760,6 +2071,92 @@ func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition was not met before timeout")
+}
+
+func setupLegacyBulkBackupService(
+	t *testing.T,
+	port int,
+	leaseRepo domain.BulkOperationLeaseRepository,
+	sshDelay time.Duration,
+) (*BackupService, *mockBackupJobRepo, uuid.UUID) {
+	t.Helper()
+
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{delay: sshDelay}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+		WithBulkOperationLeaseRepository(leaseRepo),
+	)
+	svc.SetBulkOperationLimits(BulkOperationLimits{
+		BulkBackupMaxDevices:    10,
+		BulkBackupMaxQueuedJobs: 10,
+		BulkDownloadMaxDevices:  10,
+		BulkDownloadMaxFiles:    10,
+		BulkDownloadMaxBytes:    1024,
+	})
+
+	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
+		ID: uuid.New(), Name: "test-profile", Username: "admin", Port: port,
+		AuthMethod: domain.SSHAuthPassword, Role: "Admin",
+	}); err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
+		Managed: true, Status: domain.DeviceStatusUp,
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	return svc, jobRepo, deviceID
+}
+
+type mockBulkOperationLeaseRepo struct {
+	mu     sync.Mutex
+	active map[string]struct{}
+}
+
+func newMockBulkOperationLeaseRepo() *mockBulkOperationLeaseRepo {
+	return &mockBulkOperationLeaseRepo{active: make(map[string]struct{})}
+}
+
+func (r *mockBulkOperationLeaseRepo) TryAcquireBulkOperationLease(_ context.Context, key string) (domain.BulkOperationLease, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.active[key]; ok {
+		return nil, false, nil
+	}
+	r.active[key] = struct{}{}
+	return mockBulkOperationLease{release: func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		delete(r.active, key)
+	}}, true, nil
+}
+
+func (r *mockBulkOperationLeaseRepo) isActive(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.active[key]
+	return ok
+}
+
+type mockBulkOperationLease struct {
+	release func()
+}
+
+func (l mockBulkOperationLease) Release() error {
+	if l.release != nil {
+		l.release()
+	}
+	return nil
 }
 
 func setupBulkDownloadServiceWithFiles(

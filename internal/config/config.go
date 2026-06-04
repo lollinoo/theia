@@ -58,9 +58,11 @@ type BulkBackupLimits struct {
 
 // BulkDownloadLimits holds defensive quotas for one bulk backup download request.
 type BulkDownloadLimits struct {
-	MaxDevices int   `yaml:"max_devices"`
-	MaxFiles   int   `yaml:"max_files"`
-	MaxBytes   int64 `yaml:"max_bytes"`
+	MaxDevices            int   `yaml:"max_devices"`
+	MaxFiles              int   `yaml:"max_files"`
+	MaxBytes              int64 `yaml:"max_bytes"`
+	MaxConcurrentPerActor int   `yaml:"max_concurrent_per_actor"`
+	MaxConcurrentGlobal   int   `yaml:"max_concurrent_global"`
 }
 
 // defaults returns a Config with sensible default values.
@@ -86,9 +88,11 @@ func defaults() *Config {
 			MaxQueuedJobs: 100,
 		},
 		BulkDownloadLimits: BulkDownloadLimits{
-			MaxDevices: 100,
-			MaxFiles:   500,
-			MaxBytes:   512 << 20,
+			MaxDevices:            100,
+			MaxFiles:              500,
+			MaxBytes:              512 << 20,
+			MaxConcurrentPerActor: 1,
+			MaxConcurrentGlobal:   4,
 		},
 	}
 }
@@ -121,6 +125,8 @@ func defaults() *Config {
 //   - THEIA_BULK_DOWNLOAD_MAX_DEVICES
 //   - THEIA_BULK_DOWNLOAD_MAX_FILES
 //   - THEIA_BULK_DOWNLOAD_MAX_BYTES
+//   - THEIA_BULK_DOWNLOAD_MAX_CONCURRENT_PER_ACTOR
+//   - THEIA_BULK_DOWNLOAD_MAX_CONCURRENT_GLOBAL
 func Load(path string) (*Config, error) {
 	cfg := defaults()
 
@@ -301,6 +307,20 @@ func applyBulkLimitEnv(cfg *Config) error {
 		}
 		cfg.BulkDownloadLimits.MaxBytes = parsed
 	}
+	if v := os.Getenv("THEIA_BULK_DOWNLOAD_MAX_CONCURRENT_PER_ACTOR"); v != "" {
+		parsed, err := parsePositiveEnvInt("THEIA_BULK_DOWNLOAD_MAX_CONCURRENT_PER_ACTOR", v)
+		if err != nil {
+			return err
+		}
+		cfg.BulkDownloadLimits.MaxConcurrentPerActor = parsed
+	}
+	if v := os.Getenv("THEIA_BULK_DOWNLOAD_MAX_CONCURRENT_GLOBAL"); v != "" {
+		parsed, err := parsePositiveEnvInt("THEIA_BULK_DOWNLOAD_MAX_CONCURRENT_GLOBAL", v)
+		if err != nil {
+			return err
+		}
+		cfg.BulkDownloadLimits.MaxConcurrentGlobal = parsed
+	}
 	return nil
 }
 
@@ -385,6 +405,12 @@ func validateBulkLimits(cfg *Config) error {
 		return err
 	}
 	if err := validatePositiveInt64("bulk_download_limits.max_bytes", cfg.BulkDownloadLimits.MaxBytes); err != nil {
+		return err
+	}
+	if err := validatePositiveInt("bulk_download_limits.max_concurrent_per_actor", cfg.BulkDownloadLimits.MaxConcurrentPerActor); err != nil {
+		return err
+	}
+	if err := validatePositiveInt("bulk_download_limits.max_concurrent_global", cfg.BulkDownloadLimits.MaxConcurrentGlobal); err != nil {
 		return err
 	}
 	return nil

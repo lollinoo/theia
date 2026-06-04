@@ -94,31 +94,64 @@ func TestHubRemoveClient_DropsSubscriptionState(t *testing.T) {
 	}
 }
 
-func TestHubBroadcast_RecordsHubBufferBackpressure(t *testing.T) {
+func TestHubClientConnectionChurnMetrics(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	t.Cleanup(func() {
 		observability.ResetDefaultForTest()
 	})
 
 	hub := NewHub()
-	for i := 0; i < cap(hub.broadcast); i++ {
-		hub.broadcast <- []byte("prefill")
+	first := newObservedTestClient(hub)
+	second := newObservedTestClient(hub)
+
+	hub.addClient(first)
+	hub.addClient(first)
+	hub.addClient(second)
+	hub.removeClient(first)
+	hub.removeClient(second)
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_ws_connections_total{event="connected"} 2`) {
+		t.Fatalf("expected connected churn metric, got:\n%s", metrics)
 	}
+	if !strings.Contains(metrics, `theia_ws_connections_total{event="disconnected"} 2`) {
+		t.Fatalf("expected disconnected churn metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_ws_connected_clients 0`) {
+		t.Fatalf("expected connected client gauge to return to zero, got:\n%s", metrics)
+	}
+}
 
-	hub.Broadcast(Message{Type: MessageTypeSnapshot, Payload: EmptySnapshot()})
+func TestHubBroadcast_DefaultRecorderDisabledDoesNotEmitHubBufferBackpressure(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		metrics := string(registry.MarshalPrometheus())
-		if strings.Contains(metrics, `theia_ws_backpressure_total{reason="hub_buffer_full",scope="broadcast"} 1`) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	hub := NewHub()
+	for i := 0; i < sendBufferSize*3; i++ {
+		hub.Broadcast(Message{Type: MessageTypeSnapshot, Payload: EmptySnapshot()})
 	}
 
 	metrics := string(registry.MarshalPrometheus())
-	if !strings.Contains(metrics, `theia_ws_backpressure_total{reason="hub_buffer_full",scope="broadcast"} 1`) {
-		t.Fatalf("expected hub buffer backpressure metric, got:\n%s", metrics)
+	if strings.Contains(metrics, `reason="hub_buffer_full",scope="broadcast"`) {
+		t.Fatalf("unexpected hub recorder backpressure metric, got:\n%s", metrics)
+	}
+}
+
+func TestHubBroadcastCh_EnablesTestRecorder(t *testing.T) {
+	hub := NewHub()
+	recorded := hub.BroadcastCh()
+
+	hub.Broadcast(Message{Type: MessageTypeSnapshot, Payload: EmptySnapshot()})
+
+	select {
+	case payload := <-recorded:
+		if !strings.Contains(string(payload), MessageTypeSnapshot) {
+			t.Fatalf("expected snapshot payload, got %s", string(payload))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recorded broadcast")
 	}
 }
 
@@ -153,6 +186,37 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshotForLegacyClient(t
 	}
 	if client.needsResync {
 		t.Fatal("expected client resync flag to clear after fallback snapshot")
+	}
+}
+
+func TestHubOverviewDelta_RecordsLegacyFallbackSnapshotPayloadMetrics(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	hub := NewHub()
+	firstClient := registerTestClient(hub)
+	secondClient := registerTestClient(hub)
+	for _, client := range []*Client{firstClient, secondClient} {
+		for i := 0; i < cap(client.overviewSend); i++ {
+			client.overviewSend <- []byte("occupied")
+		}
+	}
+
+	fallback := EmptySnapshot()
+	fallback.Devices["dev-1"] = DeviceRuntimeDTO{
+		DeviceID:      "dev-1",
+		PrimaryHealth: "up_fresh",
+	}
+	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, fallback)
+
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_ws_messages_total{scope="overview_fallback",type="snapshot"} 2`) {
+		t.Fatalf("expected legacy fallback snapshot message metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_ws_message_payload_bytes_count{scope="overview_fallback",type="snapshot"} 2`) {
+		t.Fatalf("expected legacy fallback snapshot payload histogram, got:\n%s", metrics)
 	}
 }
 
@@ -511,6 +575,14 @@ func registerTestClient(hub *Hub) *Client {
 	hub.mu.Unlock()
 
 	return client
+}
+
+func newObservedTestClient(hub *Hub) *Client {
+	return &Client{
+		hub:          hub,
+		send:         make(chan []byte, 1),
+		overviewSend: make(chan []byte, overviewBufferSize),
+	}
 }
 
 func containsClient(clients []*Client, target *Client) bool {

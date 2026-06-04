@@ -793,6 +793,8 @@ export interface BulkBackupRunItem {
   status: BulkBackupRunItemStatus;
   reason?: string;
   backup_job_id?: string;
+  file_count: number;
+  byte_count: number;
   created_at: string;
   updated_at: string;
   completed_at?: string;
@@ -804,10 +806,17 @@ export interface BulkBackupRun {
   batch_size: number;
   total_count: number;
   queued_count: number;
+  running_count: number;
+  completed_count: number;
   success_count: number;
   failed_count: number;
   skipped_count: number;
   cancelled_count: number;
+  file_count: number;
+  byte_count: number;
+  current_device_id?: string;
+  current_device_name?: string;
+  current_job_id?: string;
   error_message: string;
   cancel_requested: boolean;
   created_by: string;
@@ -815,6 +824,45 @@ export interface BulkBackupRun {
   started_at?: string;
   completed_at?: string;
   items: BulkBackupRunItem[];
+}
+
+export interface BulkOperationStatus {
+  bulk_backup: {
+    max_devices: number;
+    max_queued_jobs: number;
+    concurrency: {
+      max_concurrent: number;
+      configurable: boolean;
+      distributed: boolean;
+      distributed_max_concurrent: number;
+    };
+    legacy_endpoint: {
+      path: string;
+      deprecated: boolean;
+    };
+  };
+  bulk_backup_run: {
+    max_devices: number;
+    max_queued_jobs: number;
+    batch_size: number;
+    max_active_runs: number;
+    configurable_concurrency: boolean;
+    distributed: boolean;
+    distributed_max_active_runs: number;
+    can_pause: boolean;
+    can_resume: boolean;
+    can_cancel: boolean;
+  };
+  bulk_download: {
+    max_devices: number;
+    max_files: number;
+    max_bytes: number;
+    max_concurrent_per_actor: number;
+    max_concurrent_global: number;
+    distributed: boolean;
+    distributed_max_concurrent_per_actor: number;
+    distributed_max_concurrent_global: number;
+  };
 }
 
 // Instance backup types

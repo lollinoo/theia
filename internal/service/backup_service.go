@@ -23,6 +23,7 @@ import (
 
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/vendor"
 	"golang.org/x/sys/unix"
@@ -32,25 +33,33 @@ var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 
 const defaultBulkBackupWorkerCount = 4
 const defaultBulkBackupRunBatchSize = 10
+const legacyBulkBackupLeaseKey = "backup.bulk_backup:legacy"
+const legacyBulkBackupMetricOperation = "bulk_backup_legacy"
 
 var ErrBulkBackupRunAlreadyActive = errors.New("bulk backup run already active")
+var ErrBulkBackupAlreadyActive = errors.New("bulk backup already active")
+var ErrBulkOperationLimiterUnavailable = errors.New("bulk operation limiter unavailable")
 
 // BulkOperationLimits holds defensive quotas for bulk backup and download requests.
 type BulkOperationLimits struct {
-	BulkBackupMaxDevices    int
-	BulkBackupMaxQueuedJobs int
-	BulkDownloadMaxDevices  int
-	BulkDownloadMaxFiles    int
-	BulkDownloadMaxBytes    int64
+	BulkBackupMaxDevices              int
+	BulkBackupMaxQueuedJobs           int
+	BulkDownloadMaxDevices            int
+	BulkDownloadMaxFiles              int
+	BulkDownloadMaxBytes              int64
+	BulkDownloadMaxConcurrentPerActor int
+	BulkDownloadMaxConcurrentGlobal   int
 }
 
 // DefaultBulkOperationLimits bounds bulk workflows while preserving ordinary fleet use.
 var DefaultBulkOperationLimits = BulkOperationLimits{
-	BulkBackupMaxDevices:    100,
-	BulkBackupMaxQueuedJobs: 100,
-	BulkDownloadMaxDevices:  100,
-	BulkDownloadMaxFiles:    500,
-	BulkDownloadMaxBytes:    512 << 20,
+	BulkBackupMaxDevices:              100,
+	BulkBackupMaxQueuedJobs:           100,
+	BulkDownloadMaxDevices:            100,
+	BulkDownloadMaxFiles:              500,
+	BulkDownloadMaxBytes:              512 << 20,
+	BulkDownloadMaxConcurrentPerActor: 1,
+	BulkDownloadMaxConcurrentGlobal:   4,
 }
 
 // BulkLimitError reports a request that exceeds a configured bulk quota.
@@ -92,19 +101,21 @@ func IsBulkPathError(err error) bool {
 
 // BackupService orchestrates credential profile management and config backups.
 type BackupService struct {
-	jobRepo               domain.BackupJobRepository
-	fileRepo              domain.BackupFileRepository
-	credentialProfileRepo domain.CredentialProfileRepository
-	deviceRepo            domain.DeviceRepository
-	settingsRepo          domain.SettingsRepository
-	vendorRegistry        *vendor.Registry
-	sshDialer             ssh.Dialer
-	encryptionKey         []byte
-	backupDir             string
-	hostKeyCallback       gossh.HostKeyCallback
-	deviceLocks           sync.Map // per-device mutex: map[uuid.UUID]*sync.Mutex
-	bulkLimits            BulkOperationLimits
-	bulkRunRepo           domain.BulkBackupRunRepository
+	jobRepo                domain.BackupJobRepository
+	fileRepo               domain.BackupFileRepository
+	credentialProfileRepo  domain.CredentialProfileRepository
+	deviceRepo             domain.DeviceRepository
+	settingsRepo           domain.SettingsRepository
+	vendorRegistry         *vendor.Registry
+	sshDialer              ssh.Dialer
+	encryptionKey          []byte
+	backupDir              string
+	hostKeyCallback        gossh.HostKeyCallback
+	deviceLocks            sync.Map // per-device mutex: map[uuid.UUID]*sync.Mutex
+	bulkLimits             BulkOperationLimits
+	bulkRunRepo            domain.BulkBackupRunRepository
+	bulkOperationLeaseRepo domain.BulkOperationLeaseRepository
+	legacyBulkBackupGate   bulkOperationGate
 }
 
 type BackupServiceOption func(*BackupService)
@@ -112,6 +123,15 @@ type BackupServiceOption func(*BackupService)
 func WithBulkBackupRunRepo(repo domain.BulkBackupRunRepository) BackupServiceOption {
 	return func(s *BackupService) {
 		s.bulkRunRepo = repo
+	}
+}
+
+func WithBulkOperationLeaseRepository(repo domain.BulkOperationLeaseRepository) BackupServiceOption {
+	return func(s *BackupService) {
+		s.bulkOperationLeaseRepo = repo
+		if repo != nil {
+			recordLegacyBulkBackupDistributedConcurrencyLimit()
+		}
 	}
 }
 
@@ -145,6 +165,7 @@ func NewBackupService(
 	for _, opt := range opts {
 		opt(svc)
 	}
+	recordLegacyBulkBackupLocalConcurrencyLimit()
 	return svc
 }
 
@@ -156,6 +177,25 @@ func (s *BackupService) SetBulkOperationLimits(limits BulkOperationLimits) {
 // BulkOperationLimits returns the effective bulk request quotas.
 func (s *BackupService) BulkOperationLimits() BulkOperationLimits {
 	return normalizeBulkOperationLimits(s.bulkLimits)
+}
+
+func (s *BackupService) BulkOperationLeaseRepositoryConfigured() bool {
+	return s != nil && s.bulkOperationLeaseRepo != nil
+}
+
+func (s *BackupService) BulkBackupRunRepositoryConfigured() bool {
+	return s != nil && s.bulkRunRepo != nil
+}
+
+func (s *BackupService) BulkBackupRunBatchSize() int {
+	return defaultBulkBackupRunBatchSize
+}
+
+func (s *BackupService) SetBulkOperationLeaseRepository(repo domain.BulkOperationLeaseRepository) {
+	s.bulkOperationLeaseRepo = repo
+	if repo != nil {
+		recordLegacyBulkBackupDistributedConcurrencyLimit()
+	}
 }
 
 func normalizeBulkOperationLimits(limits BulkOperationLimits) BulkOperationLimits {
@@ -174,6 +214,12 @@ func normalizeBulkOperationLimits(limits BulkOperationLimits) BulkOperationLimit
 	}
 	if limits.BulkDownloadMaxBytes <= 0 {
 		limits.BulkDownloadMaxBytes = defaults.BulkDownloadMaxBytes
+	}
+	if limits.BulkDownloadMaxConcurrentPerActor <= 0 {
+		limits.BulkDownloadMaxConcurrentPerActor = defaults.BulkDownloadMaxConcurrentPerActor
+	}
+	if limits.BulkDownloadMaxConcurrentGlobal <= 0 {
+		limits.BulkDownloadMaxConcurrentGlobal = defaults.BulkDownloadMaxConcurrentGlobal
 	}
 	return limits
 }
@@ -214,6 +260,61 @@ type queuedDeviceBackup struct {
 	jobID     uuid.UUID
 }
 
+type bulkOperationGate struct {
+	mu     sync.Mutex
+	active bool
+}
+
+func (g *bulkOperationGate) TryAcquire() (domain.BulkOperationLease, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.active {
+		return nil, false
+	}
+	g.active = true
+	return &releaseFuncBulkOperationLease{release: func() error {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		g.active = false
+		return nil
+	}}, true
+}
+
+type releaseFuncBulkOperationLease struct {
+	once    sync.Once
+	release func() error
+}
+
+func (l *releaseFuncBulkOperationLease) Release() error {
+	var err error
+	l.once.Do(func() {
+		if l.release != nil {
+			err = l.release()
+		}
+	})
+	return err
+}
+
+type compositeBulkOperationLease struct {
+	once   sync.Once
+	leases []domain.BulkOperationLease
+}
+
+func (l *compositeBulkOperationLease) Release() error {
+	var releaseErr error
+	l.once.Do(func() {
+		for i := len(l.leases) - 1; i >= 0; i-- {
+			if l.leases[i] == nil {
+				continue
+			}
+			if err := l.leases[i].Release(); err != nil && releaseErr == nil {
+				releaseErr = err
+			}
+		}
+	})
+	return releaseErr
+}
+
 type preparedDeviceBackup struct {
 	device      domain.Device
 	profile     *domain.CredentialProfile
@@ -221,8 +322,91 @@ type preparedDeviceBackup struct {
 	resultIndex int
 }
 
+func (s *BackupService) acquireLegacyBulkBackupLease(ctx context.Context) (domain.BulkOperationLease, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	localLease, acquired := s.legacyBulkBackupGate.TryAcquire()
+	if !acquired {
+		return nil, ErrBulkBackupAlreadyActive
+	}
+	localLease = newBulkOperationMetricLease(localLease, legacyBulkBackupMetricOperation, "local")
+	if s.bulkOperationLeaseRepo == nil {
+		return localLease, nil
+	}
+
+	distributedLease, acquired, err := s.bulkOperationLeaseRepo.TryAcquireBulkOperationLease(ctx, legacyBulkBackupLeaseKey)
+	if err != nil {
+		if releaseErr := localLease.Release(); releaseErr != nil {
+			log.Printf("Warning: failed to release local bulk backup gate after distributed limiter error: %v", releaseErr)
+		}
+		return nil, fmt.Errorf("%w: %v", ErrBulkOperationLimiterUnavailable, err)
+	}
+	if !acquired {
+		if releaseErr := localLease.Release(); releaseErr != nil {
+			log.Printf("Warning: failed to release local bulk backup gate after distributed limiter rejection: %v", releaseErr)
+		}
+		return nil, ErrBulkBackupAlreadyActive
+	}
+	distributedLease = newBulkOperationMetricLease(distributedLease, legacyBulkBackupMetricOperation, "distributed")
+
+	return &compositeBulkOperationLease{leases: []domain.BulkOperationLease{localLease, distributedLease}}, nil
+}
+
+func recordLegacyBulkBackupLocalConcurrencyLimit() {
+	observability.Default().SetBulkOperationConcurrencyLimit(legacyBulkBackupMetricOperation, "global", "local", 1)
+}
+
+func recordLegacyBulkBackupDistributedConcurrencyLimit() {
+	observability.Default().SetBulkOperationConcurrencyLimit(legacyBulkBackupMetricOperation, "global", "distributed", 1)
+}
+
+func newBulkOperationMetricLease(lease domain.BulkOperationLease, operation, source string) domain.BulkOperationLease {
+	if lease == nil {
+		return nil
+	}
+	observability.Default().SetBulkOperationInFlight(operation, source, 1)
+	return &bulkOperationMetricLease{
+		lease:     lease,
+		operation: operation,
+		source:    source,
+	}
+}
+
+type bulkOperationMetricLease struct {
+	lease     domain.BulkOperationLease
+	operation string
+	source    string
+}
+
+func (l *bulkOperationMetricLease) Release() error {
+	err := l.lease.Release()
+	observability.Default().SetBulkOperationInFlight(l.operation, l.source, 0)
+	return err
+}
+
+func releaseBulkOperationLease(label string, lease domain.BulkOperationLease) {
+	if lease == nil {
+		return
+	}
+	if err := lease.Release(); err != nil {
+		log.Printf("Warning: failed to release %s bulk operation lease: %v", label, err)
+	}
+}
+
 // TriggerBulkBackup validates all devices and queues backups for eligible ones.
 func (s *BackupService) TriggerBulkBackup(ctx context.Context, requestedDeviceIDs ...uuid.UUID) ([]BulkBackupResult, error) {
+	lease, err := s.acquireLegacyBulkBackupLease(ctx)
+	if err != nil {
+		return nil, err
+	}
+	leaseTransferred := false
+	defer func() {
+		if !leaseTransferred {
+			releaseBulkOperationLease("legacy backup", lease)
+		}
+	}()
+
 	devices, err := s.bulkBackupDevices(ctx, requestedDeviceIDs)
 	if err != nil {
 		return nil, err
@@ -319,13 +503,28 @@ func (s *BackupService) TriggerBulkBackup(ctx context.Context, requestedDeviceID
 		results[prepared.resultIndex].JobID = &jobID
 	}
 
-	s.startBulkBackupWorkers(queuedBackups)
+	if len(queuedBackups) == 0 {
+		return results, nil
+	}
+
+	leaseTransferred = true
+	s.startBulkBackupWorkers(queuedBackups, func() {
+		releaseBulkOperationLease("legacy backup", lease)
+	})
 
 	return results, nil
 }
 
-func (s *BackupService) startBulkBackupWorkers(queuedBackups []queuedDeviceBackup) {
+func (s *BackupService) startBulkBackupWorkers(queuedBackups []queuedDeviceBackup, onComplete ...func()) {
+	runCompleteCallbacks := func() {
+		for _, callback := range onComplete {
+			if callback != nil {
+				callback()
+			}
+		}
+	}
 	if len(queuedBackups) == 0 {
+		runCompleteCallbacks()
 		return
 	}
 
@@ -335,6 +534,7 @@ func (s *BackupService) startBulkBackupWorkers(queuedBackups []queuedDeviceBacku
 	}
 
 	go func() {
+		defer runCompleteCallbacks()
 		jobs := make(chan queuedDeviceBackup)
 		var wg sync.WaitGroup
 		wg.Add(workerCount)
@@ -362,11 +562,24 @@ func (s *BackupService) StartBulkBackupRun(ctx context.Context, requestedDeviceI
 	if active, err := s.bulkRunRepo.GetActiveRun(); err != nil {
 		return nil, fmt.Errorf("checking active bulk backup run: %w", err)
 	} else if active != nil {
-		return active, ErrBulkBackupRunAlreadyActive
+		hydrated, hydrateErr := s.hydrateBulkBackupRunFileTotals(active)
+		if hydrateErr != nil {
+			return nil, fmt.Errorf("loading active bulk backup run totals: %w", hydrateErr)
+		}
+		return hydrated, ErrBulkBackupRunAlreadyActive
 	}
 	devices, err := s.bulkBackupRunDevices(ctx, requestedDeviceIDs)
 	if err != nil {
 		return nil, err
+	}
+	limits := s.BulkOperationLimits()
+	if len(devices) > limits.BulkBackupMaxQueuedJobs {
+		return nil, &BulkLimitError{
+			Operation: "bulk backup run",
+			Limit:     "queued jobs",
+			Max:       int64(limits.BulkBackupMaxQueuedJobs),
+			Actual:    int64(len(devices)),
+		}
 	}
 
 	now := time.Now().UTC()
@@ -409,7 +622,7 @@ func (s *BackupService) StartBulkBackupRun(ctx context.Context, requestedDeviceI
 		return nil, fmt.Errorf("calculating bulk backup run counters: %w", err)
 	}
 	go s.processBulkBackupRun(run.ID)
-	return s.bulkRunRepo.GetRun(run.ID)
+	return s.getBulkBackupRunWithFileTotals(run.ID)
 }
 
 func (s *BackupService) GetBulkBackupRun(ctx context.Context, id uuid.UUID) (*domain.BulkBackupRun, error) {
@@ -419,7 +632,7 @@ func (s *BackupService) GetBulkBackupRun(ctx context.Context, id uuid.UUID) (*do
 	if s.bulkRunRepo == nil {
 		return nil, errors.New("bulk backup run repository is not configured")
 	}
-	return s.bulkRunRepo.GetRun(id)
+	return s.getBulkBackupRunWithFileTotals(id)
 }
 
 func (s *BackupService) GetLatestBulkBackupRun(ctx context.Context) (*domain.BulkBackupRun, error) {
@@ -429,7 +642,11 @@ func (s *BackupService) GetLatestBulkBackupRun(ctx context.Context) (*domain.Bul
 	if s.bulkRunRepo == nil {
 		return nil, errors.New("bulk backup run repository is not configured")
 	}
-	return s.bulkRunRepo.GetLatestRun()
+	run, err := s.bulkRunRepo.GetLatestRun()
+	if err != nil {
+		return nil, err
+	}
+	return s.hydrateBulkBackupRunFileTotals(run)
 }
 
 func (s *BackupService) CancelBulkBackupRun(ctx context.Context, id uuid.UUID) (*domain.BulkBackupRun, error) {
@@ -456,7 +673,7 @@ func (s *BackupService) CancelBulkBackupRun(ctx context.Context, id uuid.UUID) (
 	if wasPaused {
 		go s.processBulkBackupRun(id)
 	}
-	return s.bulkRunRepo.GetRun(id)
+	return s.getBulkBackupRunWithFileTotals(id)
 }
 
 func (s *BackupService) PauseBulkBackupRun(ctx context.Context, id uuid.UUID) (*domain.BulkBackupRun, error) {
@@ -476,7 +693,7 @@ func (s *BackupService) PauseBulkBackupRun(ctx context.Context, id uuid.UUID) (*
 	if err := s.bulkRunRepo.UpdateRun(run); err != nil {
 		return nil, err
 	}
-	return s.bulkRunRepo.GetRun(id)
+	return s.getBulkBackupRunWithFileTotals(id)
 }
 
 func (s *BackupService) ResumeBulkBackupRun(ctx context.Context, id uuid.UUID) (*domain.BulkBackupRun, error) {
@@ -500,7 +717,45 @@ func (s *BackupService) ResumeBulkBackupRun(ctx context.Context, id uuid.UUID) (
 	if wasPaused {
 		go s.processBulkBackupRun(id)
 	}
-	return s.bulkRunRepo.GetRun(id)
+	return s.getBulkBackupRunWithFileTotals(id)
+}
+
+func (s *BackupService) getBulkBackupRunWithFileTotals(id uuid.UUID) (*domain.BulkBackupRun, error) {
+	run, err := s.bulkRunRepo.GetRun(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.hydrateBulkBackupRunFileTotals(run)
+}
+
+func (s *BackupService) hydrateBulkBackupRunFileTotals(run *domain.BulkBackupRun) (*domain.BulkBackupRun, error) {
+	if run == nil || s.fileRepo == nil {
+		return run, nil
+	}
+
+	run.FileCount = 0
+	run.ByteCount = 0
+	for index := range run.Items {
+		item := &run.Items[index]
+		item.FileCount = 0
+		item.ByteCount = 0
+		if item.BackupJobID == nil {
+			continue
+		}
+		files, err := s.fileRepo.GetByJobID(*item.BackupJobID)
+		if err != nil {
+			return nil, fmt.Errorf("loading bulk backup run item files: %w", err)
+		}
+		item.FileCount = len(files)
+		for _, file := range files {
+			if file.SizeBytes > 0 {
+				item.ByteCount += int64(file.SizeBytes)
+			}
+		}
+		run.FileCount += item.FileCount
+		run.ByteCount += item.ByteCount
+	}
+	return run, nil
 }
 
 func (s *BackupService) ResumeBulkBackupRuns(ctx context.Context) {
@@ -710,9 +965,9 @@ func (s *BackupService) waitForBulkRunBatch(runID uuid.UUID, batch []domain.Bulk
 					log.Printf("Warning: failed to update running bulk run item %s: %v", item.ID, err)
 				}
 			case domain.BackupStatusSuccess:
-				s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusSuccess, "", nil)
+				s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusSuccess, "", item.BackupJobID)
 			case domain.BackupStatusFailed:
-				s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusFailed, job.ErrorMessage, nil)
+				s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusFailed, job.ErrorMessage, item.BackupJobID)
 			}
 		}
 		if complete {
@@ -783,7 +1038,30 @@ func (s *BackupService) finishBulkBackupRun(runID uuid.UUID) {
 	}
 	if err := s.bulkRunRepo.UpdateRun(run); err != nil {
 		log.Printf("Warning: failed to finish bulk backup run %s: %v", runID, err)
+		return
 	}
+	durationStart := run.CreatedAt
+	if run.StartedAt != nil {
+		durationStart = *run.StartedAt
+	}
+	duration := time.Duration(0)
+	if run.CompletedAt != nil && !durationStart.IsZero() {
+		duration = run.CompletedAt.Sub(durationStart)
+	}
+	if hydratedRun, err := s.hydrateBulkBackupRunFileTotals(run); err != nil {
+		log.Printf("Warning: failed to hydrate bulk backup run %s file totals for metrics: %v", runID, err)
+	} else if hydratedRun != nil {
+		run = hydratedRun
+	}
+	observability.Default().ObserveBulkOperationCompletion(
+		"bulk_backup_run",
+		"distributed",
+		string(run.Status),
+		duration,
+		run.TotalCount,
+		run.FileCount,
+		run.ByteCount,
+	)
 }
 
 func (s *BackupService) recalculateBulkRunCounters(runID uuid.UUID) {
@@ -905,6 +1183,7 @@ func (s *BackupService) bulkBackupDevices(ctx context.Context, requestedDeviceID
 }
 
 func (s *BackupService) bulkBackupRunDevices(ctx context.Context, requestedDeviceIDs []uuid.UUID) ([]domain.Device, error) {
+	limits := s.BulkOperationLimits()
 	if len(requestedDeviceIDs) == 0 {
 		if err := contextError(ctx); err != nil {
 			return nil, err
@@ -913,10 +1192,27 @@ func (s *BackupService) bulkBackupRunDevices(ctx context.Context, requestedDevic
 		if err != nil {
 			return nil, fmt.Errorf("fetching devices: %w", err)
 		}
+		if len(devices) > limits.BulkBackupMaxDevices {
+			return nil, &BulkLimitError{
+				Operation: "bulk backup run",
+				Limit:     "devices",
+				Max:       int64(limits.BulkBackupMaxDevices),
+				Actual:    int64(len(devices)),
+			}
+		}
 		return devices, nil
 	}
 
 	uniqueIDs := dedupeUUIDs(requestedDeviceIDs)
+	if len(uniqueIDs) > limits.BulkBackupMaxDevices {
+		return nil, &BulkLimitError{
+			Operation: "bulk backup run",
+			Limit:     "devices",
+			Max:       int64(limits.BulkBackupMaxDevices),
+			Actual:    int64(len(uniqueIDs)),
+		}
+	}
+
 	devices := make([]domain.Device, 0, len(uniqueIDs))
 	for _, id := range uniqueIDs {
 		if err := contextError(ctx); err != nil {
@@ -934,6 +1230,7 @@ func (s *BackupService) bulkBackupRunDevices(ctx context.Context, requestedDevic
 // BulkDownloadEntry pairs a backup file with a device-derived folder name.
 type BulkDownloadEntry struct {
 	File      domain.BackupFile
+	DeviceID  uuid.UUID
 	DeviceDir string // sanitized device name for zip folder
 	ZipPath   string // slash-separated, prevalidated zip entry path
 	SizeBytes int64
@@ -1018,6 +1315,7 @@ func (s *BackupService) GetBulkDownloadFiles(ctx context.Context, deviceIDs []uu
 			f.FilePath = filePath
 			entries = append(entries, BulkDownloadEntry{
 				File:      f,
+				DeviceID:  did,
 				DeviceDir: dirName,
 				ZipPath:   zipPath,
 				SizeBytes: sizeBytes,

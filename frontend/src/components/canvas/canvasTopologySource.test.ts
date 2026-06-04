@@ -118,6 +118,7 @@ describe('canvasTopologySource', () => {
       devices: [testDevice],
       links: [testLink],
       areas: [],
+      etag: '"topo-1"',
       topologyVersion: 'topo-1',
       runtimeVersion: 7,
       runtimeIdentity: 'rt-sha256:abc',

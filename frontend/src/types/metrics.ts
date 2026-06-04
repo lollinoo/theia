@@ -195,6 +195,18 @@ export interface RuntimeDeltaEnvelopePayload {
   delta: RuntimePatchPayload;
 }
 
+export interface PollingHealthQueuePayload {
+  ready_depth: number;
+  lag_seconds: number;
+  active_workers: number;
+  configured_workers: number;
+}
+
+export interface PollingHealthWarningPayload {
+  code: string;
+  message: string;
+}
+
 export interface PollingHealthPayload {
   essential_overloaded: boolean;
   degraded_risk: boolean;
@@ -202,6 +214,8 @@ export interface PollingHealthPayload {
   deadline_miss_total: number;
   active_workers: number;
   configured_workers: number;
+  queues?: Record<string, PollingHealthQueuePayload>;
+  warnings?: PollingHealthWarningPayload[];
 }
 
 export interface WSMessage {
@@ -266,6 +280,58 @@ function isRecord(value: unknown): value is APIRecord {
 function readString(record: APIRecord, key: string, fallback = ''): string {
   const value = record[key];
   return typeof value === 'string' ? value : fallback;
+}
+
+function readFiniteNumber(record: APIRecord, key: string, fallback = 0): number {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+const MAX_POLLING_HEALTH_QUEUES = 16;
+const MAX_POLLING_HEALTH_WARNINGS = 16;
+
+function parsePollingHealthQueues(
+  value: unknown,
+): Record<string, PollingHealthQueuePayload> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const queues: Record<string, PollingHealthQueuePayload> = {};
+  for (const [name, queue] of Object.entries(value).slice(0, MAX_POLLING_HEALTH_QUEUES)) {
+    if (name.length === 0 || !isRecord(queue)) {
+      continue;
+    }
+    queues[name] = {
+      ready_depth: readFiniteNumber(queue, 'ready_depth'),
+      lag_seconds: readFiniteNumber(queue, 'lag_seconds'),
+      active_workers: readFiniteNumber(queue, 'active_workers'),
+      configured_workers: readFiniteNumber(queue, 'configured_workers'),
+    };
+  }
+
+  return Object.keys(queues).length > 0 ? queues : undefined;
+}
+
+function parsePollingHealthWarnings(value: unknown): PollingHealthWarningPayload[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const warnings: PollingHealthWarningPayload[] = [];
+  for (const warning of value.slice(0, MAX_POLLING_HEALTH_WARNINGS)) {
+    if (!isRecord(warning)) {
+      continue;
+    }
+    const code = readString(warning, 'code');
+    const message = readString(warning, 'message');
+    if (code === '' && message === '') {
+      continue;
+    }
+    warnings.push({ code, message });
+  }
+
+  return warnings.length > 0 ? warnings : undefined;
 }
 
 function readRequiredString(record: APIRecord, key: string, allowEmpty = false): string {
@@ -906,15 +972,12 @@ export function parseWSMessage(
       payload: {
         essential_overloaded: payload.essential_overloaded === true,
         degraded_risk: payload.degraded_risk === true,
-        essential_queue_lag_seconds:
-          typeof payload.essential_queue_lag_seconds === 'number'
-            ? payload.essential_queue_lag_seconds
-            : 0,
-        deadline_miss_total:
-          typeof payload.deadline_miss_total === 'number' ? payload.deadline_miss_total : 0,
-        active_workers: typeof payload.active_workers === 'number' ? payload.active_workers : 0,
-        configured_workers:
-          typeof payload.configured_workers === 'number' ? payload.configured_workers : 0,
+        essential_queue_lag_seconds: readFiniteNumber(payload, 'essential_queue_lag_seconds'),
+        deadline_miss_total: readFiniteNumber(payload, 'deadline_miss_total'),
+        active_workers: readFiniteNumber(payload, 'active_workers'),
+        configured_workers: readFiniteNumber(payload, 'configured_workers'),
+        queues: parsePollingHealthQueues(payload.queues),
+        warnings: parsePollingHealthWarnings(payload.warnings),
       },
     } as PollingHealthChangedWSMessage;
   }
