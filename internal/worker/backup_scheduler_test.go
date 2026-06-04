@@ -77,8 +77,9 @@ func TestBackupSchedulerRunRetention_Normal(t *testing.T) {
 	settingsRepo.Set(domain.SettingInstanceBackupRetentionCount, "5")
 
 	scheduler := &BackupScheduler{
-		backupRepo:   backupRepo,
-		settingsRepo: settingsRepo,
+		backupService: newTestBackupService(backupRepo),
+		backupRepo:    backupRepo,
+		settingsRepo:  settingsRepo,
 	}
 
 	scheduler.runRetention(context.Background())
@@ -105,8 +106,9 @@ func TestBackupSchedulerRunRetention_Timeout(t *testing.T) {
 	settingsRepo.Set(domain.SettingInstanceBackupRetentionCount, "5")
 
 	scheduler := &BackupScheduler{
-		backupRepo:   backupRepo,
-		settingsRepo: settingsRepo,
+		backupService: newTestBackupService(backupRepo),
+		backupRepo:    backupRepo,
+		settingsRepo:  settingsRepo,
 	}
 
 	// Use already-cancelled context to simulate timeout

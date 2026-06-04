@@ -133,44 +133,23 @@ func (s *BackupScheduler) runRetention(ctx context.Context) {
 
 	retentionCount := GetRetentionCount(s.settingsRepo)
 
-	// Delete oldest successful backups beyond retention count
-	successful, err := s.backupRepo.ListSuccessfulOldest()
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	result, err := s.backupService.CleanupRetention(retCtx, retentionCount, cutoff)
 	if err != nil {
 		log.Printf("BackupScheduler: retention: failed to list successful backups: %v", err)
 		return
 	}
-
-	deletedCount := 0
-	timedOut := false
-	if len(successful) > retentionCount {
-		toDelete := successful[:len(successful)-retentionCount]
-		for _, b := range toDelete {
-			select {
-			case <-retCtx.Done():
-				log.Printf("BackupScheduler: retention sweep timed out after deleting %d/%d backups, will resume next cycle", deletedCount, len(toDelete))
-				timedOut = true
-			default:
-			}
-			if timedOut {
-				break
-			}
-			if err := s.backupService.Delete(retCtx, b.ID); err != nil {
-				log.Printf("BackupScheduler: retention: failed to delete backup %s: %v", b.ID, err)
-				continue
-			}
-			deletedCount++
-		}
+	if result.TimedOut {
+		log.Printf("BackupScheduler: retention sweep timed out after deleting %d/%d backups, will resume next cycle", result.SuccessfulDeleted, result.SuccessfulDeleteCandidates)
 	}
-
-	// Always clean up failed backup records regardless of timeout
-	cutoff := time.Now().Add(-7 * 24 * time.Hour)
-	failedCount, err := s.backupRepo.DeleteFailedOlderThan(cutoff)
-	if err != nil {
-		log.Printf("BackupScheduler: retention: failed to clean failed records: %v", err)
+	for _, failure := range result.DeleteFailures {
+		log.Printf("BackupScheduler: retention: failed to delete backup %s: %v", failure.ID, failure.Err)
 	}
-
-	if deletedCount > 0 || failedCount > 0 {
-		log.Printf("Retention: deleted %d old backups, cleaned %d failed records", deletedCount, failedCount)
+	if result.FailedCleanupError != nil {
+		log.Printf("BackupScheduler: retention: failed to clean failed records: %v", result.FailedCleanupError)
+	}
+	if result.SuccessfulDeleted > 0 || result.FailedDeleted > 0 {
+		log.Printf("Retention: deleted %d old backups, cleaned %d failed records", result.SuccessfulDeleted, result.FailedDeleted)
 	}
 }
 
