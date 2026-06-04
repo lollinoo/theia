@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEffect } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import type { Area, CanvasMap, Device, Link } from './types/api';
 import type { SnapshotPayload } from './types/metrics';
@@ -26,6 +26,10 @@ const useWebSocketMock = vi.fn();
 const watermarkPropsMock = vi.hoisted(() => vi.fn());
 const adminDashboardPropsMock = vi.hoisted(() => vi.fn());
 const hasPermissionMock = vi.hoisted(() => vi.fn());
+const reactActWarningPattern = /not wrapped in act/;
+const originalConsoleError = console.error;
+let appActWarnings: unknown[][] = [];
+let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
 vi.mock('./api/client', () => ({
   fetchAreas: () => fetchAreasMock(),
@@ -466,8 +470,24 @@ async function renderApp() {
   return result;
 }
 
+// clickButton keeps App-level event updates and follow-up effects inside React's async act boundary.
+async function clickButton(name: string) {
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name }));
+  });
+}
+
 describe('App', () => {
   beforeEach(() => {
+    appActWarnings = [];
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      if (args.some((arg) => typeof arg === 'string' && reactActWarningPattern.test(arg))) {
+        appActWarnings.push(args);
+        return;
+      }
+
+      originalConsoleError(...args);
+    });
     window.localStorage.clear();
     fetchAreasMock.mockReset();
     fetchCanvasMapsMock.mockReset();
@@ -499,6 +519,13 @@ describe('App', () => {
     });
   });
 
+  afterEach(() => {
+    const warnings = [...appActWarnings];
+    consoleErrorSpy.mockRestore();
+    // App warnings are noisy in CI, so this suite fails immediately when a test leaks one.
+    expect(warnings).toEqual([]);
+  });
+
   it('passes visibility state to the mounted admin dashboard', async () => {
     hasPermissionMock.mockImplementation(
       (permission: string) => permission === 'admin:dashboard:read',
@@ -510,8 +537,7 @@ describe('App', () => {
     await waitFor(() => {
       expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({ visible: true });
     });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Dashboard' }));
+    await clickButton('Dashboard');
     await waitFor(() => {
       expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({ visible: false });
     });
@@ -544,15 +570,13 @@ describe('App', () => {
 
     expect(screen.getByTestId('navigation-pill')).toBeInTheDocument();
     expect(screen.getByTestId('canvas')).toHaveTextContent('chrome:visible');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle canvas chrome' }));
+    await clickButton('Toggle canvas chrome');
 
     expect(screen.queryByTestId('navigation-pill')).not.toBeInTheDocument();
     expect(screen.getByTestId('canvas')).toHaveTextContent('chrome:hidden');
     expect(screen.getByTestId('canvas')).toHaveTextContent('fit:0');
     expect(screen.getByTestId('watermark')).toHaveAttribute('data-compact', 'true');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle canvas chrome' }));
+    await clickButton('Toggle canvas chrome');
 
     expect(screen.getByTestId('navigation-pill')).toBeInTheDocument();
     expect(screen.getByTestId('canvas')).toHaveTextContent('chrome:visible');
@@ -637,10 +661,7 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
     await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     expect(await screen.findByTestId('topology-hub')).toHaveTextContent('devices:1');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('links:1');
@@ -651,8 +672,7 @@ describe('App', () => {
     expect(duplicateCanvasMapMock).not.toHaveBeenCalled();
     expect(deleteCanvasMapMock).not.toHaveBeenCalled();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-
-    screen.getByRole('button', { name: 'Dashboard' }).click();
+    await clickButton('Dashboard');
     expect(await screen.findByTestId('dashboard')).toHaveTextContent('devices:1');
     expect(screen.getByTestId('dashboard')).toHaveTextContent('status:down');
   });
@@ -675,10 +695,7 @@ describe('App', () => {
       ),
     );
     expect(fetchCanvasMapsMock).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
 
     expect(await screen.findByTestId('topology-hub')).toHaveTextContent('maps:1');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('loading:false');
@@ -689,10 +706,7 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
 
     const canvasViewport = screen.getByTestId('canvas').parentElement;
     expect(canvasViewport).not.toHaveClass('hidden');
@@ -710,8 +724,7 @@ describe('App', () => {
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
     );
-
-    screen.getByRole('button', { name: 'Dashboard' }).click();
+    await clickButton('Dashboard');
 
     expect(await screen.findByTestId('dashboard')).toHaveTextContent(
       'dashboard-areas:Map Local Area',
@@ -736,12 +749,12 @@ describe('App', () => {
         'pill-map:default-map-id:Default',
       ),
     );
-    screen.getByRole('button', { name: 'Hub' }).click();
+    await clickButton('Hub');
 
     await waitFor(() =>
       expect(screen.getByTestId('topology-hub')).toHaveTextContent('hub-areas:Backbone'),
     );
-    screen.getByRole('button', { name: 'Refresh map areas' }).click();
+    await clickButton('Refresh map areas');
 
     await waitFor(() => expect(screen.getByTestId('canvas')).toHaveTextContent('refresh:1'));
     await waitFor(() =>
@@ -753,12 +766,9 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    screen.getByRole('button', { name: 'Dashboard' }).click();
+    await clickButton('Dashboard');
     expect(await screen.findByTestId('dashboard')).toHaveTextContent('devices:1');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
-    });
+    await clickButton('Pill Open Backbone map');
 
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:map-1:Backbone');
     expect(screen.getByTestId('dashboard').parentElement?.className).toContain('h-full');
@@ -769,14 +779,9 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
     expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
-    });
+    await clickButton('Pill Open Backbone map');
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     expect(screen.getByTestId('canvas')).toHaveTextContent('fit:1');
@@ -792,11 +797,8 @@ describe('App', () => {
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
     );
-
-    screen.getByRole('button', { name: 'Dashboard' }).click();
-    act(() => {
-      screen.getByRole('button', { name: 'Pill area Backbone' }).click();
-    });
+    await clickButton('Dashboard');
+    await clickButton('Pill area Backbone');
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('area:map-area-1');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
@@ -808,16 +810,10 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    screen.getByRole('button', { name: 'Dashboard' }).click();
-
-    act(() => {
-      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
-    });
+    await clickButton('Dashboard');
+    await clickButton('Pill Open Backbone map');
     expect(screen.getByTestId('dashboard').parentElement?.className).toContain('h-full');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Open map' }).click();
-    });
+    await clickButton('Open map');
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
@@ -837,18 +833,13 @@ describe('App', () => {
 
     vi.useFakeTimers();
     try {
-      act(() => {
-        screen.getByRole('button', { name: 'Start interaction' }).click();
-      });
+      await clickButton('Start interaction');
       expect(useWebSocketMock).toHaveBeenLastCalledWith(
         '/api/v1/ws',
         null,
         expect.objectContaining({ runtimeUpdatesPaused: true }),
       );
-
-      act(() => {
-        screen.getByRole('button', { name: 'End interaction' }).click();
-      });
+      await clickButton('End interaction');
       expect(useWebSocketMock).toHaveBeenLastCalledWith(
         '/api/v1/ws',
         null,
@@ -881,10 +872,7 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-
-    act(() => {
-      screen.getByRole('button', { name: 'Start interaction' }).click();
-    });
+    await clickButton('Start interaction');
 
     expect(screen.getByTestId('watermark')).toHaveAttribute('data-hidden', 'false');
     expect(watermarkPropsMock.mock.lastCall?.[0]).not.toHaveProperty('hidden');
@@ -906,15 +894,9 @@ describe('App', () => {
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:default:Default');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
-    });
+    await clickButton('Pill Open Backbone map');
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Pill Manage maps' }).click();
-    });
+    await clickButton('Pill Manage maps');
     expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
     expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-0');
   });
@@ -924,10 +906,7 @@ describe('App', () => {
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     expect(screen.getByTestId('canvas')).toHaveTextContent('fit:0');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
-    });
+    await clickButton('Pill Open Backbone map');
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     expect(screen.getByTestId('canvas')).toHaveTextContent('fit:1');
@@ -942,21 +921,12 @@ describe('App', () => {
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
     );
-
-    act(() => {
-      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
-    });
+    await clickButton('Pill Open Backbone map');
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:map-1:Backbone');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Pill area Backbone' }).click();
-    });
+    await clickButton('Pill area Backbone');
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Pill all areas' }).click();
-    });
+    await clickButton('Pill all areas');
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
   });
 
@@ -976,18 +946,13 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
     await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
-
-    act(() => {
-      screen.getByRole('button', { name: 'Create empty map' }).click();
-    });
+    await clickButton('Create empty map');
     fireEvent.change(await screen.findByLabelText('Map name'), {
       target: { value: 'Blank Map' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create map' }));
+    await clickButton('Create map');
 
     await waitFor(() =>
       expect(createCanvasMapMock).toHaveBeenCalledWith({
@@ -1008,13 +973,10 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
     await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     const fetchCountBeforeDelete = fetchCanvasMapsMock.mock.calls.length;
-
-    screen.getByRole('button', { name: 'Delete map Branch' }).click();
+    await clickButton('Delete map Branch');
 
     expect(confirmSpy).not.toHaveBeenCalled();
     const dialog = await screen.findByRole('dialog', { name: 'Delete map' });
@@ -1036,16 +998,13 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
     await waitFor(() =>
       expect(screen.getByTestId('topology-hub')).toHaveTextContent(
         'selected-map:map-rename:Branch',
       ),
     );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Rename map Branch' }));
+    await clickButton('Rename map Branch');
     const dialog = await screen.findByRole('dialog', { name: 'Rename map' });
     expect(within(dialog).getByLabelText('Map name')).toHaveValue('Branch');
 
@@ -1091,25 +1050,16 @@ describe('App', () => {
         'pill-map:default-map-id:Default',
       ),
     );
-
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
     await waitFor(() =>
       expect(screen.getByTestId('topology-hub')).toHaveTextContent(
         'selected-map:default-map-id:Default',
       ),
     );
-
-    act(() => {
-      screen.getByRole('button', { name: 'Select hub map Branch' }).click();
-    });
+    await clickButton('Select hub map Branch');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('selected-map:map-branch:Branch');
     expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Open selected map' }).click();
-    });
+    await clickButton('Open selected map');
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-branch:Branch');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
@@ -1140,17 +1090,13 @@ describe('App', () => {
         'pill-map:default-map-id:Default',
       ),
     );
-
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
     await waitFor(() =>
       expect(screen.getByTestId('topology-hub')).toHaveTextContent(
         'selected-map:default-map-id:Default',
       ),
     );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Set primary map Branch' }));
+    await clickButton('Set primary map Branch');
 
     await waitFor(() => expect(setCanvasMapPrimaryMock).toHaveBeenCalledWith('map-branch'));
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:map-branch:Branch');
@@ -1168,27 +1114,16 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    act(() => {
-      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
-    });
+    await clickButton('Pill Open Backbone map');
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
     );
-
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('hub-areas:Map Local Area');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Select hub map Backbone' }).click();
-    });
+    await clickButton('Select hub map Backbone');
     expect(screen.getByTestId('topology-hub')).toHaveTextContent('hub-areas:Map Local Area');
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Open selected map' }).click();
-    });
+    await clickButton('Open selected map');
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
@@ -1207,12 +1142,8 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    act(() => {
-      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
-    });
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Pill Open Backbone map');
+    await clickButton('Hub');
 
     expect(await screen.findByTestId('topology-hub')).toHaveTextContent('hub-areas:Map Local Area');
     fireEvent.click(
@@ -1223,7 +1154,7 @@ describe('App', () => {
     fireEvent.change(await screen.findByLabelText('Map name'), {
       target: { value: 'Map Local Area Copy' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create map' }));
+    await clickButton('Create map');
 
     await waitFor(() =>
       expect(createCanvasMapMock).toHaveBeenCalledWith({
@@ -1263,16 +1194,14 @@ describe('App', () => {
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:default-map'),
     );
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
 
     expect(await screen.findByTestId('topology-hub')).toHaveTextContent('hub-areas:Backbone');
-    fireEvent.click(screen.getByRole('button', { name: 'Create map from area Backbone' }));
+    await clickButton('Create map from area Backbone');
     fireEvent.change(await screen.findByLabelText('Map name'), {
       target: { value: 'Backbone Copy' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create map' }));
+    await clickButton('Create map');
 
     await waitFor(() =>
       expect(createCanvasMapMock).toHaveBeenCalledWith({
@@ -1300,23 +1229,14 @@ describe('App', () => {
     await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
-    act(() => {
-      screen.getByRole('button', { name: 'Pill Open Backbone map' }).click();
-    });
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Pill Open Backbone map');
+    await clickButton('Hub');
 
     expect(await screen.findByTestId('topology-hub')).toHaveTextContent('hub-areas:Map Local Area');
-    act(() => {
-      screen.getByRole('button', { name: 'Open area Map Local Area' }).click();
-    });
+    await clickButton('Open area Map Local Area');
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
-
-    act(() => {
-      screen.getByRole('button', { name: 'Hub' }).click();
-    });
+    await clickButton('Hub');
     fireEvent.click(
       screen.getByRole('button', {
         name: 'Create map from area Map Local Area',
@@ -1325,7 +1245,7 @@ describe('App', () => {
     fireEvent.change(await screen.findByLabelText('Map name'), {
       target: { value: 'Opened Area Copy' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create map' }));
+    await clickButton('Create map');
 
     await waitFor(() =>
       expect(createCanvasMapMock).toHaveBeenCalledWith({
