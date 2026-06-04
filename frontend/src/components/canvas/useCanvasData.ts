@@ -14,7 +14,7 @@ import {
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { applyAlertStatusPatch } from './alertStatusPatch';
-import { recordCanvasDiagnosticEvent, updateCanvasDiagnosticsState } from './canvasDiagnostics';
+import { updateCanvasDiagnosticsState } from './canvasDiagnostics';
 import { topologyFitViewPadding, viewportSize } from './canvasHelpers';
 import {
   type CanvasMeasurementTrigger,
@@ -25,6 +25,11 @@ import {
   recordCanvasLayoutCompleted,
   recordCanvasLayoutStarted,
 } from './canvasLayoutDiagnostics';
+import {
+  recordCanvasTopologyLoadFailed,
+  recordCanvasTopologyLoadStarted,
+  recordCanvasTopologyLoadSucceeded,
+} from './canvasTopologyDiagnostics';
 import { canvasMapKey, loadCanvasTopologySource } from './canvasTopologySource';
 import {
   buildIncrementalLayoutInputs,
@@ -137,10 +142,6 @@ function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
     : Date.now();
-}
-
-function roundDurationMs(durationMs: number): number {
-  return Number(Math.max(0, durationMs).toFixed(3));
 }
 
 export function useCanvasData({
@@ -280,20 +281,7 @@ export function useCanvasData({
           mapId: diagnosticMapId,
           mapName: diagnosticMapName,
         };
-        updateCanvasDiagnosticsState({
-          topology: {
-            lastTopologyLoadReason: trigger,
-            lastTopologyLoadStatus: 'loading',
-            lastTopologyLoadError: undefined,
-          },
-        });
-        recordCanvasDiagnosticEvent({
-          level: 'info',
-          source: 'topology',
-          event: 'topology.load.started',
-          message: 'Canvas topology load started',
-          metadata: topologyLoadMetadata,
-        });
+        recordCanvasTopologyLoadStarted(topologyLoadMetadata);
 
         if (!isSilentRefresh) {
           setLoading(true);
@@ -349,24 +337,10 @@ export function useCanvasData({
             if (notModifiedPlan.shouldFitView) {
               requestFitViewAfterLoad();
             }
-            updateCanvasDiagnosticsState({
-              topology: {
-                lastTopologyLoadAt: new Date().toISOString(),
-                lastTopologyLoadReason: trigger,
-                lastTopologyLoadDurationMs: roundDurationMs(nowMs() - loadStartedAt),
-                lastTopologyLoadStatus: 'success',
-                lastTopologyLoadError: undefined,
-              },
-            });
-            recordCanvasDiagnosticEvent({
-              level: 'info',
-              source: 'topology',
-              event: 'topology.load.succeeded',
-              message: 'Canvas topology read model not modified',
-              metadata: {
-                ...topologyLoadMetadata,
-                notModified: true,
-              },
+            recordCanvasTopologyLoadSucceeded({
+              metadata: topologyLoadMetadata,
+              durationMs: nowMs() - loadStartedAt,
+              notModified: true,
             });
             return 'applied';
           }
@@ -503,35 +477,14 @@ export function useCanvasData({
             lastAppliedRuntimeSnapshotRef.current = snapshotRef.current;
             lastTopologyIdentityByMapRef.current.set(mapKey, topologyIdentity.signature);
             lastUsablePositionStateByMapRef.current.set(mapKey, usablePositionState);
-            updateCanvasDiagnosticsState({
-              topology: {
-                lastTopologyLoadAt: new Date().toISOString(),
-                lastTopologyLoadReason: trigger,
-                lastTopologyLoadDurationMs: roundDurationMs(nowMs() - loadStartedAt),
-                lastTopologyLoadStatus: 'success',
-                lastTopologyLoadError: undefined,
-              },
-              graph: {
-                canonicalNodeCount: fetchedDevices.length,
-                canonicalEdgeCount: fetchedLinks.length,
-              },
-              layout: {
-                pendingLayout: false,
-              },
-            });
-            recordCanvasDiagnosticEvent({
-              level: 'info',
-              source: 'topology',
-              event: 'topology.load.succeeded',
-              message: 'Canvas topology load succeeded',
-              metadata: {
-                ...topologyLoadMetadata,
-                deviceCount: fetchedDevices.length,
-                linkCount: fetchedLinks.length,
-                positionCount: savedPositions.size,
-                placementDeviceCount: 0,
-                structureChanged,
-              },
+            recordCanvasTopologyLoadSucceeded({
+              metadata: topologyLoadMetadata,
+              durationMs: nowMs() - loadStartedAt,
+              deviceCount: fetchedDevices.length,
+              linkCount: fetchedLinks.length,
+              positionCount: savedPositions.size,
+              placementDeviceCount: 0,
+              structureChanged,
             });
             if (shouldFitViewAfterLoad) {
               requestFitViewAfterLoad();
@@ -613,35 +566,14 @@ export function useCanvasData({
 
           lastTopologyIdentityByMapRef.current.set(mapKey, topologyIdentity.signature);
           lastUsablePositionStateByMapRef.current.set(mapKey, usablePositionState);
-          updateCanvasDiagnosticsState({
-            topology: {
-              lastTopologyLoadAt: new Date().toISOString(),
-              lastTopologyLoadReason: trigger,
-              lastTopologyLoadDurationMs: roundDurationMs(nowMs() - loadStartedAt),
-              lastTopologyLoadStatus: 'success',
-              lastTopologyLoadError: undefined,
-            },
-            graph: {
-              canonicalNodeCount: fetchedDevices.length,
-              canonicalEdgeCount: fetchedLinks.length,
-            },
-            layout: {
-              pendingLayout: false,
-            },
-          });
-          recordCanvasDiagnosticEvent({
-            level: 'info',
-            source: 'topology',
-            event: 'topology.load.succeeded',
-            message: 'Canvas topology load succeeded',
-            metadata: {
-              ...topologyLoadMetadata,
-              deviceCount: fetchedDevices.length,
-              linkCount: fetchedLinks.length,
-              positionCount: savedPositions.size,
-              placementDeviceCount: placementDeviceIds.size,
-              structureChanged,
-            },
+          recordCanvasTopologyLoadSucceeded({
+            metadata: topologyLoadMetadata,
+            durationMs: nowMs() - loadStartedAt,
+            deviceCount: fetchedDevices.length,
+            linkCount: fetchedLinks.length,
+            positionCount: savedPositions.size,
+            placementDeviceCount: placementDeviceIds.size,
+            structureChanged,
           });
           return 'applied';
         } catch (loadError) {
@@ -650,27 +582,10 @@ export function useCanvasData({
           }
           const topologyError =
             loadError instanceof Error ? loadError : new Error('Failed to load topology');
-          updateCanvasDiagnosticsState({
-            topology: {
-              lastTopologyLoadAt: new Date().toISOString(),
-              lastTopologyLoadReason: trigger,
-              lastTopologyLoadDurationMs: roundDurationMs(nowMs() - loadStartedAt),
-              lastTopologyLoadStatus: 'error',
-              lastTopologyLoadError: topologyError.message,
-            },
-            layout: {
-              pendingLayout: false,
-            },
-          });
-          recordCanvasDiagnosticEvent({
-            level: 'error',
-            source: 'topology',
-            event: 'topology.load.failed',
-            message: 'Canvas topology load failed',
-            metadata: {
-              ...topologyLoadMetadata,
-              error: topologyError.message,
-            },
+          recordCanvasTopologyLoadFailed({
+            metadata: topologyLoadMetadata,
+            durationMs: nowMs() - loadStartedAt,
+            error: topologyError.message,
           });
 
           if (!options.suppressBlockingError) {
