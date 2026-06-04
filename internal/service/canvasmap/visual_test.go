@@ -1,6 +1,7 @@
 package canvasmap
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -52,5 +53,19 @@ func TestVisualColorsByDeviceID(t *testing.T) {
 	}
 	if _, ok := got[deviceWithoutColor]; ok {
 		t.Fatalf("unexpected color for device without visual color")
+	}
+}
+
+func TestValidateVisualColorDeviceRequiresVirtualDevice(t *testing.T) {
+	if err := ValidateVisualColorDevice(domain.Device{DeviceType: domain.DeviceTypeVirtual}); err != nil {
+		t.Fatalf("ValidateVisualColorDevice() virtual error = %v", err)
+	}
+
+	err := ValidateVisualColorDevice(domain.Device{DeviceType: domain.DeviceTypeRouter})
+	if !errors.Is(err, ErrVisualColorRequiresVirtualDevice) {
+		t.Fatalf("ValidateVisualColorDevice() router error = %v, want ErrVisualColorRequiresVirtualDevice", err)
+	}
+	if got, want := err.Error(), "visual_color is only supported for virtual devices"; got != want {
+		t.Fatalf("ValidateVisualColorDevice() error = %q, want %q", got, want)
 	}
 }

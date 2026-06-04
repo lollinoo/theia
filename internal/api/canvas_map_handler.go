@@ -554,8 +554,8 @@ func (h *CanvasMapHandler) HandlePatchDevice(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, "canvas map device not found")
 		return
 	}
-	if device.DeviceType != domain.DeviceTypeVirtual {
-		writeError(w, http.StatusBadRequest, "visual_color is only supported for virtual devices")
+	if err := canvasmap.ValidateVisualColorDevice(*device); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

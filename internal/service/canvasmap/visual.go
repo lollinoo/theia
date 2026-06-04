@@ -9,6 +9,7 @@ import (
 )
 
 var ErrInvalidVisualColor = errors.New("invalid visual_color format (must be #RRGGBB)")
+var ErrVisualColorRequiresVirtualDevice = errors.New("visual_color is only supported for virtual devices")
 
 func NormalizeVisualColor(raw *string) (*string, error) {
 	if raw == nil {
@@ -36,6 +37,13 @@ func VisualColorsByDeviceID(
 		visualColors[member.DeviceID] = *member.VisualColor
 	}
 	return visualColors
+}
+
+func ValidateVisualColorDevice(device domain.Device) error {
+	if device.DeviceType != domain.DeviceTypeVirtual {
+		return ErrVisualColorRequiresVirtualDevice
+	}
+	return nil
 }
 
 func isHexRGBColor(color string) bool {
