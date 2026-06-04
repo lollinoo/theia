@@ -4,6 +4,7 @@ import type { PositionState } from '../../hooks/usePositions';
 import type { Device } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
 import {
+  buildTopologyCompositionPositionPlan,
   buildUsablePositionState,
   mergeNodePresentationState,
   nodePositionsToPositionMap,
@@ -48,6 +49,54 @@ function node(id: string, x: number, y: number): DeviceNode {
 }
 
 describe('topology position state helpers', () => {
+  it('builds effective positions from saved positions plus unsaved current holes', () => {
+    const saved = new Map<string, PositionState>([
+      ['dev-1', { x: 10, y: 20, pinned: true }],
+      ['dev-2', { x: 30, y: 40, pinned: false }],
+    ]);
+    const current = new Map<string, PositionState>([
+      ['dev-1', { x: 100, y: 200, pinned: false }],
+      ['dev-3', { x: 50, y: 60, pinned: false }],
+    ]);
+
+    const plan = buildTopologyCompositionPositionPlan({
+      trigger: 'manual_refresh',
+      savedPositions: saved,
+      currentNodePositions: current,
+    });
+
+    expect(plan.effectivePositions).toEqual(
+      new Map<string, PositionState>([
+        ['dev-1', { x: 10, y: 20, pinned: true }],
+        ['dev-2', { x: 30, y: 40, pinned: false }],
+        ['dev-3', { x: 50, y: 60, pinned: false }],
+      ]),
+    );
+    expect(plan.currentPositionsForComposition).toBe(current);
+  });
+
+  it('drops current composition positions after backend reconnect', () => {
+    const saved = new Map<string, PositionState>([['dev-1', { x: 10, y: 20, pinned: true }]]);
+    const current = new Map<string, PositionState>([
+      ['dev-1', { x: 100, y: 200, pinned: false }],
+      ['dev-2', { x: 50, y: 60, pinned: false }],
+    ]);
+
+    const plan = buildTopologyCompositionPositionPlan({
+      trigger: 'backend_reconnected',
+      savedPositions: saved,
+      currentNodePositions: current,
+    });
+
+    expect(plan.effectivePositions).toEqual(
+      new Map<string, PositionState>([
+        ['dev-1', { x: 10, y: 20, pinned: true }],
+        ['dev-2', { x: 50, y: 60, pinned: false }],
+      ]),
+    );
+    expect(plan.currentPositionsForComposition).toEqual(new Map());
+  });
+
   it('builds a stable usable-position signature from current or saved positions', () => {
     const devices = [device('dev-b'), device('dev-a'), device('dev-c')];
     const current = new Map<string, PositionState>([['dev-b', { x: 1, y: 2, pinned: false }]]);

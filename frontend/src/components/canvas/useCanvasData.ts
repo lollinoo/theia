@@ -51,6 +51,7 @@ import {
 } from './topologyCompositionCache';
 import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
 import {
+  buildTopologyCompositionPositionPlan,
   buildUsablePositionState,
   mergeNodePresentationState,
   nodePositionsToPositionMap,
@@ -405,18 +406,12 @@ export function useCanvasData({
             currentNodePositionsByMapRef.current.get(mapKey) ?? new Map();
           const structureChanged =
             lastTopologyIdentityByMapRef.current.get(mapKey) !== topologyIdentity.signature;
-          const effectivePositions = new Map(savedPositions);
-          for (const [deviceId, position] of currentNodePositions.entries()) {
-            if (!effectivePositions.has(deviceId)) {
-              effectivePositions.set(deviceId, position);
-            }
-          }
-          // Backend reconnects can follow instance restore; fetched persisted
-          // positions must override stale pre-restart canvas state.
-          const currentPositionsForComposition =
-            trigger === 'backend_reconnected'
-              ? new Map<string, PositionState>()
-              : currentNodePositions;
+          const { effectivePositions, currentPositionsForComposition } =
+            buildTopologyCompositionPositionPlan({
+              trigger,
+              savedPositions,
+              currentNodePositions,
+            });
 
           const usablePositionState = buildUsablePositionState(
             fetchedDevices,

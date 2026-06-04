@@ -2,9 +2,40 @@ import type { PositionState } from '../../hooks/usePositions';
 import type { Device } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
 import type { buildPositionPayload } from './canvasHelpers';
+import type { CanvasMeasurementTrigger } from './canvasInstrumentation';
+
+interface TopologyCompositionPositionPlanInput {
+  trigger: CanvasMeasurementTrigger;
+  savedPositions: Map<string, PositionState>;
+  currentNodePositions: Map<string, PositionState>;
+}
+
+interface TopologyCompositionPositionPlan {
+  effectivePositions: Map<string, PositionState>;
+  currentPositionsForComposition: Map<string, PositionState>;
+}
 
 function hasUsablePosition(position: PositionState | undefined): position is PositionState {
   return position !== undefined && Number.isFinite(position.x) && Number.isFinite(position.y);
+}
+
+export function buildTopologyCompositionPositionPlan({
+  trigger,
+  savedPositions,
+  currentNodePositions,
+}: TopologyCompositionPositionPlanInput): TopologyCompositionPositionPlan {
+  const effectivePositions = new Map(savedPositions);
+  for (const [deviceId, position] of currentNodePositions.entries()) {
+    if (!effectivePositions.has(deviceId)) {
+      effectivePositions.set(deviceId, position);
+    }
+  }
+
+  return {
+    effectivePositions,
+    currentPositionsForComposition:
+      trigger === 'backend_reconnected' ? new Map<string, PositionState>() : currentNodePositions,
+  };
 }
 
 export function buildUsablePositionState(
