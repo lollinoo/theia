@@ -5,7 +5,7 @@
        phase4-scale-lab phase4-validate \
        prod prod-metrics prod-down prod-build prod-logs prod-clean \
        staging staging-down staging-logs \
-       backend-fast frontend-fast \
+       backend-fast frontend-fast govulncheck \
        realtime-stress collector-contract browser-e2e \
        version release bridge-build-all
 
@@ -142,17 +142,27 @@ endif
 # CI and focused quality gates
 # ---------------------------------------------------------------------------
 ifeq ($(IS_WINDOWS),1)
+govulncheck: ## Run Go vulnerability scanning
+	@if (-not (Get-Command govulncheck -ErrorAction SilentlyContinue)) { Write-Error "govulncheck is required. Install it with: go install golang.org/x/vuln/cmd/govulncheck@latest"; exit 1 }
+	govulncheck ./...
+
 backend-fast: ## Run the backend-fast quality gate locally
 	@New-Item -ItemType Directory -Force coverage | Out-Null
 	go vet ./...
 	go build ./cmd/theia/
+	$(MAKE) govulncheck
 	go test ./... -count=1 -covermode=atomic -coverprofile=coverage/backend-fast.out
 	@& ./scripts/check-go-cover.ps1 coverage/backend-fast.out 45
 else
+govulncheck: ## Run Go vulnerability scanning
+	@command -v govulncheck >/dev/null 2>&1 || { echo "govulncheck is required. Install it with: go install golang.org/x/vuln/cmd/govulncheck@latest" >&2; exit 1; }
+	govulncheck ./...
+
 backend-fast: ## Run the backend-fast quality gate locally
 	mkdir -p coverage
 	go vet ./...
 	go build ./cmd/theia/
+	$(MAKE) govulncheck
 	go test ./... -count=1 -covermode=atomic -coverprofile=coverage/backend-fast.out
 	bash scripts/check-go-cover.sh coverage/backend-fast.out 45
 endif
@@ -374,8 +384,8 @@ wisp-bgp: ## Show BGP and propagated default routes in the WISP lab
 	@bash scripts/check-wisp-bgp.sh
 endif
 
-verify: ## Run go vet and go build inside container
-	docker compose --profile test run --rm --no-deps backend sh -c "go vet ./... && go build ./cmd/theia/"
+verify: ## Run go vet, go build, and vulnerability scanning inside container
+	docker compose --profile test run --build --rm --no-deps backend sh -c "go vet ./... && go build ./cmd/theia/ && govulncheck ./..."
 
 logs: ## Follow backend container logs
 	docker compose logs -f backend

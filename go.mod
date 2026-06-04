@@ -1,6 +1,8 @@
 module github.com/lollinoo/theia
 
-go 1.24.0
+go 1.25.0
+
+toolchain go1.26.4
 
 require (
 	github.com/google/uuid v1.6.0
@@ -25,11 +27,11 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	golang.org/x/sync v0.18.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 )
 
 require (
-	golang.org/x/crypto v0.45.0
-	golang.org/x/sys v0.40.0
+	golang.org/x/crypto v0.52.0
+	golang.org/x/sys v0.45.0
 )
