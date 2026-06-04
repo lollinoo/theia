@@ -48,6 +48,7 @@ import {
   patchRuntimeEdges,
   patchRuntimeNodes,
 } from './runtimePatches';
+import { refreshCanvasSettings } from './canvasSettingsRefresh';
 import {
   buildCanvasTopologyCompositionCacheKey,
   createCanvasTopologyCompositionCache,
@@ -1111,20 +1112,12 @@ export function useCanvasData({
   // Re-fetch settings (Grafana URLs) on demand; called on mount and after
   // any settings panel or device config panel saves Grafana URL changes.
   const refreshSettings = useCallback(() => {
-    fetchSettings()
-      .then((settings) => {
-        grafanaUrlRef.current = settings['grafana_url'] ?? '';
-      })
-      .catch(() => {
-        // Settings fetch failure is non-fatal; Grafana links will be disabled.
-      });
-    fetchGrafanaDashboardConfig()
-      .then((config) => {
-        grafanaDashboardConfigRef.current = config;
-      })
-      .catch(() => {
-        grafanaDashboardConfigRef.current = null;
-      });
+    refreshCanvasSettings({
+      fetchSettings,
+      fetchGrafanaDashboardConfig,
+      grafanaUrlRef,
+      grafanaDashboardConfigRef,
+    });
   }, []);
 
   // Fetch settings on mount
