@@ -17,6 +17,13 @@ type TopologyProjection struct {
 	GhostDevices []domain.Device
 }
 
+type CreatePlan struct {
+	Filter                domain.CanvasMapFilter
+	PersistedSourceAreaID *uuid.UUID
+	SourceMapID           *uuid.UUID
+	CreateEmptyMembership bool
+}
+
 var ErrDefaultMapDelete = errors.New("cannot delete default canvas map")
 
 // ValidateDelete rejects attempts to delete the default saved map.
@@ -47,6 +54,21 @@ func MaterializationFilter(filter domain.CanvasMapFilter, sourceAreaID *uuid.UUI
 		filter.AreaID = &areaID
 	}
 	return filter
+}
+
+// PlanCreate captures saved-map materialization decisions for a create request.
+func PlanCreate(filter domain.CanvasMapFilter, sourceAreaID *uuid.UUID, sourceMapID *uuid.UUID) CreatePlan {
+	materializationFilter := MaterializationFilter(filter, sourceAreaID)
+	persistedSourceAreaID := sourceAreaID
+	if sourceMapID != nil {
+		persistedSourceAreaID = nil
+	}
+	return CreatePlan{
+		Filter:                materializationFilter,
+		PersistedSourceAreaID: persistedSourceAreaID,
+		SourceMapID:           sourceMapID,
+		CreateEmptyMembership: ShouldCreateEmptyMembership(filter, sourceAreaID),
+	}
 }
 
 // ShouldCreateEmptyMembership reports whether map creation should persist an

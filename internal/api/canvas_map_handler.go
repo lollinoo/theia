@@ -158,33 +158,29 @@ func (h *CanvasMapHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 	if !h.requireTopologyDeps(w) {
 		return
 	}
-	materializationFilter := canvasmap.MaterializationFilter(req.Filter, sourceAreaID)
-	persistedSourceAreaID := sourceAreaID
-	if sourceMapID != nil {
-		persistedSourceAreaID = nil
-	}
+	createPlan := canvasmap.PlanCreate(req.Filter, sourceAreaID, sourceMapID)
 
 	canvasMap, err := h.mapRepo.Create(domain.CanvasMapCreate{
 		Name:         req.Name,
 		Description:  req.Description,
-		SourceAreaID: persistedSourceAreaID,
-		Filter:       materializationFilter,
+		SourceAreaID: createPlan.PersistedSourceAreaID,
+		Filter:       createPlan.Filter,
 	})
 	if err != nil {
 		h.writeMapRepoMutationError(w, err)
 		return
 	}
-	if canvasmap.ShouldCreateEmptyMembership(req.Filter, sourceAreaID) {
+	if createPlan.CreateEmptyMembership {
 		if err := h.mapRepo.ReplaceMembership(canvasMap.ID, domain.CanvasMapMembership{}); err != nil {
 			h.writeMapRepoMutationError(w, err)
 			return
 		}
-	} else if sourceMapID != nil {
-		if !h.replaceMaterializedMembershipFromSourceMap(w, r, canvasMap.ID, *sourceMapID, materializationFilter) {
+	} else if createPlan.SourceMapID != nil {
+		if !h.replaceMaterializedMembershipFromSourceMap(w, r, canvasMap.ID, *createPlan.SourceMapID, createPlan.Filter) {
 			return
 		}
 	} else {
-		if !h.replaceMaterializedMembership(w, r, canvasMap.ID, materializationFilter) {
+		if !h.replaceMaterializedMembership(w, r, canvasMap.ID, createPlan.Filter) {
 			return
 		}
 		if !h.copyDefaultCanvasMapPositionsForMaterializedMembership(w, canvasMap.ID) {

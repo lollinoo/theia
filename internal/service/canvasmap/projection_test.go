@@ -267,6 +267,59 @@ func TestValidateDeleteRejectsDefaultMap(t *testing.T) {
 	}
 }
 
+func TestPlanCreateEmptyMembership(t *testing.T) {
+	plan := PlanCreate(domain.CanvasMapFilter{}, nil, nil)
+
+	if !plan.CreateEmptyMembership {
+		t.Fatal("PlanCreate().CreateEmptyMembership = false, want true")
+	}
+	if plan.SourceMapID != nil {
+		t.Fatalf("PlanCreate().SourceMapID = %v, want nil", plan.SourceMapID)
+	}
+	if plan.PersistedSourceAreaID != nil {
+		t.Fatalf("PlanCreate().PersistedSourceAreaID = %v, want nil", plan.PersistedSourceAreaID)
+	}
+	if plan.Filter.AreaID != nil {
+		t.Fatalf("PlanCreate().Filter.AreaID = %v, want nil", plan.Filter.AreaID)
+	}
+}
+
+func TestPlanCreateFromSourceAreaPersistsSourceAreaAndMaterializationFilter(t *testing.T) {
+	areaID := uuid.New()
+
+	plan := PlanCreate(domain.CanvasMapFilter{}, &areaID, nil)
+
+	if plan.CreateEmptyMembership {
+		t.Fatal("PlanCreate().CreateEmptyMembership = true, want false")
+	}
+	if plan.PersistedSourceAreaID == nil || *plan.PersistedSourceAreaID != areaID {
+		t.Fatalf("PlanCreate().PersistedSourceAreaID = %v, want %s", plan.PersistedSourceAreaID, areaID)
+	}
+	if plan.Filter.AreaID == nil || *plan.Filter.AreaID != areaID {
+		t.Fatalf("PlanCreate().Filter.AreaID = %v, want %s", plan.Filter.AreaID, areaID)
+	}
+}
+
+func TestPlanCreateFromSourceMapDoesNotPersistSourceArea(t *testing.T) {
+	areaID := uuid.New()
+	sourceMapID := uuid.New()
+
+	plan := PlanCreate(domain.CanvasMapFilter{}, &areaID, &sourceMapID)
+
+	if plan.CreateEmptyMembership {
+		t.Fatal("PlanCreate().CreateEmptyMembership = true, want false")
+	}
+	if plan.SourceMapID == nil || *plan.SourceMapID != sourceMapID {
+		t.Fatalf("PlanCreate().SourceMapID = %v, want %s", plan.SourceMapID, sourceMapID)
+	}
+	if plan.PersistedSourceAreaID != nil {
+		t.Fatalf("PlanCreate().PersistedSourceAreaID = %v, want nil for source map", plan.PersistedSourceAreaID)
+	}
+	if plan.Filter.AreaID == nil || *plan.Filter.AreaID != areaID {
+		t.Fatalf("PlanCreate().Filter.AreaID = %v, want %s", plan.Filter.AreaID, areaID)
+	}
+}
+
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false
