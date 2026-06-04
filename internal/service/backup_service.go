@@ -1926,13 +1926,7 @@ func (s *BackupService) decryptSecret(encrypted string) (string, error) {
 		if crypto.IsEnvelope(encrypted) {
 			return s.encryptionKeyring.DecryptString(encrypted)
 		}
-		if len(s.legacyEncryptionKey) == 0 {
-			plaintext, _, err := s.encryptionKeyring.DecryptLegacyString(encrypted)
-			if err == nil {
-				return plaintext, nil
-			}
-			return "", err
-		}
+		return "", fmt.Errorf("credential secret is not a versioned encryption envelope")
 	}
 
 	var base64DecryptErr error

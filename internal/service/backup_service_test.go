@@ -2348,7 +2348,7 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	}
 }
 
-func TestBackupServiceDecryptSecret_LegacyRawCiphertextCompatible(t *testing.T) {
+func TestBackupServiceDecryptSecretRejectsLegacyRawCiphertext(t *testing.T) {
 	encryptionKey := crypto.DeriveKey("test-encryption-passphrase")
 	plaintext := "legacy-raw-ciphertext-secret"
 	rawCiphertext, err := crypto.Encrypt([]byte(plaintext), encryptionKey)
@@ -2369,12 +2369,12 @@ func TestBackupServiceDecryptSecret_LegacyRawCiphertextCompatible(t *testing.T) 
 		ssh.InsecureIgnoreHostKey(),
 	)
 
-	decrypted, err := svc.decryptSecret(string(rawCiphertext))
-	if err != nil {
-		t.Fatalf("decryptSecret failed for legacy raw ciphertext: %v", err)
+	_, err = svc.decryptSecret(string(rawCiphertext))
+	if err == nil {
+		t.Fatal("decryptSecret should reject legacy raw ciphertext outside migration")
 	}
-	if decrypted != plaintext {
-		t.Fatalf("expected decrypted plaintext %q, got %q", plaintext, decrypted)
+	if !strings.Contains(err.Error(), "versioned encryption envelope") {
+		t.Fatalf("decryptSecret error = %q, want envelope rejection", err.Error())
 	}
 }
 
@@ -2415,7 +2415,7 @@ func TestBackupServiceEncryptSecretUsesKeyringEnvelope(t *testing.T) {
 	}
 }
 
-func TestBackupServiceDecryptSecretAcceptsLegacyBase64ThroughCompatibilityPath(t *testing.T) {
+func TestBackupServiceDecryptSecretRejectsLegacyBase64Ciphertext(t *testing.T) {
 	keyring := mustServiceTestKeyring(t, "kid-active", map[string]string{
 		"kid-active": "active credential secret material",
 		"legacy":     "legacy credential secret material",
@@ -2437,12 +2437,12 @@ func TestBackupServiceDecryptSecretAcceptsLegacyBase64ThroughCompatibilityPath(t
 		ssh.InsecureIgnoreHostKey(),
 	)
 
-	decrypted, err := svc.decryptSecret(base64.StdEncoding.EncodeToString(legacyRaw))
-	if err != nil {
-		t.Fatalf("decryptSecret failed for legacy base64 ciphertext: %v", err)
+	_, err = svc.decryptSecret(base64.StdEncoding.EncodeToString(legacyRaw))
+	if err == nil {
+		t.Fatal("decryptSecret should reject legacy base64 ciphertext outside migration")
 	}
-	if decrypted != "legacy-profile-password" {
-		t.Fatalf("decrypted secret = %q, want legacy-profile-password", decrypted)
+	if !strings.Contains(err.Error(), "versioned encryption envelope") {
+		t.Fatalf("decryptSecret error = %q, want envelope rejection", err.Error())
 	}
 }
 
@@ -2582,16 +2582,15 @@ func TestRunTextExportReconcilesExistingDeviceBackupDirBeforeWritingBackupFile(t
 	backupRoot := t.TempDir()
 	encryptionKey := []byte("0123456789abcdef")
 
-	secretCiphertext, err := crypto.Encrypt([]byte("secret"), encryptionKey)
-	if err != nil {
-		t.Fatalf("crypto.Encrypt: %v", err)
-	}
-
 	svc := NewBackupService(
 		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
 		registry, &internalssh.DefaultDialer{}, encryptionKey, backupRoot,
 		ssh.InsecureIgnoreHostKey(),
 	)
+	encryptedSecret, err := svc.EncryptSecret("secret")
+	if err != nil {
+		t.Fatalf("EncryptSecret: %v", err)
+	}
 
 	profileID := uuid.New()
 	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
@@ -2599,7 +2598,7 @@ func TestRunTextExportReconcilesExistingDeviceBackupDirBeforeWritingBackupFile(t
 		Name:            "test-profile",
 		Username:        "admin",
 		Port:            serverPort(t, addr),
-		EncryptedSecret: base64.StdEncoding.EncodeToString(secretCiphertext),
+		EncryptedSecret: encryptedSecret,
 		AuthMethod:      domain.SSHAuthPassword,
 		Role:            "Admin",
 	}); err != nil {
