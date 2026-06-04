@@ -960,19 +960,6 @@ func (s *InstanceBackupService) readCurrentMigrationVersion(ctx context.Context)
 	return version, nil
 }
 
-func manifestDatabaseEntryName(manifest backupManifest) (string, error) {
-	if entry := strings.TrimSpace(manifest.DBEntryName); entry != "" {
-		if entry == postgresArchiveDBEntry {
-			return entry, nil
-		}
-		if entry == legacySQLiteArchiveDBEntry {
-			return "", legacySQLiteRestoreArchiveError()
-		}
-		return "", fmt.Errorf("unsupported database entry %q in manifest", entry)
-	}
-	return postgresArchiveDBEntry, nil
-}
-
 func (s *InstanceBackupService) validatePostgresDump(ctx context.Context, dumpPath string) error {
 	if err := ensureSupportedPostgresCLITools(ctx, "pg_restore"); err != nil {
 		return err
@@ -1181,17 +1168,10 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	}
 
 	// Step 3: Parse manifest
-	manifestPath := filepath.Join(tempDir, "manifest.json")
-	manifestData, err := os.ReadFile(manifestPath)
+	manifest, err := readRestoreManifest(tempDir)
 	if err != nil {
-		return nil, fmt.Errorf("archive missing manifest.json")
+		return nil, err
 	}
-
-	var manifest backupManifest
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return nil, fmt.Errorf("parsing manifest.json: %w", err)
-	}
-
 	dbEntryName, err := manifestDatabaseEntryName(manifest)
 	if err != nil {
 		return nil, err
@@ -1199,9 +1179,8 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	extractedDBPath := filepath.Join(tempDir, filepath.FromSlash(dbEntryName))
 
 	// Step 4: Verify encryption key hash
-	currentKeyHash := computeEncryptionKeyHash(s.encryptionKey)
-	if manifest.EncryptionKeyHash != currentKeyHash {
-		return nil, fmt.Errorf("encryption key mismatch: backup was created with a different THEIA_ENCRYPTION_KEY")
+	if err := validateRestoreManifestEncryptionKey(manifest, s.encryptionKey); err != nil {
+		return nil, err
 	}
 
 	// Step 5: Verify DB checksum
@@ -1225,13 +1204,10 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	}
 
 	// Step 8: Check migration version compatibility
-	if manifest.MigrationVersion > currentVersion {
-		return nil, fmt.Errorf("archive has newer migration version (%d) than current (%d); upgrade Theia first",
-			manifest.MigrationVersion, currentVersion)
+	needsMigration, err := validateRestoreManifestMigrationCompatibility(manifest, currentVersion)
+	if err != nil {
+		return nil, err
 	}
-
-	// Step 9: Determine if migration is needed
-	needsMigration := manifest.MigrationVersion < currentVersion
 
 	// Step 11: Get DB file size for report
 	dbInfo, err := os.Stat(extractedDBPath)
