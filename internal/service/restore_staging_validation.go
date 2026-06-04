@@ -111,6 +111,39 @@ func validateOptionalStagedKnownHosts(path string) error {
 	return nil
 }
 
+// validateLiveRestoreBackupDir rejects unsafe live backup destinations before optional restore activation.
+func validateLiveRestoreBackupDir(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat live backup dir: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("live backup dir must not be a symlink")
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("live backup dir must be a directory")
+	}
+	return nil
+}
+
+// validateLiveRestoreKnownHosts rejects unsafe live known_hosts destinations before optional restore activation.
+func validateLiveRestoreKnownHosts(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat live known_hosts: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("live known_hosts must be a regular file")
+	}
+	return nil
+}
+
 func validateRetryStagedDBDestination(stagedDB string, stagingDir string) error {
 	if err := validateRestoreStagingDir(stagingDir); err != nil {
 		return err

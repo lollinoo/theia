@@ -79,7 +79,8 @@ func TestActivateOptionalRestoreArtifactsReplacesBackupsAndKnownHosts(t *testing
 	}
 }
 
-func TestActivateOptionalRestoreArtifactsRejectsUnsafeSources(t *testing.T) {
+// TestActivateOptionalRestoreArtifactsRejectsUnsafeSourcesAndDestinations preserves optional artifact safety checks.
+func TestActivateOptionalRestoreArtifactsRejectsUnsafeSourcesAndDestinations(t *testing.T) {
 	tests := []struct {
 		name    string
 		setup   func(t *testing.T, root string, stagingDir string) restoreMarker
@@ -116,6 +117,47 @@ func TestActivateOptionalRestoreArtifactsRejectsUnsafeSources(t *testing.T) {
 				}
 			},
 			wantErr: "validate staged known_hosts: staged known_hosts must be a regular file",
+		},
+		{
+			name: "live backup dir symlink",
+			setup: func(t *testing.T, root string, stagingDir string) restoreMarker {
+				t.Helper()
+				stagedBackups := filepath.Join(stagingDir, "backups")
+				if err := os.MkdirAll(filepath.Join(stagedBackups, "router"), 0o700); err != nil {
+					t.Fatalf("creating staged backups: %v", err)
+				}
+				writeRegularFile(t, filepath.Join(stagedBackups, "router", "config.rsc"), "restored-backup")
+				targetDir := filepath.Join(root, "live-backup-target")
+				if err := os.Mkdir(targetDir, 0o700); err != nil {
+					t.Fatalf("creating live backup target: %v", err)
+				}
+				deviceBackupDir := filepath.Join(root, "device-backups")
+				if err := os.Symlink(targetDir, deviceBackupDir); err != nil {
+					t.Fatalf("creating live backup symlink: %v", err)
+				}
+				return restoreMarker{
+					StagedBackups:   stagedBackups,
+					DeviceBackupDir: deviceBackupDir,
+				}
+			},
+			wantErr: "validate live backup dir: live backup dir must not be a symlink",
+		},
+		{
+			name: "live known hosts directory",
+			setup: func(t *testing.T, root string, stagingDir string) restoreMarker {
+				t.Helper()
+				stagedKnownHosts := filepath.Join(stagingDir, "known_hosts")
+				writeRegularFile(t, stagedKnownHosts, "restored-known-hosts")
+				knownHostsPath := filepath.Join(root, "known_hosts")
+				if err := os.Mkdir(knownHostsPath, 0o700); err != nil {
+					t.Fatalf("creating live known_hosts directory: %v", err)
+				}
+				return restoreMarker{
+					StagedKnownHosts: stagedKnownHosts,
+					KnownHostsPath:   knownHostsPath,
+				}
+			},
+			wantErr: "validate live known_hosts: live known_hosts must be a regular file",
 		},
 	}
 
