@@ -40,6 +40,12 @@ type DefaultPositionCopyPlan struct {
 	Positions  []domain.DevicePosition
 }
 
+type SourceMapMaterializationPlan struct {
+	Membership          domain.CanvasMapMembership
+	Positions           []domain.DevicePosition
+	ShouldSavePositions bool
+}
+
 var ErrDefaultMapDelete = errors.New("cannot delete default canvas map")
 
 // ValidateDelete rejects attempts to delete the default saved map.
@@ -261,6 +267,29 @@ func MaterializeMembershipFromSourceMap(
 	membership.Areas = append(membership.Areas, areaMemberships...)
 
 	return membership
+}
+
+// PlanSourceMapMaterialization prepares membership and source-position copy
+// decisions for creating a saved map from another saved map.
+func PlanSourceMapMaterialization(
+	devices []domain.Device,
+	links []domain.Link,
+	sourceMembership domain.CanvasMapMembership,
+	fallbackAreas []domain.AreaWithCount,
+	filter domain.CanvasMapFilter,
+	sourcePositions []domain.DevicePosition,
+) SourceMapMaterializationPlan {
+	areaSnapshots := sourceMembership.Areas
+	if len(areaSnapshots) == 0 {
+		areaSnapshots = AreasWithCountToMembership(fallbackAreas)
+	}
+	membership := MaterializeMembershipFromSourceMap(devices, links, sourceMembership, areaSnapshots, filter)
+	positions := FilterPositionsForMemberDevices(sourcePositions, membership.Devices)
+	return SourceMapMaterializationPlan{
+		Membership:          membership,
+		Positions:           positions,
+		ShouldSavePositions: len(positions) > 0,
+	}
 }
 
 // BuildMaterializedTopologyResponsePlan prepares saved-map topology response inputs.

@@ -1084,42 +1084,47 @@ func (h *CanvasMapHandler) replaceMaterializedMembershipFromSourceMap(
 		writeError(w, http.StatusInternalServerError, "failed to list source map links", err)
 		return false
 	}
-	areaSnapshots := sourceMembership.Areas
-	if len(areaSnapshots) == 0 {
-		areas, err := h.areaRepo.GetAllWithDeviceCount()
+	fallbackAreas := []domain.AreaWithCount{}
+	if len(sourceMembership.Areas) == 0 {
+		fallbackAreas, err = h.areaRepo.GetAllWithDeviceCount()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list source map areas", err)
 			return false
 		}
-		areaSnapshots = canvasmap.AreasWithCountToMembership(areas)
 	}
+	plan := canvasmap.PlanSourceMapMaterialization(
+		devices,
+		links,
+		sourceMembership,
+		fallbackAreas,
+		filter,
+		nil,
+	)
 
-	membership := canvasmap.MaterializeMembershipFromSourceMap(devices, links, sourceMembership, areaSnapshots, filter)
-	if err := h.mapRepo.ReplaceMembership(mapID, membership); err != nil {
+	if err := h.mapRepo.ReplaceMembership(mapID, plan.Membership); err != nil {
 		h.writeMapRepoMutationError(w, err)
 		return false
 	}
-	if err := h.copyCanvasMapPositionsForMembership(mapID, sourceMapID, membership.Devices); err != nil {
+	sourcePositions, err := h.mapPositionRepo.GetAllForMap(sourceMapID)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to copy source map positions", err)
 		return false
 	}
+	positionPlan := canvasmap.PlanSourceMapMaterialization(
+		devices,
+		links,
+		sourceMembership,
+		fallbackAreas,
+		filter,
+		sourcePositions,
+	)
+	if positionPlan.ShouldSavePositions {
+		if err := h.mapPositionRepo.SaveAllForMap(mapID, positionPlan.Positions); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to copy source map positions", err)
+			return false
+		}
+	}
 	return true
-}
-
-func (h *CanvasMapHandler) copyCanvasMapPositionsForMembership(
-	mapID uuid.UUID,
-	sourceMapID uuid.UUID,
-	devices []domain.CanvasMapDeviceMembership,
-) error {
-	sourcePositions, err := h.mapPositionRepo.GetAllForMap(sourceMapID)
-	if err != nil {
-		return err
-	}
-	positions := canvasmap.FilterPositionsForMemberDevices(sourcePositions, devices)
-	if len(positions) == 0 {
-		return nil
-	}
-	return h.mapPositionRepo.SaveAllForMap(mapID, positions)
 }
 
 func (h *CanvasMapHandler) copyDefaultCanvasMapPositionsForMaterializedMembership(

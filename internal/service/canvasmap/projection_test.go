@@ -99,6 +99,86 @@ func TestMaterializeMembershipFromSourceMapUsesSourceAreaAssignments(t *testing.
 	}
 }
 
+func TestPlanSourceMapMaterializationFallsBackToImportedAreasAndPrunesPositions(t *testing.T) {
+	areaID := uuid.New()
+	baseID := uuid.New()
+	ghostID := uuid.New()
+	prunedID := uuid.New()
+	linkID := uuid.New()
+	sourceMembership := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: baseID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaID}},
+			{DeviceID: ghostID, Role: domain.CanvasMapDeviceRoleGhost},
+		},
+		LinkIDs: []uuid.UUID{linkID},
+	}
+
+	plan := PlanSourceMapMaterialization(
+		[]domain.Device{
+			{ID: baseID, AreaIDs: []uuid.UUID{areaID}},
+			{ID: ghostID},
+		},
+		[]domain.Link{{ID: linkID, SourceDeviceID: baseID, TargetDeviceID: ghostID}},
+		sourceMembership,
+		[]domain.AreaWithCount{
+			{Area: domain.Area{ID: areaID, Name: "Imported", Description: "global fallback", Color: "#2979FF"}},
+		},
+		domain.CanvasMapFilter{DeviceIDs: []uuid.UUID{baseID}},
+		[]domain.DevicePosition{
+			{DeviceID: baseID, X: 10, Y: 20, Pinned: true},
+			{DeviceID: ghostID, X: 30, Y: 40},
+			{DeviceID: prunedID, X: 50, Y: 60},
+		},
+	)
+
+	if len(plan.Membership.Devices) != 1 || plan.Membership.Devices[0].DeviceID != baseID {
+		t.Fatalf("planned devices = %+v, want only filtered base", plan.Membership.Devices)
+	}
+	if !uuidSlicesEqual(plan.Membership.Devices[0].AreaIDs, []uuid.UUID{areaID}) {
+		t.Fatalf("planned device areas = %v, want imported area %s", plan.Membership.Devices[0].AreaIDs, areaID)
+	}
+	if len(plan.Membership.Areas) != 1 || plan.Membership.Areas[0].Name != "Imported" {
+		t.Fatalf("planned areas = %+v, want imported fallback area", plan.Membership.Areas)
+	}
+	if !plan.ShouldSavePositions {
+		t.Fatal("PlanSourceMapMaterialization().ShouldSavePositions = false, want true")
+	}
+	if len(plan.Positions) != 1 || plan.Positions[0].DeviceID != baseID {
+		t.Fatalf("planned positions = %+v, want only filtered base position", plan.Positions)
+	}
+}
+
+func TestPlanSourceMapMaterializationPrefersSourceAreaSnapshots(t *testing.T) {
+	areaID := uuid.New()
+	baseID := uuid.New()
+	sourceMembership := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{DeviceID: baseID, Role: domain.CanvasMapDeviceRoleBase, AreaIDs: []uuid.UUID{areaID}},
+		},
+		Areas: []domain.CanvasMapAreaMembership{
+			{AreaID: areaID, Name: "Source Snapshot", Description: "map-local", Color: "#FFAB00"},
+		},
+	}
+
+	plan := PlanSourceMapMaterialization(
+		[]domain.Device{{ID: baseID, AreaIDs: []uuid.UUID{areaID}}},
+		nil,
+		sourceMembership,
+		[]domain.AreaWithCount{
+			{Area: domain.Area{ID: areaID, Name: "Fallback", Description: "global", Color: "#2979FF"}},
+		},
+		domain.CanvasMapFilter{DeviceIDs: []uuid.UUID{baseID}},
+		nil,
+	)
+
+	if len(plan.Membership.Areas) != 1 || plan.Membership.Areas[0].Name != "Source Snapshot" {
+		t.Fatalf("planned areas = %+v, want source snapshot", plan.Membership.Areas)
+	}
+	if plan.ShouldSavePositions || len(plan.Positions) != 0 {
+		t.Fatalf("planned positions = %+v save=%v, want none", plan.Positions, plan.ShouldSavePositions)
+	}
+}
+
 func TestConnectedBaseLinkIDsIncludesNewDeviceAndDeduplicates(t *testing.T) {
 	existingID := uuid.New()
 	newID := uuid.New()
