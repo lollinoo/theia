@@ -320,6 +320,34 @@ func TestPlanCreateFromSourceMapDoesNotPersistSourceArea(t *testing.T) {
 	}
 }
 
+func TestRemapPositionsForDeviceClonesPrunesNonMembers(t *testing.T) {
+	originalID := uuid.New()
+	cloneID := uuid.New()
+	keptID := uuid.New()
+	prunedID := uuid.New()
+
+	got := RemapPositionsForDeviceClones(
+		[]domain.DevicePosition{
+			{DeviceID: originalID, X: 10, Y: 20},
+			{DeviceID: keptID, X: 30, Y: 40},
+			{DeviceID: prunedID, X: 50, Y: 60},
+		},
+		map[uuid.UUID]uuid.UUID{originalID: cloneID},
+		[]domain.CanvasMapDeviceMembership{
+			{DeviceID: cloneID},
+			{DeviceID: keptID},
+		},
+	)
+
+	want := []domain.DevicePosition{
+		{DeviceID: cloneID, X: 10, Y: 20},
+		{DeviceID: keptID, X: 30, Y: 40},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("RemapPositionsForDeviceClones() = %+v, want %+v", got, want)
+	}
+}
+
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false

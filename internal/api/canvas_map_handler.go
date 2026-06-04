@@ -1276,7 +1276,7 @@ func (h *CanvasMapHandler) isolateCanvasMapVirtualDevices(ctx context.Context, m
 	if err != nil {
 		return fmt.Errorf("loading canvas map positions: %w", err)
 	}
-	nextPositions := remapCanvasMapPositionsForDeviceClones(
+	nextPositions := canvasmap.RemapPositionsForDeviceClones(
 		positions,
 		clonedDeviceIDs,
 		nextMembership.Devices,
@@ -1391,28 +1391,6 @@ func (h *CanvasMapHandler) cloneCanvasMapLinkForVirtualDevices(
 		return uuid.Nil, fmt.Errorf("cloning canvas map link %s: %w", link.ID, err)
 	}
 	return nextLink.ID, nil
-}
-
-func remapCanvasMapPositionsForDeviceClones(
-	positions []domain.DevicePosition,
-	clonedDeviceIDs map[uuid.UUID]uuid.UUID,
-	members []domain.CanvasMapDeviceMembership,
-) []domain.DevicePosition {
-	memberIDs := make(map[uuid.UUID]struct{}, len(members))
-	for _, member := range members {
-		memberIDs[member.DeviceID] = struct{}{}
-	}
-
-	nextPositions := make([]domain.DevicePosition, 0, len(positions))
-	for _, position := range positions {
-		if cloneID, ok := clonedDeviceIDs[position.DeviceID]; ok {
-			position.DeviceID = cloneID
-		}
-		if _, ok := memberIDs[position.DeviceID]; ok {
-			nextPositions = append(nextPositions, position)
-		}
-	}
-	return nextPositions
 }
 
 func cloneStringMap(values map[string]string) map[string]string {

@@ -302,6 +302,30 @@ func DefaultPositionsForMembership(
 	return FilterPositionsForMemberDevices(candidates, devices)
 }
 
+// RemapPositionsForDeviceClones moves positions from original device IDs to
+// their clone IDs and keeps only positions still present in membership.
+func RemapPositionsForDeviceClones(
+	positions []domain.DevicePosition,
+	clonedDeviceIDs map[uuid.UUID]uuid.UUID,
+	members []domain.CanvasMapDeviceMembership,
+) []domain.DevicePosition {
+	memberIDs := make(map[uuid.UUID]struct{}, len(members))
+	for _, member := range members {
+		memberIDs[member.DeviceID] = struct{}{}
+	}
+
+	nextPositions := make([]domain.DevicePosition, 0, len(positions))
+	for _, position := range positions {
+		if cloneID, ok := clonedDeviceIDs[position.DeviceID]; ok {
+			position.DeviceID = cloneID
+		}
+		if _, ok := memberIDs[position.DeviceID]; ok {
+			nextPositions = append(nextPositions, position)
+		}
+	}
+	return nextPositions
+}
+
 // ProjectTopologyForMembership applies a materialized map membership to a topology.
 func ProjectTopologyForMembership(
 	devices []domain.Device,
