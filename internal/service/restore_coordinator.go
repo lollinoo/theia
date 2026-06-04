@@ -120,36 +120,8 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		}
 	}
 
-	if marker.StagedBackups != "" || marker.StagedKnownHosts != "" {
-		if err := validateRestoreStagingDir(stagingDir); err != nil {
-			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("validate restore staging dir: %w", err))
-		}
-	}
-
-	if marker.StagedBackups != "" && marker.DeviceBackupDir != "" {
-		if _, err := os.Lstat(marker.StagedBackups); err == nil {
-			if err := validateOptionalStagedBackupDir(marker.StagedBackups); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("validate staged backup dir: %w", err))
-			}
-			if err := replaceDirForRestore(marker.StagedBackups, marker.DeviceBackupDir); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("activate staged backup dir: %w", err))
-			}
-		} else if !os.IsNotExist(err) {
-			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("stat staged backup dir: %w", err))
-		}
-	}
-
-	if marker.StagedKnownHosts != "" && marker.KnownHostsPath != "" {
-		if _, err := os.Lstat(marker.StagedKnownHosts); err == nil {
-			if err := validateOptionalStagedKnownHosts(marker.StagedKnownHosts); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("validate staged known_hosts: %w", err))
-			}
-			if err := replaceFileForRestore(marker.StagedKnownHosts, marker.KnownHostsPath); err != nil {
-				return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("activate staged known_hosts: %w", err))
-			}
-		} else if !os.IsNotExist(err) {
-			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("stat staged known_hosts: %w", err))
-		}
+	if err := activateOptionalRestoreArtifacts(*marker, stagingDir); err != nil {
+		return false, c.restoreRetryableError(marker.StagedDB, stagingDir, err)
 	}
 
 	if err := removeRestoreMarker(markerPath); err != nil {
