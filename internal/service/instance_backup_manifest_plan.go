@@ -46,7 +46,7 @@ func buildInstanceBackupArchiveManifestPlan(input instanceBackupArchiveManifestI
 		manifest.Encryption = &backupManifestEncryption{
 			Version:        1,
 			ActiveKeyID:    input.encryptionKeyring.ActiveKeyID(),
-			RequiredKeyIDs: input.encryptionKeyring.KeyIDs(),
+			RequiredKeyIDs: []string{input.encryptionKeyring.ActiveKeyID()},
 		}
 	} else {
 		manifest.EncryptionKeyHash = computeEncryptionKeyHash(input.encryptionKey)

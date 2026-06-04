@@ -63,7 +63,7 @@ func TestBuildInstanceBackupArchiveManifestPlanSetsStableMetadataAndFinalSize(t 
 	if manifest.Encryption.ActiveKeyID != "kid-b" {
 		t.Fatalf("manifest.Encryption.ActiveKeyID = %q, want kid-b", manifest.Encryption.ActiveKeyID)
 	}
-	if got, want := manifest.Encryption.RequiredKeyIDs, []string{"kid-a", "kid-b"}; !equalStringSlices(got, want) {
+	if got, want := manifest.Encryption.RequiredKeyIDs, []string{"kid-b"}; !equalStringSlices(got, want) {
 		t.Fatalf("manifest.Encryption.RequiredKeyIDs = %#v, want %#v", got, want)
 	}
 	if manifest.EncryptionKeyHash != "" {
