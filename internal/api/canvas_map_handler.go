@@ -1203,19 +1203,9 @@ func (h *CanvasMapHandler) isolateCanvasMapVirtualDevices(ctx context.Context, m
 	if err != nil {
 		return fmt.Errorf("loading canvas map devices: %w", err)
 	}
-	deviceByID := make(map[uuid.UUID]domain.Device, len(devices))
-	for _, device := range devices {
-		deviceByID[device.ID] = device
-	}
-	virtualMemberIDs := make(map[uuid.UUID]struct{})
-	for _, member := range membership.Devices {
-		device, ok := deviceByID[member.DeviceID]
-		if !ok {
-			return fmt.Errorf("canvas map member device %s not found", member.DeviceID)
-		}
-		if device.DeviceType == domain.DeviceTypeVirtual {
-			virtualMemberIDs[member.DeviceID] = struct{}{}
-		}
+	virtualMemberIDs, err := canvasmap.VirtualMemberDeviceIDs(membership, devices)
+	if err != nil {
+		return err
 	}
 	if len(virtualMemberIDs) == 0 {
 		return nil
@@ -1228,36 +1218,26 @@ func (h *CanvasMapHandler) isolateCanvasMapVirtualDevices(ctx context.Context, m
 		return nil
 	}
 
-	clonedDeviceIDs := make(map[uuid.UUID]uuid.UUID)
-	nextMembership := domain.CanvasMapMembership{
-		Devices: make([]domain.CanvasMapDeviceMembership, 0, len(membership.Devices)),
-		Areas:   append([]domain.CanvasMapAreaMembership(nil), membership.Areas...),
+	cloneCandidates, err := canvasmap.VirtualDeviceCloneCandidates(membership, devices, sharedVirtualIDs)
+	if err != nil {
+		return err
 	}
-	for _, member := range membership.Devices {
-		device, ok := deviceByID[member.DeviceID]
-		if !ok {
-			return fmt.Errorf("canvas map member device %s not found", member.DeviceID)
-		}
+	if len(cloneCandidates) == 0 {
+		return nil
+	}
 
-		nextMember := domain.CanvasMapDeviceMembership{
-			DeviceID:    member.DeviceID,
-			Role:        member.Role,
-			AreaIDs:     append([]uuid.UUID(nil), member.AreaIDs...),
-			VisualColor: cloneOptionalString(member.VisualColor),
+	clonedDeviceIDs := make(map[uuid.UUID]uuid.UUID, len(cloneCandidates))
+	for _, device := range cloneCandidates {
+		clone, err := h.cloneCanvasMapVirtualDevice(ctx, device)
+		if err != nil {
+			return err
 		}
-		if _, shared := sharedVirtualIDs[member.DeviceID]; shared && device.DeviceType == domain.DeviceTypeVirtual {
-			clone, err := h.cloneCanvasMapVirtualDevice(ctx, device)
-			if err != nil {
-				return err
-			}
-			clonedDeviceIDs[member.DeviceID] = clone.ID
-			nextMember.DeviceID = clone.ID
-		}
-		nextMembership.Devices = append(nextMembership.Devices, nextMember)
+		clonedDeviceIDs[device.ID] = clone.ID
 	}
 	if len(clonedDeviceIDs) == 0 {
 		return nil
 	}
+	nextMembership := canvasmap.MembershipWithDeviceClones(membership, clonedDeviceIDs)
 
 	links, err := loadCanvasMapLinksByIDs(h.linkRepo, membership.LinkIDs)
 	if err != nil {

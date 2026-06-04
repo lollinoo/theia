@@ -302,6 +302,74 @@ func DefaultPositionsForMembership(
 	return FilterPositionsForMemberDevices(candidates, devices)
 }
 
+// VirtualMemberDeviceIDs returns materialized members that are virtual devices.
+func VirtualMemberDeviceIDs(
+	membership domain.CanvasMapMembership,
+	devices []domain.Device,
+) (map[uuid.UUID]struct{}, error) {
+	deviceByID := canvasMapDeviceByID(devices)
+	virtualMemberIDs := make(map[uuid.UUID]struct{})
+	for _, member := range membership.Devices {
+		device, ok := deviceByID[member.DeviceID]
+		if !ok {
+			return nil, fmt.Errorf("canvas map member device %s not found", member.DeviceID)
+		}
+		if device.DeviceType == domain.DeviceTypeVirtual {
+			virtualMemberIDs[member.DeviceID] = struct{}{}
+		}
+	}
+	return virtualMemberIDs, nil
+}
+
+// VirtualDeviceCloneCandidates returns shared virtual members in membership order.
+func VirtualDeviceCloneCandidates(
+	membership domain.CanvasMapMembership,
+	devices []domain.Device,
+	sharedDeviceIDs map[uuid.UUID]struct{},
+) ([]domain.Device, error) {
+	deviceByID := canvasMapDeviceByID(devices)
+	candidates := make([]domain.Device, 0, len(sharedDeviceIDs))
+	for _, member := range membership.Devices {
+		device, ok := deviceByID[member.DeviceID]
+		if !ok {
+			return nil, fmt.Errorf("canvas map member device %s not found", member.DeviceID)
+		}
+		if _, shared := sharedDeviceIDs[member.DeviceID]; !shared {
+			continue
+		}
+		if device.DeviceType != domain.DeviceTypeVirtual {
+			continue
+		}
+		candidates = append(candidates, device)
+	}
+	return candidates, nil
+}
+
+// MembershipWithDeviceClones copies membership and replaces cloned device IDs.
+func MembershipWithDeviceClones(
+	membership domain.CanvasMapMembership,
+	clonedDeviceIDs map[uuid.UUID]uuid.UUID,
+) domain.CanvasMapMembership {
+	nextMembership := domain.CanvasMapMembership{
+		Devices: make([]domain.CanvasMapDeviceMembership, 0, len(membership.Devices)),
+		LinkIDs: append([]uuid.UUID(nil), membership.LinkIDs...),
+		Areas:   append([]domain.CanvasMapAreaMembership(nil), membership.Areas...),
+	}
+	for _, member := range membership.Devices {
+		nextMember := domain.CanvasMapDeviceMembership{
+			DeviceID:    member.DeviceID,
+			Role:        member.Role,
+			AreaIDs:     append([]uuid.UUID(nil), member.AreaIDs...),
+			VisualColor: copyOptionalString(member.VisualColor),
+		}
+		if cloneID, ok := clonedDeviceIDs[member.DeviceID]; ok {
+			nextMember.DeviceID = cloneID
+		}
+		nextMembership.Devices = append(nextMembership.Devices, nextMember)
+	}
+	return nextMembership
+}
+
 // RemapPositionsForDeviceClones moves positions from original device IDs to
 // their clone IDs and keeps only positions still present in membership.
 func RemapPositionsForDeviceClones(
@@ -660,4 +728,20 @@ func deviceMatchesTags(device domain.Device, tags map[string]string) bool {
 		}
 	}
 	return true
+}
+
+func canvasMapDeviceByID(devices []domain.Device) map[uuid.UUID]domain.Device {
+	deviceByID := make(map[uuid.UUID]domain.Device, len(devices))
+	for _, device := range devices {
+		deviceByID[device.ID] = device
+	}
+	return deviceByID
+}
+
+func copyOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }

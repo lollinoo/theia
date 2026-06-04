@@ -381,6 +381,150 @@ func TestRemapLinkForDeviceClonesPreservesLinkDetails(t *testing.T) {
 	}
 }
 
+func TestVirtualMemberDeviceIDsKeepsOnlyVirtualMembers(t *testing.T) {
+	virtualID := uuid.New()
+	physicalID := uuid.New()
+
+	got, err := VirtualMemberDeviceIDs(
+		domain.CanvasMapMembership{
+			Devices: []domain.CanvasMapDeviceMembership{
+				{DeviceID: physicalID, Role: domain.CanvasMapDeviceRoleBase},
+				{DeviceID: virtualID, Role: domain.CanvasMapDeviceRoleGhost},
+			},
+		},
+		[]domain.Device{
+			{ID: virtualID, DeviceType: domain.DeviceTypeVirtual},
+			{ID: physicalID, DeviceType: domain.DeviceTypeRouter},
+		},
+	)
+
+	if err != nil {
+		t.Fatalf("VirtualMemberDeviceIDs() error = %v", err)
+	}
+	if _, ok := got[virtualID]; !ok || len(got) != 1 {
+		t.Fatalf("VirtualMemberDeviceIDs() = %v, want only virtual device %s", got, virtualID)
+	}
+}
+
+func TestVirtualMemberDeviceIDsFailsClosedForMissingMemberDevice(t *testing.T) {
+	missingID := uuid.New()
+
+	_, err := VirtualMemberDeviceIDs(
+		domain.CanvasMapMembership{
+			Devices: []domain.CanvasMapDeviceMembership{{DeviceID: missingID}},
+		},
+		nil,
+	)
+
+	if err == nil {
+		t.Fatal("VirtualMemberDeviceIDs() error = nil, want missing member device error")
+	}
+	if got, want := err.Error(), "canvas map member device "+missingID.String()+" not found"; got != want {
+		t.Fatalf("VirtualMemberDeviceIDs() error = %q, want %q", got, want)
+	}
+}
+
+func TestVirtualDeviceCloneCandidatesKeepsSharedVirtualMembersInMembershipOrder(t *testing.T) {
+	firstVirtualID := uuid.New()
+	secondVirtualID := uuid.New()
+	physicalID := uuid.New()
+	unsharedVirtualID := uuid.New()
+
+	got, err := VirtualDeviceCloneCandidates(
+		domain.CanvasMapMembership{
+			Devices: []domain.CanvasMapDeviceMembership{
+				{DeviceID: secondVirtualID},
+				{DeviceID: physicalID},
+				{DeviceID: unsharedVirtualID},
+				{DeviceID: firstVirtualID},
+			},
+		},
+		[]domain.Device{
+			{ID: firstVirtualID, Hostname: "first", DeviceType: domain.DeviceTypeVirtual},
+			{ID: secondVirtualID, Hostname: "second", DeviceType: domain.DeviceTypeVirtual},
+			{ID: physicalID, Hostname: "physical", DeviceType: domain.DeviceTypeRouter},
+			{ID: unsharedVirtualID, Hostname: "unshared", DeviceType: domain.DeviceTypeVirtual},
+		},
+		map[uuid.UUID]struct{}{
+			firstVirtualID:  {},
+			secondVirtualID: {},
+			physicalID:      {},
+		},
+	)
+
+	if err != nil {
+		t.Fatalf("VirtualDeviceCloneCandidates() error = %v", err)
+	}
+	if gotIDs, want := deviceIDs(got), []uuid.UUID{secondVirtualID, firstVirtualID}; !uuidSlicesEqual(gotIDs, want) {
+		t.Fatalf("VirtualDeviceCloneCandidates() IDs = %v, want %v", gotIDs, want)
+	}
+}
+
+func TestMembershipWithDeviceClonesCopiesMembershipAndSwapsCloneIDs(t *testing.T) {
+	originalID := uuid.New()
+	cloneID := uuid.New()
+	keptID := uuid.New()
+	areaID := uuid.New()
+	linkID := uuid.New()
+	color := "#AABBCC"
+
+	membership := domain.CanvasMapMembership{
+		Devices: []domain.CanvasMapDeviceMembership{
+			{
+				DeviceID:    originalID,
+				Role:        domain.CanvasMapDeviceRoleGhost,
+				AreaIDs:     []uuid.UUID{areaID},
+				VisualColor: &color,
+			},
+			{DeviceID: keptID, Role: domain.CanvasMapDeviceRoleBase},
+		},
+		LinkIDs: []uuid.UUID{linkID},
+		Areas: []domain.CanvasMapAreaMembership{
+			{AreaID: areaID, Name: "Core", Description: "source area", Color: "#00E676"},
+		},
+	}
+
+	got := MembershipWithDeviceClones(membership, map[uuid.UUID]uuid.UUID{originalID: cloneID})
+	membership.Devices[0].DeviceID = uuid.New()
+	membership.Devices[0].AreaIDs[0] = uuid.New()
+	*membership.Devices[0].VisualColor = "#000000"
+	membership.LinkIDs[0] = uuid.New()
+	membership.Areas[0].Name = "mutated"
+
+	if got.Devices[0].DeviceID != cloneID {
+		t.Fatalf("MembershipWithDeviceClones() first device = %s, want clone %s", got.Devices[0].DeviceID, cloneID)
+	}
+	if got.Devices[0].Role != domain.CanvasMapDeviceRoleGhost {
+		t.Fatalf("MembershipWithDeviceClones() first role = %s, want ghost", got.Devices[0].Role)
+	}
+	if !uuidSlicesEqual(got.Devices[0].AreaIDs, []uuid.UUID{areaID}) {
+		t.Fatalf("MembershipWithDeviceClones() area IDs = %v, want copied %s", got.Devices[0].AreaIDs, areaID)
+	}
+	if got.Devices[0].VisualColor == nil || *got.Devices[0].VisualColor != "#AABBCC" {
+		t.Fatalf("MembershipWithDeviceClones() visual color = %v, want copied #AABBCC", got.Devices[0].VisualColor)
+	}
+	if got.Devices[0].VisualColor == membership.Devices[0].VisualColor {
+		t.Fatal("MembershipWithDeviceClones() reused visual color pointer, want copy")
+	}
+	if got.Devices[1].DeviceID != keptID {
+		t.Fatalf("MembershipWithDeviceClones() second device = %s, want kept %s", got.Devices[1].DeviceID, keptID)
+	}
+	if !uuidSlicesEqual(got.LinkIDs, []uuid.UUID{linkID}) {
+		t.Fatalf("MembershipWithDeviceClones() link IDs = %v, want copied %s", got.LinkIDs, linkID)
+	}
+	if len(got.Areas) != 1 || got.Areas[0].Name != "Core" {
+		t.Fatalf("MembershipWithDeviceClones() areas = %+v, want copied source area", got.Areas)
+	}
+}
+
+func deviceIDs(devices []domain.Device) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(devices))
+	for _, device := range devices {
+		ids = append(ids, device.ID)
+	}
+	return ids
+}
+
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false
