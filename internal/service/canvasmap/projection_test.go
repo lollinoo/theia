@@ -211,6 +211,49 @@ func TestBaseDeviceMembershipCopiesAreaIDs(t *testing.T) {
 	}
 }
 
+func TestShouldCopyDefaultPositionsSkipsDefaultMap(t *testing.T) {
+	defaultMapID := uuid.New()
+	if ShouldCopyDefaultPositions(defaultMapID, defaultMapID) {
+		t.Fatal("ShouldCopyDefaultPositions() = true for default map, want false")
+	}
+	if !ShouldCopyDefaultPositions(uuid.New(), defaultMapID) {
+		t.Fatal("ShouldCopyDefaultPositions() = false for non-default map, want true")
+	}
+}
+
+func TestDefaultPositionCandidatesFallbackToLegacyOnlyWhenDefaultEmpty(t *testing.T) {
+	defaultDeviceID := uuid.New()
+	legacyDeviceID := uuid.New()
+	defaultPositions := []domain.DevicePosition{{DeviceID: defaultDeviceID, X: 10, Y: 20}}
+	legacyPositions := []domain.DevicePosition{{DeviceID: legacyDeviceID, X: 30, Y: 40}}
+
+	got := DefaultPositionCandidates(defaultPositions, legacyPositions)
+	if len(got) != 1 || got[0].DeviceID != defaultDeviceID {
+		t.Fatalf("DefaultPositionCandidates() = %+v, want default positions", got)
+	}
+
+	got = DefaultPositionCandidates(nil, legacyPositions)
+	if len(got) != 1 || got[0].DeviceID != legacyDeviceID {
+		t.Fatalf("DefaultPositionCandidates() fallback = %+v, want legacy positions", got)
+	}
+}
+
+func TestDefaultPositionsForMembershipPrunesNonMembers(t *testing.T) {
+	memberID := uuid.New()
+	otherID := uuid.New()
+	positions := DefaultPositionsForMembership(
+		[]domain.DevicePosition{
+			{DeviceID: memberID, X: 10, Y: 20},
+			{DeviceID: otherID, X: 30, Y: 40},
+		},
+		[]domain.CanvasMapDeviceMembership{{DeviceID: memberID}},
+	)
+
+	if len(positions) != 1 || positions[0].DeviceID != memberID {
+		t.Fatalf("DefaultPositionsForMembership() = %+v, want only member position", positions)
+	}
+}
+
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false

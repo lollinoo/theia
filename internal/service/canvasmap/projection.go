@@ -246,6 +246,29 @@ func BaseDeviceMembership(device domain.Device) domain.CanvasMapDeviceMembership
 	}
 }
 
+// ShouldCopyDefaultPositions reports whether a new materialized map should copy
+// positions from the current default map.
+func ShouldCopyDefaultPositions(mapID uuid.UUID, defaultMapID uuid.UUID) bool {
+	return mapID != defaultMapID
+}
+
+// DefaultPositionCandidates returns default-map positions, falling back to
+// legacy canvas positions only when the default map has no saved positions.
+func DefaultPositionCandidates(defaultPositions []domain.DevicePosition, legacyPositions []domain.DevicePosition) []domain.DevicePosition {
+	if len(defaultPositions) > 0 {
+		return defaultPositions
+	}
+	return legacyPositions
+}
+
+// DefaultPositionsForMembership returns copyable default positions for map members.
+func DefaultPositionsForMembership(
+	candidates []domain.DevicePosition,
+	devices []domain.CanvasMapDeviceMembership,
+) []domain.DevicePosition {
+	return FilterPositionsForMemberDevices(candidates, devices)
+}
+
 // ProjectTopologyForMembership applies a materialized map membership to a topology.
 func ProjectTopologyForMembership(
 	devices []domain.Device,

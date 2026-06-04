@@ -1159,7 +1159,7 @@ func (h *CanvasMapHandler) copyDefaultCanvasMapPositionsForMaterializedMembershi
 		writeError(w, http.StatusInternalServerError, "failed to load default canvas map", err)
 		return false
 	}
-	if defaultMap.ID == mapID {
+	if !canvasmap.ShouldCopyDefaultPositions(mapID, defaultMap.ID) {
 		return true
 	}
 	membership, err := h.mapRepo.GetMembership(mapID)
@@ -1173,13 +1173,14 @@ func (h *CanvasMapHandler) copyDefaultCanvasMapPositionsForMaterializedMembershi
 		return false
 	}
 	if len(sourcePositions) == 0 && h.legacyPositionRepo != nil {
-		sourcePositions, err = h.legacyPositionRepo.GetAll()
+		legacyPositions, err := h.legacyPositionRepo.GetAll()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load legacy canvas positions", err)
 			return false
 		}
+		sourcePositions = canvasmap.DefaultPositionCandidates(sourcePositions, legacyPositions)
 	}
-	positions := canvasmap.FilterPositionsForMemberDevices(sourcePositions, membership.Devices)
+	positions := canvasmap.DefaultPositionsForMembership(sourcePositions, membership.Devices)
 	if len(positions) == 0 {
 		return true
 	}
