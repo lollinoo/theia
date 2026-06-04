@@ -26,6 +26,7 @@ func computeFileHash(path string) (string, error) {
 	return computeFileHashContext(context.Background(), path)
 }
 
+// computeFileHashContext streams a file hash while honoring restore or backup cancellation.
 func computeFileHashContext(ctx context.Context, path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -40,6 +41,7 @@ func computeFileHashContext(ctx context.Context, path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// copyWithContext copies bytes in chunks and checks cancellation before reads and writes.
 func copyWithContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
 	if ctx == nil {
 		ctx = context.Background()

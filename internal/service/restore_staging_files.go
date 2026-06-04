@@ -16,6 +16,7 @@ func copyFile(src, dst string) error {
 	return copyFileContext(context.Background(), src, dst)
 }
 
+// copyFileContext copies one validated artifact with private permissions and cancellation checks.
 func copyFileContext(ctx context.Context, src, dst string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -43,6 +44,7 @@ func copyFileContext(ctx context.Context, src, dst string) error {
 	return os.Chmod(dst, 0600)
 }
 
+// moveOrCopyFileForRestoreStagingContext moves a regular file into staging or copies across devices.
 func moveOrCopyFileForRestoreStagingContext(ctx context.Context, src, dst string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -64,6 +66,7 @@ func moveOrCopyFileForRestoreStagingContext(ctx context.Context, src, dst string
 	return copyFileContext(ctx, src, dst)
 }
 
+// moveOrCopyDirForRestoreStagingContext moves a safe directory tree or copies it across devices.
 func moveOrCopyDirForRestoreStagingContext(ctx context.Context, srcDir, dstDir string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -85,6 +88,7 @@ func moveOrCopyDirForRestoreStagingContext(ctx context.Context, srcDir, dstDir s
 	return copyDirContext(ctx, srcDir, dstDir)
 }
 
+// validateRestoreStagingSourceFile rejects symlinks and non-regular files before activation.
 func validateRestoreStagingSourceFile(src string) error {
 	info, err := os.Lstat(src)
 	if err != nil {
@@ -96,6 +100,7 @@ func validateRestoreStagingSourceFile(src string) error {
 	return nil
 }
 
+// validateRestoreStagingSourceDir rejects symlinks and special files in optional artifact trees.
 func validateRestoreStagingSourceDir(ctx context.Context, srcDir string) error {
 	info, err := os.Lstat(srcDir)
 	if err != nil {
@@ -122,6 +127,7 @@ func validateRestoreStagingSourceDir(ctx context.Context, srcDir string) error {
 	})
 }
 
+// isCrossDeviceRenameError identifies rename failures that require the copy fallback.
 func isCrossDeviceRenameError(err error) bool {
 	return errors.Is(err, syscall.EXDEV)
 }
@@ -131,6 +137,7 @@ func copyDir(srcDir, dstDir string) error {
 	return copyDirContext(context.Background(), srcDir, dstDir)
 }
 
+// copyDirContext recursively copies a directory tree with private directory and file permissions.
 func copyDirContext(ctx context.Context, srcDir, dstDir string) error {
 	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
