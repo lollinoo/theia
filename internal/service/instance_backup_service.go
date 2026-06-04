@@ -67,10 +67,12 @@ type RestoreLimitError struct {
 	message string
 }
 
+// Error returns the restore quota failure message used by API error mapping.
 func (e *RestoreLimitError) Error() string {
 	return e.message
 }
 
+// newRestoreLimitError wraps a formatted message in the restore quota error type.
 func newRestoreLimitError(format string, args ...interface{}) error {
 	return &RestoreLimitError{message: fmt.Sprintf(format, args...)}
 }
@@ -176,6 +178,7 @@ func (s *InstanceBackupService) BackupArchiveLimits() BackupArchiveLimits {
 	return normalizeBackupArchiveLimits(s.backupLimits)
 }
 
+// normalizeRestoreArchiveLimits fills missing restore limits with defensive defaults.
 func normalizeRestoreArchiveLimits(limits RestoreArchiveLimits) RestoreArchiveLimits {
 	defaults := DefaultRestoreArchiveLimits
 	if limits.MaxCompressedBytes <= 0 {
@@ -193,6 +196,7 @@ func normalizeRestoreArchiveLimits(limits RestoreArchiveLimits) RestoreArchiveLi
 	return limits
 }
 
+// normalizeBackupArchiveLimits fills missing backup limits with defensive defaults.
 func normalizeBackupArchiveLimits(limits BackupArchiveLimits) BackupArchiveLimits {
 	defaults := DefaultBackupArchiveLimits
 	if limits.MaxTotalBytes <= 0 {
@@ -247,6 +251,7 @@ func (s *InstanceBackupService) StartCreateWithTrigger(ctx context.Context, trig
 	return backup, nil
 }
 
+// prepareInstanceBackup creates the filesystem and repository state for a new run.
 func (s *InstanceBackupService) prepareInstanceBackup(trigger domain.InstanceBackupTrigger) (*domain.InstanceBackup, string, error) {
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
@@ -290,6 +295,7 @@ func (s *InstanceBackupService) prepareInstanceBackup(trigger domain.InstanceBac
 	return backup, backupSubDir, nil
 }
 
+// runPreparedInstanceBackup runs a prepared backup synchronously with its own tracker entry.
 func (s *InstanceBackupService) runPreparedInstanceBackup(ctx context.Context, backup *domain.InstanceBackup, backupSubDir string) (*domain.InstanceBackup, error) {
 	runCtx, cancel := s.backupRunContext(ctx)
 	s.beginInstanceBackupOperation(backup.ID, cancel, domain.InstanceBackupProgress{
@@ -301,6 +307,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackup(ctx context.Context, b
 	return s.runPreparedInstanceBackupWithContext(runCtx, backup, backupSubDir, true)
 }
 
+// runPreparedInstanceBackupWithContext performs database dump, manifest, archive, hash, and persistence steps.
 func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context.Context, backup *domain.InstanceBackup, backupSubDir string, ownOperation bool) (*domain.InstanceBackup, error) {
 	if err := ctx.Err(); err != nil {
 		s.cleanupFailedInstanceBackup(backup, backupSubDir, "backup cancelled", err)
@@ -470,12 +477,14 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 	return backup, nil
 }
 
+// completeInstanceBackupSuccess persists successful metadata while respecting cancellation races.
 func (s *InstanceBackupService) completeInstanceBackupSuccess(backup *domain.InstanceBackup, totalSize int64, ownOperation bool) error {
 	return s.operations.completeSuccess(backup.ID, totalSize, ownOperation, func() error {
 		return s.repo.Update(backup)
 	})
 }
 
+// cleanupFailedInstanceBackup marks a failed or cancelled run and removes its working directory.
 func (s *InstanceBackupService) cleanupFailedInstanceBackup(backup *domain.InstanceBackup, backupSubDir string, errMsg string, err error) {
 	status := domain.InstanceBackupStatusFailed
 	if errors.Is(err, context.Canceled) || s.instanceBackupCancellationRequested(backup.ID) || backupAlreadyCancelled(s.repo, backup.ID) {
@@ -490,11 +499,13 @@ func (s *InstanceBackupService) cleanupFailedInstanceBackup(backup *domain.Insta
 	os.RemoveAll(backupSubDir)
 }
 
+// backupAlreadyCancelled checks persisted state for cancellation that arrived during cleanup.
 func backupAlreadyCancelled(repo domain.InstanceBackupRepository, id uuid.UUID) bool {
 	backup, err := repo.GetByID(id)
 	return err == nil && backup != nil && backup.Status == domain.InstanceBackupStatusCancelled
 }
 
+// backupRunContext applies the configured backup duration limit to a run context.
 func (s *InstanceBackupService) backupRunContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -506,6 +517,7 @@ func (s *InstanceBackupService) backupRunContext(ctx context.Context) (context.C
 	return context.WithCancel(ctx)
 }
 
+// hasRunningInstanceBackup checks persisted records for an already-running backup.
 func (s *InstanceBackupService) hasRunningInstanceBackup() (bool, error) {
 	backups, err := s.repo.List()
 	if err != nil {
@@ -524,6 +536,7 @@ func (s *InstanceBackupService) backupDatabase(ctx context.Context, backupSubDir
 	return s.backupPostgresDatabase(ctx, filepath.Join(backupSubDir, postgresArchiveDBEntry+".tmp"))
 }
 
+// backupPostgresDatabase dumps PostgreSQL and records the migration version for the manifest.
 func (s *InstanceBackupService) backupPostgresDatabase(ctx context.Context, destPath string) (databaseBackupArtifact, error) {
 	if err := runPostgresDump(ctx, s.dbDSN, destPath); err != nil {
 		return databaseBackupArtifact{}, err
@@ -541,6 +554,7 @@ func (s *InstanceBackupService) backupPostgresDatabase(ctx context.Context, dest
 	}, nil
 }
 
+// readCurrentMigrationVersion reads the live schema migration version from PostgreSQL.
 func (s *InstanceBackupService) readCurrentMigrationVersion(ctx context.Context) (int, error) {
 	if s.db == nil {
 		return 0, fmt.Errorf("database connection unavailable")
@@ -553,6 +567,7 @@ func (s *InstanceBackupService) readCurrentMigrationVersion(ctx context.Context)
 	return version, nil
 }
 
+// validatePostgresDump delegates dump validation to pg_restore inspection.
 func (s *InstanceBackupService) validatePostgresDump(ctx context.Context, dumpPath string) error {
 	return validatePostgresDumpArchive(ctx, dumpPath)
 }
@@ -747,10 +762,9 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	return report, nil
 }
 
-// List returns all instance backups.
 // FailStaleRunning reconciles any "running" backups on startup.
 // If the archive file exists on disk, the backup completed but the DB was
-// snapshot'd mid-process (self-referential backup) — mark it as success.
+// snapshot'd mid-process (self-referential backup), so it is marked as success.
 // Otherwise the goroutine is gone and the backup truly failed.
 func (s *InstanceBackupService) FailStaleRunning() {
 	backups, err := s.repo.List()
@@ -794,6 +808,7 @@ func (s *InstanceBackupService) FailStaleRunning() {
 	}
 }
 
+// List returns all instance backups.
 func (s *InstanceBackupService) List(ctx context.Context) ([]domain.InstanceBackup, error) {
 	return s.repo.List()
 }
@@ -829,6 +844,7 @@ func (s *InstanceBackupService) Delete(ctx context.Context, id uuid.UUID) error 
 	return s.repo.Delete(id)
 }
 
+// validateInstanceBackupFilePath ensures deletion targets stay inside the backup root.
 func validateInstanceBackupFilePath(rootDir string, filePath string) error {
 	root := filepath.Clean(rootDir)
 	dir := filepath.Clean(filepath.Dir(filePath))
