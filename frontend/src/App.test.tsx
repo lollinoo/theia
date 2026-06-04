@@ -459,6 +459,13 @@ function mockMap(overrides: Partial<CanvasMap> = {}): CanvasMap {
   };
 }
 
+// renderApp waits for App's initial async fetch/effect updates so tests do not leak act warnings.
+async function renderApp() {
+  const result = render(<App />);
+  await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+  return result;
+}
+
 describe('App', () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -497,7 +504,7 @@ describe('App', () => {
       (permission: string) => permission === 'admin:dashboard:read',
     );
 
-    render(<App />);
+    await renderApp();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Admin' }));
     await waitFor(() => {
@@ -520,7 +527,7 @@ describe('App', () => {
     });
     fetchCanvasMapsMock.mockResolvedValue([defaultMap]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
@@ -531,7 +538,7 @@ describe('App', () => {
   });
 
   it('lets the canvas hide and restore the navigation pill while keeping a visible restore control', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(screen.getByTestId('canvas')).toBeInTheDocument());
 
@@ -563,7 +570,7 @@ describe('App', () => {
       }),
     ]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
       expect(screen.getByTestId('watermark')).toHaveAttribute('data-map-name', 'Primary Ops'),
@@ -578,7 +585,7 @@ describe('App', () => {
       }),
     );
 
-    render(<App />);
+    await renderApp();
 
     expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:default:Default');
     expect(screen.queryByTestId('canvas')).not.toBeInTheDocument();
@@ -616,7 +623,7 @@ describe('App', () => {
       }),
     ]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
@@ -627,7 +634,7 @@ describe('App', () => {
   });
 
   it('wires canvas devices links and snapshot into TopologyHub and Dashboard', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
 
@@ -660,7 +667,7 @@ describe('App', () => {
     });
     fetchCanvasMapsMock.mockResolvedValue([defaultMap]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
@@ -679,7 +686,7 @@ describe('App', () => {
   });
 
   it('keeps the canvas mounted and opacity-masked while the hub is active', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
 
@@ -697,7 +704,7 @@ describe('App', () => {
   });
 
   it('passes map-local areas into Devices instead of global areas', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     await waitFor(() =>
@@ -722,7 +729,7 @@ describe('App', () => {
     });
     fetchCanvasMapsMock.mockResolvedValue([defaultMap]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
@@ -743,7 +750,7 @@ describe('App', () => {
   });
 
   it('keeps Devices active when selecting a map from the navigation pill', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     screen.getByRole('button', { name: 'Dashboard' }).click();
@@ -759,7 +766,7 @@ describe('App', () => {
   });
 
   it('opens the canvas and requests fit view when selecting a map from the hub navigation pill', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     act(() => {
@@ -779,7 +786,7 @@ describe('App', () => {
   });
 
   it('opens the selected map-local area in Canvas from the navigation pill', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     await waitFor(() =>
@@ -798,7 +805,7 @@ describe('App', () => {
   });
 
   it('returns from Devices to the currently selected map', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     screen.getByRole('button', { name: 'Dashboard' }).click();
@@ -819,7 +826,7 @@ describe('App', () => {
   });
 
   it('keeps websocket runtime updates paused briefly after canvas interaction ends', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     expect(useWebSocketMock).toHaveBeenLastCalledWith(
@@ -871,7 +878,7 @@ describe('App', () => {
   });
 
   it('keeps the canvas watermark visible while canvas interaction pauses runtime updates', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
 
@@ -884,7 +891,7 @@ describe('App', () => {
   });
 
   it('anchors the canvas watermark inside the canvas viewport wrapper', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
 
@@ -895,7 +902,7 @@ describe('App', () => {
   });
 
   it('passes selected map props from the navigation pill to Canvas', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:default:Default');
@@ -913,7 +920,7 @@ describe('App', () => {
   });
 
   it('requests fit view when selecting a map from the navigation pill on the canvas', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     expect(screen.getByTestId('canvas')).toHaveTextContent('fit:0');
@@ -929,7 +936,7 @@ describe('App', () => {
   });
 
   it('lets the navigation pill select maps and filter areas without leaving the selected map', async () => {
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     await waitFor(() =>
@@ -966,7 +973,7 @@ describe('App', () => {
     createCanvasMapMock.mockResolvedValue(createdMap);
     fetchCanvasMapsMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     act(() => {
@@ -998,7 +1005,7 @@ describe('App', () => {
     const savedMap = mockMap({ id: 'map-delete', name: 'Branch' });
     fetchCanvasMapsMock.mockResolvedValue([savedMap]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     act(() => {
@@ -1026,7 +1033,7 @@ describe('App', () => {
     fetchCanvasMapsMock.mockResolvedValue([branchMap]);
     updateCanvasMapMock.mockResolvedValue(renamedMap);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     act(() => {
@@ -1076,7 +1083,7 @@ describe('App', () => {
     });
     fetchCanvasMapsMock.mockResolvedValue([defaultMap, branchMap]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     await waitFor(() =>
@@ -1126,7 +1133,7 @@ describe('App', () => {
     fetchCanvasMapsMock.mockResolvedValue([defaultMap, branchMap]);
     setCanvasMapPrimaryMock.mockResolvedValue(promotedBranch);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
@@ -1158,7 +1165,7 @@ describe('App', () => {
     });
     fetchCanvasMapsMock.mockResolvedValue([savedMap]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     act(() => {
@@ -1197,7 +1204,7 @@ describe('App', () => {
     });
     createCanvasMapMock.mockResolvedValue(createdMap);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     act(() => {
@@ -1250,7 +1257,7 @@ describe('App', () => {
     fetchCanvasMapsMock.mockResolvedValue([defaultMap]);
     createCanvasMapMock.mockResolvedValue(createdMap);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     await waitFor(() =>
@@ -1290,7 +1297,7 @@ describe('App', () => {
     });
     createCanvasMapMock.mockResolvedValue(createdMap);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
     act(() => {
