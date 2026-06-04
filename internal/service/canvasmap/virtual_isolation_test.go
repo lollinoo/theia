@@ -8,6 +8,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// TestIsolateVirtualDevicesClonesSharedVirtualDeviceAndRemapsMembershipLinksAndPositions covers the full map-local rewrite.
 func TestIsolateVirtualDevicesClonesSharedVirtualDeviceAndRemapsMembershipLinksAndPositions(t *testing.T) {
 	ctx := context.Background()
 	mapID := uuid.New()
@@ -161,14 +162,17 @@ type fakeVirtualIsolationMapRepo struct {
 	replaced    map[uuid.UUID]domain.CanvasMapMembership
 }
 
+// List returns fake maps so isolation can detect shared virtual-device membership.
 func (r *fakeVirtualIsolationMapRepo) List() ([]domain.CanvasMap, error) {
 	return append([]domain.CanvasMap(nil), r.maps...), nil
 }
 
+// GetMembership returns the current fake membership for a map.
 func (r *fakeVirtualIsolationMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership, error) {
 	return r.memberships[id], nil
 }
 
+// ReplaceMembership records the rewritten membership after clone isolation.
 func (r *fakeVirtualIsolationMapRepo) ReplaceMembership(id uuid.UUID, membership domain.CanvasMapMembership) error {
 	if r.replaced == nil {
 		r.replaced = map[uuid.UUID]domain.CanvasMapMembership{}
@@ -198,10 +202,12 @@ type fakeVirtualIsolationAddedDevice struct {
 	notes                 []*string
 }
 
+// GetDevicesByIDs returns source devices used to identify clone candidates.
 func (s *fakeVirtualIsolationDeviceService) GetDevicesByIDs(context.Context, []uuid.UUID) ([]domain.Device, error) {
 	return append([]domain.Device(nil), s.devices...), nil
 }
 
+// AddDevice records clone-creation inputs and returns the configured clone.
 func (s *fakeVirtualIsolationDeviceService) AddDevice(
 	_ context.Context,
 	ip string,
@@ -233,11 +239,13 @@ func (s *fakeVirtualIsolationDeviceService) AddDevice(
 	return &s.clone, nil
 }
 
+// UpdateClonedVirtualDevice records clone update fields that must survive isolation.
 func (s *fakeVirtualIsolationDeviceService) UpdateClonedVirtualDevice(_ context.Context, _ uuid.UUID, update VirtualDeviceCloneUpdate) error {
 	s.update = update
 	return nil
 }
 
+// GetDevice returns the reloaded clone expected by the isolation workflow.
 func (s *fakeVirtualIsolationDeviceService) GetDevice(context.Context, uuid.UUID) (*domain.Device, error) {
 	return &s.clone, nil
 }
@@ -248,10 +256,12 @@ type fakeVirtualIsolationLinkRepo struct {
 	created []domain.Link
 }
 
+// GetAll returns source links for clone endpoint remapping.
 func (r *fakeVirtualIsolationLinkRepo) GetAll() ([]domain.Link, error) {
 	return append([]domain.Link(nil), r.links...), nil
 }
 
+// Create assigns the configured cloned-link ID and records link details.
 func (r *fakeVirtualIsolationLinkRepo) Create(link *domain.Link) error {
 	link.ID = r.nextID
 	r.created = append(r.created, *link)
@@ -263,10 +273,12 @@ type fakeVirtualIsolationPositionRepo struct {
 	saved     map[uuid.UUID][]domain.DevicePosition
 }
 
+// GetAllForMap returns source positions that should be remapped to clone IDs.
 func (r *fakeVirtualIsolationPositionRepo) GetAllForMap(mapID uuid.UUID) ([]domain.DevicePosition, error) {
 	return append([]domain.DevicePosition(nil), r.positions[mapID]...), nil
 }
 
+// SaveAllForMap records remapped positions saved by isolation.
 func (r *fakeVirtualIsolationPositionRepo) SaveAllForMap(mapID uuid.UUID, positions []domain.DevicePosition) error {
 	if r.saved == nil {
 		r.saved = map[uuid.UUID][]domain.DevicePosition{}

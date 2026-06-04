@@ -645,10 +645,12 @@ func HasDuplicateDeviceAddress(device domain.Device, existing []domain.Device) b
 	return false
 }
 
+// NormalizeDeviceAddress canonicalizes device addresses before saved-map duplicate checks.
 func NormalizeDeviceAddress(address string) string {
 	return strings.ToLower(strings.TrimSpace(address))
 }
 
+// DuplicateDeviceAddressMessage formats the API-compatible duplicate-address conflict text.
 func DuplicateDeviceAddressMessage(address string) string {
 	address = strings.TrimSpace(address)
 	if address == "" {
@@ -723,6 +725,7 @@ func FilterPositionsForMemberDevices(
 	return filtered
 }
 
+// areaWithCountIDSet indexes area rows by ID for membership filtering.
 func areaWithCountIDSet(areas []domain.AreaWithCount) map[uuid.UUID]struct{} {
 	ids := make(map[uuid.UUID]struct{}, len(areas))
 	for _, area := range areas {
@@ -731,6 +734,7 @@ func areaWithCountIDSet(areas []domain.AreaWithCount) map[uuid.UUID]struct{} {
 	return ids
 }
 
+// areaSnapshotIDSet indexes saved-map area snapshots by ID for source-map filtering.
 func areaSnapshotIDSet(areas []domain.CanvasMapAreaMembership) map[uuid.UUID]struct{} {
 	ids := make(map[uuid.UUID]struct{}, len(areas))
 	for _, area := range areas {
@@ -739,6 +743,7 @@ func areaSnapshotIDSet(areas []domain.CanvasMapAreaMembership) map[uuid.UUID]str
 	return ids
 }
 
+// filterDeviceAreaIDs keeps only device area assignments that are part of the map-local area set.
 func filterDeviceAreaIDs(areaIDs []uuid.UUID, included map[uuid.UUID]struct{}) []uuid.UUID {
 	if len(areaIDs) == 0 || len(included) == 0 {
 		return []uuid.UUID{}
@@ -752,6 +757,7 @@ func filterDeviceAreaIDs(areaIDs []uuid.UUID, included map[uuid.UUID]struct{}) [
 	return filtered
 }
 
+// areasForMembership selects global area rows that should be snapshotted into a materialized map.
 func areasForMembership(
 	areas []domain.AreaWithCount,
 	baseDevices []domain.Device,
@@ -777,6 +783,7 @@ func areasForMembership(
 	return filtered
 }
 
+// areaSnapshotsForMembership selects source-map area snapshots that remain after filtering.
 func areaSnapshotsForMembership(
 	areas []domain.CanvasMapAreaMembership,
 	baseDevices []domain.Device,
@@ -802,6 +809,7 @@ func areaSnapshotsForMembership(
 	return filtered
 }
 
+// areaDeviceCount counts base devices assigned to an area in the map-local projection.
 func areaDeviceCount(areaID uuid.UUID, devices []domain.Device) int {
 	count := 0
 	for _, device := range devices {
@@ -812,6 +820,7 @@ func areaDeviceCount(areaID uuid.UUID, devices []domain.Device) int {
 	return count
 }
 
+// deviceHasArea reports whether a device currently carries the given area assignment.
 func deviceHasArea(device domain.Device, areaID uuid.UUID) bool {
 	for _, deviceAreaID := range device.AreaIDs {
 		if deviceAreaID == areaID {
@@ -821,6 +830,7 @@ func deviceHasArea(device domain.Device, areaID uuid.UUID) bool {
 	return false
 }
 
+// deviceMatchesTags applies exact saved-map tag filters to a candidate base device.
 func deviceMatchesTags(device domain.Device, tags map[string]string) bool {
 	for key, expected := range tags {
 		actual, ok := device.Tags[key]
@@ -831,6 +841,7 @@ func deviceMatchesTags(device domain.Device, tags map[string]string) bool {
 	return true
 }
 
+// canvasMapDeviceByID indexes loaded devices for membership validation and virtual isolation.
 func canvasMapDeviceByID(devices []domain.Device) map[uuid.UUID]domain.Device {
 	deviceByID := make(map[uuid.UUID]domain.Device, len(devices))
 	for _, device := range devices {
@@ -839,6 +850,7 @@ func canvasMapDeviceByID(devices []domain.Device) map[uuid.UUID]domain.Device {
 	return deviceByID
 }
 
+// copyOptionalString returns a detached copy so membership plans cannot mutate caller-owned strings.
 func copyOptionalString(value *string) *string {
 	if value == nil {
 		return nil

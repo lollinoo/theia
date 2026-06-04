@@ -2,6 +2,7 @@ package canvasmap
 
 import "testing"
 
+// TestAreaMembershipFromInputTrimsFieldsAndDefaultsColor preserves map-local area normalization.
 func TestAreaMembershipFromInputTrimsFieldsAndDefaultsColor(t *testing.T) {
 	area, err := AreaMembershipFromInput(" Core ", " backbone ", " ")
 	if err != nil {
@@ -19,6 +20,7 @@ func TestAreaMembershipFromInputTrimsFieldsAndDefaultsColor(t *testing.T) {
 	}
 }
 
+// TestAreaMembershipFromInputPreservesLegacyColorValidation keeps the historical shallow color validation.
 func TestAreaMembershipFromInputPreservesLegacyColorValidation(t *testing.T) {
 	area, err := AreaMembershipFromInput("Core", "", " #GGGGGG ")
 	if err != nil {
@@ -29,6 +31,7 @@ func TestAreaMembershipFromInputPreservesLegacyColorValidation(t *testing.T) {
 	}
 }
 
+// TestAreaMembershipFromInputValidationErrors locks the public area validation messages.
 func TestAreaMembershipFromInputValidationErrors(t *testing.T) {
 	tests := []struct {
 		name        string

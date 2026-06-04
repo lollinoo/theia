@@ -56,6 +56,7 @@ func TestVisualColorsByDeviceID(t *testing.T) {
 	}
 }
 
+// TestValidateVisualColorDeviceRequiresVirtualDevice preserves the visual-color target restriction.
 func TestValidateVisualColorDeviceRequiresVirtualDevice(t *testing.T) {
 	if err := ValidateVisualColorDevice(domain.Device{DeviceType: domain.DeviceTypeVirtual}); err != nil {
 		t.Fatalf("ValidateVisualColorDevice() virtual error = %v", err)

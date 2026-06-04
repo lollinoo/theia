@@ -8,22 +8,26 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// VirtualIsolationMapRepository is the map persistence surface required for virtual-device isolation.
 type VirtualIsolationMapRepository interface {
 	List() ([]domain.CanvasMap, error)
 	GetMembership(uuid.UUID) (domain.CanvasMapMembership, error)
 	ReplaceMembership(uuid.UUID, domain.CanvasMapMembership) error
 }
 
+// VirtualIsolationPositionRepository persists map-local positions affected by virtual-device clones.
 type VirtualIsolationPositionRepository interface {
 	GetAllForMap(uuid.UUID) ([]domain.DevicePosition, error)
 	SaveAllForMap(uuid.UUID, []domain.DevicePosition) error
 }
 
+// VirtualDeviceCloneUpdate carries clone-only mutable fields without importing the parent service package.
 type VirtualDeviceCloneUpdate struct {
 	PollIntervalOverride **int
 	PollingEnabled       *bool
 }
 
+// VirtualIsolationDeviceService is the narrow device-service surface needed to clone shared virtual devices.
 type VirtualIsolationDeviceService interface {
 	GetDevicesByIDs(context.Context, []uuid.UUID) ([]domain.Device, error)
 	AddDevice(
@@ -45,11 +49,13 @@ type VirtualIsolationDeviceService interface {
 	GetDevice(context.Context, uuid.UUID) (*domain.Device, error)
 }
 
+// VirtualIsolationLinkRepository is the link persistence surface needed to clone remapped links.
 type VirtualIsolationLinkRepository interface {
 	Create(*domain.Link) error
 	GetAll() ([]domain.Link, error)
 }
 
+// VirtualIsolationDeps groups the collaborators for saved-map virtual-device isolation.
 type VirtualIsolationDeps struct {
 	Maps      VirtualIsolationMapRepository
 	Positions VirtualIsolationPositionRepository
@@ -57,6 +63,7 @@ type VirtualIsolationDeps struct {
 	Links     VirtualIsolationLinkRepository
 }
 
+// IsolateVirtualDevices clones virtual devices shared with other maps and rewrites map-local membership, links, and positions.
 func IsolateVirtualDevices(
 	ctx context.Context,
 	mapID uuid.UUID,
@@ -147,6 +154,7 @@ func IsolateVirtualDevices(
 	return nil
 }
 
+// LoadLinksByIDs loads requested links using a batch repository when present, with GetAll fallback for compatibility.
 func LoadLinksByIDs(repo VirtualIsolationLinkRepository, ids []uuid.UUID) ([]domain.Link, error) {
 	if len(ids) == 0 {
 		return []domain.Link{}, nil
@@ -176,6 +184,7 @@ func LoadLinksByIDs(repo VirtualIsolationLinkRepository, ids []uuid.UUID) ([]dom
 	return filtered, nil
 }
 
+// sharedDeviceIDs finds virtual device IDs also referenced by other saved maps.
 func sharedDeviceIDs(
 	repo VirtualIsolationMapRepository,
 	mapID uuid.UUID,
@@ -203,6 +212,7 @@ func sharedDeviceIDs(
 	return shared, nil
 }
 
+// cloneVirtualDevice creates a detached virtual device while preserving source metadata that affects runtime behavior.
 func cloneVirtualDevice(
 	ctx context.Context,
 	devices VirtualIsolationDeviceService,
@@ -244,6 +254,7 @@ func cloneVirtualDevice(
 	return reloaded, nil
 }
 
+// cloneLinkForVirtualDevices clones a link only when one of its endpoints was remapped to a virtual clone.
 func cloneLinkForVirtualDevices(
 	repo VirtualIsolationLinkRepository,
 	link domain.Link,
@@ -267,6 +278,7 @@ func cloneLinkForVirtualDevices(
 	return nextLink.ID, nil
 }
 
+// clonePollIntervalOverrideForUpdate converts a source override into the update API's tri-state pointer shape.
 func clonePollIntervalOverrideForUpdate(value *int) **int {
 	var sourceOverride *int
 	if value != nil {
@@ -276,6 +288,7 @@ func clonePollIntervalOverrideForUpdate(value *int) **int {
 	return &sourceOverride
 }
 
+// cloneStringMap copies tag metadata before passing it to clone creation.
 func cloneStringMap(values map[string]string) map[string]string {
 	if values == nil {
 		return nil
@@ -287,6 +300,7 @@ func cloneStringMap(values map[string]string) map[string]string {
 	return cloned
 }
 
+// cloneOptionalString copies optional notes before passing them to clone creation.
 func cloneOptionalString(value *string) *string {
 	if value == nil {
 		return nil

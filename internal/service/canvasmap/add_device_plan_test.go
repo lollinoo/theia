@@ -8,6 +8,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// TestPlanAddDeviceMembershipAddsOnlyMissingLinksForExistingDevice preserves the incremental-link path for existing members.
 func TestPlanAddDeviceMembershipAddsOnlyMissingLinksForExistingDevice(t *testing.T) {
 	deviceID := uuid.New()
 	existingBaseID := uuid.New()
@@ -60,6 +61,7 @@ func TestPlanAddDeviceMembershipAddsOnlyMissingLinksForExistingDevice(t *testing
 	}
 }
 
+// TestPlanAddDeviceMembershipConflictsWhenExistingDeviceHasNoMissingLinks preserves the add-device conflict behavior.
 func TestPlanAddDeviceMembershipConflictsWhenExistingDeviceHasNoMissingLinks(t *testing.T) {
 	deviceID := uuid.New()
 	linkID := uuid.New()
@@ -84,6 +86,7 @@ func TestPlanAddDeviceMembershipConflictsWhenExistingDeviceHasNoMissingLinks(t *
 	}
 }
 
+// TestPlanAddDeviceMembershipBuildsNewBaseMemberWithLinksAndAreas characterizes new-member materialization.
 func TestPlanAddDeviceMembershipBuildsNewBaseMemberWithLinksAndAreas(t *testing.T) {
 	deviceID := uuid.New()
 	existingBaseID := uuid.New()
@@ -134,6 +137,7 @@ func TestPlanAddDeviceMembershipBuildsNewBaseMemberWithLinksAndAreas(t *testing.
 	}
 }
 
+// TestPlanAddDeviceMembershipRejectsDuplicateDeviceAddress preserves duplicate-address conflict text.
 func TestPlanAddDeviceMembershipRejectsDuplicateDeviceAddress(t *testing.T) {
 	device := domain.Device{ID: uuid.New(), IP: " Router.EXAMPLE.com "}
 

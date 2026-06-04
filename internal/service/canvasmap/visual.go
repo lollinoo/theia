@@ -11,6 +11,7 @@ import (
 var ErrInvalidVisualColor = errors.New("invalid visual_color format (must be #RRGGBB)")
 var ErrVisualColorRequiresVirtualDevice = errors.New("visual_color is only supported for virtual devices")
 
+// NormalizeVisualColor trims, uppercases, validates, or clears a map-local visual color.
 func NormalizeVisualColor(raw *string) (*string, error) {
 	if raw == nil {
 		return nil, nil
@@ -26,6 +27,7 @@ func NormalizeVisualColor(raw *string) (*string, error) {
 	return &normalized, nil
 }
 
+// VisualColorsByDeviceID indexes map-local visual color metadata by device ID for topology projection.
 func VisualColorsByDeviceID(
 	membership []domain.CanvasMapDeviceMembership,
 ) map[uuid.UUID]string {
@@ -39,6 +41,7 @@ func VisualColorsByDeviceID(
 	return visualColors
 }
 
+// ValidateVisualColorDevice enforces that visual color overrides apply only to virtual devices.
 func ValidateVisualColorDevice(device domain.Device) error {
 	if device.DeviceType != domain.DeviceTypeVirtual {
 		return ErrVisualColorRequiresVirtualDevice
@@ -46,6 +49,7 @@ func ValidateVisualColorDevice(device domain.Device) error {
 	return nil
 }
 
+// isHexRGBColor checks the strict #RRGGBB format accepted by saved-map visual metadata.
 func isHexRGBColor(color string) bool {
 	if len(color) != 7 || color[0] != '#' {
 		return false

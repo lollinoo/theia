@@ -99,6 +99,7 @@ func TestMaterializeMembershipFromSourceMapUsesSourceAreaAssignments(t *testing.
 	}
 }
 
+// TestPlanSourceMapMaterializationFallsBackToImportedAreasAndPrunesPositions preserves source-map fallback and pruning behavior.
 func TestPlanSourceMapMaterializationFallsBackToImportedAreasAndPrunesPositions(t *testing.T) {
 	areaID := uuid.New()
 	baseID := uuid.New()
@@ -148,6 +149,7 @@ func TestPlanSourceMapMaterializationFallsBackToImportedAreasAndPrunesPositions(
 	}
 }
 
+// TestPlanSourceMapMaterializationPrefersSourceAreaSnapshots keeps map-local source snapshots authoritative.
 func TestPlanSourceMapMaterializationPrefersSourceAreaSnapshots(t *testing.T) {
 	areaID := uuid.New()
 	baseID := uuid.New()
@@ -334,6 +336,7 @@ func TestDefaultPositionsForMembershipPrunesNonMembers(t *testing.T) {
 	}
 }
 
+// TestPlanDefaultPositionCopySkipsDefaultMap preserves the no-op path for the default map itself.
 func TestPlanDefaultPositionCopySkipsDefaultMap(t *testing.T) {
 	defaultMapID := uuid.New()
 	memberID := uuid.New()
@@ -354,6 +357,7 @@ func TestPlanDefaultPositionCopySkipsDefaultMap(t *testing.T) {
 	}
 }
 
+// TestPlanDefaultPositionCopyUsesDefaultPositionsAndPrunesNonMembers preserves member-only default position copy.
 func TestPlanDefaultPositionCopyUsesDefaultPositionsAndPrunesNonMembers(t *testing.T) {
 	memberID := uuid.New()
 	otherID := uuid.New()
@@ -378,6 +382,7 @@ func TestPlanDefaultPositionCopyUsesDefaultPositionsAndPrunesNonMembers(t *testi
 	}
 }
 
+// TestPlanDefaultPositionCopyFallsBackToLegacyPositions preserves legacy canvas position fallback.
 func TestPlanDefaultPositionCopyFallsBackToLegacyPositions(t *testing.T) {
 	memberID := uuid.New()
 

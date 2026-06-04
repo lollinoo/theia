@@ -11,6 +11,7 @@ var ErrAreaNameRequired = errors.New("name is required")
 var ErrAreaNameTooLong = errors.New("area name too long (max 100 characters)")
 var ErrInvalidAreaColor = errors.New("invalid color format (must be #RRGGBB)")
 
+// AreaMembershipFromInput normalizes canvas-map area input while preserving legacy validation text.
 func AreaMembershipFromInput(
 	name string,
 	description string,

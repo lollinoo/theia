@@ -9,20 +9,24 @@ import (
 
 var ErrDeviceAlreadyInCanvasMap = errors.New("device already exists in this map")
 
+// DuplicateDeviceAddressError preserves the user-visible duplicate-address message.
 type DuplicateDeviceAddressError struct {
 	Address string
 }
 
+// Error formats the duplicate-address conflict using the API-compatible text.
 func (e DuplicateDeviceAddressError) Error() string {
 	return DuplicateDeviceAddressMessage(e.Address)
 }
 
+// AddDeviceMembershipPlan describes the map-local membership rows to persist.
 type AddDeviceMembershipPlan struct {
 	Device  domain.CanvasMapDeviceMembership
 	LinkIDs []uuid.UUID
 	Areas   []domain.CanvasMapAreaMembership
 }
 
+// PlanAddDeviceMembership chooses whether to add a new base member or only missing links for an existing member.
 func PlanAddDeviceMembership(
 	device domain.Device,
 	membership domain.CanvasMapMembership,
@@ -62,6 +66,7 @@ func PlanAddDeviceMembership(
 	}, nil
 }
 
+// MemberByDeviceID returns a defensive copy of an existing map membership row.
 func MemberByDeviceID(
 	membership domain.CanvasMapMembership,
 	deviceID uuid.UUID,
