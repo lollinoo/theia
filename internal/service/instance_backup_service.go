@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -363,49 +362,29 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 	}
 
 	// Step 5: Build manifest
-	manifest := backupManifest{
-		Version:           1,
-		AppVersion:        version.Version,
-		GitCommit:         version.GitCommit,
-		DBEntryName:       dbArtifact.archiveEntryName,
-		MigrationVersion:  dbArtifact.migrationVersion,
-		CreatedAt:         backup.CreatedAt.UTC().Format(time.RFC3339),
-		DBSHA256:          dbHash,
-		BackupFileCount:   backupFileCount,
-		TotalSizeBytes:    0, // will be updated after archiving
-		EncryptionKeyHash: computeEncryptionKeyHash(s.encryptionKey),
-	}
-
-	manifestJSON, err := json.MarshalIndent(&manifest, "", "  ")
+	manifestPlan, err := buildInstanceBackupArchiveManifestPlan(instanceBackupArchiveManifestInput{
+		appVersion:         version.Version,
+		gitCommit:          version.GitCommit,
+		dbArtifact:         dbArtifact,
+		backupCreatedAt:    backup.CreatedAt,
+		dbSHA256:           dbHash,
+		backupFileCount:    backupFileCount,
+		totalSourceBytes:   totalSourceBytes,
+		archiveFileEntries: archiveFileEntries,
+		encryptionKey:      s.encryptionKey,
+		limits:             limits,
+	})
 	if err != nil {
-		cleanupOnError(fmt.Sprintf("marshaling manifest: %v", err), err)
-		return nil, fmt.Errorf("marshaling manifest: %w", err)
-	}
-	estimatedManifestTotal, err := checkedArchiveByteTotal(
-		totalSourceBytes,
-		int64(len(manifestJSON)),
-		limits.MaxTotalBytes,
-	)
-	if err != nil {
-		cleanupOnError(fmt.Sprintf("checking archive quota: %v", err), err)
+		errMsg := err.Error()
+		if !strings.HasPrefix(errMsg, "marshaling manifest:") {
+			errMsg = fmt.Sprintf("checking archive quota: %v", err)
+		}
+		cleanupOnError(errMsg, err)
 		return nil, err
 	}
-	manifest.TotalSizeBytes = estimatedManifestTotal
-	manifestJSON, err = json.MarshalIndent(&manifest, "", "  ")
-	if err != nil {
-		cleanupOnError(fmt.Sprintf("marshaling manifest: %v", err), err)
-		return nil, fmt.Errorf("marshaling manifest: %w", err)
-	}
-	totalArchiveBytes, err := checkedArchiveByteTotal(totalSourceBytes, int64(len(manifestJSON)), limits.MaxTotalBytes)
-	if err != nil {
-		cleanupOnError(fmt.Sprintf("checking archive quota: %v", err), err)
-		return nil, err
-	}
-	manifest.TotalSizeBytes = totalArchiveBytes
-	if err := checkBackupArchiveTotals(totalArchiveBytes, archiveFileEntries+1, limits); err != nil {
-		cleanupOnError(fmt.Sprintf("checking archive quota: %v", err), err)
-		return nil, err
-	}
+	manifest := manifestPlan.manifest
+	manifestJSON := manifestPlan.manifestJSON
+	totalArchiveBytes := manifestPlan.totalArchiveBytes
 
 	s.updateInstanceBackupProgress(backup.ID, domain.InstanceBackupProgress{
 		Phase:   "archiving",
