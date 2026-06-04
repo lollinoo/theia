@@ -50,6 +50,10 @@ import {
 } from './runtimePatches';
 import { refreshCanvasSettings } from './canvasSettingsRefresh';
 import {
+  createStructuralRefreshQueue,
+  type StructuralRefreshQueue,
+} from './structuralRefreshQueue';
+import {
   buildCanvasTopologyCompositionCacheKey,
   createCanvasTopologyCompositionCache,
 } from './topologyCompositionCache';
@@ -401,8 +405,10 @@ export function useCanvasData({
 
   const [topologyRecoveryNotice, setTopologyRecoveryNotice] =
     useState<TopologyRecoveryNotice | null>(null);
-  const structuralRefreshTimerRef = useRef<number | null>(null);
-  const pendingStructuralRefreshCausesRef = useRef<Set<StructuralRefreshCause>>(new Set());
+  const structuralRefreshRunnerRef = useRef<(causes: Set<StructuralRefreshCause>) => void>(
+    () => undefined,
+  );
+  const structuralRefreshQueueRef = useRef<StructuralRefreshQueue | null>(null);
   const lastStructuralRefreshCausesRef = useRef<Set<StructuralRefreshCause>>(new Set());
 
   // Keep refs in sync so async loadTopology and snapshot effect can read the latest state
@@ -981,6 +987,12 @@ export function useCanvasData({
     [loadTopology],
   );
 
+  useEffect(() => {
+    structuralRefreshRunnerRef.current = (causes) => {
+      void runStructuralRefresh(causes);
+    };
+  }, [runStructuralRefresh]);
+
   const retryTopologyRefresh = useCallback(() => {
     const retryCauses =
       lastStructuralRefreshCausesRef.current.size > 0
@@ -1033,20 +1045,18 @@ export function useCanvasData({
 
   const queueStructuralRefresh = useCallback(
     (cause: StructuralRefreshCause) => {
-      pendingStructuralRefreshCausesRef.current.add(cause);
-
-      if (structuralRefreshTimerRef.current !== null) {
-        return;
+      if (structuralRefreshQueueRef.current === null) {
+        structuralRefreshQueueRef.current = createStructuralRefreshQueue({
+          debounceMs: structuralRefreshDebounceMs,
+          runRefresh: (causes) => structuralRefreshRunnerRef.current(causes),
+          setTimeoutFn: window.setTimeout.bind(window),
+          clearTimeoutFn: window.clearTimeout.bind(window),
+        });
       }
 
-      structuralRefreshTimerRef.current = window.setTimeout(() => {
-        structuralRefreshTimerRef.current = null;
-        const refreshCauses = new Set(pendingStructuralRefreshCausesRef.current);
-        pendingStructuralRefreshCausesRef.current.clear();
-        void runStructuralRefresh(refreshCauses);
-      }, structuralRefreshDebounceMs);
+      structuralRefreshQueueRef.current.queue(cause);
     },
-    [runStructuralRefresh],
+    [],
   );
 
   // Initial load
@@ -1098,11 +1108,7 @@ export function useCanvasData({
     window.addEventListener('topology-changed', handleTopologyChanged);
 
     return () => {
-      if (structuralRefreshTimerRef.current !== null) {
-        window.clearTimeout(structuralRefreshTimerRef.current);
-        structuralRefreshTimerRef.current = null;
-      }
-      pendingStructuralRefreshCausesRef.current.clear();
+      structuralRefreshQueueRef.current?.cancel();
       window.removeEventListener('backend-reconnected', handleReconnect);
       window.removeEventListener('backend-resync-required', handleResyncRequired);
       window.removeEventListener('topology-changed', handleTopologyChanged);
