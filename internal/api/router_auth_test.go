@@ -241,6 +241,33 @@ func TestRequiredPermissionsForUnknownProtectedRoutesFailClosed(t *testing.T) {
 	}
 }
 
+func TestRoutePermissionRegistryRejectsShadowedStaticPatterns(t *testing.T) {
+	registry := newRoutePermissionRegistry([]routePermissionSpec{
+		{
+			pattern:     "/api/v1/devices/{deviceID}",
+			permissions: fixedRoutePermissions(domain.PermissionDevicesRead),
+		},
+		{
+			pattern:     "/api/v1/devices/batch",
+			permissions: fixedRoutePermissions(domain.PermissionDevicesCreate),
+		},
+	})
+
+	err := registry.validate()
+	if err == nil {
+		t.Fatal("registry.validate() error = nil, want shadowed pattern error")
+	}
+	if got, want := err.Error(), "route permission pattern /api/v1/devices/batch is shadowed by earlier pattern /api/v1/devices/{deviceID}"; got != want {
+		t.Fatalf("registry.validate() error = %q, want %q", got, want)
+	}
+}
+
+func TestProtectedRoutePermissionRegistryMetadataIsValid(t *testing.T) {
+	if err := protectedRoutePermissionRegistry.validate(); err != nil {
+		t.Fatalf("protected route permission registry invalid: %v", err)
+	}
+}
+
 func TestUserAuthRejectsUnknownProtectedRouteBeforeHandler(t *testing.T) {
 	auth := newFakeAPIAuthProvider()
 	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("alice", false, allSystemPermissionKeys()...))

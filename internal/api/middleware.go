@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -300,12 +301,7 @@ func requiredPermissionsForRoute(method, path string) ([]string, bool) {
 	if path == "/api/v1/health" || path == "/api/v1/prometheus/health" {
 		return []string{domain.PermissionSettingsRead}, true
 	}
-	for _, spec := range routePermissionSpecs {
-		if spec.matches(path) {
-			return spec.permissions(method), true
-		}
-	}
-	return nil, false
+	return protectedRoutePermissionRegistry.permissionsForRoute(method, path)
 }
 
 type routePermissionSpec struct {
@@ -315,8 +311,46 @@ type routePermissionSpec struct {
 
 type routePermissionPolicy func(method string) []string
 
+type routePermissionRegistry struct {
+	specs []routePermissionSpec
+}
+
 func (s routePermissionSpec) matches(path string) bool {
 	return matchRoutePattern(path, s.pattern)
+}
+
+func newRoutePermissionRegistry(specs []routePermissionSpec) routePermissionRegistry {
+	return routePermissionRegistry{specs: append([]routePermissionSpec(nil), specs...)}
+}
+
+func (r routePermissionRegistry) permissionsForRoute(method, path string) ([]string, bool) {
+	for _, spec := range r.specs {
+		if spec.matches(path) {
+			return spec.permissions(method), true
+		}
+	}
+	return nil, false
+}
+
+func (r routePermissionRegistry) validate() error {
+	seenPatterns := make(map[string]struct{}, len(r.specs))
+	for index, spec := range r.specs {
+		if _, exists := seenPatterns[spec.pattern]; exists {
+			return fmt.Errorf("duplicate route permission pattern %s", spec.pattern)
+		}
+		seenPatterns[spec.pattern] = struct{}{}
+
+		for _, previous := range r.specs[:index] {
+			if previous.matches(spec.pattern) {
+				return fmt.Errorf(
+					"route permission pattern %s is shadowed by earlier pattern %s",
+					spec.pattern,
+					previous.pattern,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 var routePermissionSpecs = []routePermissionSpec{
@@ -416,6 +450,8 @@ var routePermissionSpecs = []routePermissionSpec{
 	{pattern: "/api/v1/admin/permissions", permissions: fixedRoutePermissions(domain.PermissionRolesRead)},
 	{pattern: "/api/v1/admin/audit-logs", permissions: fixedRoutePermissions(domain.PermissionAuditLogsRead)},
 }
+
+var protectedRoutePermissionRegistry = newRoutePermissionRegistry(routePermissionSpecs)
 
 func matchRoutePattern(path, pattern string) bool {
 	pathSegments := splitRouteSegments(path)
