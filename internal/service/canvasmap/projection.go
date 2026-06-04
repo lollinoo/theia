@@ -321,6 +321,25 @@ func ConnectedBaseLinkIDs(
 	return linkIDs
 }
 
+// MissingLinkIDs returns candidate links that are not already present.
+func MissingLinkIDs(existing []uuid.UUID, candidates []uuid.UUID) []uuid.UUID {
+	if len(candidates) == 0 {
+		return []uuid.UUID{}
+	}
+	known := make(map[uuid.UUID]struct{}, len(existing))
+	for _, id := range existing {
+		known[id] = struct{}{}
+	}
+	missing := make([]uuid.UUID, 0, len(candidates))
+	for _, id := range candidates {
+		if _, ok := known[id]; ok {
+			continue
+		}
+		missing = append(missing, id)
+	}
+	return missing
+}
+
 // AreaMembershipToAreas converts saved-map area snapshots to area rows with map-local counts.
 func AreaMembershipToAreas(
 	areas []domain.CanvasMapAreaMembership,

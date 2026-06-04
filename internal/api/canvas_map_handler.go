@@ -467,7 +467,7 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 					return
 				}
 				linkIDs := canvasmap.ConnectedBaseLinkIDs(deviceID, membership, links)
-				missingLinkIDs := canvasMapMissingLinkIDs(membership.LinkIDs, linkIDs)
+				missingLinkIDs := canvasmap.MissingLinkIDs(membership.LinkIDs, linkIDs)
 				if len(missingLinkIDs) > 0 {
 					if err := adder.AddDeviceMembership(canvasMap.ID, member, linkIDs, membership.Areas); err != nil {
 						h.writeMapRepoMutationError(w, err)
@@ -538,24 +538,6 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
-}
-
-func canvasMapMissingLinkIDs(existing []uuid.UUID, candidates []uuid.UUID) []uuid.UUID {
-	if len(candidates) == 0 {
-		return []uuid.UUID{}
-	}
-	known := make(map[uuid.UUID]struct{}, len(existing))
-	for _, id := range existing {
-		known[id] = struct{}{}
-	}
-	missing := make([]uuid.UUID, 0, len(candidates))
-	for _, id := range candidates {
-		if _, ok := known[id]; ok {
-			continue
-		}
-		missing = append(missing, id)
-	}
-	return missing
 }
 
 func (h *CanvasMapHandler) HandlePatchDevice(w http.ResponseWriter, r *http.Request) {

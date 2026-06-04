@@ -126,6 +126,21 @@ func TestConnectedBaseLinkIDsIncludesNewDeviceAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestMissingLinkIDsKeepsOnlyCandidatesNotAlreadyInMembership(t *testing.T) {
+	existingID := uuid.New()
+	firstMissingID := uuid.New()
+	secondMissingID := uuid.New()
+
+	got := MissingLinkIDs(
+		[]uuid.UUID{existingID},
+		[]uuid.UUID{existingID, firstMissingID, firstMissingID, secondMissingID},
+	)
+
+	if want := []uuid.UUID{firstMissingID, firstMissingID, secondMissingID}; !uuidSlicesEqual(got, want) {
+		t.Fatalf("missing link IDs = %v, want %v", got, want)
+	}
+}
+
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false
