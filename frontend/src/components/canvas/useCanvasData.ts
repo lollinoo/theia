@@ -13,6 +13,7 @@ import {
 } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
+import { applyAlertStatusPatch } from './alertStatusPatch';
 import { recordCanvasDiagnosticEvent, updateCanvasDiagnosticsState } from './canvasDiagnostics';
 import {
   buildPositionPayload,
@@ -27,16 +28,13 @@ import {
   measureCanvasAsyncWork,
   measureCanvasWork,
 } from './canvasInstrumentation';
-import { patchAlertStatuses } from './canvasPresentationPatches';
 import { canvasMapKey, loadCanvasTopologySource } from './canvasTopologySource';
 import { buildTopologyEdges } from './edgeBuilder';
 import {
   buildIncrementalLayoutInputs,
   computeIncrementalLayoutPositions,
 } from './incrementalLayout';
-import {
-  migrateStoredManualEdges,
-} from './manualEdgeMigration';
+import { migrateStoredManualEdges } from './manualEdgeMigration';
 import {
   recordManualEdgeMigrationDiagnostics,
   recordPersistedManualEdgeMigrationDiagnostics,
@@ -994,27 +992,14 @@ export function useCanvasData({
   ]);
 
   useEffect(() => {
-    setNodes(
-      (currentNodes) =>
-        patchAlertStatuses(
-          currentNodes,
-          [],
-          { nodeIndexById: nodeIndexByIdRef?.current },
-          snapshot,
-          alerts,
-        ).nodes,
-    );
-
-    setEdges(
-      (currentEdges) =>
-        patchAlertStatuses(
-          [],
-          currentEdges,
-          { edgeIndexById: edgeIndexByIdRef?.current },
-          snapshot,
-          alerts,
-        ).edges,
-    );
+    applyAlertStatusPatch({
+      snapshot,
+      alerts,
+      setNodes,
+      setEdges,
+      nodeIndexById: nodeIndexByIdRef?.current,
+      edgeIndexById: edgeIndexByIdRef?.current,
+    });
   }, [alerts, edgeIndexByIdRef, nodeIndexByIdRef, setEdges, setNodes]);
 
   return {
