@@ -56,6 +56,19 @@ function makeLinkRuntime(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function makeRuntimeSnapshot(cpuPercent: number, timestamp: string) {
+  return {
+    devices: {
+      'dev-1': makeDeviceRuntime({
+        cpu_percent: cpuPercent,
+        last_collected_at: timestamp,
+        last_polled_at: timestamp,
+      }),
+    },
+    links: {},
+  };
+}
+
 class MockWebSocket {
   static CONNECTING = 0;
   static OPEN = 1;
@@ -651,11 +664,15 @@ describe('useWebSocket', () => {
     });
 
     expect(result.current.snapshot).not.toBeNull();
-    expect(result.current.snapshot!.devices).toEqual({});
-    expect((result.current.snapshot! as Record<string, unknown>).alerts).toBeUndefined();
-    expect((result.current.snapshot! as Record<string, unknown>).device_metrics).toBeUndefined();
-    expect((result.current.snapshot! as Record<string, unknown>).link_metrics).toBeUndefined();
-    expect((result.current.snapshot! as Record<string, unknown>).device_statuses).toBeUndefined();
+    const snapshot = result.current.snapshot;
+    if (!snapshot) {
+      throw new Error('expected snapshot to be populated');
+    }
+    expect(snapshot.devices).toEqual({});
+    expect(snapshot).not.toHaveProperty('alerts');
+    expect(snapshot).not.toHaveProperty('device_metrics');
+    expect(snapshot).not.toHaveProperty('link_metrics');
+    expect(snapshot).not.toHaveProperty('device_statuses');
   });
 
   it('closes WebSocket on unmount', () => {
@@ -1852,16 +1869,7 @@ describe('useWebSocket', () => {
 
     act(() => {
       publishCanvasRuntimeBootstrap({
-        snapshot: {
-          devices: {
-            'dev-1': makeDeviceRuntime({
-              cpu_percent: 70,
-              last_collected_at: '2026-01-01T00:02:00Z',
-              last_polled_at: '2026-01-01T00:02:00Z',
-            }),
-          },
-          links: {},
-        },
+        snapshot: makeRuntimeSnapshot(70, '2026-01-01T00:02:00Z'),
         runtimeVersion: 10,
         runtimeIdentity: 'rt-sha256:newer',
       });
@@ -1904,16 +1912,7 @@ describe('useWebSocket', () => {
 
     act(() => {
       publishCanvasRuntimeBootstrap({
-        snapshot: {
-          devices: {
-            'dev-1': makeDeviceRuntime({
-              cpu_percent: 70,
-              last_collected_at: '2026-01-01T00:02:00Z',
-              last_polled_at: '2026-01-01T00:02:00Z',
-            }),
-          },
-          links: {},
-        },
+        snapshot: makeRuntimeSnapshot(70, '2026-01-01T00:02:00Z'),
         runtimeVersion: 10,
         runtimeIdentity: 'rt-sha256:newer',
       });
@@ -1956,16 +1955,7 @@ describe('useWebSocket', () => {
 
     act(() => {
       publishCanvasRuntimeBootstrap({
-        snapshot: {
-          devices: {
-            'dev-1': makeDeviceRuntime({
-              cpu_percent: 70,
-              last_collected_at: '2026-01-01T00:02:00Z',
-              last_polled_at: '2026-01-01T00:02:00Z',
-            }),
-          },
-          links: {},
-        },
+        snapshot: makeRuntimeSnapshot(70, '2026-01-01T00:02:00Z'),
         runtimeVersion: 10,
         runtimeIdentity: 'rt-sha256:base',
       });
@@ -2013,16 +2003,7 @@ describe('useWebSocket', () => {
 
     act(() => {
       publishCanvasRuntimeBootstrap({
-        snapshot: {
-          devices: {
-            'dev-1': makeDeviceRuntime({
-              cpu_percent: 99,
-              last_collected_at: '2026-01-01T00:03:00Z',
-              last_polled_at: '2026-01-01T00:03:00Z',
-            }),
-          },
-          links: {},
-        },
+        snapshot: makeRuntimeSnapshot(99, '2026-01-01T00:03:00Z'),
         runtimeVersion: 13,
         runtimeIdentity: 'rt-sha256:fresh',
       });
