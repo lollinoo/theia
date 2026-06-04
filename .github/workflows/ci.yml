@@ -90,6 +90,7 @@ jobs:
 
             case "$path" in
               .github/workflows/ci.yml)
+                backend=true
                 browser_e2e=true
                 ;;
             esac
@@ -114,6 +115,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Install govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Run backend-fast gate
         run: make backend-fast

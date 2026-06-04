@@ -15,7 +15,7 @@ FROM postgres:17-bookworm AS postgres-tools
 # ---------------------------------------------------------------------------
 # Stage: dev — Development with Air hot-reload
 # ---------------------------------------------------------------------------
-FROM golang:1.24-bookworm AS dev
+FROM golang:1.26.4-bookworm AS dev
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl libpq5 libreadline8 && \
@@ -26,12 +26,15 @@ COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_restore /usr/local/bin/
 COPY --from=postgres-tools /usr/lib/postgresql/17/bin/psql /usr/local/bin/psql
 COPY --from=postgres-tools /usr/lib/x86_64-linux-gnu/libpq.so.5* /usr/lib/x86_64-linux-gnu/
 
-# Install Air for hot-reload (pinned version compatible with Go 1.24)
-RUN go install github.com/air-verse/air@v1.61.5
+# Install dev/test tooling.
+RUN go install github.com/air-verse/air@v1.61.5 && \
+    go install golang.org/x/vuln/cmd/govulncheck@latest
 
 ENV CGO_ENABLED=0
 
 WORKDIR /app
+
+RUN git config --global --add safe.directory /app
 
 # Cache dependencies
 COPY go.mod go.sum* ./
@@ -44,7 +47,7 @@ CMD ["air", "-c", ".air.toml"]
 # ---------------------------------------------------------------------------
 # Stage: builder — Compile production binary
 # ---------------------------------------------------------------------------
-FROM golang:1.24-bookworm AS builder
+FROM golang:1.26.4-bookworm AS builder
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
