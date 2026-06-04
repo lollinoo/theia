@@ -293,6 +293,65 @@ func TestCollectArchiveSourceFilesEnforcesBackupQuotas(t *testing.T) {
 	}
 }
 
+func TestCollectInstanceBackupArchiveSourceFilesIncludesAllowedSourcesAndSkipsInstanceBackups(t *testing.T) {
+	tmpDir := t.TempDir()
+	deviceBackupDir := filepath.Join(tmpDir, "device-backups")
+	instanceBackupDir := filepath.Join(deviceBackupDir, "instance-backups")
+	knownHostsPath := filepath.Join(tmpDir, "known_hosts")
+	if err := os.MkdirAll(filepath.Join(deviceBackupDir, "router"), 0o700); err != nil {
+		t.Fatalf("creating router backup dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(instanceBackupDir, "old-instance"), 0o700); err != nil {
+		t.Fatalf("creating instance backup dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deviceBackupDir, "router", "config.rsc"), []byte("device"), 0o600); err != nil {
+		t.Fatalf("writing device backup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(instanceBackupDir, "old-instance", "archive.tar.gz"), []byte("instance"), 0o600); err != nil {
+		t.Fatalf("writing nested instance backup: %v", err)
+	}
+	if err := os.WriteFile(knownHostsPath, []byte("known-hosts"), 0o600); err != nil {
+		t.Fatalf("writing known_hosts: %v", err)
+	}
+
+	sources, err := collectInstanceBackupArchiveSourceFiles(
+		context.Background(),
+		instanceBackupDir,
+		deviceBackupDir,
+		knownHostsPath,
+		DefaultBackupArchiveLimits,
+		4,
+	)
+
+	if err != nil {
+		t.Fatalf("collectInstanceBackupArchiveSourceFiles: %v", err)
+	}
+	if sources.backupFileCount != 1 {
+		t.Fatalf("backupFileCount = %d, want 1", sources.backupFileCount)
+	}
+	if len(sources.deviceBackupFiles) != 1 {
+		t.Fatalf("deviceBackupFiles = %d, want 1", len(sources.deviceBackupFiles))
+	}
+	if got := sources.deviceBackupFiles[0].archiveName; got != "backups/router/config.rsc" {
+		t.Fatalf("device archiveName = %q, want backups/router/config.rsc", got)
+	}
+	if strings.Contains(sources.deviceBackupFiles[0].diskPath, "old-instance") {
+		t.Fatalf("instance backup source should be skipped, got %s", sources.deviceBackupFiles[0].diskPath)
+	}
+	if sources.knownHostsFile == nil {
+		t.Fatal("knownHostsFile = nil, want known_hosts source")
+	}
+	if got := sources.knownHostsFile.archiveName; got != "known_hosts" {
+		t.Fatalf("known_hosts archiveName = %q, want known_hosts", got)
+	}
+	if sources.totalBytes != int64(4+len("device")+len("known-hosts")) {
+		t.Fatalf("totalBytes = %d, want %d", sources.totalBytes, 4+len("device")+len("known-hosts"))
+	}
+	if sources.fileEntries != 3 {
+		t.Fatalf("fileEntries = %d, want 3", sources.fileEntries)
+	}
+}
+
 func TestCheckedArchiveByteTotalRejectsOverflowBeforeAdding(t *testing.T) {
 	_, err := checkedArchiveByteTotal(math.MaxInt64-1, 10, math.MaxInt64)
 	assertRestoreLimitError(t, err, "backup archive exceeds expanded backup limit")
