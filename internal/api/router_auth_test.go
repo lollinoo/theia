@@ -262,6 +262,20 @@ func TestRoutePermissionRegistryRejectsShadowedStaticPatterns(t *testing.T) {
 	}
 }
 
+func TestRoutePermissionRegistryRejectsMissingPermissionPolicy(t *testing.T) {
+	registry := newRoutePermissionRegistry([]routePermissionSpec{
+		{pattern: "/api/v1/broken"},
+	})
+
+	err := registry.validate()
+	if err == nil {
+		t.Fatal("registry.validate() error = nil, want missing policy error")
+	}
+	if got, want := err.Error(), "route permission pattern /api/v1/broken has no permission policy"; got != want {
+		t.Fatalf("registry.validate() error = %q, want %q", got, want)
+	}
+}
+
 func TestProtectedRoutePermissionRegistryMetadataIsValid(t *testing.T) {
 	if err := protectedRoutePermissionRegistry.validate(); err != nil {
 		t.Fatalf("protected route permission registry invalid: %v", err)

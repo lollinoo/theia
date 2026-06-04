@@ -339,6 +339,9 @@ func (r routePermissionRegistry) validate() error {
 			return fmt.Errorf("duplicate route permission pattern %s", spec.pattern)
 		}
 		seenPatterns[spec.pattern] = struct{}{}
+		if spec.permissions == nil {
+			return fmt.Errorf("route permission pattern %s has no permission policy", spec.pattern)
+		}
 
 		for _, previous := range r.specs[:index] {
 			if previous.matches(spec.pattern) {
