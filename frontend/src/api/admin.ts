@@ -1,5 +1,13 @@
-import { parseAuthUser, type AuthUser } from './auth';
-import { permissionKeysArray, recordField, stringField } from './parsers';
+import type { AuthUser } from './auth';
+import {
+  parseAdminAuditLogsEnvelope,
+  parseAdminDashboard,
+  parseAdminPasswordResetResponse,
+  parseAdminPermissionsEnvelope,
+  parseAdminRolesEnvelope,
+  parseAdminUserEnvelope,
+  parseAdminUsersEnvelope,
+} from './adminParsers';
 import { requestJSON, requestJSONWithBody } from './transport';
 
 export interface AdminDashboardStats {
@@ -57,104 +65,37 @@ export interface AdminPasswordResetResponse {
   reset_token: string;
 }
 
-function parseAdminAuditLog(value: unknown): AdminAuditLog {
-  const record =
-    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
-  return {
-    id: stringField(record, 'id'),
-    actor_user_id: stringField(record, 'actor_user_id') || undefined,
-    action: stringField(record, 'action'),
-    target_user_id: stringField(record, 'target_user_id') || undefined,
-    resource: stringField(record, 'resource') || undefined,
-    resource_id: stringField(record, 'resource_id') || undefined,
-    metadata: recordField(record.metadata),
-    ip_address: stringField(record, 'ip_address') || undefined,
-    user_agent: stringField(record, 'user_agent') || undefined,
-    created_at: stringField(record, 'created_at'),
-  };
-}
-
-function parseAdminDashboard(payload: unknown): AdminDashboardResponse {
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  const stats =
-    typeof record.stats === 'object' && record.stats !== null
-      ? (record.stats as Record<string, unknown>)
-      : {};
-  const logs = Array.isArray(record.recent_audit_logs) ? record.recent_audit_logs : [];
-  return {
-    stats: {
-      total_users: typeof stats.total_users === 'number' ? stats.total_users : 0,
-      active_users: typeof stats.active_users === 'number' ? stats.active_users : 0,
-      disabled_users: typeof stats.disabled_users === 'number' ? stats.disabled_users : 0,
-      locked_users: typeof stats.locked_users === 'number' ? stats.locked_users : 0,
-      recent_logins: typeof stats.recent_logins === 'number' ? stats.recent_logins : 0,
-      recent_failed_login_attempts:
-        typeof stats.recent_failed_login_attempts === 'number'
-          ? stats.recent_failed_login_attempts
-          : 0,
-    },
-    recent_audit_logs: logs.map(parseAdminAuditLog),
-  };
-}
-
-function parseAdminRole(value: unknown): AdminRole {
-  const record =
-    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
-  return {
-    id: stringField(record, 'id'),
-    name: stringField(record, 'name'),
-    description: stringField(record, 'description'),
-    is_system_role: record.is_system_role === true,
-    permissions: permissionKeysArray(record.permissions),
-  };
-}
-
-function parseAdminUserEnvelope(payload: unknown): AuthUser {
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  return parseAuthUser(record.user);
-}
-
+// fetchAdminDashboard loads admin summary counters and recent audit logs.
 export async function fetchAdminDashboard(): Promise<AdminDashboardResponse> {
   return parseAdminDashboard(await requestJSON('/api/v1/admin/dashboard'));
 }
 
+// fetchAdminUsers loads safe admin user rows without exposing secret-bearing fields.
 export async function fetchAdminUsers(): Promise<AuthUser[]> {
-  const payload = await requestJSON('/api/v1/admin/users');
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  const users = Array.isArray(record.users) ? record.users : [];
-  return users.map(parseAuthUser);
+  return parseAdminUsersEnvelope(await requestJSON('/api/v1/admin/users'));
 }
 
+// fetchAdminRoles loads available roles and their permission keys.
 export async function fetchAdminRoles(): Promise<AdminRole[]> {
-  const payload = await requestJSON('/api/v1/admin/roles');
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  const roles = Array.isArray(record.roles) ? record.roles : [];
-  return roles.map(parseAdminRole);
+  return parseAdminRolesEnvelope(await requestJSON('/api/v1/admin/roles'));
 }
 
+// fetchAdminPermissions loads global admin permission keys.
 export async function fetchAdminPermissions(): Promise<string[]> {
-  const payload = await requestJSON('/api/v1/admin/permissions');
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  return permissionKeysArray(record.permissions);
+  return parseAdminPermissionsEnvelope(await requestJSON('/api/v1/admin/permissions'));
 }
 
+// fetchAdminAuditLogs loads recent admin audit logs.
 export async function fetchAdminAuditLogs(): Promise<AdminAuditLog[]> {
-  const payload = await requestJSON('/api/v1/admin/audit-logs');
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  const logs = Array.isArray(record.audit_logs) ? record.audit_logs : [];
-  return logs.map(parseAdminAuditLog);
+  return parseAdminAuditLogsEnvelope(await requestJSON('/api/v1/admin/audit-logs'));
 }
 
+// createAdminUser creates an admin-managed user and parses the safe response user.
 export async function createAdminUser(payload: CreateAdminUserPayload): Promise<AuthUser> {
   return parseAdminUserEnvelope(await requestJSONWithBody('/api/v1/admin/users', 'POST', payload));
 }
 
+// updateAdminUser patches admin-managed user profile fields.
 export async function updateAdminUser(
   id: string,
   payload: UpdateAdminUserPayload,
@@ -164,6 +105,7 @@ export async function updateAdminUser(
   );
 }
 
+// setAdminUserStatus updates account status and parses the safe response user.
 export async function setAdminUserStatus(id: string, status: string): Promise<AuthUser> {
   return parseAdminUserEnvelope(
     await requestJSONWithBody(`/api/v1/admin/users/${encodeURIComponent(id)}/status`, 'PATCH', {
@@ -172,6 +114,7 @@ export async function setAdminUserStatus(id: string, status: string): Promise<Au
   );
 }
 
+// assignAdminUserRole assigns one role to a user and parses the safe response user.
 export async function assignAdminUserRole(userId: string, roleId: string): Promise<AuthUser> {
   return parseAdminUserEnvelope(
     await requestJSONWithBody(`/api/v1/admin/users/${encodeURIComponent(userId)}/roles`, 'POST', {
@@ -180,6 +123,7 @@ export async function assignAdminUserRole(userId: string, roleId: string): Promi
   );
 }
 
+// removeAdminUserRole removes one role assignment from a user.
 export async function removeAdminUserRole(userId: string, roleId: string): Promise<void> {
   await requestJSONWithBody(
     `/api/v1/admin/users/${encodeURIComponent(userId)}/roles/${encodeURIComponent(roleId)}`,
@@ -187,20 +131,14 @@ export async function removeAdminUserRole(userId: string, roleId: string): Promi
   );
 }
 
+// createAdminPasswordReset creates a reset token while preserving the legacy token fallback.
 export async function createAdminPasswordReset(
   userId: string,
 ): Promise<AdminPasswordResetResponse> {
-  const payload = await requestJSONWithBody(
-    `/api/v1/admin/users/${encodeURIComponent(userId)}/password-reset`,
-    'POST',
+  return parseAdminPasswordResetResponse(
+    await requestJSONWithBody(
+      `/api/v1/admin/users/${encodeURIComponent(userId)}/password-reset`,
+      'POST',
+    ),
   );
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  const resetToken =
-    typeof record.reset_token === 'string'
-      ? record.reset_token
-      : typeof record.token === 'string'
-        ? record.token
-        : '';
-  return { reset_token: resetToken };
 }
