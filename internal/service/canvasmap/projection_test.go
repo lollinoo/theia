@@ -517,10 +517,102 @@ func TestMembershipWithDeviceClonesCopiesMembershipAndSwapsCloneIDs(t *testing.T
 	}
 }
 
+func TestBuildMaterializedTopologyResponsePlanKeepsCountsPositionsGhostsAndVisualMetadata(t *testing.T) {
+	areaID := uuid.New()
+	baseID := uuid.New()
+	ghostID := uuid.New()
+	prunedID := uuid.New()
+	linkID := uuid.New()
+	baseColor := "#112233"
+	ghostColor := "#445566"
+
+	plan := BuildMaterializedTopologyResponsePlan(
+		domain.CanvasMapMembership{
+			Devices: []domain.CanvasMapDeviceMembership{
+				{
+					DeviceID:    baseID,
+					Role:        domain.CanvasMapDeviceRoleBase,
+					AreaIDs:     []uuid.UUID{areaID},
+					VisualColor: &baseColor,
+				},
+				{
+					DeviceID:    ghostID,
+					Role:        domain.CanvasMapDeviceRoleGhost,
+					VisualColor: &ghostColor,
+				},
+			},
+			LinkIDs: []uuid.UUID{linkID},
+			Areas: []domain.CanvasMapAreaMembership{
+				{AreaID: areaID, Name: "Core", Description: "core area", Color: "#00E676"},
+			},
+		},
+		[]domain.Device{
+			{ID: ghostID, Hostname: "ghost", AreaIDs: []uuid.UUID{uuid.New()}},
+			{ID: baseID, Hostname: "base", AreaIDs: []uuid.UUID{uuid.New()}},
+		},
+		[]domain.Link{{ID: linkID, SourceDeviceID: baseID, TargetDeviceID: ghostID}},
+		[]domain.DevicePosition{
+			{DeviceID: baseID, X: 10, Y: 20, Pinned: true},
+			{DeviceID: ghostID, X: 30, Y: 40},
+			{DeviceID: prunedID, X: 50, Y: 60},
+		},
+	)
+
+	if got, want := plan.DeviceCount, 1; got != want {
+		t.Fatalf("DeviceCount = %d, want %d", got, want)
+	}
+	if got, want := plan.LinkCount, 1; got != want {
+		t.Fatalf("LinkCount = %d, want %d", got, want)
+	}
+	if got, want := plan.PositionCount, 2; got != want {
+		t.Fatalf("PositionCount = %d, want %d", got, want)
+	}
+	if got, want := deviceIDs(plan.Devices), []uuid.UUID{baseID, ghostID}; !uuidSlicesEqual(got, want) {
+		t.Fatalf("Devices = %v, want base then ghost %v", got, want)
+	}
+	if got, want := len(plan.Links), 1; got != want || plan.Links[0].ID != linkID {
+		t.Fatalf("Links = %+v, want link %s", plan.Links, linkID)
+	}
+	if got, want := positionDeviceIDs(plan.Positions), []uuid.UUID{baseID, ghostID}; !uuidSlicesEqual(got, want) {
+		t.Fatalf("Positions = %v, want %v", got, want)
+	}
+	if len(plan.Areas) != 1 || plan.Areas[0].ID != areaID || plan.Areas[0].DeviceCount != 1 {
+		t.Fatalf("Areas = %+v, want area count for base device", plan.Areas)
+	}
+	if got := plan.VisualColors[baseID]; got != baseColor {
+		t.Fatalf("VisualColors[%s] = %q, want %q", baseID, got, baseColor)
+	}
+	if got := plan.VisualColors[ghostID]; got != ghostColor {
+		t.Fatalf("VisualColors[%s] = %q, want %q", ghostID, got, ghostColor)
+	}
+}
+
+func TestEmptyTopologyResponsePlanReturnsEmptyValues(t *testing.T) {
+	plan := EmptyTopologyResponsePlan()
+
+	if plan.DeviceCount != 0 || plan.LinkCount != 0 || plan.PositionCount != 0 {
+		t.Fatalf("empty counts = devices %d links %d positions %d, want zero", plan.DeviceCount, plan.LinkCount, plan.PositionCount)
+	}
+	if len(plan.Devices) != 0 || len(plan.Links) != 0 || len(plan.Positions) != 0 || len(plan.Areas) != 0 {
+		t.Fatalf("empty plan = %+v, want empty slices", plan)
+	}
+	if len(plan.VisualColors) != 0 {
+		t.Fatalf("empty VisualColors = %v, want empty map", plan.VisualColors)
+	}
+}
+
 func deviceIDs(devices []domain.Device) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(devices))
 	for _, device := range devices {
 		ids = append(ids, device.ID)
+	}
+	return ids
+}
+
+func positionDeviceIDs(positions []domain.DevicePosition) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(positions))
+	for _, position := range positions {
+		ids = append(ids, position.DeviceID)
 	}
 	return ids
 }

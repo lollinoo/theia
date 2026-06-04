@@ -905,9 +905,7 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusInternalServerError, "failed to list canvas map positions", err)
 		return canvasTopologyResponse{}, false
 	}
-	var projection canvasmap.TopologyProjection
-	var areaMembership []domain.AreaWithCount
-	var deviceMembership []domain.CanvasMapDeviceMembership
+	var responsePlan canvasmap.TopologyResponsePlan
 	if canvasMap.MembershipMaterialized {
 		membership, err := h.mapRepo.GetMembership(canvasMap.ID)
 		if err != nil {
@@ -924,23 +922,17 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 			writeError(w, http.StatusInternalServerError, "failed to list canvas map links", err)
 			return canvasTopologyResponse{}, false
 		}
-		deviceMembership = membership.Devices
-		projection = canvasmap.ProjectTopologyForMembership(devices, links, membership)
-		areaMembership = canvasmap.AreaMembershipToAreas(membership.Areas, projection.Devices)
+		responsePlan = canvasmap.BuildMaterializedTopologyResponsePlan(membership, devices, links, positions)
 	} else {
-		projection = canvasmap.TopologyProjection{}
-		areaMembership = []domain.AreaWithCount{}
+		responsePlan = canvasmap.EmptyTopologyResponsePlan()
 	}
-	displayDevices := append([]domain.Device{}, projection.Devices...)
-	displayDevices = append(displayDevices, projection.GhostDevices...)
-	projectedPositions := canvasmap.FilterPositionsForDevices(positions, displayDevices)
 
-	response := h.canvasTopology.buildResponse(displayDevices, projection.Links, projectedPositions, areaMembership)
-	applyCanvasMapDeviceVisualColors(response.Devices, deviceMembership)
+	response := h.canvasTopology.buildResponse(responsePlan.Devices, responsePlan.Links, responsePlan.Positions, responsePlan.Areas)
+	applyCanvasMapDeviceVisualColors(response.Devices, responsePlan.VisualColors)
 	mapResponse := mapToResponse(canvasMap)
-	mapResponse.DeviceCount = len(projection.Devices)
-	mapResponse.LinkCount = len(projection.Links)
-	mapResponse.PositionCount = len(projectedPositions)
+	mapResponse.DeviceCount = responsePlan.DeviceCount
+	mapResponse.LinkCount = responsePlan.LinkCount
+	mapResponse.PositionCount = responsePlan.PositionCount
 	response.Map = &mapResponse
 	response.TopologyVersion = buildCanvasMapTopologyVersion(response)
 	return response, true
@@ -1556,13 +1548,9 @@ func canvasMapAreaMembershipFromRequest(
 
 func applyCanvasMapDeviceVisualColors(
 	devices []jsonAPIResource,
-	membership []domain.CanvasMapDeviceMembership,
+	visualColors map[uuid.UUID]string,
 ) {
-	if len(devices) == 0 || len(membership) == 0 {
-		return
-	}
-	visualColors := canvasmap.VisualColorsByDeviceID(membership)
-	if len(visualColors) == 0 {
+	if len(devices) == 0 || len(visualColors) == 0 {
 		return
 	}
 	for i := range devices {

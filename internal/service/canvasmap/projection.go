@@ -17,6 +17,17 @@ type TopologyProjection struct {
 	GhostDevices []domain.Device
 }
 
+type TopologyResponsePlan struct {
+	Devices       []domain.Device
+	Links         []domain.Link
+	Positions     []domain.DevicePosition
+	Areas         []domain.AreaWithCount
+	VisualColors  map[uuid.UUID]string
+	DeviceCount   int
+	LinkCount     int
+	PositionCount int
+}
+
 type CreatePlan struct {
 	Filter                domain.CanvasMapFilter
 	PersistedSourceAreaID *uuid.UUID
@@ -245,6 +256,41 @@ func MaterializeMembershipFromSourceMap(
 	membership.Areas = append(membership.Areas, areaMemberships...)
 
 	return membership
+}
+
+// BuildMaterializedTopologyResponsePlan prepares saved-map topology response inputs.
+func BuildMaterializedTopologyResponsePlan(
+	membership domain.CanvasMapMembership,
+	devices []domain.Device,
+	links []domain.Link,
+	positions []domain.DevicePosition,
+) TopologyResponsePlan {
+	projection := ProjectTopologyForMembership(devices, links, membership)
+	displayDevices := append([]domain.Device{}, projection.Devices...)
+	displayDevices = append(displayDevices, projection.GhostDevices...)
+	projectedPositions := FilterPositionsForDevices(positions, displayDevices)
+
+	return TopologyResponsePlan{
+		Devices:       displayDevices,
+		Links:         projection.Links,
+		Positions:     projectedPositions,
+		Areas:         AreaMembershipToAreas(membership.Areas, projection.Devices),
+		VisualColors:  VisualColorsByDeviceID(membership.Devices),
+		DeviceCount:   len(projection.Devices),
+		LinkCount:     len(projection.Links),
+		PositionCount: len(projectedPositions),
+	}
+}
+
+// EmptyTopologyResponsePlan returns the response inputs for an unmaterialized map.
+func EmptyTopologyResponsePlan() TopologyResponsePlan {
+	return TopologyResponsePlan{
+		Devices:      []domain.Device{},
+		Links:        []domain.Link{},
+		Positions:    []domain.DevicePosition{},
+		Areas:        []domain.AreaWithCount{},
+		VisualColors: map[uuid.UUID]string{},
+	}
 }
 
 // AreasWithCountToMembership converts global area rows into saved-map snapshots.
