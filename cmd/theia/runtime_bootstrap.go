@@ -84,12 +84,8 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 		return nil
 	}
 
-	encryptionKey := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
-	if encryptionKey == "" {
-		return fmt.Errorf("THEIA_ENCRYPTION_KEY is required for %s deployment", deploymentEnv)
-	}
-	if isKnownSecretPlaceholder(encryptionKey) {
-		return fmt.Errorf("%s deployment rejects example THEIA_ENCRYPTION_KEY values", deploymentEnv)
+	if err := validateEncryptionKeySecretPolicy(deploymentEnv); err != nil {
+		return err
 	}
 
 	if isPostgresDSNPasswordPlaceholder(cfg.DBDSN) {
@@ -114,6 +110,48 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 	}
 
 	return nil
+}
+
+func validateEncryptionKeySecretPolicy(deploymentEnv string) error {
+	activeKeyID := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY_ID"))
+	keyList := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEYS"))
+	if activeKeyID != "" || keyList != "" {
+		if activeKeyID == "" {
+			return fmt.Errorf("THEIA_ENCRYPTION_KEY_ID is required for %s deployment when THEIA_ENCRYPTION_KEYS is set", deploymentEnv)
+		}
+		if keyList == "" {
+			return fmt.Errorf("THEIA_ENCRYPTION_KEYS is required for %s deployment when THEIA_ENCRYPTION_KEY_ID is set", deploymentEnv)
+		}
+		if _, err := crypto.ParseKeyring(activeKeyID, keyList); err != nil {
+			return fmt.Errorf("%s deployment rejects malformed THEIA_ENCRYPTION_KEYS: %w", deploymentEnv, err)
+		}
+		if encryptionKeyListHasPlaceholderSecret(keyList) {
+			return fmt.Errorf("%s deployment rejects example THEIA_ENCRYPTION_KEYS values", deploymentEnv)
+		}
+		return nil
+	}
+
+	encryptionKey := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
+	if encryptionKey == "" {
+		return fmt.Errorf("THEIA_ENCRYPTION_KEY is required for %s deployment", deploymentEnv)
+	}
+	if isKnownSecretPlaceholder(encryptionKey) {
+		return fmt.Errorf("%s deployment rejects example THEIA_ENCRYPTION_KEY values", deploymentEnv)
+	}
+	return nil
+}
+
+func encryptionKeyListHasPlaceholderSecret(keyList string) bool {
+	for _, rawPair := range strings.Split(keyList, ",") {
+		_, secret, ok := strings.Cut(rawPair, "=")
+		if !ok {
+			continue
+		}
+		if isKnownSecretPlaceholder(secret) {
+			return true
+		}
+	}
+	return false
 }
 
 func isKnownSecretPlaceholder(value string) bool {

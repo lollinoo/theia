@@ -984,6 +984,24 @@ func TestValidateDeploymentSecretPolicyRejectsUnsafeProductionAndStagingSecrets(
 			want: []string{"THEIA_ENCRYPTION_KEY", "required"},
 		},
 		{
+			name: "production missing active keyring id",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEYS": "kid-a=strong-encryption-key", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_ENCRYPTION_KEY_ID", "required"},
+		},
+		{
+			name: "production missing keyring keys",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY_ID": "kid-a", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_ENCRYPTION_KEYS", "required"},
+		},
+		{
+			name: "production rejects keyring placeholder secret",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY_ID": "kid-a", "THEIA_ENCRYPTION_KEYS": "kid-a=change-me", "POSTGRES_PASSWORD": "strong-password"},
+			want: []string{"THEIA_ENCRYPTION_KEYS", "example"},
+		},
+		{
 			name: "production rejects example encryption key",
 			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "change-me", "POSTGRES_PASSWORD": "strong-password"},
@@ -1076,6 +1094,9 @@ func TestValidateDeploymentSecretPolicyRejectsUnsafeProductionAndStagingSecrets(
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("THEIA_ENCRYPTION_KEY", "")
+			t.Setenv("THEIA_ENCRYPTION_KEY_ID", "")
+			t.Setenv("THEIA_ENCRYPTION_KEYS", "")
 			for key, value := range tt.env {
 				t.Setenv(key, value)
 			}
@@ -1113,9 +1134,17 @@ func TestValidateDeploymentSecretPolicyAllowsDevelopmentBlankAndSafeProductionSe
 			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", SessionSecret: "0123456789abcdef0123456789abcdef", MetricsToken: "abcdef0123456789abcdef0123456789"},
 			env:  map[string]string{"THEIA_ENCRYPTION_KEY": "strong-encryption-key", "POSTGRES_PASSWORD": "another-strong-password"},
 		},
+		{
+			name: "production accepts keyring secrets",
+			cfg:  &runtimeConfig{DeploymentEnv: "production", DBDSN: "postgres://theia:strong-password@postgres:5432/theia?sslmode=disable", SessionSecret: "0123456789abcdef0123456789abcdef", MetricsToken: "abcdef0123456789abcdef0123456789"},
+			env:  map[string]string{"THEIA_ENCRYPTION_KEY_ID": "kid-b", "THEIA_ENCRYPTION_KEYS": "kid-a=old-strong-encryption-key,kid-b=new-strong-encryption-key", "POSTGRES_PASSWORD": "another-strong-password"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("THEIA_ENCRYPTION_KEY", "")
+			t.Setenv("THEIA_ENCRYPTION_KEY_ID", "")
+			t.Setenv("THEIA_ENCRYPTION_KEYS", "")
 			for key, value := range tt.env {
 				t.Setenv(key, value)
 			}
