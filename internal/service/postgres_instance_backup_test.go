@@ -1022,6 +1022,129 @@ func TestRestoreCoordinatorApplyPendingRestore_PostgresRestoreFailureKeepsRetryS
 	}
 }
 
+// TestRestoreCoordinatorApplyPendingRestore_OptionalArtifactFailureRefreshesStagedDBForRetry preserves post-DB retry semantics.
+func TestRestoreCoordinatorApplyPendingRestore_OptionalArtifactFailureRefreshesStagedDBForRetry(t *testing.T) {
+	const dbDSN = "postgres://theia:strong-password@localhost:5432/theia?sslmode=disable"
+
+	stateDir := t.TempDir()
+	deviceBackupDir := filepath.Join(stateDir, "device-backups")
+	knownHostsPath := filepath.Join(stateDir, "known_hosts")
+	stagingDir := filepath.Join(stateDir, ".restore-staging")
+	stagedDump := filepath.Join(stagingDir, postgresArchiveDBEntry)
+	stagedBackups := filepath.Join(stagingDir, "backups")
+	if err := os.MkdirAll(filepath.Join(stagedBackups, "router"), 0o755); err != nil {
+		t.Fatalf("creating staged backup dir: %v", err)
+	}
+	if err := os.WriteFile(stagedDump, []byte("staged-pg-dump"), 0o600); err != nil {
+		t.Fatalf("writing staged dump: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stagedBackups, "router", "config.rsc"), []byte("restored-backup"), 0o600); err != nil {
+		t.Fatalf("writing staged backup file: %v", err)
+	}
+	liveBackupTarget := filepath.Join(stateDir, "live-backup-target")
+	if err := os.Mkdir(liveBackupTarget, 0o755); err != nil {
+		t.Fatalf("creating live backup target: %v", err)
+	}
+	if err := os.Symlink(liveBackupTarget, deviceBackupDir); err != nil {
+		t.Fatalf("creating live backup symlink: %v", err)
+	}
+
+	originalTerminate := terminatePostgresConnections
+	terminatePostgresConnections = func(ctx context.Context, dsn string) error { return nil }
+	t.Cleanup(func() { terminatePostgresConnections = originalTerminate })
+
+	restoreExecuted := false
+	retryDumpExecuted := false
+	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "pg_dump":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+			}
+			dest := commandFlagValue(args, "--file")
+			if dest == "" {
+				t.Fatal("pg_dump missing --file argument")
+			}
+			body := []byte("pre-restore-pg-dump")
+			if dest == stagedDump {
+				body = []byte("retry-pg-dump")
+				retryDumpExecuted = true
+			}
+			if err := os.WriteFile(dest, body, 0o600); err != nil {
+				t.Fatalf("writing pg_dump destination: %v", err)
+			}
+			return nil, nil
+		case "pg_restore":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+			}
+			restoreExecuted = true
+			return nil, nil
+		case "psql":
+			if commandArgsEqual(args, "--version") {
+				return []byte("psql (PostgreSQL) 17.4\n"), nil
+			}
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+	})
+
+	marker := newRestoreMarker(
+		stagedDump,
+		stagedBackups,
+		"",
+		stateDir,
+		deviceBackupDir,
+		knownHostsPath,
+		"2026-04-23T00:00:00Z",
+	)
+	markerJSON, err := json.Marshal(marker)
+	if err != nil {
+		t.Fatalf("marshal marker: %v", err)
+	}
+	markerPath := filepath.Join(stateDir, ".theia-restore-pending")
+	if err := os.WriteFile(markerPath, markerJSON, 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	coordinator := NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath)
+	applied, err := coordinator.ApplyPendingRestore()
+	if err == nil {
+		t.Fatal("ApplyPendingRestore() error = nil, want optional artifact activation failure")
+	}
+	if applied {
+		t.Fatal("ApplyPendingRestore() applied = true, want false")
+	}
+	if !strings.Contains(err.Error(), "validate live backup dir") {
+		t.Fatalf("ApplyPendingRestore() error = %q, want live backup validation failure", err.Error())
+	}
+	if !restoreExecuted {
+		t.Fatal("pg_restore was not executed before optional artifact failure")
+	}
+	if !retryDumpExecuted {
+		t.Fatal("retry pg_dump to staged database was not executed")
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("restore marker should remain for retry: %v", err)
+	}
+	if _, err := os.Stat(stagingDir); err != nil {
+		t.Fatalf("restore staging dir should remain for retry: %v", err)
+	}
+	stagedBytes, err := os.ReadFile(stagedDump)
+	if err != nil {
+		t.Fatalf("reading refreshed staged dump: %v", err)
+	}
+	if string(stagedBytes) != "retry-pg-dump" {
+		t.Fatalf("staged dump = %q, want retry-pg-dump", string(stagedBytes))
+	}
+	if info, err := os.Lstat(deviceBackupDir); err != nil {
+		t.Fatalf("lstat live backup symlink: %v", err)
+	} else if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("live backup destination mode = %v, want unchanged symlink", info.Mode())
+	}
+}
+
 func TestRestoreCoordinatorApplyPendingRestore_PostgresChecksPgDumpAndPgRestoreBeforeSideEffects(t *testing.T) {
 	const dbDSN = "postgres://theia:strong-password@localhost:5432/theia?sslmode=disable"
 
