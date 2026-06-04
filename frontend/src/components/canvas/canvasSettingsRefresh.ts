@@ -9,6 +9,7 @@ export interface CanvasSettingsRefreshDependencies {
   grafanaDashboardConfigRef: Pick<MutableRefObject<GrafanaDashboardConfig | null>, 'current'>;
 }
 
+// refreshCanvasSettings refreshes non-critical settings refs without failing topology loads.
 export function refreshCanvasSettings({
   fetchSettings,
   fetchGrafanaDashboardConfig,

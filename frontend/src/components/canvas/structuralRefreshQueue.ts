@@ -12,6 +12,7 @@ interface StructuralRefreshQueueOptions {
   clearTimeoutFn: (timerId: number) => void;
 }
 
+// createStructuralRefreshQueue coalesces backend structural events into one debounced refresh pass.
 export function createStructuralRefreshQueue({
   debounceMs,
   runRefresh,

@@ -30,6 +30,7 @@ interface ApplyRuntimeSnapshotPatchOptions {
   edgeIndexById?: ReadonlyMap<string, number>;
 }
 
+// applyRuntimeSnapshotPatch applies runtime-only node and edge updates without recomposing topology.
 export function applyRuntimeSnapshotPatch({
   previousSnapshot,
   snapshot,

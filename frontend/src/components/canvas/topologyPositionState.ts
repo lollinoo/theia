@@ -20,10 +20,12 @@ interface TopologyPositionSavePlan {
   payload: ReturnType<typeof buildPositionPayload>;
 }
 
+// hasUsablePosition accepts only finite positions for composition and save decisions.
 function hasUsablePosition(position: PositionState | undefined): position is PositionState {
   return position !== undefined && Number.isFinite(position.x) && Number.isFinite(position.y);
 }
 
+// buildTopologyCompositionPositionPlan merges saved and current positions for one topology compose pass.
 export function buildTopologyCompositionPositionPlan({
   trigger,
   savedPositions,
@@ -43,6 +45,7 @@ export function buildTopologyCompositionPositionPlan({
   };
 }
 
+// buildUsablePositionState creates a stable signature of devices that already have usable positions.
 export function buildUsablePositionState(
   devices: Device[],
   currentPositions: Map<string, PositionState>,
@@ -64,6 +67,7 @@ export function buildUsablePositionState(
     .join('|');
 }
 
+// positionsChanged compares a save payload with the saved backend position map.
 export function positionsChanged(
   nextPositions: ReturnType<typeof buildPositionPayload>,
   savedPositions: Map<string, PositionState>,
@@ -87,6 +91,7 @@ export function positionsChanged(
   return false;
 }
 
+// buildTopologyPositionSavePlan decides whether rendered node positions need persistence.
 export function buildTopologyPositionSavePlan(
   nodes: DeviceNode[],
   savedPositions: Map<string, PositionState>,
@@ -98,6 +103,7 @@ export function buildTopologyPositionSavePlan(
   };
 }
 
+// nodePositionsToPositionMap converts React Flow node positions into persisted position state.
 export function nodePositionsToPositionMap(nodes: DeviceNode[]): Map<string, PositionState> {
   return new Map(
     nodes.map((node) => [
@@ -111,6 +117,7 @@ export function nodePositionsToPositionMap(nodes: DeviceNode[]): Map<string, Pos
   );
 }
 
+// mergeNodePresentationState preserves transient React Flow presentation fields across recomposition.
 export function mergeNodePresentationState(
   nextNodes: DeviceNode[],
   currentNodes: DeviceNode[],

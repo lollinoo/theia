@@ -14,6 +14,7 @@ export interface TopologyRecoveryNotice {
 const topologyRefreshRetryActionLabel = 'Retry topology refresh';
 const topologyRefreshDelayedMessage = 'Live topology refresh delayed';
 
+// measurementTriggerForCauses maps coalesced structural causes to instrumentation triggers.
 export function measurementTriggerForCauses(
   causes: ReadonlySet<StructuralRefreshCause>,
 ): CanvasMeasurementTrigger {
@@ -24,6 +25,7 @@ export function measurementTriggerForCauses(
   return 'topology_changed';
 }
 
+// buildTopologyRecoveryNotice builds user-facing recovery copy for successful structural refreshes.
 export function buildTopologyRecoveryNotice(
   causes: ReadonlySet<StructuralRefreshCause>,
 ): TopologyRecoveryNotice | null {
@@ -55,6 +57,7 @@ export function buildTopologyRecoveryNotice(
   };
 }
 
+// buildTopologyRecoveryFailureNotice builds the retryable notice for failed structural refreshes.
 export function buildTopologyRecoveryFailureNotice(): TopologyRecoveryNotice {
   return {
     tone: 'warning',

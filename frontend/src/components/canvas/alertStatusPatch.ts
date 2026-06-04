@@ -15,6 +15,7 @@ interface ApplyAlertStatusPatchOptions {
   edgeIndexById?: ReadonlyMap<string, number>;
 }
 
+// applyAlertStatusPatch updates alert presentation on existing nodes and edges.
 export function applyAlertStatusPatch({
   snapshot,
   alerts,
