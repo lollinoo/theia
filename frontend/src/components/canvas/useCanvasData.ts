@@ -15,19 +15,13 @@ import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { applyAlertStatusPatch } from './alertStatusPatch';
 import { recordCanvasDiagnosticEvent, updateCanvasDiagnosticsState } from './canvasDiagnostics';
-import {
-  buildPositionPayload,
-  isGhostDeviceNode,
-  topologyFitViewPadding,
-  viewportSize,
-} from './canvasHelpers';
+import { topologyFitViewPadding, viewportSize } from './canvasHelpers';
 import {
   type CanvasMeasurementTrigger,
   measureCanvasAsyncWork,
   measureCanvasWork,
 } from './canvasInstrumentation';
 import { canvasMapKey, loadCanvasTopologySource } from './canvasTopologySource';
-import { buildTopologyEdges } from './edgeBuilder';
 import {
   buildIncrementalLayoutInputs,
   computeIncrementalLayoutPositions,
@@ -41,6 +35,7 @@ import { buildAlertsPanelModel } from './panelAdapters';
 import { buildRuntimeState } from './runtimeAdapters';
 import { applyRuntimeSnapshotPatch } from './runtimeSnapshotPatch';
 import { refreshCanvasSettings } from './canvasSettingsRefresh';
+import { buildManualNodePositionUpdate } from './nodePositionUpdate';
 import {
   createStructuralRefreshQueue,
   type StructuralRefreshQueue,
@@ -796,36 +791,25 @@ export function useCanvasData({
         return;
       }
 
-      let changed = false;
-      const nextNodes = nodesRef.current.map((node) =>
-        node.id === deviceId && !isGhostDeviceNode(node)
-          ? {
-              ...node,
-              position,
-              data: {
-                ...node.data,
-                pinned: true,
-              },
-            }
-          : node,
-      );
-      changed = nextNodes.some((node, index) => node !== nodesRef.current[index]);
-      if (!changed) {
+      const updatePlan = buildManualNodePositionUpdate({
+        deviceId,
+        position,
+        nodes: nodesRef.current,
+        devices: devicesRef.current,
+        links: topologyLinksRef.current,
+        openEdgeMenu,
+      });
+      if (updatePlan === null) {
         return;
       }
 
-      const devicesById = new Map(devicesRef.current.map((device) => [device.id, device]));
-      const links = topologyLinksRef.current;
       const ownerMapKey = nodesOwnerMapKeyRef.current;
 
-      setNodes(nextNodes);
-      currentNodePositionsByMapRef.current.set(ownerMapKey, nodePositionsToPositionMap(nextNodes));
-      setEdges((currentEdges) => {
-        const existingEdgeData = new Map(currentEdges.map((edge) => [edge.id, edge.data ?? {}]));
-        return buildTopologyEdges(links, devicesById, nextNodes, existingEdgeData, openEdgeMenu);
-      });
+      setNodes(updatePlan.nodes);
+      currentNodePositionsByMapRef.current.set(ownerMapKey, updatePlan.positionMap);
+      setEdges(updatePlan.buildEdges);
       if (ownerMapKey === activeMapKeyRef.current) {
-        void savePositions(buildPositionPayload(nextNodes));
+        void savePositions(updatePlan.positionPayload);
       }
     },
     [mapKey, openEdgeMenu, savePositions, setEdges, setNodes],
