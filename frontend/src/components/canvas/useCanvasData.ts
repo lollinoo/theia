@@ -59,6 +59,7 @@ import {
 } from './topologyPositionState';
 import {
   buildNotModifiedTopologyLoadPlan,
+  buildShouldFitViewAfterTopologyLoad,
   buildTopologySourceRequestPlan,
 } from './topologyLoadPlan';
 import {
@@ -423,9 +424,11 @@ export function useCanvasData({
             currentNodePositions,
             savedPositions,
           );
-          const shouldAutoFitView = usablePositionState.length === 0;
-          const shouldFitViewAfterLoad =
-            options.forceFitView === true || trigger === 'initial_load' || shouldAutoFitView;
+          const shouldFitViewAfterLoad = buildShouldFitViewAfterTopologyLoad({
+            trigger,
+            forceFitView: options.forceFitView === true,
+            usablePositionState,
+          });
 
           // Read any pending snapshot so first-load metrics are included in the
           // initial node/edge data -- eliminates the race where the WS snapshot

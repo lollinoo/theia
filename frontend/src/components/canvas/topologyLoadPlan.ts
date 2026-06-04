@@ -31,6 +31,12 @@ interface NotModifiedTopologyLoadPlan {
   shouldFitView: boolean;
 }
 
+interface ShouldFitViewAfterTopologyLoadInput {
+  trigger: CanvasMeasurementTrigger;
+  forceFitView: boolean;
+  usablePositionState: string;
+}
+
 export function buildTopologySourceRequestPlan({
   trigger,
   options,
@@ -66,4 +72,12 @@ export function buildNotModifiedTopologyLoadPlan({
     etag: responseEtag ?? lastCanvasTopologyEtag,
     shouldFitView: forceFitView,
   };
+}
+
+export function buildShouldFitViewAfterTopologyLoad({
+  trigger,
+  forceFitView,
+  usablePositionState,
+}: ShouldFitViewAfterTopologyLoadInput): boolean {
+  return forceFitView || trigger === 'initial_load' || usablePositionState.length === 0;
 }

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ManualEdgeMigrationTopologyLoadPlan } from './manualEdgeMigrationOrchestrator';
-import { buildNotModifiedTopologyLoadPlan, buildTopologySourceRequestPlan } from './topologyLoadPlan';
+import {
+  buildNotModifiedTopologyLoadPlan,
+  buildShouldFitViewAfterTopologyLoad,
+  buildTopologySourceRequestPlan,
+} from './topologyLoadPlan';
 
 function manualMigrationPlan(
   overrides: Partial<ManualEdgeMigrationTopologyLoadPlan> = {},
@@ -129,5 +133,39 @@ describe('topologyLoadPlan', () => {
       etag: '"topo-1"',
       shouldFitView: true,
     });
+  });
+
+  it('fits view after forced, initial, or unpositioned topology loads', () => {
+    expect(
+      buildShouldFitViewAfterTopologyLoad({
+        trigger: 'manual_refresh',
+        forceFitView: true,
+        usablePositionState: 'dev-1',
+      }),
+    ).toBe(true);
+    expect(
+      buildShouldFitViewAfterTopologyLoad({
+        trigger: 'initial_load',
+        forceFitView: false,
+        usablePositionState: 'dev-1',
+      }),
+    ).toBe(true);
+    expect(
+      buildShouldFitViewAfterTopologyLoad({
+        trigger: 'manual_refresh',
+        forceFitView: false,
+        usablePositionState: '',
+      }),
+    ).toBe(true);
+  });
+
+  it('skips fitView for ordinary refreshes with usable positions', () => {
+    expect(
+      buildShouldFitViewAfterTopologyLoad({
+        trigger: 'manual_refresh',
+        forceFitView: false,
+        usablePositionState: 'dev-1',
+      }),
+    ).toBe(false);
   });
 });
