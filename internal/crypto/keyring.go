@@ -4,11 +4,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -163,7 +166,20 @@ func (k *Keyring) KeyIDs() []string {
 	for id := range k.keys {
 		ids = append(ids, id)
 	}
+	sort.Strings(ids)
 	return ids
+}
+
+func (k *Keyring) LegacyKeyHashes() []string {
+	if k == nil {
+		return nil
+	}
+	hashes := make([]string, 0, len(k.keys))
+	for _, secret := range k.keys {
+		hashes = append(hashes, legacyKeyHash(DeriveKey(secret)))
+	}
+	sort.Strings(hashes)
+	return hashes
 }
 
 func (k *Keyring) EncryptString(plaintext string) (string, error) {
@@ -377,4 +393,13 @@ func decodeURL(value, field string) ([]byte, error) {
 		return nil, fmt.Errorf("decoding encryption envelope %s: %w", field, err)
 	}
 	return out, nil
+}
+
+func legacyKeyHash(key []byte) string {
+	if len(key) < 8 {
+		h := sha256.Sum256(key)
+		return hex.EncodeToString(h[:])
+	}
+	h := sha256.Sum256(key[:8])
+	return hex.EncodeToString(h[:])
 }

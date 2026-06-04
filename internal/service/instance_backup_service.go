@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/version"
 )
@@ -28,7 +29,8 @@ type InstanceBackupService struct {
 	knownHostsPath  string // SSH known hosts file path
 	stateDir        string // local restore marker/staging directory
 	dbDSN           string // live DB DSN for postgres backups/restores
-	encryptionKey   []byte // for key hash in manifest
+	encryptionKey   []byte // legacy key hash in old manifests
+	keyring         *crypto.Keyring
 	restoreLimits   RestoreArchiveLimits
 	backupLimits    BackupArchiveLimits
 	createMu        sync.Mutex
@@ -37,16 +39,24 @@ type InstanceBackupService struct {
 
 // backupManifest describes the contents and metadata of an instance backup archive.
 type backupManifest struct {
-	Version           int    `json:"version"`
-	AppVersion        string `json:"app_version"`
-	GitCommit         string `json:"git_commit"`
-	DBEntryName       string `json:"db_entry_name,omitempty"`
-	MigrationVersion  int    `json:"migration_version"`
-	CreatedAt         string `json:"created_at"`
-	DBSHA256          string `json:"db_sha256"`
-	BackupFileCount   int    `json:"backup_file_count"`
-	TotalSizeBytes    int64  `json:"total_size_bytes"`
-	EncryptionKeyHash string `json:"encryption_key_hash"`
+	Version           int                       `json:"version"`
+	AppVersion        string                    `json:"app_version"`
+	GitCommit         string                    `json:"git_commit"`
+	DBEntryName       string                    `json:"db_entry_name,omitempty"`
+	MigrationVersion  int                       `json:"migration_version"`
+	CreatedAt         string                    `json:"created_at"`
+	DBSHA256          string                    `json:"db_sha256"`
+	BackupFileCount   int                       `json:"backup_file_count"`
+	TotalSizeBytes    int64                     `json:"total_size_bytes"`
+	EncryptionKeyHash string                    `json:"encryption_key_hash"`
+	Encryption        *backupManifestEncryption `json:"encryption,omitempty"`
+}
+
+type backupManifestEncryption struct {
+	Version         int      `json:"version"`
+	ActiveKeyID     string   `json:"active_key_id"`
+	RequiredKeyIDs  []string `json:"required_key_ids"`
+	LegacyKeyHashes []string `json:"legacy_key_hashes,omitempty"`
 }
 
 const (
@@ -130,8 +140,9 @@ func NewInstanceBackupService(
 	knownHostsPath string,
 	stateDir string,
 	dbDSN string,
-	encryptionKey []byte,
+	encryptionKey any,
 ) *InstanceBackupService {
+	keyring, legacyKey := normalizeInstanceBackupEncryptionKey(encryptionKey)
 	return &InstanceBackupService{
 		db:              db,
 		repo:            repo,
@@ -141,10 +152,24 @@ func NewInstanceBackupService(
 		knownHostsPath:  knownHostsPath,
 		stateDir:        stateDir,
 		dbDSN:           strings.TrimSpace(dbDSN),
-		encryptionKey:   encryptionKey,
+		encryptionKey:   legacyKey,
+		keyring:         keyring,
 		restoreLimits:   DefaultRestoreArchiveLimits,
 		backupLimits:    DefaultBackupArchiveLimits,
 		operations:      newInstanceBackupOperationTracker(),
+	}
+}
+
+func normalizeInstanceBackupEncryptionKey(key any) (*crypto.Keyring, []byte) {
+	switch k := key.(type) {
+	case *crypto.Keyring:
+		return k, nil
+	case []byte:
+		return nil, k
+	case nil:
+		return nil, nil
+	default:
+		return nil, nil
 	}
 }
 
@@ -379,6 +404,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 		totalSourceBytes:   totalSourceBytes,
 		archiveFileEntries: archiveFileEntries,
 		encryptionKey:      s.encryptionKey,
+		encryptionKeyring:  s.keyring,
 		limits:             limits,
 	})
 	if err != nil {
@@ -634,8 +660,8 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	}
 	extractedDBPath := filepath.Join(tempDir, filepath.FromSlash(dbEntryName))
 
-	// Step 4: Verify encryption key hash
-	if err := validateRestoreManifestEncryptionKey(manifest, s.encryptionKey); err != nil {
+	// Step 4: Verify configured encryption keys
+	if err := validateRestoreManifestEncryptionKey(manifest, s.restoreEncryptionKeySource()); err != nil {
 		return nil, err
 	}
 
@@ -760,6 +786,16 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 
 	report.Message = "Restore staged successfully. Server will restart to apply."
 	return report, nil
+}
+
+func (s *InstanceBackupService) restoreEncryptionKeySource() any {
+	if s != nil && s.keyring != nil {
+		return s.keyring
+	}
+	if s == nil {
+		return nil
+	}
+	return s.encryptionKey
 }
 
 // FailStaleRunning reconciles any "running" backups on startup.

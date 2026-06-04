@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lollinoo/theia/internal/crypto"
 )
 
 func TestReadRestoreManifest(t *testing.T) {
@@ -95,6 +97,41 @@ func TestValidateRestoreManifestEncryptionKey(t *testing.T) {
 	if got := err.Error(); got != "encryption key mismatch: backup was created with a different THEIA_ENCRYPTION_KEY" {
 		t.Fatalf("validateRestoreManifestEncryptionKey() error = %q, want stable mismatch error", got)
 	}
+
+	keyring := mustRestoreTestKeyring(t)
+	newManifest := backupManifest{Encryption: &backupManifestEncryption{
+		Version:        1,
+		ActiveKeyID:    "kid-b",
+		RequiredKeyIDs: []string{"kid-a", "kid-b"},
+	}}
+	if err := validateRestoreManifestEncryptionKey(newManifest, keyring); err != nil {
+		t.Fatalf("validateRestoreManifestEncryptionKey() keyring error = %v", err)
+	}
+
+	missingKeyManifest := backupManifest{Encryption: &backupManifestEncryption{
+		Version:        1,
+		ActiveKeyID:    "kid-b",
+		RequiredKeyIDs: []string{"kid-a", "kid-missing"},
+	}}
+	err = validateRestoreManifestEncryptionKey(missingKeyManifest, keyring)
+	if err == nil {
+		t.Fatal("validateRestoreManifestEncryptionKey() missing key error = nil")
+	}
+	if got, want := err.Error(), "archive requires encryption key id kid-missing, but it is not configured"; got != want {
+		t.Fatalf("validateRestoreManifestEncryptionKey() error = %q, want %q", got, want)
+	}
+}
+
+func mustRestoreTestKeyring(t *testing.T) *crypto.Keyring {
+	t.Helper()
+	keyring, err := crypto.NewKeyring("kid-b", map[string]string{
+		"kid-a": "old restore secret",
+		"kid-b": "new restore secret",
+	})
+	if err != nil {
+		t.Fatalf("NewKeyring failed: %v", err)
+	}
+	return keyring
 }
 
 func TestValidateRestoreManifestMigrationCompatibility(t *testing.T) {

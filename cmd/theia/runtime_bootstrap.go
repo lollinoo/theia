@@ -332,15 +332,9 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		return wrapPostgresConnectError(err)
 	}
 
-	encryptionKey, err := crypto.LoadEncryptionKey()
+	encryptionKeyring, err := crypto.LoadKeyringFromEnv()
 	if err != nil {
 		return fmt.Errorf("security configuration error: %w", err)
-	}
-	encryptionKeyring, err := crypto.NewKeyring(crypto.LegacyKeyID, map[string]string{
-		crypto.LegacyKeyID: strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY")),
-	})
-	if err != nil {
-		return fmt.Errorf("security keyring configuration error: %w", err)
 	}
 
 	if err := postgres.RunMigrations(db, encryptionKeyring); err != nil {
@@ -436,7 +430,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 
 	backupService := service.NewBackupService(
 		backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
-		vendorRegistry, sshDialer, encryptionKey, paths.backupDir, knownHostsStore.HostKeyCallback(),
+		vendorRegistry, sshDialer, encryptionKeyring, paths.backupDir, knownHostsStore.HostKeyCallback(),
 		service.WithBulkBackupRunRepo(bulkBackupRunRepo),
 	)
 	configureBackupServiceBulkOperationLimits(backupService, cfg)
@@ -469,7 +463,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		paths.knownHostsPath,
 		paths.appDataDir,
 		cfg.DBDSN,
-		encryptionKey,
+		encryptionKeyring,
 	)
 	configureInstanceBackupArchiveLimits(instanceBackupService, cfg)
 	log.Printf("Instance backup directory: %s", paths.instanceBackupDir)
