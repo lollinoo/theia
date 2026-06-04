@@ -1,4 +1,3 @@
-import type { AuthUser } from './auth';
 import {
   parseAdminAuditLogsEnvelope,
   parseAdminDashboard,
@@ -8,6 +7,7 @@ import {
   parseAdminUserEnvelope,
   parseAdminUsersEnvelope,
 } from './adminParsers';
+import type { AuthUser } from './auth';
 import { requestJSON, requestJSONWithBody } from './transport';
 
 export interface AdminDashboardStats {

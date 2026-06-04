@@ -95,9 +95,11 @@ describe('grafana client', () => {
   it('normalizes Prometheus health failures to unavailable results', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse({ error: 'offline' }, { ok: false, status: 503, statusText: 'Unavailable' }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse({ error: 'offline' }, { ok: false, status: 503, statusText: 'Unavailable' }),
+        ),
     );
 
     await expect(checkPrometheusHealth()).resolves.toEqual({

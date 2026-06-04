@@ -1,7 +1,4 @@
-import {
-  type GrafanaDashboardConfig,
-  parseGrafanaDashboardConfigResponse,
-} from '../types/api';
+import { type GrafanaDashboardConfig, parseGrafanaDashboardConfigResponse } from '../types/api';
 import { parsePrometheusHealthPayload } from './grafanaParsers';
 import { requestJSON, requestJSONWithBody } from './transport';
 

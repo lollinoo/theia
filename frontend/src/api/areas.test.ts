@@ -35,7 +35,10 @@ beforeEach(() => {
 
 describe('areas client', () => {
   it('fetches and parses areas', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ data: [areaPayload('a1').data] })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(mockResponse({ data: [areaPayload('a1').data] })),
+    );
 
     await expect(fetchAreas()).resolves.toEqual([
       {

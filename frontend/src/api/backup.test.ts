@@ -63,12 +63,14 @@ describe('backup client', () => {
   it('keeps bulk backup limit errors user-readable', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'bulk backup exceeds devices limit: requested 150, maximum 100' },
-          { ok: false, status: 413, statusText: 'Payload Too Large' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'bulk backup exceeds devices limit: requested 150, maximum 100' },
+            { ok: false, status: 413, statusText: 'Payload Too Large' },
+          ),
         ),
-      ),
     );
 
     await expect(triggerBulkBackup(['dev-1'])).rejects.toThrow(ValidationError);
@@ -132,9 +134,11 @@ describe('backup client', () => {
   it('defaults backup file content download URLs to the file download endpoint', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse({ data: { content: 'export compact', inline: true, size_bytes: 14 } }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse({ data: { content: 'export compact', inline: true, size_bytes: 14 } }),
+        ),
     );
 
     await expect(fetchBackupFileContent('file-1')).resolves.toEqual({

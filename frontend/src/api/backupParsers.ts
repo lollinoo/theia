@@ -9,8 +9,8 @@ import {
   type BulkBackupRunStatus,
   type BulkOperationStatus,
 } from '../types/api';
-import { recordField, stringField } from './parsers';
 import type { BulkBackupResult } from './backup';
+import { recordField, stringField } from './parsers';
 
 // parseBackupFile normalizes backup file rows while preserving empty-string and zero defaults.
 export function parseBackupFile(data: Record<string, unknown>): BackupFile {

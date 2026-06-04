@@ -39,7 +39,9 @@ describe('vendor client', () => {
   });
 
   it('fetches individual vendor configs through encoded names', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ data: vendorConfig('acme/vendor') }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(mockResponse({ data: vendorConfig('acme/vendor') }));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(fetchVendorConfig('acme/vendor')).resolves.toEqual(vendorConfig('acme/vendor'));

@@ -77,7 +77,9 @@ describe('API transport', () => {
     });
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(mockResponse(null, { ok: true, status: 204, statusText: 'No Content' }))
+      .mockResolvedValueOnce(
+        mockResponse(null, { ok: true, status: 204, statusText: 'No Content' }),
+      )
       .mockResolvedValueOnce(
         mockResponse({ error: 'bad value' }, { ok: false, status: 400, statusText: 'Bad Request' }),
       );
@@ -107,12 +109,14 @@ describe('API transport', () => {
   it('redacts internal errors behind ServerError correlation messages', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'internal error, ref: abc12345' },
-          { ok: false, status: 500, statusText: 'Internal Server Error' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'internal error, ref: abc12345' },
+            { ok: false, status: 500, statusText: 'Internal Server Error' },
+          ),
         ),
-      ),
     );
 
     await expect(requestJSONWithBody('/api/v1/devices', 'POST', {})).rejects.toEqual(

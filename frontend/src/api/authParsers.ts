@@ -1,5 +1,5 @@
-import { permissionKeysArray, stringArray, stringField } from './parsers';
 import type { AuthSession, AuthUser } from './auth';
+import { permissionKeysArray, stringArray, stringField } from './parsers';
 
 // parseAuthUser normalizes auth user payloads while dropping any secret-bearing fields.
 export function parseAuthUser(value: unknown): AuthUser {

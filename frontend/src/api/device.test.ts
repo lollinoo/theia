@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  type CreateDevicePayload,
   createBridgeLaunchRequest,
   createDevice,
   fetchDevices,
   fetchLinks,
   testSNMPConnection,
-  type CreateDevicePayload,
 } from './device';
 import { ValidationError } from './errors';
 
@@ -65,7 +65,9 @@ describe('device client', () => {
   it('fetches and parses devices from the device resource module', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(mockResponse({ data: [deviceResource('dev-1', 'r1', '10.0.0.1')] })),
+      vi
+        .fn()
+        .mockResolvedValue(mockResponse({ data: [deviceResource('dev-1', 'r1', '10.0.0.1')] })),
     );
 
     const devices = await fetchDevices();
@@ -87,12 +89,14 @@ describe('device client', () => {
     };
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          { error: 'a device with IP/host "10.0.0.1" already exists' },
-          { ok: false, status: 409, statusText: 'Conflict' },
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'a device with IP/host "10.0.0.1" already exists' },
+            { ok: false, status: 409, statusText: 'Conflict' },
+          ),
         ),
-      ),
     );
 
     await expect(createDevice(payload)).rejects.toThrow(ValidationError);

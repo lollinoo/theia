@@ -120,12 +120,10 @@ describe('topology position state helpers', () => {
   it('detects position payload changes against saved positions', () => {
     const saved = new Map<string, PositionState>([['dev-1', { x: 1, y: 2, pinned: false }]]);
 
-    expect(
-      positionsChanged([{ device_id: 'dev-1', x: 1, y: 2, pinned: false }], saved),
-    ).toBe(false);
-    expect(positionsChanged([{ device_id: 'dev-1', x: 1, y: 3, pinned: false }], saved)).toBe(
-      true,
+    expect(positionsChanged([{ device_id: 'dev-1', x: 1, y: 2, pinned: false }], saved)).toBe(
+      false,
     );
+    expect(positionsChanged([{ device_id: 'dev-1', x: 1, y: 3, pinned: false }], saved)).toBe(true);
   });
 
   it('builds a position save plan that prunes ghost nodes and detects changes', () => {

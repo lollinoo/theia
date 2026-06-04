@@ -157,8 +157,6 @@ describe('ThemeProvider', () => {
   // --- Error boundary ---
 
   it('throws when useTheme is called outside ThemeProvider', () => {
-    expect(() => requireThemeContext(null)).toThrow(
-      'useTheme must be used within ThemeProvider',
-    );
+    expect(() => requireThemeContext(null)).toThrow('useTheme must be used within ThemeProvider');
   });
 });

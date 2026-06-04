@@ -21,10 +21,8 @@ import {
   measureCanvasAsyncWork,
   measureCanvasWork,
 } from './canvasInstrumentation';
-import {
-  recordCanvasLayoutCompleted,
-  recordCanvasLayoutStarted,
-} from './canvasLayoutDiagnostics';
+import { recordCanvasLayoutCompleted, recordCanvasLayoutStarted } from './canvasLayoutDiagnostics';
+import { refreshCanvasSettings } from './canvasSettingsRefresh';
 import {
   recordCanvasTopologyLoadFailed,
   recordCanvasTopologyLoadStarted,
@@ -40,14 +38,13 @@ import {
   recordSavedMapManualEdgeMigrationSkip,
   runDefaultMapManualEdgeMigrationForTopologyLoad,
 } from './manualEdgeMigrationOrchestrator';
+import { buildManualNodePositionUpdate } from './nodePositionUpdate';
 import { buildAlertsPanelModel } from './panelAdapters';
 import { buildRuntimeState } from './runtimeAdapters';
 import { applyRuntimeSnapshotPatch } from './runtimeSnapshotPatch';
-import { refreshCanvasSettings } from './canvasSettingsRefresh';
-import { buildManualNodePositionUpdate } from './nodePositionUpdate';
 import {
-  createStructuralRefreshQueue,
   type StructuralRefreshQueue,
+  createStructuralRefreshQueue,
 } from './structuralRefreshQueue';
 import {
   buildCanvasTopologyCompositionCacheKey,
@@ -55,17 +52,17 @@ import {
 } from './topologyCompositionCache';
 import { buildTopologyIdentity, collectPlacementDeviceIds } from './topologyIdentity';
 import {
+  buildNotModifiedTopologyLoadPlan,
+  buildShouldFitViewAfterTopologyLoad,
+  buildTopologySourceRequestPlan,
+} from './topologyLoadPlan';
+import {
   buildTopologyCompositionPositionPlan,
   buildTopologyPositionSavePlan,
   buildUsablePositionState,
   mergeNodePresentationState,
   nodePositionsToPositionMap,
 } from './topologyPositionState';
-import {
-  buildNotModifiedTopologyLoadPlan,
-  buildShouldFitViewAfterTopologyLoad,
-  buildTopologySourceRequestPlan,
-} from './topologyLoadPlan';
 import {
   type StructuralRefreshCause,
   type TopologyRecoveryNotice,
@@ -709,21 +706,18 @@ export function useCanvasData({
     [mapKey, openEdgeMenu, savePositions, setEdges, setNodes],
   );
 
-  const queueStructuralRefresh = useCallback(
-    (cause: StructuralRefreshCause) => {
-      if (structuralRefreshQueueRef.current === null) {
-        structuralRefreshQueueRef.current = createStructuralRefreshQueue({
-          debounceMs: structuralRefreshDebounceMs,
-          runRefresh: (causes) => structuralRefreshRunnerRef.current(causes),
-          setTimeoutFn: window.setTimeout.bind(window),
-          clearTimeoutFn: window.clearTimeout.bind(window),
-        });
-      }
+  const queueStructuralRefresh = useCallback((cause: StructuralRefreshCause) => {
+    if (structuralRefreshQueueRef.current === null) {
+      structuralRefreshQueueRef.current = createStructuralRefreshQueue({
+        debounceMs: structuralRefreshDebounceMs,
+        runRefresh: (causes) => structuralRefreshRunnerRef.current(causes),
+        setTimeoutFn: window.setTimeout.bind(window),
+        clearTimeoutFn: window.clearTimeout.bind(window),
+      });
+    }
 
-      structuralRefreshQueueRef.current.queue(cause);
-    },
-    [],
-  );
+    structuralRefreshQueueRef.current.queue(cause);
+  }, []);
 
   // Initial load
   useEffect(() => {

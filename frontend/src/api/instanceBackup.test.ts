@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ServerError, ValidationError } from './errors';
 import {
   cancelInstanceBackup,
   fetchInstanceBackups,
   instanceBackupDownloadUrl,
   restoreInstanceBackup,
 } from './instanceBackup';
-import { ServerError, ValidationError } from './errors';
 
 function mockResponse(
   body: unknown,
@@ -94,7 +94,9 @@ describe('instance backup client', () => {
   });
 
   it('builds encoded instance backup download URLs', () => {
-    expect(instanceBackupDownloadUrl('backup/1')).toBe('/api/v1/instance-backups/backup%2F1/download');
+    expect(instanceBackupDownloadUrl('backup/1')).toBe(
+      '/api/v1/instance-backups/backup%2F1/download',
+    );
   });
 
   it('restores backups with multipart form data and dry-run query', async () => {

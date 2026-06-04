@@ -73,7 +73,9 @@ describe('credential client', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/credential-profiles');
     expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/credential-profiles/profile-1');
     for (const [, options] of fetchMock.mock.calls) {
-      expect(options.headers).toEqual(expect.objectContaining({ 'X-CSRF-Token': 'credential-csrf' }));
+      expect(options.headers).toEqual(
+        expect.objectContaining({ 'X-CSRF-Token': 'credential-csrf' }),
+      );
     }
   });
 

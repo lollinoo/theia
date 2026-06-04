@@ -5,10 +5,7 @@ import {
   getCanvasDiagnosticsSnapshot,
   resetCanvasDiagnostics,
 } from './canvasDiagnostics';
-import {
-  recordCanvasLayoutCompleted,
-  recordCanvasLayoutStarted,
-} from './canvasLayoutDiagnostics';
+import { recordCanvasLayoutCompleted, recordCanvasLayoutStarted } from './canvasLayoutDiagnostics';
 
 describe('canvas layout diagnostics helpers', () => {
   beforeEach(() => {

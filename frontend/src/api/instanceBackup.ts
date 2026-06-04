@@ -1,7 +1,4 @@
-import {
-  type InstanceBackup,
-  type RestoreReport,
-} from '../types/api';
+import { type InstanceBackup, type RestoreReport } from '../types/api';
 import { ServerError, ValidationError } from './errors';
 import { parseInstanceBackup, parseRestoreReport } from './instanceBackupParsers';
 import { headersWithCsrf, requestJSON, requestJSONWithBody } from './transport';

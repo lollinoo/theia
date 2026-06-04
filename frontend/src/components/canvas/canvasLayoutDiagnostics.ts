@@ -1,5 +1,5 @@
-import type { CanvasMeasurementTrigger } from './canvasInstrumentation';
 import { recordCanvasDiagnosticEvent, updateCanvasDiagnosticsState } from './canvasDiagnostics';
+import type { CanvasMeasurementTrigger } from './canvasInstrumentation';
 
 interface CanvasLayoutStartedInput {
   reason: CanvasMeasurementTrigger;

@@ -1,11 +1,11 @@
-import { parseAuthUser, type AuthUser } from './auth';
-import { permissionKeysArray, recordField, stringField } from './parsers';
 import type {
   AdminAuditLog,
   AdminDashboardResponse,
   AdminPasswordResetResponse,
   AdminRole,
 } from './admin';
+import { type AuthUser, parseAuthUser } from './auth';
+import { permissionKeysArray, recordField, stringField } from './parsers';
 
 // parseAdminAuditLog normalizes audit log records while preserving optional metadata fields.
 export function parseAdminAuditLog(value: unknown): AdminAuditLog {
