@@ -20,6 +20,17 @@ export interface TopologySourceRequestPlan {
   etag: string | null;
 }
 
+interface BuildNotModifiedTopologyLoadPlanInput {
+  responseEtag: string | undefined;
+  lastCanvasTopologyEtag: string | null;
+  forceFitView: boolean;
+}
+
+interface NotModifiedTopologyLoadPlan {
+  etag: string | null;
+  shouldFitView: boolean;
+}
+
 export function buildTopologySourceRequestPlan({
   trigger,
   options,
@@ -43,5 +54,16 @@ export function buildTopologySourceRequestPlan({
     includeRuntimeBootstrap,
     forceRuntimeBootstrap,
     etag,
+  };
+}
+
+export function buildNotModifiedTopologyLoadPlan({
+  responseEtag,
+  lastCanvasTopologyEtag,
+  forceFitView,
+}: BuildNotModifiedTopologyLoadPlanInput): NotModifiedTopologyLoadPlan {
+  return {
+    etag: responseEtag ?? lastCanvasTopologyEtag,
+    shouldFitView: forceFitView,
   };
 }

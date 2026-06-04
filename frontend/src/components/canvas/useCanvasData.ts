@@ -57,7 +57,10 @@ import {
   nodePositionsToPositionMap,
   positionsChanged,
 } from './topologyPositionState';
-import { buildTopologySourceRequestPlan } from './topologyLoadPlan';
+import {
+  buildNotModifiedTopologyLoadPlan,
+  buildTopologySourceRequestPlan,
+} from './topologyLoadPlan';
 import {
   type StructuralRefreshCause,
   type TopologyRecoveryNotice,
@@ -337,11 +340,13 @@ export function useCanvasData({
             topologyLoadMetadata,
           });
           if (topologySource.status === 'not-modified') {
-            lastCanvasTopologyEtagByMapRef.current.set(
-              mapKey,
-              topologySource.etag ?? lastCanvasTopologyEtag,
-            );
-            if (options.forceFitView === true) {
+            const notModifiedPlan = buildNotModifiedTopologyLoadPlan({
+              responseEtag: topologySource.etag,
+              lastCanvasTopologyEtag,
+              forceFitView: options.forceFitView === true,
+            });
+            lastCanvasTopologyEtagByMapRef.current.set(mapKey, notModifiedPlan.etag);
+            if (notModifiedPlan.shouldFitView) {
               requestFitViewAfterLoad();
             }
             updateCanvasDiagnosticsState({

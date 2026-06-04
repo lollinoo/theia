@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ManualEdgeMigrationTopologyLoadPlan } from './manualEdgeMigrationOrchestrator';
-import { buildTopologySourceRequestPlan } from './topologyLoadPlan';
+import { buildNotModifiedTopologyLoadPlan, buildTopologySourceRequestPlan } from './topologyLoadPlan';
 
 function manualMigrationPlan(
   overrides: Partial<ManualEdgeMigrationTopologyLoadPlan> = {},
@@ -102,6 +102,32 @@ describe('topologyLoadPlan', () => {
       includeRuntimeBootstrap: false,
       forceRuntimeBootstrap: false,
       etag: '"topo-1"',
+    });
+  });
+
+  it('keeps the response ETag for not-modified topology loads', () => {
+    expect(
+      buildNotModifiedTopologyLoadPlan({
+        responseEtag: '"topo-2"',
+        lastCanvasTopologyEtag: '"topo-1"',
+        forceFitView: false,
+      }),
+    ).toEqual({
+      etag: '"topo-2"',
+      shouldFitView: false,
+    });
+  });
+
+  it('falls back to the previous ETag for not-modified loads without a response ETag', () => {
+    expect(
+      buildNotModifiedTopologyLoadPlan({
+        responseEtag: undefined,
+        lastCanvasTopologyEtag: '"topo-1"',
+        forceFitView: true,
+      }),
+    ).toEqual({
+      etag: '"topo-1"',
+      shouldFitView: true,
     });
   });
 });
