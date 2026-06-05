@@ -244,7 +244,9 @@ describe('InstanceBackupManager — SC-5: restore UI', () => {
     await renderAndWait();
 
     expect(
-      screen.getByText('Restore blocked because key id legacy is missing from THEIA_ENCRYPTION_KEYS.'),
+      screen.getByText(
+        'Restore blocked because key id legacy is missing from THEIA_ENCRYPTION_KEYS.',
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
