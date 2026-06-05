@@ -14,6 +14,8 @@ const restoreStatusFileName = ".theia-restore-status.json"
 
 type restoreOperationPhase string
 
+type RestoreOperationPhase = restoreOperationPhase
+
 const (
 	restorePhaseValidationPassed             restoreOperationPhase = "validation_passed"
 	restorePhaseStagedRestartPending         restoreOperationPhase = "staged_restart_pending"
@@ -25,6 +27,11 @@ const (
 	restorePhaseCompleted                    restoreOperationPhase = "completed"
 	restorePhaseFailedRetryable              restoreOperationPhase = "failed_retryable"
 	restorePhaseFailedOperatorActionRequired restoreOperationPhase = "failed_operator_action_required"
+)
+
+const (
+	RestorePhaseVerifyingKeyring        RestoreOperationPhase = restorePhaseVerifyingKeyring
+	RestorePhaseRunningCredentialRewrap RestoreOperationPhase = restorePhaseRunningCredentialRewrap
 )
 
 type RestoreOperationStatus struct {

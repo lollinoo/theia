@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -31,6 +32,8 @@ var terminatePostgresConnections = func(ctx context.Context, dsn string) error {
 
 // restoreCoordinatorAfterDBActivationHook lets tests inject post-database activation failures.
 var restoreCoordinatorAfterDBActivationHook func() error
+
+type RestoreCompletionVerifier func(context.Context, func(RestoreOperationPhase) error) error
 
 type restoreMarker struct {
 	StagedDB         string `json:"staged_db"`
@@ -75,6 +78,7 @@ type RestoreCoordinator struct {
 	dbDSN           string
 	deviceBackupDir string
 	knownHostsPath  string
+	verifier        RestoreCompletionVerifier
 }
 
 // NewRestoreCoordinatorWithDSN builds a restore coordinator for pending restart-time activation.
@@ -85,6 +89,10 @@ func NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPa
 		deviceBackupDir: deviceBackupDir,
 		knownHostsPath:  knownHostsPath,
 	}
+}
+
+func (c *RestoreCoordinator) SetCompletionVerifier(verifier RestoreCompletionVerifier) {
+	c.verifier = verifier
 }
 
 // ApplyPendingRestore applies a staged restore after process restart.
@@ -134,6 +142,20 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		return false, err
 	}
 
+	if c.verifier != nil {
+		if err := c.verifier(ctx, func(phase RestoreOperationPhase) error {
+			return c.persistRestoreStatus(marker, phase, "", "")
+		}); err != nil {
+			if missingKeyID := restoreMissingKeyIDFromError(err); missingKeyID != "" {
+				actionableErr := restoreMissingKeyOperatorError(missingKeyID, err)
+				_ = c.persistRestoreStatus(marker, restorePhaseFailedOperatorActionRequired, actionableErr.Error(), missingKeyID)
+				return false, actionableErr
+			}
+			_ = c.persistRestoreStatus(marker, restorePhaseFailedRetryable, err.Error(), "")
+			return false, err
+		}
+	}
+
 	if restoreCoordinatorAfterDBActivationHook != nil {
 		if err := restoreCoordinatorAfterDBActivationHook(); err != nil {
 			retryErr := c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("after db activation hook: %w", err))
@@ -170,6 +192,31 @@ func (c *RestoreCoordinator) persistRestoreStatus(marker *restoreMarker, phase r
 	}
 	updateRestoreOperationFields(marker, phase, lastError, missingKeyID)
 	return writeRestoreOperationStatus(c.stateDir, restoreOperationStatusFromMarker(*marker))
+}
+
+var restoreMissingKeyIDPattern = regexp.MustCompile(`key id "([^"]+)".*not configured`)
+
+func restoreMissingKeyIDFromError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	if matches := restoreMissingKeyIDPattern.FindStringSubmatch(message); len(matches) == 2 {
+		return matches[1]
+	}
+	if strings.Contains(message, "legacy ciphertext cannot be decrypted") ||
+		strings.Contains(message, "legacy ciphertext cannot be decrypted with any configured key") ||
+		strings.Contains(message, "encrypted-looking value cannot be decrypted") {
+		return "legacy"
+	}
+	return ""
+}
+
+func restoreMissingKeyOperatorError(missingKeyID string, err error) error {
+	if missingKeyID == "legacy" {
+		return fmt.Errorf("%w. Restore is blocked because key id %q is missing from THEIA_ENCRYPTION_KEYS. Add legacy=<old secret> to THEIA_ENCRYPTION_KEYS or set THEIA_ENCRYPTION_KEY as fallback, restart, then create and restore-test a fresh backup.", err, missingKeyID)
+	}
+	return fmt.Errorf("%w. Restore is blocked because key id %q is missing from THEIA_ENCRYPTION_KEYS. Add %s=<old secret> to THEIA_ENCRYPTION_KEYS, restart, then create and restore-test a fresh backup.", err, missingKeyID, missingKeyID)
 }
 
 // backupLiveDB captures the current database once before applying a staged restore.
