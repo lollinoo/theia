@@ -514,6 +514,72 @@ func (r *DeviceRepo) GetByIDs(ids []uuid.UUID) ([]domain.Device, error) {
 	return devices, nil
 }
 
+// GetByIDsForTopology retrieves the requested devices without loading sensitive credentials.
+func (r *DeviceRepo) GetByIDsForTopology(ids []uuid.UUID) ([]domain.Device, error) {
+	if len(ids) == 0 {
+		return []domain.Device{}, nil
+	}
+
+	placeholders := make([]string, 0, len(ids))
+	args := make([]interface{}, 0, len(ids))
+	for _, id := range ids {
+		placeholders = append(placeholders, "?")
+		args = append(args, id.String())
+	}
+
+	rows, err := r.db.Query(
+		`SELECT id, hostname, ip, device_type, status,
+			sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
+			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
+			poll_class, poll_interval_override, polling_enabled, notes,
+			topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
+		FROM devices
+		WHERE id IN (`+strings.Join(placeholders, ", ")+`)
+		ORDER BY hostname`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying topology devices by ids: %w", err)
+	}
+	defer rows.Close()
+
+	devices := make([]domain.Device, 0, len(ids))
+	for rows.Next() {
+		device, err := r.scanDeviceTopologyRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		devices = append(devices, *device)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(devices) == 0 {
+		return devices, nil
+	}
+
+	loadedIDs := make([]uuid.UUID, 0, len(devices))
+	for _, device := range devices {
+		loadedIDs = append(loadedIDs, device.ID)
+	}
+
+	interfacesByDevice, err := r.loadInterfacesForDeviceIDs(loadedIDs)
+	if err != nil {
+		return nil, fmt.Errorf("loading interfaces for topology devices: %w", err)
+	}
+	areaIDsByDevice, err := r.loadAreaIDsForDeviceIDs(loadedIDs)
+	if err != nil {
+		return nil, fmt.Errorf("loading area IDs for topology devices: %w", err)
+	}
+
+	for i := range devices {
+		devices[i].Interfaces = interfacesByDevice[devices[i].ID]
+		devices[i].AreaIDs = areaIDsByDevice[devices[i].ID]
+	}
+
+	return devices, nil
+}
+
 // Update modifies an existing device and replaces its interfaces.
 func (r *DeviceRepo) Update(device *domain.Device) error {
 	return withWriteRetry(func() error {
@@ -812,6 +878,65 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 	if err := json.Unmarshal([]byte(tagsJSON), &d.Tags); err != nil {
 		return nil, fmt.Errorf("unmarshaling tags: %w", err)
 	}
+
+	return &d, nil
+}
+
+// scanDeviceTopologyRow scans a device row that intentionally excludes sensitive credentials.
+func (r *DeviceRepo) scanDeviceTopologyRow(rows *sql.Rows) (*domain.Device, error) {
+	var d domain.Device
+	var idStr, tagsJSON, deviceType, status string
+	var managed int
+	var metricsSource, prometheusLabelName, prometheusLabelValue string
+	var pollClass string
+	var pollIntervalOverride sql.NullInt64
+	var pollingEnabled int
+	var notes sql.NullString
+	var topologyMode, bootstrapState, lastTopologyResult string
+	var lastTopologyAt sql.NullTime
+
+	err := rows.Scan(
+		&idStr, &d.Hostname, &d.IP, &deviceType, &status,
+		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel, &d.OSVersion,
+		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
+		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
+		&pollClass, &pollIntervalOverride, &pollingEnabled, &notes,
+		&topologyMode, &bootstrapState, &lastTopologyAt, &lastTopologyResult,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	d.ID = uuid.MustParse(idStr)
+	d.DeviceType = domain.DeviceType(deviceType)
+	d.Status = domain.DeviceStatus(status)
+	d.Managed = managed != 0
+	d.MetricsSource = domain.MetricsSource(metricsSource)
+	d.PrometheusLabelName = prometheusLabelName
+	d.PrometheusLabelValue = prometheusLabelValue
+	d.PollClass = domain.PollClass(pollClass)
+	enabled := pollingEnabled != 0
+	d.PollingEnabled = &enabled
+	d.TopologyDiscoveryMode = domain.TopologyDiscoveryMode(topologyMode)
+	d.TopologyBootstrapState = domain.TopologyBootstrapState(bootstrapState)
+	d.LastTopologyDiscoveryResult = lastTopologyResult
+	if pollIntervalOverride.Valid {
+		v := int(pollIntervalOverride.Int64)
+		d.PollIntervalOverride = &v
+	}
+	if lastTopologyAt.Valid {
+		v := lastTopologyAt.Time
+		d.LastTopologyDiscoveryAt = &v
+	}
+	if notes.Valid {
+		v := notes.String
+		d.Notes = &v
+	}
+
+	if err := json.Unmarshal([]byte(tagsJSON), &d.Tags); err != nil {
+		return nil, fmt.Errorf("unmarshaling tags: %w", err)
+	}
+	d.SNMPCredentials = domain.SNMPCredentials{}
 
 	return &d, nil
 }

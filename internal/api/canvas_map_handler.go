@@ -1060,7 +1060,7 @@ type canvasMapVirtualIsolationDeviceService struct {
 
 // GetDevicesByIDs adapts the full device service to the canvasmap isolation dependency.
 func (s canvasMapVirtualIsolationDeviceService) GetDevicesByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Device, error) {
-	return s.service.GetDevicesByIDs(ctx, ids)
+	return s.service.GetTopologyDevicesByIDs(ctx, ids)
 }
 
 // AddDevice adapts virtual clone creation while preserving device-service defaults.

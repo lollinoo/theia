@@ -19,9 +19,12 @@ import (
 // --- Mock Device Repository ---
 
 type mockDeviceRepo struct {
-	mu         sync.Mutex
-	devices    map[uuid.UUID]*domain.Device
-	updateHook func(*domain.Device) error
+	mu                       sync.Mutex
+	devices                  map[uuid.UUID]*domain.Device
+	updateHook               func(*domain.Device) error
+	getByIDsCalls            int
+	getByIDsForTopologyCalls int
+	failGetByIDs             bool
 }
 
 func newMockDeviceRepo() *mockDeviceRepo {
@@ -72,6 +75,42 @@ func (r *mockDeviceRepo) GetAll() ([]domain.Device, error) {
 		result = append(result, *d)
 	}
 	return result, nil
+}
+
+func (r *mockDeviceRepo) GetByIDs(ids []uuid.UUID) ([]domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.getByIDsCalls++
+	if r.failGetByIDs {
+		return nil, fmt.Errorf("full device batch path should not be used")
+	}
+	return r.devicesByIDsLocked(ids, false), nil
+}
+
+func (r *mockDeviceRepo) GetByIDsForTopology(ids []uuid.UUID) ([]domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.getByIDsForTopologyCalls++
+	return r.devicesByIDsLocked(ids, true), nil
+}
+
+func (r *mockDeviceRepo) devicesByIDsLocked(ids []uuid.UUID, clearSensitive bool) []domain.Device {
+	requested := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		requested[id] = struct{}{}
+	}
+	result := make([]domain.Device, 0, len(ids))
+	for _, d := range r.devices {
+		if _, ok := requested[d.ID]; !ok {
+			continue
+		}
+		cp := *d
+		if clearSensitive {
+			cp.SNMPCredentials = domain.SNMPCredentials{}
+		}
+		result = append(result, cp)
+	}
+	return result
 }
 
 func (r *mockDeviceRepo) Update(device *domain.Device) error {
@@ -2809,6 +2848,44 @@ func TestGetAllDevices_ReturnsAllWithInterfaces(t *testing.T) {
 	}
 	if len(devices) != 2 {
 		t.Errorf("expected 2 devices, got %d", len(devices))
+	}
+}
+
+func TestGetTopologyDevicesByIDsUsesNonSensitiveProjection(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+
+	deviceID := uuid.New()
+	device := &domain.Device{
+		ID:       deviceID,
+		IP:       "10.0.0.1",
+		Hostname: "router-1",
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "secret-community"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	deviceRepo.failGetByIDs = true
+
+	devices, err := svc.GetTopologyDevicesByIDs(context.Background(), []uuid.UUID{deviceID})
+	if err != nil {
+		t.Fatalf("GetTopologyDevicesByIDs failed: %v", err)
+	}
+	if got := deviceRepo.getByIDsCalls; got != 0 {
+		t.Fatalf("GetByIDs calls = %d, want 0", got)
+	}
+	if got := deviceRepo.getByIDsForTopologyCalls; got != 1 {
+		t.Fatalf("GetByIDsForTopology calls = %d, want 1", got)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("device count = %d, want 1", len(devices))
+	}
+	if devices[0].SNMPCredentials != (domain.SNMPCredentials{}) {
+		t.Fatalf("SNMP credentials = %+v, want empty for topology projection", devices[0].SNMPCredentials)
 	}
 }
 
