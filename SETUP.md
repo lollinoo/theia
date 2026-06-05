@@ -9,6 +9,7 @@ Network topology visualizer with SNMP monitoring, real-time metrics, and link ma
 - [Prerequisites](#prerequisites)
 - [Development Environment](#development-environment)
 - [Production Environment](#production-environment)
+- [Credential Encryption Keyring](#credential-encryption-keyring)
 - [Configuration Reference](#configuration-reference)
 - [API Quick Reference](#api-quick-reference)
 - [Troubleshooting](#troubleshooting)
@@ -272,7 +273,9 @@ Required operator inputs for the standard bundled PostgreSQL stack:
 If you restore or start against data that was previously protected by the
 legacy `THEIA_ENCRYPTION_KEY`, keep that old secret configured as key id
 `legacy` until startup has rewrapped credentials with the active key and you
-have created and restore-validated a fresh backup:
+have created and restore-validated a fresh backup. See
+[Credential Encryption Keyring](#credential-encryption-keyring) for the full
+restore and rotation procedure:
 
 ```text
 THEIA_ENCRYPTION_KEY_ID=kid-prod-2026-06
@@ -381,7 +384,9 @@ Required operator inputs for the standard bundled PostgreSQL stack:
 If you restore or start against data that was previously protected by the
 legacy `THEIA_ENCRYPTION_KEY`, keep that old secret configured as key id
 `legacy` until startup has rewrapped credentials with the active key and you
-have created and restore-validated a fresh backup:
+have created and restore-validated a fresh backup. See
+[Credential Encryption Keyring](#credential-encryption-keyring) for the full
+restore and rotation procedure:
 
 ```text
 THEIA_ENCRYPTION_KEY_ID=kid-staging-2026-06
@@ -428,6 +433,142 @@ make staging-logs      # Follow staging backend logs
 
 ---
 
+## Credential Encryption Keyring
+
+The backend encrypts stored credential secrets with a versioned keyring. The
+active key is used for all new writes, and non-active keys remain available so
+startup migrations can decrypt and rewrap older values.
+
+Encrypted data includes device SNMP credentials, SNMP profile credentials, and
+credential profile secrets stored in PostgreSQL. These values are normalized
+during backend startup after SQL migrations complete.
+
+### Variables
+
+Use the keyring variables for production and staging:
+
+```env
+THEIA_ENCRYPTION_KEY_ID=<active-key-id>
+THEIA_ENCRYPTION_KEYS=<key-id>=<secret>[,<key-id>=<secret>...]
+```
+
+Example:
+
+```env
+THEIA_ENCRYPTION_KEY_ID=kid-staging-2026-06
+THEIA_ENCRYPTION_KEYS=kid-staging-2026-06=<secret>
+```
+
+`THEIA_ENCRYPTION_KEY_ID` must match one entry in `THEIA_ENCRYPTION_KEYS`.
+The active key id is written into every new encryption envelope. Keep key ids
+stable and descriptive, for example `kid-prod-2026-06` or
+`kid-staging-2026-09`.
+
+### Legacy Key Compatibility
+
+Deployments that previously used only `THEIA_ENCRYPTION_KEY` may have stored
+data encrypted under key id `legacy`. During migration or restore, provide the
+old secret as a keyring entry named `legacy`:
+
+```env
+THEIA_ENCRYPTION_KEY_ID=kid-staging-2026-06
+THEIA_ENCRYPTION_KEYS=kid-staging-2026-06=<new-secret>,legacy=<old-THEIA_ENCRYPTION_KEY>
+```
+
+As a compatibility fallback, if the new keyring variables are set and
+`THEIA_ENCRYPTION_KEY` is also present, the backend loads that value as key id
+`legacy` unless `THEIA_ENCRYPTION_KEYS` already contains `legacy=...`.
+
+If startup fails with an error like:
+
+```text
+archive or ciphertext requires encryption key id "legacy", but it is not configured
+```
+
+the database or restored backup still contains at least one encrypted value that
+requires the legacy secret. Add `legacy=<old-secret>` to
+`THEIA_ENCRYPTION_KEYS`, or provide the old value through `THEIA_ENCRYPTION_KEY`,
+then restart the backend.
+
+### First Migration From Legacy
+
+Use this sequence when moving an existing deployment from `THEIA_ENCRYPTION_KEY`
+to the keyring variables:
+
+1. Generate a new high-entropy secret for the active key.
+2. Configure the new key and the old legacy key together:
+
+```env
+THEIA_ENCRYPTION_KEY_ID=kid-prod-2026-06
+THEIA_ENCRYPTION_KEYS=kid-prod-2026-06=<new-secret>,legacy=<old-THEIA_ENCRYPTION_KEY>
+```
+
+3. Start the backend and confirm startup migrations complete without encryption
+   errors.
+4. Create a fresh instance backup after the successful startup.
+5. Restore-test that backup with both keys still configured.
+6. Restore-test or restart with only the new key:
+
+```env
+THEIA_ENCRYPTION_KEY_ID=kid-prod-2026-06
+THEIA_ENCRYPTION_KEYS=kid-prod-2026-06=<new-secret>
+```
+
+If the backend starts without a `requires encryption key id "legacy"` error, the
+stack no longer needs `legacy` in `.env`. Keep the old secret in your secret
+manager until all backups created before the migration have expired or are no
+longer part of your recovery plan.
+
+### Rotating A Keyring Secret
+
+To rotate from one keyring secret to another, keep the old and new keys
+configured during the migration window and make the new key active.
+
+Current state:
+
+```env
+THEIA_ENCRYPTION_KEY_ID=kid-staging-2026-06
+THEIA_ENCRYPTION_KEYS=kid-staging-2026-06=<current-secret>
+```
+
+Rotated state:
+
+```env
+THEIA_ENCRYPTION_KEY_ID=kid-staging-2026-09
+THEIA_ENCRYPTION_KEYS=kid-staging-2026-06=<current-secret>,kid-staging-2026-09=<new-secret>
+```
+
+Then:
+
+1. Restart the backend.
+2. Confirm startup migrations complete without encryption errors.
+3. Create a fresh backup after the successful startup.
+4. Restore-test or restart once with both keys configured.
+5. Restore-test or restart with only the new active key:
+
+```env
+THEIA_ENCRYPTION_KEY_ID=kid-staging-2026-09
+THEIA_ENCRYPTION_KEYS=kid-staging-2026-09=<new-secret>
+```
+
+If the backend starts without a `requires encryption key id
+"kid-staging-2026-06"` error, the old key can be removed from the stack `.env`.
+Keep the old secret in a secret manager until backups created before the
+rotation have expired.
+
+### Operational Rules
+
+- Do not change the secret for an existing key id. Create a new key id for every
+  rotation.
+- Do not remove an old key before the backend has started successfully with the
+  old and new keys together.
+- Do not delete old secrets from your secret manager while backups that require
+  them are still retained.
+- Never commit real `THEIA_ENCRYPTION_KEYS`, `THEIA_ENCRYPTION_KEY`, database
+  passwords, session secrets, or metrics tokens.
+
+---
+
 ## Configuration Reference
 
 ### Backend
@@ -437,6 +578,9 @@ Configuration is loaded from local `config.yaml` when present. The tracked `conf
 | config.yaml key | Environment variable | Default | Description |
 |-----------------|---------------------|---------|-------------|
 | `deployment_env` | `THEIA_DEPLOYMENT_ENV` | none | Set to `production` or `staging` for deployed environments so startup enforces required secret validation |
+| none | `THEIA_ENCRYPTION_KEY_ID` | none | Active credential encryption key id; required with `THEIA_ENCRYPTION_KEYS` in production and staging |
+| none | `THEIA_ENCRYPTION_KEYS` | none | Comma-separated credential encryption keyring entries in `<key-id>=<secret>` format |
+| none | `THEIA_ENCRYPTION_KEY` | none | Legacy credential encryption fallback; when keyring variables are set, this value is loaded as key id `legacy` |
 | `listen_addr` | `THEIA_LISTEN_ADDR` | `:8080` | HTTP server bind address |
 | `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN; `config.Load()` does not inject one, so operators must provide it explicitly through local config, local env, or a secret manager |
 | `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
