@@ -310,6 +310,9 @@ func TestRoutePermissionRegistryRejectsMissingPermissionPolicy(t *testing.T) {
 }
 
 func TestProtectedRoutePermissionRegistryMetadataIsValid(t *testing.T) {
+	if err := apiRouteMetadata.validate(); err != nil {
+		t.Fatalf("api route metadata invalid: %v", err)
+	}
 	if err := protectedRoutePermissionRegistry.validate(); err != nil {
 		t.Fatalf("protected route permission registry invalid: %v", err)
 	}
