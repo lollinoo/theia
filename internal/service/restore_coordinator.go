@@ -191,6 +191,11 @@ func (c *RestoreCoordinator) persistRestoreStatus(marker *restoreMarker, phase r
 		return nil
 	}
 	updateRestoreOperationFields(marker, phase, lastError, missingKeyID)
+	if phase != restorePhaseCompleted {
+		if err := writeRestoreMarker(restoreMarkerFilePath(c.stateDir), *marker); err != nil {
+			return err
+		}
+	}
 	return writeRestoreOperationStatus(c.stateDir, restoreOperationStatusFromMarker(*marker))
 }
 

@@ -1002,6 +1002,16 @@ func TestRestoreCoordinatorApplyPendingRestore_PostgresRestoreFailureKeepsRetryS
 	if _, err := os.Stat(markerPath); err != nil {
 		t.Fatalf("restore marker should remain for retry: %v", err)
 	}
+	markerAfterFailure, exists, err := readRestoreMarker(markerPath)
+	if err != nil {
+		t.Fatalf("reading marker after failed restore: %v", err)
+	}
+	if !exists {
+		t.Fatal("restore marker missing after failed restore")
+	}
+	if markerAfterFailure.Phase != "failed_retryable" {
+		t.Fatalf("restore marker phase = %q, want failed_retryable", markerAfterFailure.Phase)
+	}
 	if _, err := os.Stat(stagingDir); err != nil {
 		t.Fatalf("restore staging dir should remain for retry: %v", err)
 	}
