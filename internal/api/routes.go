@@ -96,6 +96,45 @@ type apiRouteMetadataRegistry struct {
 	specs []apiRouteSpec
 }
 
+type routeMuxRegistration struct {
+	pattern string
+	handler http.Handler
+}
+
+func routeMuxRegistrations(specs []apiRouteSpec, handlers map[routeHandlerKey]http.Handler) ([]routeMuxRegistration, error) {
+	seen := make(map[string]routeHandlerKey, len(specs))
+	registrations := make([]routeMuxRegistration, 0, len(specs))
+	for _, spec := range specs {
+		if existing, ok := seen[spec.serveMuxPattern]; ok {
+			if existing != spec.handlerKey {
+				return nil, fmt.Errorf("serve mux pattern %s has handlers %s and %s", spec.serveMuxPattern, existing, spec.handlerKey)
+			}
+			continue
+		}
+		handler := handlers[spec.handlerKey]
+		if handler == nil {
+			return nil, fmt.Errorf("api route %s handler %s is not configured", spec.name, spec.handlerKey)
+		}
+		seen[spec.serveMuxPattern] = spec.handlerKey
+		registrations = append(registrations, routeMuxRegistration{
+			pattern: spec.serveMuxPattern,
+			handler: handler,
+		})
+	}
+	return registrations, nil
+}
+
+func registerAPIRouteHandlers(mux *http.ServeMux, specs []apiRouteSpec, handlers map[routeHandlerKey]http.Handler) error {
+	registrations, err := routeMuxRegistrations(specs, handlers)
+	if err != nil {
+		return err
+	}
+	for _, registration := range registrations {
+		mux.Handle(registration.pattern, registration.handler)
+	}
+	return nil
+}
+
 func newAPIRouteMetadataRegistry(specs []apiRouteSpec) apiRouteMetadataRegistry {
 	return apiRouteMetadataRegistry{specs: append([]apiRouteSpec(nil), specs...)}
 }

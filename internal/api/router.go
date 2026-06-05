@@ -143,731 +143,606 @@ func NewRouter(
 	bridgeHandler := NewBridgeHandlerWithService(bridgeBinariesDir, routerOpts.bridgeService)
 	userSettingsHandler := NewUserSettingsHandler(routerOpts.bridgeService, bridgeBinariesDir)
 
-	mux.Handle("/api/v1/admin/", adminHandler)
-
-	// Canvas topology read model route
-	mux.HandleFunc("/api/v1/topology/canvas", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		canvasTopologyHandler.HandleGet(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/canvas", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		canvasTopologyHandler.HandleGetCanvas(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/canvas/maps", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			canvasMapHandler.HandleList(w, r)
-		case http.MethodPost:
-			canvasMapHandler.HandleCreate(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	mux.HandleFunc("/api/v1/canvas/maps/", func(w http.ResponseWriter, r *http.Request) {
-		_, action, ok := parseCanvasMapRoute(r.URL.Path)
-		if !ok {
-			writeError(w, http.StatusNotFound, "not found")
-			return
-		}
-
-		switch action {
-		case "":
-			switch r.Method {
-			case http.MethodGet:
-				canvasMapHandler.HandleGet(w, r)
-			case http.MethodPatch:
-				canvasMapHandler.HandlePatch(w, r)
-			case http.MethodDelete:
-				canvasMapHandler.HandleDelete(w, r)
-			default:
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			}
-		case "duplicate":
-			if r.Method != http.MethodPost {
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			canvasMapHandler.HandleDuplicate(w, r)
-		case "primary":
-			if r.Method != http.MethodPost {
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			canvasMapHandler.HandleSetPrimary(w, r)
-		case "topology":
+	webSocketHandler := http.NotFoundHandler()
+	if wsHandler != nil {
+		webSocketHandler = wsHandler
+	}
+	routeHandlers := map[routeHandlerKey]http.Handler{
+		routeHandlerAdmin: adminHandler,
+		routeHandlerAuth:  authHandler,
+		routeHandlerTopologyCanvas: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			canvasMapHandler.HandleTopology(w, r)
-		case "bootstrap":
+			canvasTopologyHandler.HandleGet(w, r)
+		}),
+		routeHandlerCanvas: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			canvasMapHandler.HandleBootstrap(w, r)
-		case "positions":
+			canvasTopologyHandler.HandleGetCanvas(w, r)
+		}),
+		routeHandlerCanvasMapCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.Method {
 			case http.MethodGet:
-				canvasMapHandler.HandleListPositions(w, r)
-			case http.MethodPut:
-				canvasMapHandler.HandleSavePositions(w, r)
-			default:
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			}
-		case "device-areas":
-			if r.Method != http.MethodPut {
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			canvasMapHandler.HandleUpdateDeviceAreas(w, r)
-		case "areas":
-			switch r.Method {
-			case http.MethodGet:
-				canvasMapHandler.HandleListAreas(w, r)
+				canvasMapHandler.HandleList(w, r)
 			case http.MethodPost:
-				canvasMapHandler.HandleCreateArea(w, r)
+				canvasMapHandler.HandleCreate(w, r)
 			default:
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			}
-		default:
-			if strings.HasPrefix(action, "areas/") {
-				switch r.Method {
-				case http.MethodPut:
-					canvasMapHandler.HandleUpdateArea(w, r)
-				case http.MethodDelete:
-					canvasMapHandler.HandleDeleteArea(w, r)
-				default:
-					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				}
+		}),
+		routeHandlerCanvasMapItem: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, action, ok := parseCanvasMapRoute(r.URL.Path)
+			if !ok {
+				writeError(w, http.StatusNotFound, "not found")
 				return
 			}
-			if strings.HasPrefix(action, "devices/") {
+			switch action {
+			case "":
 				switch r.Method {
-				case http.MethodDelete:
-					canvasMapHandler.HandleRemoveDevice(w, r)
+				case http.MethodGet:
+					canvasMapHandler.HandleGet(w, r)
 				case http.MethodPatch:
-					canvasMapHandler.HandlePatchDevice(w, r)
-				case http.MethodPost:
-					canvasMapHandler.HandleAddDevice(w, r)
+					canvasMapHandler.HandlePatch(w, r)
+				case http.MethodDelete:
+					canvasMapHandler.HandleDelete(w, r)
 				default:
 					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 				}
-				return
-			}
-			writeError(w, http.StatusNotFound, "not found")
-		}
-	})
-
-	// Device routes
-	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			deviceHandler.HandleCreate(w, r)
-		case http.MethodGet:
-			deviceHandler.HandleList(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	mux.HandleFunc("/api/v1/devices/batch", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		deviceHandler.HandleBatchAdd(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/devices/orphans", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		deviceHandler.HandleListOrphans(w, r)
-	})
-
-	// Device by ID routes (must be registered after /devices/batch and /devices/orphans to avoid conflicts)
-	mux.HandleFunc("/api/v1/devices/", func(w http.ResponseWriter, r *http.Request) {
-		// Check if this is an interfaces request
-		if strings.HasSuffix(r.URL.Path, "/interfaces") && r.Method == http.MethodGet {
-			linkHandler.HandleGetInterfaces(w, r)
-			return
-		}
-
-		// Check if this is a probe request
-		if len(r.URL.Path) > len("/api/v1/devices/") {
-			pathSuffix := r.URL.Path[len("/api/v1/devices/"):]
-			if idx := indexOf(pathSuffix, "/probe"); idx >= 0 && r.Method == http.MethodPost {
-				deviceHandler.HandleProbe(w, r)
-				return
-			}
-		}
-
-		// SNMP test route
-		if strings.HasSuffix(r.URL.Path, "/snmp-test") && r.Method == http.MethodPost {
-			deviceHandler.HandleTestSNMP(w, r)
-			return
-		}
-
-		if strings.HasSuffix(r.URL.Path, "/topology-discovery") && r.Method == http.MethodPost {
-			deviceHandler.HandleRunTopologyDiscovery(w, r)
-			return
-		}
-
-		// SSH test route (resolves credentials via profile)
-		if strings.HasSuffix(r.URL.Path, "/ssh-credentials/test") && r.Method == http.MethodPost {
-			backupHandler.HandleTestSSH(w, r)
-			return
-		}
-
-		// Backup routes for devices
-		if strings.HasSuffix(r.URL.Path, "/backups/latest") && r.Method == http.MethodGet {
-			backupHandler.HandleGetLatestBackup(w, r)
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/backups") {
-			switch r.Method {
-			case http.MethodGet:
-				backupHandler.HandleListBackups(w, r)
-			case http.MethodPost:
-				backupHandler.HandleTriggerBackup(w, r)
-			default:
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			}
-			return
-		}
-
-		// Device credential profile assignment routes
-		if strings.HasSuffix(r.URL.Path, "/credential-profiles") {
-			switch r.Method {
-			case http.MethodGet:
-				deviceCredHandler.HandleListAssignments(w, r)
-			case http.MethodPost:
-				deviceCredHandler.HandleAssign(w, r)
-			default:
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			}
-			return
-		}
-
-		// Device credential profile unassign (DELETE with profileId in path)
-		// Path: /api/v1/devices/{id}/credential-profiles/{profileId}
-		if strings.Contains(r.URL.Path, "/credential-profiles/") && r.Method == http.MethodDelete {
-			deviceCredHandler.HandleUnassign(w, r)
-			return
-		}
-
-		// WinBox profile designation routes
-		if strings.HasSuffix(r.URL.Path, "/winbox-profile") {
-			switch r.Method {
-			case http.MethodPut:
-				deviceCredHandler.HandleSetWinbox(w, r)
-			case http.MethodDelete:
-				deviceCredHandler.HandleClearWinbox(w, r)
-			default:
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			}
-			return
-		}
-
-		// Explicit WinBox credential reveal endpoint
-		if isWinboxCredentialsRevealPath(r.URL.Path) {
-			deviceCredHandler.HandleRevealWinboxCredentials(w, r)
-			return
-		}
-
-		// Legacy WinBox credentials endpoint
-		if strings.HasSuffix(r.URL.Path, "/winbox-credentials") && r.Method == http.MethodGet {
-			deviceCredHandler.HandleGetWinboxCredentials(w, r)
-			return
-		}
-
-		switch r.Method {
-		case http.MethodGet:
-			deviceHandler.HandleGet(w, r)
-		case http.MethodPut:
-			deviceHandler.HandleUpdate(w, r)
-		case http.MethodDelete:
-			deviceHandler.HandleDelete(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Links routes
-	mux.HandleFunc("/api/v1/links", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			linkHandler.HandleList(w, r)
-		case http.MethodPost:
-			linkHandler.HandleCreate(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Link by ID routes (PUT and DELETE)
-	mux.HandleFunc("/api/v1/links/", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPut:
-			linkHandler.HandleUpdate(w, r)
-		case http.MethodDelete:
-			linkHandler.HandleDelete(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Position routes
-	mux.HandleFunc("/api/v1/positions", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			positionHandler.HandleList(w, r)
-		case http.MethodPut:
-			positionHandler.HandleSaveAll(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Settings routes
-	mux.HandleFunc("/api/v1/settings", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		settingsHandler.HandleGetAll(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/settings/me", func(w http.ResponseWriter, r *http.Request) {
-		userSettingsHandler.HandleMe(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/settings/bridge", func(w http.ResponseWriter, r *http.Request) {
-		userSettingsHandler.HandleBridge(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/settings/bridge/secret", func(w http.ResponseWriter, r *http.Request) {
-		userSettingsHandler.HandleBridgeSecret(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/settings/bridge/secret/rotate", func(w http.ResponseWriter, r *http.Request) {
-		userSettingsHandler.HandleBridgeSecret(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/settings/bridge/secret/revoke", func(w http.ResponseWriter, r *http.Request) {
-		userSettingsHandler.HandleBridgeSecretRevoke(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/settings/bridge/connector/config", func(w http.ResponseWriter, r *http.Request) {
-		userSettingsHandler.HandleConnectorConfig(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/settings/bridge/connector/download/", func(w http.ResponseWriter, r *http.Request) {
-		userSettingsHandler.HandleConnectorDownload(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/settings/", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			settingsHandler.HandleGet(w, r)
-		case http.MethodPut:
-			settingsHandler.HandleUpdate(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	mux.HandleFunc("/api/v1/grafana/dashboard-profiles", func(w http.ResponseWriter, r *http.Request) {
-		grafanaDashboardHandler.HandleProfiles(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/grafana/dashboard-profiles/", func(w http.ResponseWriter, r *http.Request) {
-		grafanaDashboardHandler.HandleProfile(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/grafana/device-overrides/", func(w http.ResponseWriter, r *http.Request) {
-		grafanaDashboardHandler.HandleDeviceOverride(w, r)
-	})
-
-	// SNMP credential profile routes
-	mux.HandleFunc("/api/v1/snmp-profiles", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			snmpProfileHandler.HandleList(w, r)
-		case http.MethodPost:
-			snmpProfileHandler.HandleCreate(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	mux.HandleFunc("/api/v1/snmp-profiles/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/reveal") {
-			snmpProfileHandler.HandleReveal(w, r)
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			snmpProfileHandler.HandleGet(w, r)
-		case http.MethodPut:
-			snmpProfileHandler.HandleUpdate(w, r)
-		case http.MethodDelete:
-			snmpProfileHandler.HandleDelete(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Area routes
-	mux.HandleFunc("/api/v1/areas", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			areaHandler.HandleList(w, r)
-		case http.MethodPost:
-			areaHandler.HandleCreate(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	mux.HandleFunc("/api/v1/areas/", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			areaHandler.HandleGet(w, r)
-		case http.MethodPut:
-			areaHandler.HandleUpdate(w, r)
-		case http.MethodDelete:
-			areaHandler.HandleDelete(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Credential profile routes
-	mux.HandleFunc("/api/v1/credential-profiles", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			credentialProfileHandler.HandleList(w, r)
-		case http.MethodPost:
-			credentialProfileHandler.HandleCreate(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	mux.HandleFunc("/api/v1/credential-profiles/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/test") && r.Method == http.MethodPost {
-			credentialProfileHandler.HandleTest(w, r)
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			credentialProfileHandler.HandleGet(w, r)
-		case http.MethodPut:
-			credentialProfileHandler.HandleUpdate(w, r)
-		case http.MethodDelete:
-			credentialProfileHandler.HandleDelete(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Bulk backup routes
-	mux.HandleFunc("/api/v1/backups/bulk/status", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		backupHandler.HandleGetBulkOperationStatus(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/backups/bulk-runs/latest", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		backupHandler.HandleGetLatestBulkBackupRun(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/backups/bulk-runs", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		backupHandler.HandleStartBulkBackupRun(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/backups/bulk-runs/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/pause") {
-			if r.Method != http.MethodPost {
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			backupHandler.HandlePauseBulkBackupRun(w, r)
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/resume") {
-			if r.Method != http.MethodPost {
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			backupHandler.HandleResumeBulkBackupRun(w, r)
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/cancel") {
-			if r.Method != http.MethodPost {
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			backupHandler.HandleCancelBulkBackupRun(w, r)
-			return
-		}
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		backupHandler.HandleGetBulkBackupRun(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/backups/bulk", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		backupHandler.HandleBulkBackup(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/backups/bulk-download", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		backupHandler.HandleBulkDownload(w, r)
-	})
-
-	// Backup job routes (by job ID)
-	mux.HandleFunc("/api/v1/backup-jobs/", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			backupHandler.HandleGetBackupJob(w, r)
-		case http.MethodDelete:
-			backupHandler.HandleDeleteBackupJob(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Backup file routes (download and content)
-	mux.HandleFunc("/api/v1/backup-files/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/download") {
-			backupHandler.HandleDownloadBackupFile(w, r)
-		} else if strings.HasSuffix(r.URL.Path, "/content") {
-			backupHandler.HandleGetBackupFileContent(w, r)
-		} else {
-			writeError(w, http.StatusNotFound, "not found")
-		}
-	})
-
-	// Vendor config routes
-	mux.HandleFunc("/api/v1/vendors", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		vendorHandler.HandleListVendors(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/vendors/", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			vendorHandler.HandleGetVendor(w, r)
-		case http.MethodPut:
-			vendorHandler.HandleUpdateVendor(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Instance backup routes
-	mux.HandleFunc("/api/v1/instance-backups", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			instanceBackupHandler.HandleCreate(w, r)
-		case http.MethodGet:
-			instanceBackupHandler.HandleList(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Instance backup restore (multipart upload, bypass middleware)
-	mux.HandleFunc("/api/v1/instance-backups/restore-status", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		instanceBackupHandler.HandleRestoreStatus(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/instance-backups/restore", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		instanceBackupHandler.HandleRestore(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/instance-backups/", func(w http.ResponseWriter, r *http.Request) {
-		rest := strings.TrimPrefix(r.URL.Path, "/api/v1/instance-backups/")
-		parts := strings.Split(rest, "/")
-		if rest == "" || len(parts) > 2 || parts[0] == "" {
-			writeError(w, http.StatusNotFound, "not found")
-			return
-		}
-		if len(parts) == 2 {
-			switch parts[1] {
-			case "cancel":
+			case "duplicate":
 				if r.Method != http.MethodPost {
 					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 					return
 				}
-				instanceBackupHandler.HandleCancel(w, r)
-			case "download":
+				canvasMapHandler.HandleDuplicate(w, r)
+			case "primary":
+				if r.Method != http.MethodPost {
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				canvasMapHandler.HandleSetPrimary(w, r)
+			case "topology":
 				if r.Method != http.MethodGet {
 					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 					return
 				}
-				instanceBackupHandler.HandleDownload(w, r)
+				canvasMapHandler.HandleTopology(w, r)
+			case "bootstrap":
+				if r.Method != http.MethodGet {
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				canvasMapHandler.HandleBootstrap(w, r)
+			case "positions":
+				switch r.Method {
+				case http.MethodGet:
+					canvasMapHandler.HandleListPositions(w, r)
+				case http.MethodPut:
+					canvasMapHandler.HandleSavePositions(w, r)
+				default:
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				}
+			case "device-areas":
+				if r.Method != http.MethodPut {
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				canvasMapHandler.HandleUpdateDeviceAreas(w, r)
+			case "areas":
+				switch r.Method {
+				case http.MethodGet:
+					canvasMapHandler.HandleListAreas(w, r)
+				case http.MethodPost:
+					canvasMapHandler.HandleCreateArea(w, r)
+				default:
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				}
 			default:
+				if strings.HasPrefix(action, "areas/") {
+					switch r.Method {
+					case http.MethodPut:
+						canvasMapHandler.HandleUpdateArea(w, r)
+					case http.MethodDelete:
+						canvasMapHandler.HandleDeleteArea(w, r)
+					default:
+						writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					}
+					return
+				}
+				if strings.HasPrefix(action, "devices/") {
+					switch r.Method {
+					case http.MethodDelete:
+						canvasMapHandler.HandleRemoveDevice(w, r)
+					case http.MethodPatch:
+						canvasMapHandler.HandlePatchDevice(w, r)
+					case http.MethodPost:
+						canvasMapHandler.HandleAddDevice(w, r)
+					default:
+						writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					}
+					return
+				}
 				writeError(w, http.StatusNotFound, "not found")
 			}
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			instanceBackupHandler.HandleGet(w, r)
-		case http.MethodDelete:
-			instanceBackupHandler.HandleDelete(w, r)
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-	})
-
-	// Bridge binary download
-	mux.HandleFunc("/api/v1/bridge/download/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		bridgeHandler.HandleDownload(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/bridge/launch-requests/", func(w http.ResponseWriter, r *http.Request) {
-		bridgeHandler.HandleCreateLaunchRequest(w, r)
-	})
-
-	mux.HandleFunc("/api/v1/bridge/connector/launch", func(w http.ResponseWriter, r *http.Request) {
-		bridgeHandler.HandleConnectorLaunch(w, r)
-	})
-
-	// Legacy bridge credential token endpoint.
-	mux.HandleFunc("/api/v1/bridge/token/", func(w http.ResponseWriter, r *http.Request) {
-		bridgeHandler.HandleBridgeToken(w, r)
-	})
-
-	// Health endpoint
-	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		healthHandler.HandleHealth(w, r)
-	})
-
-	// Prometheus health endpoint
-	mux.HandleFunc("/api/v1/prometheus/health", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		prometheusHandler.HandleHealth(w, r)
-	})
-
-	if wsHandler != nil {
-		mux.Handle("/api/v1/ws", wsHandler)
+		}),
+		routeHandlerDeviceCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodPost:
+				deviceHandler.HandleCreate(w, r)
+			case http.MethodGet:
+				deviceHandler.HandleList(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerDeviceBatch: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			deviceHandler.HandleBatchAdd(w, r)
+		}),
+		routeHandlerDeviceOrphans: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			deviceHandler.HandleListOrphans(w, r)
+		}),
+		routeHandlerDeviceItem: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/interfaces") && r.Method == http.MethodGet {
+				linkHandler.HandleGetInterfaces(w, r)
+				return
+			}
+			if len(r.URL.Path) > len("/api/v1/devices/") {
+				pathSuffix := r.URL.Path[len("/api/v1/devices/"):]
+				if idx := indexOf(pathSuffix, "/probe"); idx >= 0 && r.Method == http.MethodPost {
+					deviceHandler.HandleProbe(w, r)
+					return
+				}
+			}
+			if strings.HasSuffix(r.URL.Path, "/snmp-test") && r.Method == http.MethodPost {
+				deviceHandler.HandleTestSNMP(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/topology-discovery") && r.Method == http.MethodPost {
+				deviceHandler.HandleRunTopologyDiscovery(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/ssh-credentials/test") && r.Method == http.MethodPost {
+				backupHandler.HandleTestSSH(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/backups/latest") && r.Method == http.MethodGet {
+				backupHandler.HandleGetLatestBackup(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/backups") {
+				switch r.Method {
+				case http.MethodGet:
+					backupHandler.HandleListBackups(w, r)
+				case http.MethodPost:
+					backupHandler.HandleTriggerBackup(w, r)
+				default:
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				}
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/credential-profiles") {
+				switch r.Method {
+				case http.MethodGet:
+					deviceCredHandler.HandleListAssignments(w, r)
+				case http.MethodPost:
+					deviceCredHandler.HandleAssign(w, r)
+				default:
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				}
+				return
+			}
+			if strings.Contains(r.URL.Path, "/credential-profiles/") && r.Method == http.MethodDelete {
+				deviceCredHandler.HandleUnassign(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/winbox-profile") {
+				switch r.Method {
+				case http.MethodPut:
+					deviceCredHandler.HandleSetWinbox(w, r)
+				case http.MethodDelete:
+					deviceCredHandler.HandleClearWinbox(w, r)
+				default:
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				}
+				return
+			}
+			if isWinboxCredentialsRevealPath(r.URL.Path) {
+				deviceCredHandler.HandleRevealWinboxCredentials(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/winbox-credentials") && r.Method == http.MethodGet {
+				deviceCredHandler.HandleGetWinboxCredentials(w, r)
+				return
+			}
+			switch r.Method {
+			case http.MethodGet:
+				deviceHandler.HandleGet(w, r)
+			case http.MethodPut:
+				deviceHandler.HandleUpdate(w, r)
+			case http.MethodDelete:
+				deviceHandler.HandleDelete(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerLinkCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				linkHandler.HandleList(w, r)
+			case http.MethodPost:
+				linkHandler.HandleCreate(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerLinkItem: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodPut:
+				linkHandler.HandleUpdate(w, r)
+			case http.MethodDelete:
+				linkHandler.HandleDelete(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerPositionCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				positionHandler.HandleList(w, r)
+			case http.MethodPut:
+				positionHandler.HandleSaveAll(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerSettingsCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			settingsHandler.HandleGetAll(w, r)
+		}),
+		routeHandlerSettingsMe:                 http.HandlerFunc(userSettingsHandler.HandleMe),
+		routeHandlerSettingsBridge:             http.HandlerFunc(userSettingsHandler.HandleBridge),
+		routeHandlerSettingsBridgeSecret:       http.HandlerFunc(userSettingsHandler.HandleBridgeSecret),
+		routeHandlerSettingsBridgeSecretRevoke: http.HandlerFunc(userSettingsHandler.HandleBridgeSecretRevoke),
+		routeHandlerSettingsBridgeConnector:    http.HandlerFunc(userSettingsHandler.HandleConnectorConfig),
+		routeHandlerSettingsBridgeDownload:     http.HandlerFunc(userSettingsHandler.HandleConnectorDownload),
+		routeHandlerSettingsItem: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				settingsHandler.HandleGet(w, r)
+			case http.MethodPut:
+				settingsHandler.HandleUpdate(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerGrafanaProfileCollection: http.HandlerFunc(grafanaDashboardHandler.HandleProfiles),
+		routeHandlerGrafanaProfileItem:       http.HandlerFunc(grafanaDashboardHandler.HandleProfile),
+		routeHandlerGrafanaDeviceOverride:    http.HandlerFunc(grafanaDashboardHandler.HandleDeviceOverride),
+		routeHandlerSNMPProfileCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				snmpProfileHandler.HandleList(w, r)
+			case http.MethodPost:
+				snmpProfileHandler.HandleCreate(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerSNMPProfileItem: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/reveal") {
+				snmpProfileHandler.HandleReveal(w, r)
+				return
+			}
+			switch r.Method {
+			case http.MethodGet:
+				snmpProfileHandler.HandleGet(w, r)
+			case http.MethodPut:
+				snmpProfileHandler.HandleUpdate(w, r)
+			case http.MethodDelete:
+				snmpProfileHandler.HandleDelete(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerAreaCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				areaHandler.HandleList(w, r)
+			case http.MethodPost:
+				areaHandler.HandleCreate(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerAreaItem: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				areaHandler.HandleGet(w, r)
+			case http.MethodPut:
+				areaHandler.HandleUpdate(w, r)
+			case http.MethodDelete:
+				areaHandler.HandleDelete(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerCredentialProfileCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				credentialProfileHandler.HandleList(w, r)
+			case http.MethodPost:
+				credentialProfileHandler.HandleCreate(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerCredentialProfileItem: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/test") && r.Method == http.MethodPost {
+				credentialProfileHandler.HandleTest(w, r)
+				return
+			}
+			switch r.Method {
+			case http.MethodGet:
+				credentialProfileHandler.HandleGet(w, r)
+			case http.MethodPut:
+				credentialProfileHandler.HandleUpdate(w, r)
+			case http.MethodDelete:
+				credentialProfileHandler.HandleDelete(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerBackupBulkStatus: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			backupHandler.HandleGetBulkOperationStatus(w, r)
+		}),
+		routeHandlerBackupBulkRunLatest: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			backupHandler.HandleGetLatestBulkBackupRun(w, r)
+		}),
+		routeHandlerBackupBulkRunCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			backupHandler.HandleStartBulkBackupRun(w, r)
+		}),
+		routeHandlerBackupBulkRunItem: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/pause") {
+				if r.Method != http.MethodPost {
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				backupHandler.HandlePauseBulkBackupRun(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/resume") {
+				if r.Method != http.MethodPost {
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				backupHandler.HandleResumeBulkBackupRun(w, r)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/cancel") {
+				if r.Method != http.MethodPost {
+					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				backupHandler.HandleCancelBulkBackupRun(w, r)
+				return
+			}
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			backupHandler.HandleGetBulkBackupRun(w, r)
+		}),
+		routeHandlerBackupBulk: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			backupHandler.HandleBulkBackup(w, r)
+		}),
+		routeHandlerBackupBulkDownload: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			backupHandler.HandleBulkDownload(w, r)
+		}),
+		routeHandlerBackupJob: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				backupHandler.HandleGetBackupJob(w, r)
+			case http.MethodDelete:
+				backupHandler.HandleDeleteBackupJob(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerBackupFile: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/download") {
+				backupHandler.HandleDownloadBackupFile(w, r)
+			} else if strings.HasSuffix(r.URL.Path, "/content") {
+				backupHandler.HandleGetBackupFileContent(w, r)
+			} else {
+				writeError(w, http.StatusNotFound, "not found")
+			}
+		}),
+		routeHandlerVendorCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			vendorHandler.HandleListVendors(w, r)
+		}),
+		routeHandlerVendorItem: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				vendorHandler.HandleGetVendor(w, r)
+			case http.MethodPut:
+				vendorHandler.HandleUpdateVendor(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerInstanceBackupCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodPost:
+				instanceBackupHandler.HandleCreate(w, r)
+			case http.MethodGet:
+				instanceBackupHandler.HandleList(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerInstanceBackupRestoreStatus: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			instanceBackupHandler.HandleRestoreStatus(w, r)
+		}),
+		routeHandlerInstanceBackupRestore: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			instanceBackupHandler.HandleRestore(w, r)
+		}),
+		routeHandlerInstanceBackupItem: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rest := strings.TrimPrefix(r.URL.Path, "/api/v1/instance-backups/")
+			parts := strings.Split(rest, "/")
+			if rest == "" || len(parts) > 2 || parts[0] == "" {
+				writeError(w, http.StatusNotFound, "not found")
+				return
+			}
+			if len(parts) == 2 {
+				switch parts[1] {
+				case "cancel":
+					if r.Method != http.MethodPost {
+						writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+						return
+					}
+					instanceBackupHandler.HandleCancel(w, r)
+				case "download":
+					if r.Method != http.MethodGet {
+						writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+						return
+					}
+					instanceBackupHandler.HandleDownload(w, r)
+				default:
+					writeError(w, http.StatusNotFound, "not found")
+				}
+				return
+			}
+			switch r.Method {
+			case http.MethodGet:
+				instanceBackupHandler.HandleGet(w, r)
+			case http.MethodDelete:
+				instanceBackupHandler.HandleDelete(w, r)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
+		}),
+		routeHandlerBridgeDownload: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			bridgeHandler.HandleDownload(w, r)
+		}),
+		routeHandlerBridgeLaunchRequest:   http.HandlerFunc(bridgeHandler.HandleCreateLaunchRequest),
+		routeHandlerBridgeConnectorLaunch: http.HandlerFunc(bridgeHandler.HandleConnectorLaunch),
+		routeHandlerBridgeToken:           http.HandlerFunc(bridgeHandler.HandleBridgeToken),
+		routeHandlerHealth:                http.HandlerFunc(healthHandler.HandleHealth),
+		routeHandlerPrometheusHealth: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			prometheusHandler.HandleHealth(w, r)
+		}),
+		routeHandlerWebSocket: webSocketHandler,
+	}
+	if err := registerAPIRouteHandlers(mux, apiRouteSpecs, routeHandlers); err != nil {
+		panic(err)
 	}
 
 	handler := applyMiddleware(mux, routerOpts.security, routerOpts.auth, true, 1<<20)
 	downloadHandler := applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, 0)
 	publicAuthHandler := applyPublicMiddleware(authHandler, routerOpts.security, true, 16<<10)
+	publicRouteHandlers := map[routeHandlerKey]http.Handler{
+		routeHandlerAuth:                  publicAuthHandler,
+		routeHandlerBridgeConnectorLaunch: applyPublicMiddleware(routeHandlers[routeHandlerBridgeConnectorLaunch], routerOpts.security, true, 16<<10),
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isAuthRoute(r.URL.Path) {
-			publicAuthHandler.ServeHTTP(w, r)
-			return
-		}
-
-		if r.URL.Path == "/api/v1/bridge/connector/launch" {
-			applyPublicMiddleware(http.HandlerFunc(bridgeHandler.HandleConnectorLaunch), routerOpts.security, true, 16<<10).ServeHTTP(w, r)
-			return
-		}
-
-		// WebSocket upgrades must bypass the JSON/logger middleware chain because
-		// the wrapped ResponseWriter does not expose the hijacker interface.
-		if wsHandler != nil && r.URL.Path == "/api/v1/ws" {
-			authenticatedRequest, user, _, ok := AuthenticateUserRequest(w, r, routerOpts.auth)
-			if !ok {
+		if spec, ok := apiRouteMetadata.matchPath(r.URL.Path); ok && spec.authMode == routeAuthPublic {
+			if publicHandler := publicRouteHandlers[spec.handlerKey]; publicHandler != nil {
+				publicHandler.ServeHTTP(w, r)
 				return
 			}
-			if user.User.User.MustChangePassword {
-				writeAuthCodeError(w, http.StatusForbidden, "password_change_required", "password change required")
+		}
+
+		if spec, ok := apiRouteMetadata.match(r.Method, r.URL.Path); ok {
+			switch spec.middlewareProfile {
+			case routeMiddlewareWebSocketUpgrade:
+				if wsHandler == nil {
+					break
+				}
+				// WebSocket upgrades must bypass the JSON/logger middleware chain because
+				// the wrapped ResponseWriter does not expose the hijacker interface.
+				authenticatedRequest, user, _, ok := AuthenticateUserRequest(w, r, routerOpts.auth)
+				if !ok {
+					return
+				}
+				if user.User.User.MustChangePassword {
+					writeAuthCodeError(w, http.StatusForbidden, "password_change_required", "password change required")
+					return
+				}
+				if !requireAnyPermission(w, routerOpts.auth, user, spec.methodPolicies[r.Method]) {
+					return
+				}
+				wsHandler.ServeHTTP(w, authenticatedRequest)
+				return
+			case routeMiddlewareBinaryDownload:
+				downloadHandler.ServeHTTP(w, r)
+				return
+			case routeMiddlewareRestoreUpload:
+				restoreLimit := service.DefaultRestoreArchiveLimits.MaxCompressedBytes
+				if instanceBackupService != nil {
+					restoreLimit = instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
+				}
+				applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, restoreLimit+restoreMultipartEnvelopeOverheadBytes).ServeHTTP(w, r)
 				return
 			}
-			if !requireAnyPermission(w, routerOpts.auth, user, []string{domain.PermissionTopologyRead}) {
-				return
-			}
-			wsHandler.ServeHTTP(w, authenticatedRequest)
-			return
-		}
-
-		// File download bypasses JSON content-type middleware
-		if strings.HasSuffix(r.URL.Path, "/download") && strings.HasPrefix(r.URL.Path, "/api/v1/backup-files/") {
-			downloadHandler.ServeHTTP(w, r)
-			return
-		}
-
-		// Instance backup download bypasses JSON content-type and body size middleware
-		if strings.HasSuffix(r.URL.Path, "/download") && strings.HasPrefix(r.URL.Path, "/api/v1/instance-backups/") {
-			downloadHandler.ServeHTTP(w, r)
-			return
-		}
-
-		// Instance backup restore bypasses JSON content-type but keeps a restore-specific body cap.
-		if r.URL.Path == "/api/v1/instance-backups/restore" && r.Method == http.MethodPost {
-			restoreLimit := service.DefaultRestoreArchiveLimits.MaxCompressedBytes
-			if instanceBackupService != nil {
-				restoreLimit = instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
-			}
-			applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, restoreLimit+restoreMultipartEnvelopeOverheadBytes).ServeHTTP(w, r)
-			return
-		}
-
-		// Bridge binary download bypasses JSON content-type and body size middleware
-		if strings.HasPrefix(r.URL.Path, "/api/v1/bridge/download/") && r.Method == http.MethodGet {
-			downloadHandler.ServeHTTP(w, r)
-			return
 		}
 
 		handler.ServeHTTP(w, r)

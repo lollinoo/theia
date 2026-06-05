@@ -89,3 +89,38 @@ func TestIsAuthRouteUsesRouteMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestRouteMetadataBuildsServeMuxRegistrations(t *testing.T) {
+	handlers := make(map[routeHandlerKey]http.Handler)
+	for _, spec := range apiRouteSpecs {
+		handlers[spec.handlerKey] = http.NotFoundHandler()
+	}
+
+	registrations, err := routeMuxRegistrations(apiRouteSpecs, handlers)
+	if err != nil {
+		t.Fatalf("routeMuxRegistrations() error = %v", err)
+	}
+	if len(registrations) == 0 {
+		t.Fatal("routeMuxRegistrations() returned no registrations")
+	}
+
+	seenPatterns := make(map[string]struct{}, len(registrations))
+	for _, registration := range registrations {
+		if registration.pattern == "" {
+			t.Fatal("registration has empty pattern")
+		}
+		if registration.handler == nil {
+			t.Fatalf("registration %s has nil handler", registration.pattern)
+		}
+		if _, exists := seenPatterns[registration.pattern]; exists {
+			t.Fatalf("duplicate mux registration for %s", registration.pattern)
+		}
+		seenPatterns[registration.pattern] = struct{}{}
+	}
+
+	for _, spec := range apiRouteSpecs {
+		if _, ok := seenPatterns[spec.serveMuxPattern]; !ok {
+			t.Fatalf("route %s serveMuxPattern %s was not registered", spec.name, spec.serveMuxPattern)
+		}
+	}
+}
