@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"log"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -147,11 +146,7 @@ func (p *Poller) getWorkerPoolSize() int {
 	if err != nil {
 		return 5 // default
 	}
-	size, err := strconv.Atoi(val)
-	if err != nil || size <= 0 {
-		return 5
-	}
-	return size
+	return domain.CoerceConstrainedInt(domain.SettingSNMPWorkerPoolSize, val, 5)
 }
 
 // getPingTimeout returns the timeout for TCP reachability checks on virtual
@@ -162,9 +157,6 @@ func (p *Poller) getPingTimeout() time.Duration {
 	if err != nil {
 		return 5 * time.Second // default: 5s for TCP ping
 	}
-	secs, err := strconv.Atoi(val)
-	if err != nil || secs <= 0 {
-		return 5 * time.Second
-	}
+	secs := domain.CoerceConstrainedInt(domain.SettingSNMPTimeout, val, 5)
 	return time.Duration(secs) * time.Second
 }

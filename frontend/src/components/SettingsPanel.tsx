@@ -89,6 +89,8 @@ interface WorkerSetting {
   key: WorkerSettingKey;
   label: string;
   defaultValue: string;
+  min: number;
+  max: number;
 }
 
 interface WorkerSettingGroup {
@@ -104,21 +106,29 @@ const WORKER_SETTING_GROUPS: readonly WorkerSettingGroup[] = [
         key: 'polling_essential_workers',
         label: 'Essential Workers',
         defaultValue: '64',
+        min: 1,
+        max: 256,
       },
       {
         key: 'snmp_worker_pool_performance_size',
         label: 'Performance Pool',
         defaultValue: '3',
+        min: 1,
+        max: 128,
       },
       {
         key: 'snmp_worker_pool_operational_size',
         label: 'Operational Pool',
         defaultValue: '1',
+        min: 1,
+        max: 128,
       },
       {
         key: 'snmp_worker_pool_static_size',
         label: 'Static Pool',
         defaultValue: '1',
+        min: 1,
+        max: 128,
       },
     ],
   },
@@ -129,21 +139,29 @@ const WORKER_SETTING_GROUPS: readonly WorkerSettingGroup[] = [
         key: 'polling_max_workers_per_device',
         label: 'Max Workers Per Device',
         defaultValue: '1',
+        min: 1,
+        max: 32,
       },
       {
         key: 'polling_max_workers_per_site',
         label: 'Max Workers Per Site',
         defaultValue: '16',
+        min: 1,
+        max: 256,
       },
       {
         key: 'polling_max_workers_per_subnet',
         label: 'Max Workers Per Subnet',
         defaultValue: '8',
+        min: 1,
+        max: 256,
       },
       {
         key: 'polling_max_inflight_per_snmp_profile',
         label: 'Max Inflight Per SNMP Profile',
         defaultValue: '16',
+        min: 1,
+        max: 256,
       },
     ],
   },
@@ -377,20 +395,23 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 2000);
   }
 
-  function validatePositiveInteger(value: string): string | null {
+  function validateIntegerRange(value: string, min: number, max: number): string | null {
     const trimmed = value.trim();
-    if (!/^\d+$/.test(trimmed)) return 'Must be a positive integer';
-    if (parseInt(trimmed, 10) <= 0) return 'Must be greater than 0';
+    if (!/^\d+$/.test(trimmed)) return 'Must be a valid integer';
+    const parsed = parseInt(trimmed, 10);
+    if (parsed < min || parsed > max) return `Must be between ${min} and ${max}`;
     return null;
   }
 
   function handleWorkerSettingChange(key: WorkerSettingKey, value: string) {
+    const setting = WORKER_SETTINGS.find((candidate) => candidate.key === key);
+    if (!setting) return;
     setWorkerSettings((prev) => ({ ...prev, [key]: value }));
     if (workerTimerRefs.current[key] !== null) {
       window.clearTimeout(workerTimerRefs.current[key]);
     }
 
-    const err = validatePositiveInteger(value);
+    const err = validateIntegerRange(value, setting.min, setting.max);
     if (err) {
       setFieldError(key, err);
       return;
@@ -405,8 +426,9 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
 
   function schedulePollingUpdate(rawValue: string) {
     if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
-    const numVal = parseInt(rawValue, 10);
-    if (!Number.isFinite(numVal) || numVal < 5 || numVal > 3600) return;
+    const trimmed = rawValue.trim();
+    const numVal = parseInt(trimmed, 10);
+    if (!/^\d+$/.test(trimmed) || numVal < 5 || numVal > 3600) return;
     pollingTimerRef.current = window.setTimeout(() => {
       void updateSetting('polling_interval_seconds', String(numVal)).then(() =>
         showSaved(setSavedPolling, savedPollingTimerRef),
@@ -485,8 +507,9 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     setBridgePort(value);
     setFieldError('bridgePort', null);
     if (bridgePortTimerRef.current !== null) window.clearTimeout(bridgePortTimerRef.current);
-    const num = parseInt(value, 10);
-    if (!Number.isFinite(num) || num < 1 || num > 65535) {
+    const trimmed = value.trim();
+    const num = parseInt(trimmed, 10);
+    if (!/^\d+$/.test(trimmed) || num < 1 || num > 65535) {
       setFieldError('bridgePort', 'Bridge port must be an integer between 1 and 65535');
       return;
     }
@@ -519,12 +542,16 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
         <input
           id={inputId}
           type="number"
-          min={1}
+          min={setting.min}
+          max={setting.max}
           step={1}
           value={workerSettings[setting.key]}
           onChange={(e) => handleWorkerSettingChange(setting.key, e.target.value)}
           onBlur={() =>
-            setFieldError(setting.key, validatePositiveInteger(workerSettings[setting.key]))
+            setFieldError(
+              setting.key,
+              validateIntegerRange(workerSettings[setting.key], setting.min, setting.max),
+            )
           }
           className={controlClass(Boolean(fieldErrors[setting.key]))}
         />
@@ -589,8 +616,9 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
                         schedulePollingUpdate(e.target.value);
                       }}
                       onBlur={() => {
-                        const num = parseInt(customPolling, 10);
-                        if (!Number.isFinite(num) || num < 5 || num > 3600) {
+                        const trimmed = customPolling.trim();
+                        const num = parseInt(trimmed, 10);
+                        if (!/^\d+$/.test(trimmed) || num < 5 || num > 3600) {
                           setFieldError(
                             'customPolling',
                             'Polling interval must be between 5 and 3600 seconds',
@@ -772,8 +800,9 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
                 placeholder="1337"
                 onChange={(e) => handleBridgePortChange(e.target.value)}
                 onBlur={() => {
-                  const num = parseInt(bridgePort, 10);
-                  if (!Number.isFinite(num) || num < 1 || num > 65535) {
+                  const trimmed = bridgePort.trim();
+                  const num = parseInt(trimmed, 10);
+                  if (!/^\d+$/.test(trimmed) || num < 1 || num > 65535) {
                     setFieldError(
                       'bridgePort',
                       'Bridge port must be an integer between 1 and 65535',
@@ -895,7 +924,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
                     <input
                       type="number"
                       min={1}
-                      max={50}
+                      max={365}
                       value={deviceBackupRetention}
                       onChange={(e) => handleDeviceRetentionChange(e.target.value)}
                       className={compactControlClass(Boolean(fieldErrors.deviceBackupRetention))}

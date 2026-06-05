@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -175,12 +176,9 @@ func GetRetentionCount(settingsRepo domain.SettingsRepository) int {
 	if err != nil {
 		return 5
 	}
-	count, err := strconv.Atoi(val)
+	count, err := strconv.Atoi(strings.TrimSpace(val))
 	if err != nil || count < 0 {
 		return 5
 	}
-	if count < 1 {
-		return 1
-	}
-	return count
+	return domain.CoerceConstrainedInt(domain.SettingInstanceBackupRetentionCount, val, 5)
 }

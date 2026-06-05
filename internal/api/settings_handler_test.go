@@ -262,6 +262,161 @@ func TestSettingsHandler_NumericSetting_InvalidValue_400(t *testing.T) {
 	}
 }
 
+func TestSettingsHandler_BoundedIntegerSettings_ValidBoundariesAccepted(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		min  string
+		max  string
+	}{
+		{name: "polling interval", key: domain.SettingPollingInterval, min: "5", max: "3600"},
+		{name: "legacy snmp worker pool", key: domain.SettingSNMPWorkerPoolSize, min: "1", max: "128"},
+		{name: "performance worker pool", key: domain.SettingSNMPWorkerPoolPerformance, min: "1", max: "128"},
+		{name: "operational worker pool", key: domain.SettingSNMPWorkerPoolOperational, min: "1", max: "128"},
+		{name: "static worker pool", key: domain.SettingSNMPWorkerPoolStatic, min: "1", max: "128"},
+		{name: "snmp timeout", key: domain.SettingSNMPTimeout, min: "1", max: "120"},
+		{name: "snmp retries", key: domain.SettingSNMPRetries, min: "0", max: "10"},
+		{name: "essential workers", key: domain.SettingPollingEssentialWorkers, min: "1", max: "256"},
+		{name: "workers per site", key: domain.SettingPollingMaxWorkersPerSite, min: "1", max: "256"},
+		{name: "workers per subnet", key: domain.SettingPollingMaxWorkersPerSubnet, min: "1", max: "256"},
+		{name: "workers per device", key: domain.SettingPollingMaxWorkersPerDevice, min: "1", max: "32"},
+		{name: "inflight per profile", key: domain.SettingPollingMaxInflightPerProfile, min: "1", max: "256"},
+		{name: "essential timeout", key: domain.SettingPollingEssentialTimeoutMillis, min: "100", max: "30000"},
+		{name: "essential retries", key: domain.SettingPollingEssentialRetries, min: "0", max: "10"},
+		{name: "websocket coalesce", key: domain.SettingPollingWebSocketCoalesceMS, min: "50", max: "5000"},
+		{name: "persistence batch", key: domain.SettingPollingPersistenceBatchMS, min: "100", max: "10000"},
+		{name: "instance retention", key: domain.SettingInstanceBackupRetentionCount, min: "1", max: "365"},
+		{name: "device retention", key: domain.SettingDeviceBackupRetentionCount, min: "1", max: "365"},
+		{name: "bridge port", key: domain.SettingBridgePort, min: "1", max: "65535"},
+	}
+
+	for _, tt := range tests {
+		for _, value := range []string{tt.min, tt.max} {
+			t.Run(tt.name+" "+value, func(t *testing.T) {
+				repo := newMockSettingsRepo()
+				h := NewSettingsHandler(repo)
+				req := httptest.NewRequest(
+					http.MethodPut,
+					"/api/v1/settings/"+tt.key,
+					strings.NewReader(`{"value":" `+value+` "}`),
+				)
+				rec := httptest.NewRecorder()
+
+				h.HandleUpdate(rec, req)
+
+				if rec.Code != http.StatusOK {
+					t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+				}
+				got, _ := repo.Get(tt.key)
+				if got != strings.TrimSpace(value) {
+					t.Fatalf("expected %s=%s, got %s", tt.key, strings.TrimSpace(value), got)
+				}
+			})
+		}
+	}
+}
+
+func TestSettingsHandler_BoundedIntegerSettings_OutOfRangeRejected(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+		want  string
+	}{
+		{name: "below polling interval", key: domain.SettingPollingInterval, value: "4", want: "polling_interval_seconds must be between 5 and 3600"},
+		{name: "above polling interval", key: domain.SettingPollingInterval, value: "3601", want: "polling_interval_seconds must be between 5 and 3600"},
+		{name: "negative snmp retries", key: domain.SettingSNMPRetries, value: "-1", want: "snmp_retries must be between 0 and 10"},
+		{name: "excess snmp retries", key: domain.SettingSNMPRetries, value: "11", want: "snmp_retries must be between 0 and 10"},
+		{name: "negative essential retries", key: domain.SettingPollingEssentialRetries, value: "-1", want: "polling_essential_retries must be between 0 and 10"},
+		{name: "excess essential retries", key: domain.SettingPollingEssentialRetries, value: "11", want: "polling_essential_retries must be between 0 and 10"},
+		{name: "oversized essential workers", key: domain.SettingPollingEssentialWorkers, value: "257", want: "polling_essential_workers must be between 1 and 256"},
+		{name: "oversized workers per device", key: domain.SettingPollingMaxWorkersPerDevice, value: "33", want: "polling_max_workers_per_device must be between 1 and 32"},
+		{name: "oversized bridge port", key: domain.SettingBridgePort, value: "65536", want: "bridge_port must be between 1 and 65535"},
+		{name: "zero retention", key: domain.SettingInstanceBackupRetentionCount, value: "0", want: "instance_backup_retention_count must be between 1 and 365"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newMockSettingsRepo()
+			h := NewSettingsHandler(repo)
+			req := httptest.NewRequest(
+				http.MethodPut,
+				"/api/v1/settings/"+tt.key,
+				strings.NewReader(`{"value":"`+tt.value+`"}`),
+			)
+			rec := httptest.NewRecorder()
+
+			h.HandleUpdate(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tt.want) {
+				t.Fatalf("expected error containing %q, got: %s", tt.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestSettingsHandler_BoundedIntegerSettings_RejectFloats(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/settings/"+domain.SettingPollingEssentialWorkers,
+		strings.NewReader(`{"value":"1.5"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "polling_essential_workers must be a valid integer") {
+		t.Fatalf("expected integer error, got: %s", rec.Body.String())
+	}
+}
+
+func TestSettingsHandler_BoundedFloatSetting_RangeAndNonFiniteValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		wantStatus int
+		wantError  string
+	}{
+		{name: "minimum", value: " 1.0 ", wantStatus: http.StatusOK},
+		{name: "maximum", value: "5.0", wantStatus: http.StatusOK},
+		{name: "below minimum", value: "0.99", wantStatus: http.StatusBadRequest, wantError: "polling_capacity_safety_margin must be between 1.0 and 5.0"},
+		{name: "above maximum", value: "5.01", wantStatus: http.StatusBadRequest, wantError: "polling_capacity_safety_margin must be between 1.0 and 5.0"},
+		{name: "NaN", value: "NaN", wantStatus: http.StatusBadRequest, wantError: "polling_capacity_safety_margin must be a valid float"},
+		{name: "positive infinity", value: "+Inf", wantStatus: http.StatusBadRequest, wantError: "polling_capacity_safety_margin must be a valid float"},
+		{name: "negative infinity", value: "-Inf", wantStatus: http.StatusBadRequest, wantError: "polling_capacity_safety_margin must be a valid float"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newMockSettingsRepo()
+			h := NewSettingsHandler(repo)
+			req := httptest.NewRequest(
+				http.MethodPut,
+				"/api/v1/settings/"+domain.SettingPollingCapacitySafetyMargin,
+				strings.NewReader(`{"value":"`+tt.value+`"}`),
+			)
+			rec := httptest.NewRecorder()
+
+			h.HandleUpdate(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("expected %d, got %d; body: %s", tt.wantStatus, rec.Code, rec.Body.String())
+			}
+			if tt.wantError != "" && !strings.Contains(rec.Body.String(), tt.wantError) {
+				t.Fatalf("expected error containing %q, got: %s", tt.wantError, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestSettingsHandler_PollingPolicyIntegerSetting_ValidValue_200(t *testing.T) {
 	repo := newMockSettingsRepo()
 	h := NewSettingsHandler(repo)

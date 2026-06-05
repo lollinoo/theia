@@ -2,6 +2,7 @@ package pollingbudget
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/lollinoo/theia/internal/domain"
 )
@@ -105,11 +106,11 @@ func legacyTotal(repo Getter) int {
 	if err != nil {
 		return defaultWorkerPoolSize
 	}
-	size, err := strconv.Atoi(value)
-	if err != nil || size <= 0 {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 {
 		return defaultWorkerPoolSize
 	}
-	return size
+	return domain.CoerceConstrainedInt(domain.SettingSNMPWorkerPoolSize, value, defaultWorkerPoolSize)
 }
 
 func readPositive(repo Getter, key string) (int, bool) {
@@ -117,11 +118,11 @@ func readPositive(repo Getter, key string) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	parsed, err := strconv.Atoi(value)
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || parsed <= 0 {
 		return 0, false
 	}
-	return parsed, true
+	return domain.CoerceConstrainedInt(key, value, 0), true
 }
 
 func defaultSplit(total int) map[domain.VolatilityClass]int {

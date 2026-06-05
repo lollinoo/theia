@@ -36,7 +36,7 @@ async function renderAndWait() {
 
 // --- Gap 9: InstanceBackupManager validation ---
 
-describe('InstanceBackupManager — retention count validated (1-50)', () => {
+describe('InstanceBackupManager — retention count validated (1-365)', () => {
   it('shows error when retention count is set to 0', async () => {
     await renderAndWait();
 
@@ -44,18 +44,18 @@ describe('InstanceBackupManager — retention count validated (1-50)', () => {
     fireEvent.change(retentionInput, { target: { value: '0' } });
 
     await waitFor(() => {
-      expect(screen.getByText('Retention count must be between 1 and 50')).toBeInTheDocument();
+      expect(screen.getByText('Retention count must be between 1 and 365')).toBeInTheDocument();
     });
   });
 
-  it('shows error when retention count is set to 51', async () => {
+  it('shows error when retention count is set to 366', async () => {
     await renderAndWait();
 
     const retentionInput = screen.getByDisplayValue('5');
-    fireEvent.change(retentionInput, { target: { value: '51' } });
+    fireEvent.change(retentionInput, { target: { value: '366' } });
 
     await waitFor(() => {
-      expect(screen.getByText('Retention count must be between 1 and 50')).toBeInTheDocument();
+      expect(screen.getByText('Retention count must be between 1 and 365')).toBeInTheDocument();
     });
   });
 
