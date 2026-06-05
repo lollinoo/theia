@@ -269,6 +269,19 @@ Required operator inputs for the standard bundled PostgreSQL stack:
 - `THEIA_DB_DSN`
 - `POSTGRES_PASSWORD` for the bundled `postgres` service
 
+If you restore or start against data that was previously protected by the
+legacy `THEIA_ENCRYPTION_KEY`, keep that old secret configured as key id
+`legacy` until startup has rewrapped credentials with the active key and you
+have created and restore-validated a fresh backup:
+
+```text
+THEIA_ENCRYPTION_KEY_ID=kid-prod-2026-06
+THEIA_ENCRYPTION_KEYS=kid-prod-2026-06=<new-secret>,legacy=<old-THEIA_ENCRYPTION_KEY>
+```
+
+Alternatively, while the new keyring variables are set, `THEIA_ENCRYPTION_KEY`
+is still accepted as a compatibility fallback and is loaded as key id `legacy`.
+
 For bundled PostgreSQL, use this DSN shape:
 
 ```text
@@ -364,6 +377,19 @@ Required operator inputs for the standard bundled PostgreSQL stack:
 - `THEIA_METRICS_TOKEN`
 - `THEIA_DB_DSN`
 - `POSTGRES_PASSWORD` for the bundled `postgres` service
+
+If you restore or start against data that was previously protected by the
+legacy `THEIA_ENCRYPTION_KEY`, keep that old secret configured as key id
+`legacy` until startup has rewrapped credentials with the active key and you
+have created and restore-validated a fresh backup:
+
+```text
+THEIA_ENCRYPTION_KEY_ID=kid-staging-2026-06
+THEIA_ENCRYPTION_KEYS=kid-staging-2026-06=<new-secret>,legacy=<old-THEIA_ENCRYPTION_KEY>
+```
+
+Alternatively, while the new keyring variables are set, `THEIA_ENCRYPTION_KEY`
+is still accepted as a compatibility fallback and is loaded as key id `legacy`.
 
 For bundled PostgreSQL, use this DSN shape:
 

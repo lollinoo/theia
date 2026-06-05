@@ -137,7 +137,20 @@ func LoadKeyringFromEnv() (*Keyring, error) {
 	activeID := os.Getenv("THEIA_ENCRYPTION_KEY_ID")
 	keyList := os.Getenv("THEIA_ENCRYPTION_KEYS")
 	if strings.TrimSpace(activeID) != "" || strings.TrimSpace(keyList) != "" {
-		return ParseKeyring(activeID, keyList)
+		keyring, err := ParseKeyring(activeID, keyList)
+		if err != nil {
+			return nil, err
+		}
+		legacySecret := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
+		if legacySecret == "" || keyring.HasKey(LegacyKeyID) {
+			return keyring, nil
+		}
+		secrets := make(map[string]string, len(keyring.keys)+1)
+		for id, secret := range keyring.keys {
+			secrets[id] = secret
+		}
+		secrets[LegacyKeyID] = legacySecret
+		return NewKeyring(keyring.activeID, secrets)
 	}
 
 	legacySecret := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
