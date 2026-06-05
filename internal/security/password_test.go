@@ -69,23 +69,40 @@ func TestPasswordVerifyRejectsMalformedAndUnsupportedHashes(t *testing.T) {
 	}
 }
 
-func TestPasswordPolicyRejectsWeakPasswordsAndAllowsLongPassphrases(t *testing.T) {
-	for _, password := range []string{
-		"short",
-		"password",
-		"theia",
-		"administrator",
-		"123456789012",
-		strings.Repeat("a", MaxPasswordLength+1),
+func TestPasswordPolicyRequiresUserFriendlyComplexityRules(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		password string
+		want     string
+	}{
+		{name: "too short", password: "Aa1!short", want: "10 to 24 characters"},
+		{name: "too long", password: "Aa1!" + strings.Repeat("x", 21), want: "10 to 24 characters"},
+		{name: "missing uppercase", password: "lowercase1!", want: "uppercase letter"},
+		{name: "missing lowercase", password: "UPPERCASE1!", want: "lowercase letter"},
+		{name: "missing number", password: "NoNumber!!", want: "number"},
+		{name: "missing special", password: "NoSpecial12", want: "special character"},
 	} {
-		if err := ValidatePasswordPolicy(password); err == nil {
-			t.Fatalf("ValidatePasswordPolicy(%q) returned nil error", password)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePasswordPolicy(tt.password)
+			if err == nil {
+				t.Fatalf("ValidatePasswordPolicy(%q) returned nil error", tt.password)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ValidatePasswordPolicy(%q) error = %q, want %q", tt.password, err, tt.want)
+			}
+		})
 	}
 
-	longPassphrase := strings.Repeat("correct horse battery staple ", 20)
-	if err := ValidatePasswordPolicy(longPassphrase); err != nil {
-		t.Fatalf("ValidatePasswordPolicy(long passphrase): %v", err)
+	for _, password := range []string{
+		"ValidPass1!",
+		"   ValidPass1!   ",
+		"Password123!",
+	} {
+		t.Run("accepts "+password, func(t *testing.T) {
+			if err := ValidatePasswordPolicy(password); err != nil {
+				t.Fatalf("ValidatePasswordPolicy(%q): %v", password, err)
+			}
+		})
 	}
 }
 

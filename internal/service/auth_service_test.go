@@ -527,7 +527,7 @@ func TestAuthServicePasswordResetTokensExpire(t *testing.T) {
 	h.now = h.now.Add(31 * time.Minute)
 	err = h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
 		Token:       reset.Token,
-		NewPassword: "Another Correct Horse Battery Staple 2026!",
+		NewPassword: "AnotherPass1!",
 	})
 	if !errors.Is(err, ErrPasswordResetExpired) {
 		t.Fatalf("CompletePasswordReset expired error = %v, want ErrPasswordResetExpired", err)
@@ -560,7 +560,7 @@ func TestAuthServiceCompletePasswordResetUpdatesPasswordAndRevokesSessions(t *te
 		t.Fatalf("CreatePasswordResetToken: %v", err)
 	}
 
-	newPassword := "Reset Correct Horse Battery Staple 2026!"
+	newPassword := "ResetPass1!"
 	if err := h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
 		Token:       reset.Token,
 		NewPassword: newPassword,
@@ -597,6 +597,38 @@ func TestAuthServiceCompletePasswordResetUpdatesPasswordAndRevokesSessions(t *te
 	}
 }
 
+func TestAuthServiceCompletePasswordResetRejectsCurrentPassword(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	currentPassword := "CurrentPass1!"
+	user := h.addUser(t, "reset-same", "reset-same@example.test", currentPassword, domain.UserStatusActive)
+	reset, err := h.service.CreatePasswordResetToken(context.Background(), PasswordResetCreateInput{
+		UserID: user.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreatePasswordResetToken: %v", err)
+	}
+
+	err = h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
+		Token:       reset.Token,
+		NewPassword: currentPassword,
+	})
+	if !errors.Is(err, ErrPasswordReuse) {
+		t.Fatalf("CompletePasswordReset error = %v, want ErrPasswordReuse", err)
+	}
+	storedReset := h.store.passwordResetByHash(t, security.HashToken(reset.Token, h.sessionSecret))
+	if storedReset.UsedAt != nil {
+		t.Fatalf("reset token was consumed at %#v", storedReset.UsedAt)
+	}
+	storedUser := h.store.user(t, user.ID)
+	ok, err := security.VerifyPassword(currentPassword, storedUser.PasswordHash)
+	if err != nil {
+		t.Fatalf("VerifyPassword current password: %v", err)
+	}
+	if !ok {
+		t.Fatal("same-password reset changed the stored password")
+	}
+}
+
 func TestAuthServiceCompletePasswordResetRejectsReplay(t *testing.T) {
 	h := newAuthServiceHarness(t)
 	user := h.addUser(t, "reset-replay", "reset-replay@example.test", testAuthPassword, domain.UserStatusActive)
@@ -607,7 +639,7 @@ func TestAuthServiceCompletePasswordResetRejectsReplay(t *testing.T) {
 		t.Fatalf("CreatePasswordResetToken: %v", err)
 	}
 
-	firstPassword := "First Reset Correct Horse Battery Staple 2026!"
+	firstPassword := "FirstReset1!"
 	if err := h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
 		Token:       reset.Token,
 		NewPassword: firstPassword,
@@ -617,7 +649,7 @@ func TestAuthServiceCompletePasswordResetRejectsReplay(t *testing.T) {
 
 	err = h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
 		Token:       reset.Token,
-		NewPassword: "Replay Correct Horse Battery Staple 2026!",
+		NewPassword: "ReplayPass1!",
 	})
 	if !errors.Is(err, ErrPasswordResetExpired) {
 		t.Fatalf("CompletePasswordReset replay error = %v, want ErrPasswordResetExpired", err)
@@ -658,7 +690,7 @@ func TestAuthServicePasswordChangeRevokesOtherSessionsAndClearsMustChange(t *tes
 		t.Fatalf("CreateSession other: %v", err)
 	}
 
-	newPassword := "New Correct Horse Battery Staple 2026!"
+	newPassword := "NewPass123!"
 	if err := h.service.ChangePassword(context.Background(), PasswordChangeInput{
 		UserID:           user.ID,
 		CurrentSessionID: &login.Session.ID,
@@ -690,6 +722,29 @@ func TestAuthServicePasswordChangeRevokesOtherSessionsAndClearsMustChange(t *tes
 	revokedOther := h.store.session(t, otherSession.ID)
 	if revokedOther.RevokedAt == nil || !revokedOther.RevokedAt.Equal(h.now) {
 		t.Fatalf("other session RevokedAt = %#v, want %s", revokedOther.RevokedAt, h.now)
+	}
+}
+
+func TestAuthServicePasswordChangeRejectsCurrentPassword(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	currentPassword := "CurrentPass1!"
+	user := h.addUser(t, "same-password", "same-password@example.test", currentPassword, domain.UserStatusActive)
+
+	err := h.service.ChangePassword(context.Background(), PasswordChangeInput{
+		UserID:          user.ID,
+		CurrentPassword: currentPassword,
+		NewPassword:     currentPassword,
+	})
+	if !errors.Is(err, ErrPasswordReuse) {
+		t.Fatalf("ChangePassword error = %v, want ErrPasswordReuse", err)
+	}
+	stored := h.store.user(t, user.ID)
+	ok, err := security.VerifyPassword(currentPassword, stored.PasswordHash)
+	if err != nil {
+		t.Fatalf("VerifyPassword current password: %v", err)
+	}
+	if !ok {
+		t.Fatal("same-password change changed the stored password")
 	}
 }
 
@@ -816,11 +871,12 @@ func TestAuthServiceAdminCreateUserSetsSafeDefaultsAndAudits(t *testing.T) {
 	actor := h.authenticatedUser(t, actorUser.ID)
 
 	created, err := h.service.CreateAdminUser(ctx, actor, AdminCreateUserInput{
-		Username:    "new-admin",
-		Email:       "new-admin@example.test",
-		DisplayName: "New Admin",
-		Password:    "Created Correct Horse Battery 2026!",
-		Roles:       []string{domain.RoleAdmin},
+		Username:           "new-admin",
+		Email:              "new-admin@example.test",
+		DisplayName:        "New Admin",
+		Password:           "CreatedUser1!",
+		MustChangePassword: true,
+		Roles:              []string{domain.RoleAdmin},
 	})
 	if err != nil {
 		t.Fatalf("CreateAdminUser: %v", err)
@@ -832,7 +888,7 @@ func TestAuthServiceAdminCreateUserSetsSafeDefaultsAndAudits(t *testing.T) {
 		t.Fatalf("CreatedBy = %#v, want actor %s", created.User.CreatedBy, actorUser.ID)
 	}
 	stored := h.store.user(t, created.User.ID)
-	ok, err := security.VerifyPassword("Created Correct Horse Battery 2026!", stored.PasswordHash)
+	ok, err := security.VerifyPassword("CreatedUser1!", stored.PasswordHash)
 	if err != nil {
 		t.Fatalf("VerifyPassword: %v", err)
 	}
@@ -849,6 +905,37 @@ func TestAuthServiceAdminCreateUserSetsSafeDefaultsAndAudits(t *testing.T) {
 	assertAuditAction(t, h.store.auditLogs(), "admin.user_created")
 }
 
+func TestAuthServiceAdminCreateUserBypassesInitialPasswordPolicyWhenChangeRequired(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, actorUser.ID, domain.RoleSuperAdmin)
+	actor := h.authenticatedUser(t, actorUser.ID)
+
+	created, err := h.service.CreateAdminUser(ctx, actor, AdminCreateUserInput{
+		Username:           "new-force-change",
+		Email:              "new-force-change@example.test",
+		Password:           "short",
+		MustChangePassword: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateAdminUser with required change: %v", err)
+	}
+	if !created.User.MustChangePassword {
+		t.Fatal("created user MustChangePassword = false, want true")
+	}
+
+	_, err = h.service.CreateAdminUser(ctx, actor, AdminCreateUserInput{
+		Username:           "new-no-change",
+		Email:              "new-no-change@example.test",
+		Password:           "short",
+		MustChangePassword: false,
+	})
+	if !errors.Is(err, ErrPasswordPolicyViolation) {
+		t.Fatalf("CreateAdminUser without required change error = %v, want ErrPasswordPolicyViolation", err)
+	}
+}
+
 func TestAuthServiceAdminCreateUserWithRolesRequiresRolesAssign(t *testing.T) {
 	h := newAuthServiceHarness(t)
 	ctx := context.Background()
@@ -863,10 +950,11 @@ func TestAuthServiceAdminCreateUserWithRolesRequiresRolesAssign(t *testing.T) {
 	}
 
 	_, err := h.service.CreateAdminUser(ctx, actor, AdminCreateUserInput{
-		Username: "created-with-role",
-		Email:    "created-with-role@example.test",
-		Password: "Created Correct Horse Battery 2026!",
-		Roles:    []string{domain.RoleViewer},
+		Username:           "created-with-role",
+		Email:              "created-with-role@example.test",
+		Password:           "CreatedUser1!",
+		MustChangePassword: true,
+		Roles:              []string{domain.RoleViewer},
 	})
 	if !errors.Is(err, ErrPermissionDenied) {
 		t.Fatalf("CreateAdminUser error = %v, want ErrPermissionDenied", err)

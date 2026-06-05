@@ -3,7 +3,7 @@ import { request, type APIRequestContext } from '@playwright/test';
 const backendBaseURL = 'http://127.0.0.1:38080';
 const authStorageStatePath = '/tmp/theia-playwright-auth.json';
 const bootstrapPassword = 'theia';
-const e2ePassword = 'Correct Horse Battery Staple 2026!';
+const e2ePassword = 'CorrectHorse2026!';
 
 const deviceSeedPayload = {
   hostname: 'router-a',

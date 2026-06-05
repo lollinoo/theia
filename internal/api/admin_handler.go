@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/security"
 	"github.com/lollinoo/theia/internal/service"
 )
 
@@ -172,21 +173,23 @@ func (h *AdminHandler) handleCreateUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Username    string   `json:"username"`
-		Email       string   `json:"email"`
-		DisplayName string   `json:"display_name"`
-		Password    string   `json:"password"`
-		Roles       []string `json:"roles"`
+		Username           string   `json:"username"`
+		Email              string   `json:"email"`
+		DisplayName        string   `json:"display_name"`
+		Password           string   `json:"password"`
+		MustChangePassword bool     `json:"must_change_password"`
+		Roles              []string `json:"roles"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
 	user, err := h.auth.CreateAdminUser(r.Context(), actor, service.AdminCreateUserInput{
-		Username:    req.Username,
-		Email:       req.Email,
-		DisplayName: req.DisplayName,
-		Password:    req.Password,
-		Roles:       req.Roles,
+		Username:           req.Username,
+		Email:              req.Email,
+		DisplayName:        req.DisplayName,
+		Password:           req.Password,
+		MustChangePassword: req.MustChangePassword,
+		Roles:              req.Roles,
 	})
 	if err != nil {
 		writeAdminError(w, err)
@@ -554,7 +557,9 @@ func writeAdminError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrPermissionDenied):
 		writeAuthCodeError(w, http.StatusForbidden, "permission_denied", "permission denied")
-	case errors.Is(err, service.ErrPasswordPolicyViolation), errors.Is(err, service.ErrAdminInvalidInput):
+	case errors.Is(err, service.ErrPasswordPolicyViolation):
+		writeError(w, http.StatusBadRequest, security.PasswordPolicyMessage)
+	case errors.Is(err, service.ErrAdminInvalidInput):
 		writeError(w, http.StatusBadRequest, "invalid request")
 	case errors.Is(err, domain.ErrAuthUserNotFound), errors.Is(err, domain.ErrAuthRoleNotFound):
 		writeError(w, http.StatusNotFound, "not found")

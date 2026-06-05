@@ -27,11 +27,12 @@ type AdminDashboardResult struct {
 
 // AdminCreateUserInput contains admin-supplied user creation fields.
 type AdminCreateUserInput struct {
-	Username    string
-	Email       string
-	DisplayName string
-	Password    string
-	Roles       []string
+	Username           string
+	Email              string
+	DisplayName        string
+	Password           string
+	MustChangePassword bool
+	Roles              []string
 }
 
 // AdminUpdateUserInput contains safe mutable user profile fields.
@@ -101,8 +102,10 @@ func (s *AuthService) CreateAdminUser(ctx context.Context, actor *AuthenticatedU
 	if username == "" || email == "" || strings.TrimSpace(input.Password) == "" {
 		return nil, ErrAdminInvalidInput
 	}
-	if err := security.ValidatePasswordPolicy(input.Password); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPasswordPolicyViolation, err)
+	if !input.MustChangePassword {
+		if err := security.ValidatePasswordPolicy(input.Password); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrPasswordPolicyViolation, err)
+		}
 	}
 	roleIDs, err := s.validateAdminRoleIDs(ctx, actor, input.Roles)
 	if err != nil {
@@ -123,7 +126,7 @@ func (s *AuthService) CreateAdminUser(ctx context.Context, actor *AuthenticatedU
 		PasswordHash:       passwordHash,
 		DisplayName:        displayName,
 		Status:             domain.UserStatusActive,
-		MustChangePassword: true,
+		MustChangePassword: input.MustChangePassword,
 		CreatedAt:          now,
 		UpdatedAt:          now,
 		CreatedBy:          actorID,
