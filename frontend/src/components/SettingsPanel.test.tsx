@@ -293,10 +293,10 @@ describe('SettingsPanel — Device Backups schedule dropdown options (Gap 3)', (
   });
 });
 
-// --- Gap 4: Retention input has min=1 max=50 attributes ---
+// --- Gap 4: Retention input has min=1 max=365 attributes ---
 
 describe('SettingsPanel — Device Backups retention input attributes (Gap 4)', () => {
-  it('retention input has min=1 and max=50 after expanding the section', async () => {
+  it('retention input has min=1 and max=365 after expanding the section', async () => {
     render(<SettingsPanel />);
 
     const toggleBtn = screen.getByRole('button', { name: /device backups/i });
@@ -307,15 +307,15 @@ describe('SettingsPanel — Device Backups retention input attributes (Gap 4)', 
     // The retention input is a number input; find it by its label text
     expect(screen.getByText('Keep last N backups per device')).toBeInTheDocument();
 
-    // Find all number inputs and identify the retention one (has min=1, max=50)
+    // Find all number inputs and identify the retention one (has min=1, max=365)
     const numberInputs = screen
       .getAllByRole('spinbutton')
       .filter(
-        (el) => (el as HTMLInputElement).min === '1' && (el as HTMLInputElement).max === '50',
+        (el) => (el as HTMLInputElement).min === '1' && (el as HTMLInputElement).max === '365',
       );
     expect(numberInputs).toHaveLength(1);
     expect((numberInputs[0] as HTMLInputElement).min).toBe('1');
-    expect((numberInputs[0] as HTMLInputElement).max).toBe('50');
+    expect((numberInputs[0] as HTMLInputElement).max).toBe('365');
   });
 });
 
@@ -547,7 +547,27 @@ describe('SettingsPanel — Polling Workers settings', () => {
     expect(updateSetting).toHaveBeenCalledWith('polling_essential_workers', '72');
   });
 
-  it('rejects non-positive worker settings and does not save them', async () => {
+  it('sets worker input min and max attributes from tuning metadata', async () => {
+    render(<SettingsPanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /polling workers/i }));
+      await Promise.resolve();
+    });
+
+    const essentialWorkers = screen.getByLabelText('Essential Workers') as HTMLInputElement;
+    const performancePool = screen.getByLabelText('Performance Pool') as HTMLInputElement;
+    const maxWorkersPerDevice = screen.getByLabelText('Max Workers Per Device') as HTMLInputElement;
+
+    expect(essentialWorkers.min).toBe('1');
+    expect(essentialWorkers.max).toBe('256');
+    expect(performancePool.min).toBe('1');
+    expect(performancePool.max).toBe('128');
+    expect(maxWorkersPerDevice.min).toBe('1');
+    expect(maxWorkersPerDevice.max).toBe('32');
+  });
+
+  it('rejects out-of-range worker settings and does not save them', async () => {
     vi.useFakeTimers();
     const { updateSetting } = await import('../api/client');
     render(<SettingsPanel />);
@@ -559,17 +579,17 @@ describe('SettingsPanel — Polling Workers settings', () => {
 
     const field = screen.getByLabelText('Max Workers Per Device');
     const workerSection = screen.getByText('Polling Workers').closest('div');
-    fireEvent.change(field, { target: { value: '0' } });
+    fireEvent.change(field, { target: { value: '33' } });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
       await Promise.resolve();
     });
 
-    expect(updateSetting).not.toHaveBeenCalledWith('polling_max_workers_per_device', '0');
+    expect(updateSetting).not.toHaveBeenCalledWith('polling_max_workers_per_device', '33');
     expect(workerSection).not.toBeNull();
     expect(
-      within(workerSection as HTMLElement).getByText('Must be greater than 0'),
+      within(workerSection as HTMLElement).getByText('Must be between 1 and 32'),
     ).toBeInTheDocument();
   });
 

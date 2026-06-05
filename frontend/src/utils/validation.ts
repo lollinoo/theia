@@ -210,7 +210,7 @@ export function validateIntervalAllowlist(value: string): string | null {
 }
 
 /**
- * Validates that a retention count is a number between 1 and 50.
+ * Validates that a retention count is a number between 1 and 365.
  * Returns an error message string or null if valid.
  */
 export function validateRetentionCount(value: string): string | null {
@@ -218,8 +218,8 @@ export function validateRetentionCount(value: string): string | null {
   if (isNaN(n)) {
     return 'Retention count must be a number';
   }
-  if (n < 1 || n > 50) {
-    return 'Retention count must be between 1 and 50';
+  if (n < 1 || n > 365) {
+    return 'Retention count must be between 1 and 365';
   }
   return null;
 }

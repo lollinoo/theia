@@ -544,7 +544,7 @@ export function InstanceBackupManager() {
           <input
             type="number"
             min={1}
-            max={50}
+            max={365}
             value={retentionCount}
             onChange={(e) => handleRetentionChange(e.target.value)}
             className={`w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-xs text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none${fieldErrors.retentionCount ? ' border-status-down' : ' border-outline-subtle'}`}

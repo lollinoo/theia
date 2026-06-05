@@ -341,16 +341,16 @@ describe('validateRetentionCount', () => {
     expect(validateRetentionCount('1')).toBeNull();
   });
 
-  it('accepts 50', () => {
-    expect(validateRetentionCount('50')).toBeNull();
+  it('accepts 365', () => {
+    expect(validateRetentionCount('365')).toBeNull();
   });
 
   it('returns error for 0', () => {
-    expect(validateRetentionCount('0')).toBe('Retention count must be between 1 and 50');
+    expect(validateRetentionCount('0')).toBe('Retention count must be between 1 and 365');
   });
 
-  it('returns error for 51', () => {
-    expect(validateRetentionCount('51')).toBe('Retention count must be between 1 and 50');
+  it('returns error for 366', () => {
+    expect(validateRetentionCount('366')).toBe('Retention count must be between 1 and 365');
   });
 
   it('returns error for non-numeric string', () => {
