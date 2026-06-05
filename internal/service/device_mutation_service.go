@@ -415,3 +415,40 @@ func (m *deviceMutationService) GetDevicesByIDs(ctx context.Context, ids []uuid.
 	}
 	return devices, nil
 }
+
+func (m *deviceMutationService) GetTopologyDevicesByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Device, error) {
+	_ = ctx
+	if len(ids) == 0 {
+		return []domain.Device{}, nil
+	}
+
+	type topologyDeviceBatchRepository interface {
+		GetByIDsForTopology([]uuid.UUID) ([]domain.Device, error)
+	}
+
+	if topologyRepo, ok := m.deviceRepo.(topologyDeviceBatchRepository); ok {
+		devices, err := topologyRepo.GetByIDsForTopology(ids)
+		if err != nil {
+			return nil, err
+		}
+		m.normalizeTopologyDevices(devices)
+		return devices, nil
+	}
+
+	devices, err := m.GetDevicesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range devices {
+		devices[i].SNMPCredentials = domain.SNMPCredentials{}
+	}
+	return devices, nil
+}
+
+func (m *deviceMutationService) normalizeTopologyDevices(devices []domain.Device) {
+	for i := range devices {
+		domain.NormalizeDevicePollingEnabled(&devices[i])
+		domain.NormalizeVirtualDevice(&devices[i])
+		m.parent.populateEffectiveTopologyDiscoveryMode(&devices[i])
+	}
+}

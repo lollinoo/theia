@@ -9,7 +9,7 @@ import (
 
 func TestSNMPProfileRepoEncryptionRoundTrip(t *testing.T) {
 	db := setupTestDB(t)
-	repo := NewSNMPProfileRepo(db, testKey)
+	repo := NewSNMPProfileRepo(db, testKeyring)
 
 	profile := &domain.SNMPProfile{
 		Name:        "test-profile-v3",
@@ -67,7 +67,7 @@ func TestSNMPProfileRepoEncryptionRoundTrip(t *testing.T) {
 
 func TestSNMPProfileRepoV2cEncryptionRoundTrip(t *testing.T) {
 	db := setupTestDB(t)
-	repo := NewSNMPProfileRepo(db, testKey)
+	repo := NewSNMPProfileRepo(db, testKeyring)
 
 	profile := &domain.SNMPProfile{
 		Name:        "test-profile-v2c",
@@ -107,7 +107,7 @@ func TestSNMPProfileRepoV2cEncryptionRoundTrip(t *testing.T) {
 
 func TestSNMPProfileRepoGetAll(t *testing.T) {
 	db := setupTestDB(t)
-	repo := NewSNMPProfileRepo(db, testKey)
+	repo := NewSNMPProfileRepo(db, testKeyring)
 
 	// Create two profiles
 	for _, name := range []string{"profile-A", "profile-B"} {

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/lollinoo/theia/internal/crypto"
 )
 
 // readRestoreManifest loads the archive manifest from the extracted restore directory.
@@ -37,13 +39,45 @@ func manifestDatabaseEntryName(manifest backupManifest) (string, error) {
 	return postgresArchiveDBEntry, nil
 }
 
-// validateRestoreManifestEncryptionKey ensures the archive was created with the current key.
-func validateRestoreManifestEncryptionKey(manifest backupManifest, encryptionKey []byte) error {
-	currentKeyHash := computeEncryptionKeyHash(encryptionKey)
+// validateRestoreManifestEncryptionKey ensures the configured keyring can decrypt the archive.
+func validateRestoreManifestEncryptionKey(manifest backupManifest, encryptionKey any) error {
+	if manifest.Encryption != nil {
+		keyring, ok := encryptionKey.(*crypto.Keyring)
+		if !ok || keyring == nil {
+			return fmt.Errorf("archive requires encryption key metadata, but no encryption keyring is configured")
+		}
+		for _, keyID := range manifest.Encryption.RequiredKeyIDs {
+			if !keyring.HasKey(keyID) {
+				return fmt.Errorf("archive requires encryption key id %s, but it is not configured", keyID)
+			}
+		}
+		return nil
+	}
+
+	currentKeyHash, ok := encryptionKeyHashForConfiguredKey(encryptionKey, manifest.EncryptionKeyHash)
+	if !ok {
+		return fmt.Errorf("encryption key mismatch: backup was created with a different THEIA_ENCRYPTION_KEY")
+	}
 	if manifest.EncryptionKeyHash != currentKeyHash {
 		return fmt.Errorf("encryption key mismatch: backup was created with a different THEIA_ENCRYPTION_KEY")
 	}
 	return nil
+}
+
+func encryptionKeyHashForConfiguredKey(encryptionKey any, requiredHash string) (string, bool) {
+	switch key := encryptionKey.(type) {
+	case []byte:
+		return computeEncryptionKeyHash(key), true
+	case *crypto.Keyring:
+		for _, hash := range key.LegacyKeyHashes() {
+			if hash == requiredHash {
+				return hash, true
+			}
+		}
+		return "", false
+	default:
+		return "", false
+	}
 }
 
 // validateRestoreManifestMigrationCompatibility prevents restoring archives from newer schemas.

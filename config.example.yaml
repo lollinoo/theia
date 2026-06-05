@@ -9,7 +9,8 @@
 #   THEIA_LISTEN_ADDR, THEIA_DB_DSN, THEIA_DATA_DIR, THEIA_LOG_LEVEL,
 #   THEIA_BRIDGE_BINARIES_DIR, THEIA_DEPLOYMENT_ENV, THEIA_SESSION_SECRET,
 #   THEIA_SESSION_TTL_MINUTES, THEIA_PASSWORD_RESET_TTL_MINUTES,
-#   THEIA_METRICS_TOKEN, THEIA_ALLOWED_ORIGINS
+#   THEIA_METRICS_TOKEN, THEIA_ALLOWED_ORIGINS,
+#   THEIA_ENCRYPTION_KEY_ID, THEIA_ENCRYPTION_KEYS
 # =============================================================================
 
 # Address and port the HTTP server listens on.
@@ -30,6 +31,20 @@ bridge_binaries_dir: ""
 
 # Set to production or staging to require secret validation.
 deployment_env: ""
+
+# Credential encryption keyring is configured through environment variables:
+#   THEIA_ENCRYPTION_KEY_ID=kid-2026-06
+#   THEIA_ENCRYPTION_KEYS=kid-2026-05=<old-secret>,kid-2026-06=<new-secret>
+#
+# Rotation:
+#   1. Add a new key with a new key ID to THEIA_ENCRYPTION_KEYS.
+#   2. Set THEIA_ENCRYPTION_KEY_ID to the new key ID.
+#   3. Start Theia so startup migration rewraps stored credentials.
+#   4. Keep old key IDs configured through the backup/restore validation window.
+#   5. Remove old keys only after migration, a fresh backup, and restore validation pass.
+#
+# Legacy THEIA_ENCRYPTION_KEY is still accepted for existing deployments, but
+# new deployments should use the keyring variables above.
 
 # Password-session signing and token hashing secret. Required whenever the backend initializes first-party password auth.
 # Keep this blank in tracked files and provide it through local env or secrets.

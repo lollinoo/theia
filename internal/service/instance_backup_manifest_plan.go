@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/lollinoo/theia/internal/crypto"
 )
 
 type instanceBackupArchiveManifestInput struct {
@@ -16,6 +18,7 @@ type instanceBackupArchiveManifestInput struct {
 	totalSourceBytes   int64
 	archiveFileEntries int
 	encryptionKey      []byte
+	encryptionKeyring  *crypto.Keyring
 	limits             BackupArchiveLimits
 }
 
@@ -29,16 +32,24 @@ type instanceBackupArchiveManifestPlan struct {
 func buildInstanceBackupArchiveManifestPlan(input instanceBackupArchiveManifestInput) (instanceBackupArchiveManifestPlan, error) {
 	var plan instanceBackupArchiveManifestPlan
 	manifest := backupManifest{
-		Version:           1,
-		AppVersion:        input.appVersion,
-		GitCommit:         input.gitCommit,
-		DBEntryName:       input.dbArtifact.archiveEntryName,
-		MigrationVersion:  input.dbArtifact.migrationVersion,
-		CreatedAt:         input.backupCreatedAt.UTC().Format(time.RFC3339),
-		DBSHA256:          input.dbSHA256,
-		BackupFileCount:   input.backupFileCount,
-		TotalSizeBytes:    0, // will be updated after archiving
-		EncryptionKeyHash: computeEncryptionKeyHash(input.encryptionKey),
+		Version:          1,
+		AppVersion:       input.appVersion,
+		GitCommit:        input.gitCommit,
+		DBEntryName:      input.dbArtifact.archiveEntryName,
+		MigrationVersion: input.dbArtifact.migrationVersion,
+		CreatedAt:        input.backupCreatedAt.UTC().Format(time.RFC3339),
+		DBSHA256:         input.dbSHA256,
+		BackupFileCount:  input.backupFileCount,
+		TotalSizeBytes:   0, // will be updated after archiving
+	}
+	if input.encryptionKeyring != nil {
+		manifest.Encryption = &backupManifestEncryption{
+			Version:        1,
+			ActiveKeyID:    input.encryptionKeyring.ActiveKeyID(),
+			RequiredKeyIDs: []string{input.encryptionKeyring.ActiveKeyID()},
+		}
+	} else {
+		manifest.EncryptionKeyHash = computeEncryptionKeyHash(input.encryptionKey)
 	}
 
 	manifestJSON, err := json.MarshalIndent(&manifest, "", "  ")

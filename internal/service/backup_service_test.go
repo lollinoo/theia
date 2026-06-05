@@ -2293,8 +2293,8 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	if !utf8.ValidString(encStr) {
 		t.Fatal("EncryptSecret returned a non-UTF-8 string")
 	}
-	if _, err := base64.StdEncoding.DecodeString(encStr); err != nil {
-		t.Fatalf("EncryptSecret returned a non-base64 string: %v", err)
+	if !strings.HasPrefix(encStr, crypto.EnvelopePrefix) {
+		t.Fatalf("EncryptSecret prefix = %q, want %q", encStr[:min(len(encStr), len(crypto.EnvelopePrefix))], crypto.EnvelopePrefix)
 	}
 	decrypted, err := svc.decryptSecret(encStr)
 	if err != nil {
@@ -2348,7 +2348,7 @@ func TestBackupServiceDecryptCredentials(t *testing.T) {
 	}
 }
 
-func TestBackupServiceDecryptSecret_LegacyRawCiphertextCompatible(t *testing.T) {
+func TestBackupServiceDecryptSecretRejectsLegacyRawCiphertext(t *testing.T) {
 	encryptionKey := crypto.DeriveKey("test-encryption-passphrase")
 	plaintext := "legacy-raw-ciphertext-secret"
 	rawCiphertext, err := crypto.Encrypt([]byte(plaintext), encryptionKey)
@@ -2369,13 +2369,90 @@ func TestBackupServiceDecryptSecret_LegacyRawCiphertextCompatible(t *testing.T) 
 		ssh.InsecureIgnoreHostKey(),
 	)
 
-	decrypted, err := svc.decryptSecret(string(rawCiphertext))
+	_, err = svc.decryptSecret(string(rawCiphertext))
+	if err == nil {
+		t.Fatal("decryptSecret should reject legacy raw ciphertext outside migration")
+	}
+	if !strings.Contains(err.Error(), "versioned encryption envelope") {
+		t.Fatalf("decryptSecret error = %q, want envelope rejection", err.Error())
+	}
+}
+
+func TestBackupServiceEncryptSecretUsesKeyringEnvelope(t *testing.T) {
+	keyring := mustServiceTestKeyring(t, "kid-active", map[string]string{
+		"kid-active": "active credential secret material",
+	})
+	svc := NewBackupService(
+		newMockBackupJobRepo(),
+		newMockBackupFileRepo(),
+		newMockCredentialProfileRepo(),
+		newMockDeviceRepo(),
+		newMockBackupSettingsRepo(),
+		buildTestVendorRegistry("testvendor", true),
+		&recordingSSHDialer{},
+		keyring,
+		t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+
+	encrypted, err := svc.EncryptSecret("profile-password")
 	if err != nil {
-		t.Fatalf("decryptSecret failed for legacy raw ciphertext: %v", err)
+		t.Fatalf("EncryptSecret failed: %v", err)
 	}
-	if decrypted != plaintext {
-		t.Fatalf("expected decrypted plaintext %q, got %q", plaintext, decrypted)
+	if !strings.HasPrefix(encrypted, crypto.EnvelopePrefix) {
+		t.Fatalf("EncryptSecret prefix = %q, want %q", encrypted[:min(len(encrypted), len(crypto.EnvelopePrefix))], crypto.EnvelopePrefix)
 	}
+	if strings.Contains(encrypted, "profile-password") {
+		t.Fatal("encrypted secret should not contain plaintext")
+	}
+
+	decrypted, err := svc.decryptSecret(encrypted)
+	if err != nil {
+		t.Fatalf("decryptSecret failed: %v", err)
+	}
+	if decrypted != "profile-password" {
+		t.Fatalf("decrypted secret = %q, want profile-password", decrypted)
+	}
+}
+
+func TestBackupServiceDecryptSecretRejectsLegacyBase64Ciphertext(t *testing.T) {
+	keyring := mustServiceTestKeyring(t, "kid-active", map[string]string{
+		"kid-active": "active credential secret material",
+		"legacy":     "legacy credential secret material",
+	})
+	legacyRaw, err := crypto.Encrypt([]byte("legacy-profile-password"), crypto.DeriveKey("legacy credential secret material"))
+	if err != nil {
+		t.Fatalf("legacy Encrypt failed: %v", err)
+	}
+	svc := NewBackupService(
+		newMockBackupJobRepo(),
+		newMockBackupFileRepo(),
+		newMockCredentialProfileRepo(),
+		newMockDeviceRepo(),
+		newMockBackupSettingsRepo(),
+		buildTestVendorRegistry("testvendor", true),
+		&recordingSSHDialer{},
+		keyring,
+		t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+
+	_, err = svc.decryptSecret(base64.StdEncoding.EncodeToString(legacyRaw))
+	if err == nil {
+		t.Fatal("decryptSecret should reject legacy base64 ciphertext outside migration")
+	}
+	if !strings.Contains(err.Error(), "versioned encryption envelope") {
+		t.Fatalf("decryptSecret error = %q, want envelope rejection", err.Error())
+	}
+}
+
+func mustServiceTestKeyring(t *testing.T, activeID string, secrets map[string]string) *crypto.Keyring {
+	t.Helper()
+	keyring, err := crypto.NewKeyring(activeID, secrets)
+	if err != nil {
+		t.Fatalf("NewKeyring failed: %v", err)
+	}
+	return keyring
 }
 
 // ---------------------------------------------------------------------------
@@ -2505,16 +2582,15 @@ func TestRunTextExportReconcilesExistingDeviceBackupDirBeforeWritingBackupFile(t
 	backupRoot := t.TempDir()
 	encryptionKey := []byte("0123456789abcdef")
 
-	secretCiphertext, err := crypto.Encrypt([]byte("secret"), encryptionKey)
-	if err != nil {
-		t.Fatalf("crypto.Encrypt: %v", err)
-	}
-
 	svc := NewBackupService(
 		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
 		registry, &internalssh.DefaultDialer{}, encryptionKey, backupRoot,
 		ssh.InsecureIgnoreHostKey(),
 	)
+	encryptedSecret, err := svc.EncryptSecret("secret")
+	if err != nil {
+		t.Fatalf("EncryptSecret: %v", err)
+	}
 
 	profileID := uuid.New()
 	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
@@ -2522,7 +2598,7 @@ func TestRunTextExportReconcilesExistingDeviceBackupDirBeforeWritingBackupFile(t
 		Name:            "test-profile",
 		Username:        "admin",
 		Port:            serverPort(t, addr),
-		EncryptedSecret: base64.StdEncoding.EncodeToString(secretCiphertext),
+		EncryptedSecret: encryptedSecret,
 		AuthMethod:      domain.SSHAuthPassword,
 		Role:            "Admin",
 	}); err != nil {

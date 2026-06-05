@@ -36,7 +36,7 @@ func TestAreaRepo_CreateAndGetByID(t *testing.T) {
 func TestAreaRepo_GetAllWithDeviceCount(t *testing.T) {
 	db := setupTestDB(t)
 	areaRepo := NewAreaRepo(db)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 
 	area := &domain.Area{Name: "Edge", Color: "#00E676"}
 	if err := areaRepo.Create(area); err != nil {
@@ -92,7 +92,7 @@ func TestAreaRepo_DeleteSetsDeviceAreaIDToNull(t *testing.T) {
 	// AREA-03: ON DELETE SET NULL -- deleting an area should set device.area_id to NULL
 	db := setupTestDB(t)
 	areaRepo := NewAreaRepo(db)
-	deviceRepo := NewDeviceRepo(db, testKey, nil)
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
 
 	area := &domain.Area{Name: "ToDelete", Color: "#FF1744"}
 	if err := areaRepo.Create(area); err != nil {

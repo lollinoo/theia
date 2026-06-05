@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/google/uuid"
@@ -9,7 +10,7 @@ import (
 
 func TestDeviceRepoGetBySysName_NormalizedLookup(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	first := &domain.Device{
 		ID:       uuid.New(),
@@ -88,9 +89,62 @@ func TestDeviceRepoGetBySysName_NormalizedLookup(t *testing.T) {
 	}
 }
 
+func TestDeviceRepoGetByIDsForTopologySkipsSNMPDecryption(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+
+	device := &domain.Device{
+		ID:       uuid.New(),
+		Hostname: "router-topology",
+		IP:       "10.0.0.10",
+		Managed:  true,
+		Status:   domain.DeviceStatusUp,
+		Tags:     map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	_, err := db.Exec(
+		`UPDATE devices SET snmp_credentials_json = ? WHERE id = ?`,
+		`{"version":"2c","v2c":{"community":"plaintext-community"}}`,
+		device.ID.String(),
+	)
+	if err != nil {
+		t.Fatalf("corrupting stored credentials failed: %v", err)
+	}
+
+	if _, err := repo.GetByIDs([]uuid.UUID{device.ID}); err == nil {
+		t.Fatal("GetByIDs should fail when strict credential decryption sees plaintext")
+	}
+
+	devices, err := repo.GetByIDsForTopology([]uuid.UUID{device.ID})
+	if err != nil {
+		t.Fatalf("GetByIDsForTopology failed: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("device count = %d, want 1", len(devices))
+	}
+	if devices[0].SNMPCredentials != (domain.SNMPCredentials{}) {
+		t.Fatalf("SNMP credentials = %+v, want empty topology projection", devices[0].SNMPCredentials)
+	}
+
+	var stored sql.NullString
+	if err := db.QueryRow(`SELECT snmp_credentials_json FROM devices WHERE id = ?`, device.ID.String()).Scan(&stored); err != nil {
+		t.Fatalf("reading stored credentials failed: %v", err)
+	}
+	if !stored.Valid || stored.String == "" {
+		t.Fatal("stored credentials unexpectedly empty")
+	}
+}
+
 func TestDeviceRepoGetByIDsLoadsOnlyRequestedDevicesWithInterfacesAndAreas(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 	areaRepo := NewAreaRepo(db)
 
 	area := &domain.Area{
@@ -182,7 +236,7 @@ func TestDeviceRepoGetByIDsLoadsOnlyRequestedDevicesWithInterfacesAndAreas(t *te
 
 func TestDeviceRepoGetOrphansReturnsDevicesWithoutCanvasMapMembership(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 	areaRepo := NewAreaRepo(db)
 	mapRepo := NewCanvasMapRepo(db)
 
@@ -266,7 +320,7 @@ func TestDeviceRepoGetOrphansReturnsDevicesWithoutCanvasMapMembership(t *testing
 
 func TestDeviceRepoGetBySysName_EmptyOrUnknownLookup(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:       uuid.New(),
@@ -301,7 +355,7 @@ func TestDeviceRepoGetBySysName_EmptyOrUnknownLookup(t *testing.T) {
 
 func TestDeviceRepoGetBySysName_UpdateRefreshesLookupIndex(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:       uuid.New(),
@@ -354,7 +408,7 @@ func intPtr(i int) *int { return &i }
 // Verifies that PollClass=PollClassCore round-trips through Create → GetByID.
 func TestDeviceRepo_PollClassRoundTrip(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:        uuid.New(),
@@ -392,7 +446,7 @@ func TestDeviceRepo_PollClassRoundTrip(t *testing.T) {
 // Verifies that a non-nil PollIntervalOverride persists and can be cleared.
 func TestDeviceRepo_PollIntervalOverrideRoundTrip(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:                   uuid.New(),
@@ -440,7 +494,7 @@ func TestDeviceRepo_PollIntervalOverrideRoundTrip(t *testing.T) {
 
 func TestDeviceRepo_PollingEnabledDefaultsTrueAndRoundTripsFalse(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:        uuid.New(),
@@ -503,7 +557,7 @@ func TestDeviceRepo_PollingEnabledDefaultsTrueAndRoundTripsFalse(t *testing.T) {
 // Verifies that an empty PollClass is normalized to PollClassStandard by createOnce.
 func TestDeviceRepo_PollClassEmptyDefaultsToStandard(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	device := &domain.Device{
 		ID:        uuid.New(),
@@ -533,7 +587,7 @@ func TestDeviceRepo_PollClassEmptyDefaultsToStandard(t *testing.T) {
 
 func TestDeviceRepo_NotesRoundTrip(t *testing.T) {
 	db := newTestDB(t)
-	repo := NewDeviceRepo(db, testKey, nil)
+	repo := NewDeviceRepo(db, testKeyring, nil)
 
 	notes := "Installed in rack A3"
 	device := &domain.Device{

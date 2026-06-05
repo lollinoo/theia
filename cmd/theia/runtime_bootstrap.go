@@ -84,12 +84,8 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 		return nil
 	}
 
-	encryptionKey := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
-	if encryptionKey == "" {
-		return fmt.Errorf("THEIA_ENCRYPTION_KEY is required for %s deployment", deploymentEnv)
-	}
-	if isKnownSecretPlaceholder(encryptionKey) {
-		return fmt.Errorf("%s deployment rejects example THEIA_ENCRYPTION_KEY values", deploymentEnv)
+	if err := validateEncryptionKeySecretPolicy(deploymentEnv); err != nil {
+		return err
 	}
 
 	if isPostgresDSNPasswordPlaceholder(cfg.DBDSN) {
@@ -114,6 +110,48 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 	}
 
 	return nil
+}
+
+func validateEncryptionKeySecretPolicy(deploymentEnv string) error {
+	activeKeyID := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY_ID"))
+	keyList := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEYS"))
+	if activeKeyID != "" || keyList != "" {
+		if activeKeyID == "" {
+			return fmt.Errorf("THEIA_ENCRYPTION_KEY_ID is required for %s deployment when THEIA_ENCRYPTION_KEYS is set", deploymentEnv)
+		}
+		if keyList == "" {
+			return fmt.Errorf("THEIA_ENCRYPTION_KEYS is required for %s deployment when THEIA_ENCRYPTION_KEY_ID is set", deploymentEnv)
+		}
+		if _, err := crypto.ParseKeyring(activeKeyID, keyList); err != nil {
+			return fmt.Errorf("%s deployment rejects malformed THEIA_ENCRYPTION_KEYS: %w", deploymentEnv, err)
+		}
+		if encryptionKeyListHasPlaceholderSecret(keyList) {
+			return fmt.Errorf("%s deployment rejects example THEIA_ENCRYPTION_KEYS values", deploymentEnv)
+		}
+		return nil
+	}
+
+	encryptionKey := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
+	if encryptionKey == "" {
+		return fmt.Errorf("THEIA_ENCRYPTION_KEY is required for %s deployment", deploymentEnv)
+	}
+	if isKnownSecretPlaceholder(encryptionKey) {
+		return fmt.Errorf("%s deployment rejects example THEIA_ENCRYPTION_KEY values", deploymentEnv)
+	}
+	return nil
+}
+
+func encryptionKeyListHasPlaceholderSecret(keyList string) bool {
+	for _, rawPair := range strings.Split(keyList, ",") {
+		_, secret, ok := strings.Cut(rawPair, "=")
+		if !ok {
+			continue
+		}
+		if isKnownSecretPlaceholder(secret) {
+			return true
+		}
+	}
+	return false
 }
 
 func isKnownSecretPlaceholder(value string) bool {
@@ -294,12 +332,12 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		return wrapPostgresConnectError(err)
 	}
 
-	encryptionKey, err := crypto.LoadEncryptionKey()
+	encryptionKeyring, err := crypto.LoadKeyringFromEnv()
 	if err != nil {
 		return fmt.Errorf("security configuration error: %w", err)
 	}
 
-	if err := postgres.RunMigrations(db, encryptionKey); err != nil {
+	if err := postgres.RunMigrations(db, encryptionKeyring); err != nil {
 		return fmt.Errorf("run database migrations: %w", err)
 	}
 	log.Println("Database migrations completed")
@@ -353,7 +391,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 
 	cacheInvalidate := make(chan struct{}, 1)
 
-	deviceRepo := postgres.NewDeviceRepo(db, encryptionKey, cacheInvalidate)
+	deviceRepo := postgres.NewDeviceRepo(db, encryptionKeyring, cacheInvalidate)
 	linkRepo := postgres.NewLinkRepo(db, cacheInvalidate)
 	topologyObservationRepo := postgres.NewTopologyObservationRepo(db)
 	deviceLinkCache := cache.NewDeviceLinkCache(deviceRepo, linkRepo, cacheInvalidate)
@@ -364,7 +402,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	canvasMapPositionRepo := postgres.NewCanvasMapPositionRepo(db)
 	settingsRepo := postgres.NewSettingsRepo(db)
 	logging.Debugf("runtime effective config %s", runtimeDebugSettingsSummary(cfg, settingsRepo))
-	snmpProfileRepo := postgres.NewSNMPProfileRepo(db, encryptionKey)
+	snmpProfileRepo := postgres.NewSNMPProfileRepo(db, encryptionKeyring)
 	credentialProfileRepo := postgres.NewCredentialProfileRepo(db)
 	areaRepo := postgres.NewAreaRepo(db)
 	backupJobRepo := postgres.NewBackupJobRepo(db)
@@ -392,7 +430,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 
 	backupService := service.NewBackupService(
 		backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
-		vendorRegistry, sshDialer, encryptionKey, paths.backupDir, knownHostsStore.HostKeyCallback(),
+		vendorRegistry, sshDialer, encryptionKeyring, paths.backupDir, knownHostsStore.HostKeyCallback(),
 		service.WithBulkBackupRunRepo(bulkBackupRunRepo),
 	)
 	configureBackupServiceBulkOperationLimits(backupService, cfg)
@@ -425,7 +463,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		paths.knownHostsPath,
 		paths.appDataDir,
 		cfg.DBDSN,
-		encryptionKey,
+		encryptionKeyring,
 	)
 	configureInstanceBackupArchiveLimits(instanceBackupService, cfg)
 	log.Printf("Instance backup directory: %s", paths.instanceBackupDir)

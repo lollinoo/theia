@@ -13,7 +13,7 @@
 # First-time setup:
 #   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
 #   2. Copy env file:           cp .env.staging.example .env.staging
-#   3. Set THEIA_ENCRYPTION_KEY, THEIA_SESSION_SECRET, THEIA_METRICS_TOKEN, THEIA_DB_DSN, and POSTGRES_PASSWORD in .env.staging
+#   3. Set THEIA_ENCRYPTION_KEY_ID, THEIA_ENCRYPTION_KEYS, THEIA_SESSION_SECRET, THEIA_METRICS_TOKEN, THEIA_DB_DSN, and POSTGRES_PASSWORD in .env.staging
 #   4. Start the stack:         docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 # =============================================================================
 
@@ -48,7 +48,9 @@ services:
       - THEIA_DATA_DIR=${THEIA_DATA_DIR:-/data}
       - THEIA_LISTEN_ADDR=:${BACKEND_PORT:-8081}
       - THEIA_LOG_LEVEL=${LOG_LEVEL:-info}
-      - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:?THEIA_ENCRYPTION_KEY must be set}
+      - THEIA_ENCRYPTION_KEY_ID=${THEIA_ENCRYPTION_KEY_ID:-}
+      - THEIA_ENCRYPTION_KEYS=${THEIA_ENCRYPTION_KEYS:-}
+      - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-}
       - THEIA_SESSION_SECRET=${THEIA_SESSION_SECRET:?THEIA_SESSION_SECRET must be set}
       - THEIA_METRICS_TOKEN=${THEIA_METRICS_TOKEN:?THEIA_METRICS_TOKEN must be set}
       - THEIA_ALLOWED_ORIGINS=${THEIA_ALLOWED_ORIGINS:-}

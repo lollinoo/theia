@@ -506,6 +506,11 @@ func (s *DeviceService) GetDevicesByIDs(ctx context.Context, ids []uuid.UUID) ([
 	return s.mutation.GetDevicesByIDs(ctx, ids)
 }
 
+// GetTopologyDevicesByIDs retrieves selected devices without decrypting sensitive credentials.
+func (s *DeviceService) GetTopologyDevicesByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Device, error) {
+	return s.mutation.GetTopologyDevicesByIDs(ctx, ids)
+}
+
 // ProbeDevice triggers a re-probe of an existing device.
 func (s *DeviceService) ProbeDevice(ctx context.Context, id uuid.UUID) error {
 	return s.discovery.ProbeDevice(ctx, id)
