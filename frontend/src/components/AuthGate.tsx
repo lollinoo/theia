@@ -49,6 +49,41 @@ function PasswordRequirementItem({ met, children }: { met: boolean; children: Re
   );
 }
 
+function PasswordRequirementsList({
+  policy,
+  confirmationMatches,
+  differentFromCurrent,
+}: {
+  policy: PasswordPolicyResult;
+  confirmationMatches: boolean;
+  differentFromCurrent?: boolean;
+}) {
+  return (
+    <section className="mb-4 rounded-md border border-outline-subtle bg-bg/60 p-3 text-xs text-on-bg-secondary">
+      <h2 className="mb-2 text-sm font-medium text-on-bg">Password requirements</h2>
+      <ul className="space-y-1">
+        <PasswordRequirementItem met={policy.length}>10 to 24 characters</PasswordRequirementItem>
+        <PasswordRequirementItem met={policy.uppercase}>
+          At least one uppercase letter
+        </PasswordRequirementItem>
+        <PasswordRequirementItem met={policy.lowercase}>
+          At least one lowercase letter
+        </PasswordRequirementItem>
+        <PasswordRequirementItem met={policy.number}>At least one number</PasswordRequirementItem>
+        <PasswordRequirementItem met={policy.special}>
+          At least one special character
+        </PasswordRequirementItem>
+        <PasswordRequirementItem met={confirmationMatches}>Passwords match</PasswordRequirementItem>
+        {differentFromCurrent !== undefined && (
+          <PasswordRequirementItem met={differentFromCurrent}>
+            Different from current password
+          </PasswordRequirementItem>
+        )}
+      </ul>
+    </section>
+  );
+}
+
 function PasswordInput({
   label,
   revealLabel,
@@ -112,11 +147,24 @@ export function AuthGate({ children }: AuthGateProps) {
   const forcedPasswordPolicy = evaluatePasswordPolicy(newPassword);
   const forcedPasswordConfirmationMatches =
     newPassword !== '' && confirmPassword !== '' && newPassword === confirmPassword;
+  const forcedPasswordDifferentFromCurrent =
+    currentPassword !== '' && newPassword !== '' && currentPassword !== newPassword;
   const canSubmitForcedPasswordChange =
     !submitting &&
     currentPassword.trim() !== '' &&
     forcedPasswordPolicy.valid &&
-    forcedPasswordConfirmationMatches;
+    forcedPasswordConfirmationMatches &&
+    forcedPasswordDifferentFromCurrent;
+  const resetPasswordPolicy = evaluatePasswordPolicy(resetNewPassword);
+  const resetPasswordConfirmationMatches =
+    resetNewPassword !== '' &&
+    resetConfirmPassword !== '' &&
+    resetNewPassword === resetConfirmPassword;
+  const canSubmitPasswordReset =
+    !submitting &&
+    resetToken.trim() !== '' &&
+    resetPasswordPolicy.valid &&
+    resetPasswordConfirmationMatches;
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -169,6 +217,9 @@ export function AuthGate({ children }: AuthGateProps) {
     event.preventDefault();
     setError(null);
     setSuccess(null);
+    if (!canSubmitPasswordReset) {
+      return;
+    }
     if (resetNewPassword !== resetConfirmPassword) {
       setError('New passwords do not match');
       return;
@@ -234,29 +285,11 @@ export function AuthGate({ children }: AuthGateProps) {
             value={newPassword}
             onChange={setNewPassword}
           />
-          <section className="mb-4 rounded-md border border-outline-subtle bg-bg/60 p-3 text-xs text-on-bg-secondary">
-            <h2 className="mb-2 text-sm font-medium text-on-bg">Password requirements</h2>
-            <ul className="space-y-1">
-              <PasswordRequirementItem met={forcedPasswordPolicy.length}>
-                10 to 24 characters
-              </PasswordRequirementItem>
-              <PasswordRequirementItem met={forcedPasswordPolicy.uppercase}>
-                At least one uppercase letter
-              </PasswordRequirementItem>
-              <PasswordRequirementItem met={forcedPasswordPolicy.lowercase}>
-                At least one lowercase letter
-              </PasswordRequirementItem>
-              <PasswordRequirementItem met={forcedPasswordPolicy.number}>
-                At least one number
-              </PasswordRequirementItem>
-              <PasswordRequirementItem met={forcedPasswordPolicy.special}>
-                At least one special character
-              </PasswordRequirementItem>
-              <PasswordRequirementItem met={forcedPasswordConfirmationMatches}>
-                Passwords match
-              </PasswordRequirementItem>
-            </ul>
-          </section>
+          <PasswordRequirementsList
+            policy={forcedPasswordPolicy}
+            confirmationMatches={forcedPasswordConfirmationMatches}
+            differentFromCurrent={forcedPasswordDifferentFromCurrent}
+          />
           <PasswordInput
             label="Confirm new password"
             revealLabel="confirm password"
@@ -310,6 +343,10 @@ export function AuthGate({ children }: AuthGateProps) {
             value={resetNewPassword}
             onChange={setResetNewPassword}
           />
+          <PasswordRequirementsList
+            policy={resetPasswordPolicy}
+            confirmationMatches={resetPasswordConfirmationMatches}
+          />
           <PasswordInput
             label="Confirm new password"
             revealLabel="confirm password"
@@ -321,12 +358,7 @@ export function AuthGate({ children }: AuthGateProps) {
           {error && <div className="mb-4 text-sm text-warning">{error}</div>}
           <button
             className="w-full rounded-md bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={
-              submitting ||
-              resetToken.trim() === '' ||
-              resetNewPassword.trim() === '' ||
-              resetConfirmPassword.trim() === ''
-            }
+            disabled={!canSubmitPasswordReset}
             type="submit"
           >
             {submitting ? 'Resetting password' : 'Reset password'}

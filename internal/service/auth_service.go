@@ -34,6 +34,8 @@ var (
 	ErrPermissionDenied = errors.New("permission denied")
 	// ErrPasswordPolicyViolation is returned when a proposed password does not meet policy.
 	ErrPasswordPolicyViolation = errors.New("password does not meet policy")
+	// ErrPasswordReuse is returned when the proposed password matches the current password.
+	ErrPasswordReuse = errors.New("new password must be different from current password")
 	// ErrPasswordResetExpired is returned when a password reset token is expired or already used.
 	ErrPasswordResetExpired = errors.New("password reset token expired")
 )
@@ -424,9 +426,6 @@ func (s *AuthService) Logout(ctx context.Context, rawSessionToken string) error 
 
 // ChangePassword changes a user's password and revokes other sessions.
 func (s *AuthService) ChangePassword(ctx context.Context, input PasswordChangeInput) error {
-	if err := security.ValidatePasswordPolicy(input.NewPassword); err != nil {
-		return fmt.Errorf("%w: %v", ErrPasswordPolicyViolation, err)
-	}
 	user, err := s.users.GetUserByID(ctx, input.UserID)
 	if err != nil {
 		return fmt.Errorf("getting password change user: %w", err)
@@ -434,6 +433,16 @@ func (s *AuthService) ChangePassword(ctx context.Context, input PasswordChangeIn
 	ok, err := s.verifyPassword(input.CurrentPassword, user.PasswordHash)
 	if err != nil || !ok {
 		return ErrInvalidCredentials
+	}
+	if err := security.ValidatePasswordPolicy(input.NewPassword); err != nil {
+		return fmt.Errorf("%w: %v", ErrPasswordPolicyViolation, err)
+	}
+	samePassword, err := s.verifyPassword(input.NewPassword, user.PasswordHash)
+	if err != nil {
+		return fmt.Errorf("verifying changed password reuse: %w", err)
+	}
+	if samePassword {
+		return ErrPasswordReuse
 	}
 	now := s.now()
 	passwordHash, err := security.HashPassword(input.NewPassword)
@@ -495,11 +504,33 @@ func (s *AuthService) CompletePasswordReset(ctx context.Context, input PasswordR
 		return fmt.Errorf("%w: %v", ErrPasswordPolicyViolation, err)
 	}
 	now := s.now()
+	tokenHash := security.HashToken(strings.TrimSpace(input.Token), s.sessionSecret)
+	reset, err := s.passwordResets.GetPasswordResetTokenByHash(ctx, tokenHash)
+	if err != nil {
+		if errors.Is(err, domain.ErrPasswordResetTokenNotFound) {
+			return ErrInvalidCredentials
+		}
+		return fmt.Errorf("getting password reset token: %w", err)
+	}
+	if reset.UsedAt != nil || !reset.ExpiresAt.After(now) {
+		return ErrPasswordResetExpired
+	}
+	user, err := s.users.GetUserByID(ctx, reset.UserID)
+	if err != nil {
+		return fmt.Errorf("getting password reset user: %w", err)
+	}
+	samePassword, err := s.verifyPassword(input.NewPassword, user.PasswordHash)
+	if err != nil {
+		return fmt.Errorf("verifying reset password reuse: %w", err)
+	}
+	if samePassword {
+		return ErrPasswordReuse
+	}
 	passwordHash, err := security.HashPassword(input.NewPassword)
 	if err != nil {
 		return fmt.Errorf("hashing reset password: %w", err)
 	}
-	reset, err := s.passwordResets.CompletePasswordReset(ctx, security.HashToken(strings.TrimSpace(input.Token), s.sessionSecret), passwordHash, now)
+	reset, err = s.passwordResets.CompletePasswordReset(ctx, tokenHash, passwordHash, now)
 	if err != nil {
 		if errors.Is(err, domain.ErrPasswordResetTokenNotFound) {
 			return ErrInvalidCredentials

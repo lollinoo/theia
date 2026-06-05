@@ -473,7 +473,7 @@ func TestAdminUsersCreateReturnsSafePayload(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/v1/admin/users",
-		strings.NewReader(`{"username":"created","email":"created@example.test","display_name":"Created User","password":"Correct Horse Battery Staple 2026!","roles":["user"]}`),
+		strings.NewReader(`{"username":"created","email":"created@example.test","display_name":"Created User","password":"short","must_change_password":true,"roles":["user"]}`),
 	)
 	addSessionCookie(req, testSessionToken)
 	addCSRFCookieAndHeader(req, testCSRFToken)
@@ -500,6 +500,9 @@ func TestAdminUsersCreateReturnsSafePayload(t *testing.T) {
 	}
 	if !auth.createAdminUserCalled {
 		t.Fatal("CreateAdminUser was not called")
+	}
+	if !auth.createdAdminUserInput.MustChangePassword {
+		t.Fatal("CreateAdminUser input MustChangePassword = false, want true")
 	}
 }
 
@@ -566,7 +569,7 @@ func TestAuthPasswordChangeAllowedWhilePasswordChangeRequired(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/v1/auth/password/change",
-		strings.NewReader(`{"current_password":"theia","new_password":"Correct Horse Battery Staple 2026!"}`),
+		strings.NewReader(`{"current_password":"theia","new_password":"NewPass123!"}`),
 	)
 	addSessionCookie(req, testSessionToken)
 	addCSRFCookieAndHeader(req, testCSRFToken)
@@ -590,6 +593,35 @@ func TestAuthPasswordChangeAllowedWhilePasswordChangeRequired(t *testing.T) {
 	}
 	if !auth.changePasswordCalled {
 		t.Fatal("ChangePassword was not called")
+	}
+}
+
+func TestAuthPasswordChangeReturnsClearPasswordReuseError(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	user := testAPIUser("bootstrap", true, domain.PermissionSettingsRead)
+	auth.setSession(testSessionToken, testCSRFToken, user)
+	auth.changeErr = service.ErrPasswordReuse
+	router := newAuthTestRouter(auth)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/auth/password/change",
+		strings.NewReader(`{"current_password":"NewPass123!","new_password":"NewPass123!"}`),
+	)
+	addSessionCookie(req, testSessionToken)
+	addCSRFCookieAndHeader(req, testCSRFToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "password_reuse") {
+		t.Fatalf("body = %s, want password_reuse code", body)
+	}
+	if !strings.Contains(body, "New password must be different from the current password.") {
+		t.Fatalf("body = %s, want password reuse detail", body)
 	}
 }
 
@@ -644,6 +676,12 @@ func TestAuthPasswordResetMapsServiceErrorsWithoutTokenLeak(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "password_policy_violation",
 		},
+		{
+			name:       "password reuse",
+			err:        service.ErrPasswordReuse,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "password_reuse",
+		},
 	}
 
 	for _, tt := range tests {
@@ -677,6 +715,10 @@ func TestAuthPasswordResetMapsServiceErrorsWithoutTokenLeak(t *testing.T) {
 			if tt.wantCode == "password_policy_violation" &&
 				!strings.Contains(parsed["error"], "Password must be 10 to 24 characters") {
 				t.Fatalf("error = %q, want password policy detail", parsed["error"])
+			}
+			if tt.wantCode == "password_reuse" &&
+				parsed["error"] != "New password must be different from the current password." {
+				t.Fatalf("error = %q, want password reuse detail", parsed["error"])
 			}
 		})
 	}
@@ -905,6 +947,7 @@ type fakeAPIAuthProvider struct {
 	completedPasswordReset      service.PasswordResetCompleteInput
 	adminUsers                  []domain.UserWithRolesAndPermissions
 	createdAdminUser            *domain.UserWithRolesAndPermissions
+	createdAdminUserInput       service.AdminCreateUserInput
 	createAdminUserErr          error
 	listAdminUsersCalled        bool
 	createAdminUserCalled       bool
@@ -1012,8 +1055,9 @@ func (f *fakeAPIAuthProvider) ListAdminUsers(context.Context, *service.Authentic
 	return f.adminUsers, nil
 }
 
-func (f *fakeAPIAuthProvider) CreateAdminUser(context.Context, *service.AuthenticatedUser, service.AdminCreateUserInput) (*domain.UserWithRolesAndPermissions, error) {
+func (f *fakeAPIAuthProvider) CreateAdminUser(_ context.Context, _ *service.AuthenticatedUser, input service.AdminCreateUserInput) (*domain.UserWithRolesAndPermissions, error) {
 	f.createAdminUserCalled = true
+	f.createdAdminUserInput = input
 	if f.createAdminUserErr != nil {
 		return nil, f.createAdminUserErr
 	}

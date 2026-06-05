@@ -18,6 +18,7 @@ const (
 	authSessionCookieName = "theia_session"
 	authCSRFCookieName    = "theia_csrf"
 	csrfHeaderName        = "X-CSRF-Token"
+	passwordReuseMessage  = "New password must be different from the current password."
 )
 
 type authProvider interface {
@@ -358,6 +359,8 @@ func writePasswordChangeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidCredentials):
 		writeAuthCodeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid current password")
+	case errors.Is(err, service.ErrPasswordReuse):
+		writeAuthCodeError(w, http.StatusBadRequest, "password_reuse", passwordReuseMessage)
 	case errors.Is(err, service.ErrPasswordPolicyViolation):
 		writeAuthCodeError(w, http.StatusBadRequest, "password_policy_violation", security.PasswordPolicyMessage)
 	default:
@@ -371,6 +374,8 @@ func writePasswordResetError(w http.ResponseWriter, err error) {
 		writeAuthCodeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid reset token")
 	case errors.Is(err, service.ErrPasswordResetExpired):
 		writeAuthCodeError(w, http.StatusGone, "password_reset_expired", "password reset token expired")
+	case errors.Is(err, service.ErrPasswordReuse):
+		writeAuthCodeError(w, http.StatusBadRequest, "password_reuse", passwordReuseMessage)
 	case errors.Is(err, service.ErrPasswordPolicyViolation):
 		writeAuthCodeError(w, http.StatusBadRequest, "password_policy_violation", security.PasswordPolicyMessage)
 	default:

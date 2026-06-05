@@ -205,6 +205,25 @@ describe('AuthGate', () => {
     expect(screen.getByText('Passwords match').closest('li')).toHaveTextContent('Not met');
   });
 
+  it('keeps password change disabled when the new password equals the current password', async () => {
+    await renderForcedPasswordChange();
+
+    fireEvent.change(screen.getByLabelText('Current password'), {
+      target: { value: 'NewPass123!' },
+    });
+    fireEvent.change(screen.getByLabelText('New password'), {
+      target: { value: 'NewPass123!' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'NewPass123!' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Change password' })).toBeDisabled();
+    expect(screen.getByText('Different from current password').closest('li')).toHaveTextContent(
+      'Not met',
+    );
+  });
+
   it('keeps password change disabled when composition requirements are not met', async () => {
     await renderForcedPasswordChange();
 
@@ -276,5 +295,50 @@ describe('AuthGate', () => {
     expect(
       await screen.findByText('Password reset complete. Sign in with your new password.'),
     ).toBeInTheDocument();
+  });
+
+  it('shows live password requirements on the reset token form', async () => {
+    vi.mocked(fetchCurrentUser).mockResolvedValue({ authenticated: false });
+
+    renderGate();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Use reset token' }));
+
+    expect(screen.getByText('Password requirements')).toBeInTheDocument();
+    expect(screen.getByText('10 to 24 characters')).toBeInTheDocument();
+    expect(screen.getByText('At least one uppercase letter')).toBeInTheDocument();
+    expect(screen.getByText('At least one lowercase letter')).toBeInTheDocument();
+    expect(screen.getByText('At least one number')).toBeInTheDocument();
+    expect(screen.getByText('At least one special character')).toBeInTheDocument();
+    expect(screen.getByText('Passwords match')).toBeInTheDocument();
+  });
+
+  it('keeps reset token submission disabled until new password requirements pass', async () => {
+    vi.mocked(fetchCurrentUser).mockResolvedValue({ authenticated: false });
+
+    renderGate();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Use reset token' }));
+    fireEvent.change(screen.getByLabelText('One-time reset token'), {
+      target: { value: 'reset-token-1' },
+    });
+    fireEvent.change(screen.getByLabelText('New password'), {
+      target: { value: 'short' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'short' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Reset password' })).toBeDisabled();
+    expect(resetPasswordWithToken).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('New password'), {
+      target: { value: 'NewPass123!' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'NewPass123!' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Reset password' })).not.toBeDisabled();
   });
 });

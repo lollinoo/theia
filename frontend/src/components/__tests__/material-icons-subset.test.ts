@@ -26,6 +26,8 @@ const REQUIRED_AUTH_ADMIN_ICONS = [
   'lock_reset',
   'logout',
   'refresh',
+  'visibility',
+  'visibility_off',
 ] as const;
 
 const REQUIRED_USER_SETTINGS_ICONS = ['download', 'lock', 'more_vert', 'person', 'sync'] as const;
