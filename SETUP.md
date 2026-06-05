@@ -262,7 +262,8 @@ Production startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=p
 
 Required operator inputs for the standard bundled PostgreSQL stack:
 
-- `THEIA_ENCRYPTION_KEY`
+- `THEIA_ENCRYPTION_KEY_ID`
+- `THEIA_ENCRYPTION_KEYS`
 - `THEIA_SESSION_SECRET`
 - `THEIA_METRICS_TOKEN`
 - `THEIA_DB_DSN`
@@ -357,7 +358,8 @@ Staging startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=stag
 
 Required operator inputs for the standard bundled PostgreSQL stack:
 
-- `THEIA_ENCRYPTION_KEY`
+- `THEIA_ENCRYPTION_KEY_ID`
+- `THEIA_ENCRYPTION_KEYS`
 - `THEIA_SESSION_SECRET`
 - `THEIA_METRICS_TOKEN`
 - `THEIA_DB_DSN`
