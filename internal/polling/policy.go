@@ -123,11 +123,7 @@ func intSetting(repo SettingsGetter, key string, fallback int) int {
 	if err != nil {
 		return fallback
 	}
-	parsed, err := strconv.Atoi(strings.TrimSpace(value))
-	if err != nil || parsed <= 0 {
-		return fallback
-	}
-	return parsed
+	return domain.CoerceConstrainedInt(key, value, fallback)
 }
 
 func nonNegativeIntSetting(repo SettingsGetter, key string, fallback int) int {
@@ -138,11 +134,7 @@ func nonNegativeIntSetting(repo SettingsGetter, key string, fallback int) int {
 	if err != nil {
 		return fallback
 	}
-	parsed, err := strconv.Atoi(strings.TrimSpace(value))
-	if err != nil || parsed < 0 {
-		return fallback
-	}
-	return parsed
+	return domain.CoerceConstrainedInt(key, value, fallback)
 }
 
 func durationMSSetting(repo SettingsGetter, key string, fallback time.Duration) time.Duration {
@@ -158,11 +150,7 @@ func floatSetting(repo SettingsGetter, key string, fallback float64) float64 {
 	if err != nil {
 		return fallback
 	}
-	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	if err != nil || parsed <= 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
-		return fallback
-	}
-	return parsed
+	return domain.CoerceConstrainedFloat(key, value, fallback)
 }
 
 func boolSetting(repo SettingsGetter, key string, fallback bool) bool {

@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"log"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -331,11 +330,7 @@ func (r *pipelineTaskRunner) snmpTimeout() time.Duration {
 		return 10 * time.Second
 	}
 
-	seconds, err := strconv.Atoi(value)
-	if err != nil || seconds <= 0 {
-		return 10 * time.Second
-	}
-
+	seconds := domain.CoerceConstrainedInt(domain.SettingSNMPTimeout, value, 10)
 	return time.Duration(seconds) * time.Second
 }
 
@@ -350,12 +345,7 @@ func (r *pipelineTaskRunner) snmpRetries() int {
 		return 2
 	}
 
-	retries, err := strconv.Atoi(value)
-	if err != nil || retries < 0 {
-		return 2
-	}
-
-	return retries
+	return domain.CoerceConstrainedInt(domain.SettingSNMPRetries, value, 2)
 }
 
 func (r *pipelineTaskRunner) timeoutProfile(lane polling.Lane) polling.TimeoutProfile {

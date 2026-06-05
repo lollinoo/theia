@@ -2,6 +2,7 @@ package worker
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lollinoo/theia/internal/domain"
@@ -14,9 +15,10 @@ func GetPollingInterval(settingsRepo domain.SettingsRepository) time.Duration {
 	if err != nil {
 		return 60 * time.Second
 	}
-	seconds, err := strconv.Atoi(val)
-	if err != nil || seconds <= 0 {
+	parsed, err := strconv.Atoi(strings.TrimSpace(val))
+	if err != nil || parsed <= 0 {
 		return 60 * time.Second
 	}
+	seconds := domain.CoerceConstrainedInt(domain.SettingPollingInterval, val, 60)
 	return time.Duration(seconds) * time.Second
 }

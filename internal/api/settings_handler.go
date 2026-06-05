@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -71,34 +70,6 @@ var validSettingKeys = map[string]bool{
 	domain.SettingBridgePort:                    true,
 }
 
-// numericSettings lists keys that must parse as valid integers.
-var numericSettings = map[string]bool{
-	domain.SettingPollingInterval:               true,
-	domain.SettingSNMPWorkerPoolSize:            true,
-	domain.SettingSNMPWorkerPoolPerformance:     true,
-	domain.SettingSNMPWorkerPoolOperational:     true,
-	domain.SettingSNMPWorkerPoolStatic:          true,
-	domain.SettingSNMPTimeout:                   true,
-	domain.SettingSNMPRetries:                   true,
-	domain.SettingPollingEssentialWorkers:       true,
-	domain.SettingPollingMaxWorkersPerSite:      true,
-	domain.SettingPollingMaxWorkersPerSubnet:    true,
-	domain.SettingPollingMaxWorkersPerDevice:    true,
-	domain.SettingPollingMaxInflightPerProfile:  true,
-	domain.SettingPollingEssentialTimeoutMillis: true,
-	domain.SettingPollingEssentialRetries:       true,
-	domain.SettingPollingWebSocketCoalesceMS:    true,
-	domain.SettingPollingPersistenceBatchMS:     true,
-	domain.SettingInstanceBackupRetentionCount:  true,
-	domain.SettingDeviceBackupRetentionCount:    true,
-	domain.SettingBridgePort:                    true,
-}
-
-// floatSettings lists keys that must parse as finite floats.
-var floatSettings = map[string]bool{
-	domain.SettingPollingCapacitySafetyMargin: true,
-}
-
 // boolSettings lists keys that must parse as valid booleans.
 var boolSettings = map[string]bool{
 	domain.SettingPollingForceOverCapacity: true,
@@ -120,42 +91,37 @@ var intervalSettings = map[string]bool{
 var validIntervalHours = map[int]bool{0: true, 6: true, 12: true, 24: true, 48: true, 168: true}
 
 // validateSetting validates that key is in the allowlist and value matches
-// the expected type for that key. Returns nil if valid, error with specific message if not.
-func validateSetting(key, value string) error {
+// the expected type for that key. It returns the normalized value to persist.
+func validateSetting(key, value string) (string, error) {
 	if !isValidSettingKey(key) {
-		return fmt.Errorf("unknown setting key: %s", key)
+		return "", fmt.Errorf("unknown setting key: %s", key)
 	}
-	if numericSettings[key] {
-		if _, err := strconv.Atoi(value); err != nil {
-			return fmt.Errorf("%s must be a valid integer", key)
-		}
-	}
-	if floatSettings[key] {
-		n, err := strconv.ParseFloat(value, 64)
-		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
-			return fmt.Errorf("%s must be a valid float", key)
-		}
+	normalized, err := domain.NormalizeConstrainedSetting(key, value)
+	if err != nil {
+		return "", err
 	}
 	if boolSettings[key] {
-		if _, err := strconv.ParseBool(value); err != nil {
-			return fmt.Errorf("%s must be a valid boolean", key)
+		trimmed := strings.TrimSpace(value)
+		if _, err := strconv.ParseBool(trimmed); err != nil {
+			return "", fmt.Errorf("%s must be a valid boolean", key)
 		}
+		normalized = trimmed
 	}
 	if urlSettings[key] && value != "" {
 		u, err := url.Parse(value)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return fmt.Errorf("%s must be a valid http/https URL", key)
+			return "", fmt.Errorf("%s must be a valid http/https URL", key)
 		}
 	}
 	if isLegacyGrafanaDeviceURLSetting(key) && value != "" {
 		u, err := url.Parse(value)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return fmt.Errorf("%s must be a valid http/https URL", key)
+			return "", fmt.Errorf("%s must be a valid http/https URL", key)
 		}
 	}
 	if key == domain.SettingTimezone && value != "" {
 		if _, err := time.LoadLocation(value); err != nil {
-			return fmt.Errorf("invalid timezone: %s", value)
+			return "", fmt.Errorf("invalid timezone: %s", value)
 		}
 	}
 	if key == domain.SettingTopologyDiscoveryDefaultMode {
@@ -166,16 +132,18 @@ func validateSetting(key, value string) error {
 			domain.TopologyDiscoveryModeBootstrapOnce:
 			// valid
 		default:
-			return fmt.Errorf("%s must be one of: off, lldp, lldp_cdp, bootstrap_once", key)
+			return "", fmt.Errorf("%s must be one of: off, lldp, lldp_cdp, bootstrap_once", key)
 		}
 	}
 	if intervalSettings[key] {
-		n, err := strconv.Atoi(value)
+		trimmed := strings.TrimSpace(value)
+		n, err := strconv.Atoi(trimmed)
 		if err != nil || !validIntervalHours[n] {
-			return fmt.Errorf("%s must be one of: 0, 6, 12, 24, 48, 168", key)
+			return "", fmt.Errorf("%s must be one of: 0, 6, 12, 24, 48, 168", key)
 		}
+		normalized = trimmed
 	}
-	return nil
+	return normalized, nil
 }
 
 func isValidSettingKey(key string) bool {
@@ -244,13 +212,14 @@ func (h *SettingsHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateSetting(key, req.Value); err != nil {
+	value, err := validateSetting(key, req.Value)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	previous, previousErr := h.repo.Get(key)
-	if err := h.repo.Set(key, req.Value); err != nil {
+	if err := h.repo.Set(key, value); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update setting", err)
 		return
 	}
@@ -258,16 +227,16 @@ func (h *SettingsHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		"settings changed key=%s previous=%s new=%s affects=%s",
 		key,
 		debugSettingValue(key, previous, previousErr),
-		debugSettingValue(key, req.Value, nil),
+		debugSettingValue(key, value, nil),
 		debugSettingAffects(key),
 	)
 
 	if settingResponseSensitive(key) {
-		json.NewEncoder(w).Encode(buildSettingsResponse(map[string]string{key: req.Value}))
+		json.NewEncoder(w).Encode(buildSettingsResponse(map[string]string{key: value}))
 		return
 	}
 
-	json.NewEncoder(w).Encode(settingsResponse{Data: map[string]string{key: req.Value}})
+	json.NewEncoder(w).Encode(settingsResponse{Data: map[string]string{key: value}})
 }
 
 func buildSettingsResponse(settings map[string]string) settingsResponse {
