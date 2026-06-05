@@ -929,6 +929,28 @@ export interface RestoreReport {
   message: string;
 }
 
+export type RestoreStatusPhase =
+  | 'validation_passed'
+  | 'staged_restart_pending'
+  | 'startup_restore_detected'
+  | 'applying_postgres'
+  | 'postgres_applied'
+  | 'verifying_keyring'
+  | 'running_credential_rewrap'
+  | 'completed'
+  | 'failed_retryable'
+  | 'failed_operator_action_required';
+
+export interface RestoreStatus {
+  operation_id: string;
+  phase: RestoreStatusPhase;
+  attempt_count: number;
+  last_error: string;
+  missing_key_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // Vendor configuration
 export interface VendorConfig {
   name: string;

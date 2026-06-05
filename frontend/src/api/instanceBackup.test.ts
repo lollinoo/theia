@@ -3,6 +3,7 @@ import { ServerError, ValidationError } from './errors';
 import {
   cancelInstanceBackup,
   fetchInstanceBackups,
+  fetchRestoreStatus,
   instanceBackupDownloadUrl,
   restoreInstanceBackup,
 } from './instanceBackup';
@@ -97,6 +98,36 @@ describe('instance backup client', () => {
     expect(instanceBackupDownloadUrl('backup/1')).toBe(
       '/api/v1/instance-backups/backup%2F1/download',
     );
+  });
+
+  it('fetches restore status and preserves missing-key details', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: {
+          operation_id: 'restore-1',
+          phase: 'failed_operator_action_required',
+          attempt_count: 2,
+          last_error: 'missing kid-old',
+          missing_key_id: 'kid-old',
+          created_at: '2026-06-05T00:00:00Z',
+          updated_at: '2026-06-05T00:01:00Z',
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchRestoreStatus()).resolves.toEqual({
+      operation_id: 'restore-1',
+      phase: 'failed_operator_action_required',
+      attempt_count: 2,
+      last_error: 'missing kid-old',
+      missing_key_id: 'kid-old',
+      created_at: '2026-06-05T00:00:00Z',
+      updated_at: '2026-06-05T00:01:00Z',
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/instance-backups/restore-status', {
+      headers: expect.objectContaining({ Accept: 'application/json' }),
+    });
   });
 
   it('restores backups with multipart form data and dry-run query', async () => {

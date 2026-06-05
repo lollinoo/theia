@@ -1,6 +1,6 @@
-import { type InstanceBackup, type RestoreReport } from '../types/api';
+import { type InstanceBackup, type RestoreReport, type RestoreStatus } from '../types/api';
 import { ServerError, ValidationError } from './errors';
-import { parseInstanceBackup, parseRestoreReport } from './instanceBackupParsers';
+import { parseInstanceBackup, parseRestoreReport, parseRestoreStatus } from './instanceBackupParsers';
 import { headersWithCsrf, requestJSON, requestJSONWithBody } from './transport';
 
 // createInstanceBackup starts an instance backup and parses the created backup envelope.
@@ -36,6 +36,12 @@ export async function cancelInstanceBackup(id: string): Promise<InstanceBackup> 
 // instanceBackupDownloadUrl builds the download endpoint while preserving encoded IDs.
 export function instanceBackupDownloadUrl(id: string): string {
   return `/api/v1/instance-backups/${encodeURIComponent(id)}/download`;
+}
+
+export async function fetchRestoreStatus(): Promise<RestoreStatus | null> {
+  const payload = await requestJSON('/api/v1/instance-backups/restore-status');
+  const data = (payload as Record<string, unknown>)?.data;
+  return parseRestoreStatus(data);
 }
 
 // restoreInstanceBackup uploads an archive through multipart form data and parses the restore report.

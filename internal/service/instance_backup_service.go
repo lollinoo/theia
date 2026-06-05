@@ -188,6 +188,13 @@ func (s *InstanceBackupService) RestoreArchiveLimits() RestoreArchiveLimits {
 	return normalizeRestoreArchiveLimits(s.restoreLimits)
 }
 
+func (s *InstanceBackupService) RestoreOperationStatus() (*RestoreOperationStatus, bool, error) {
+	if s == nil {
+		return nil, false, nil
+	}
+	return readRestoreOperationStatus(s.stateDir)
+}
+
 // SetBackupArchiveLimitsForTest overrides backup archive quotas in focused tests.
 func (s *InstanceBackupService) SetBackupArchiveLimitsForTest(limits BackupArchiveLimits) {
 	s.SetBackupArchiveLimits(limits)

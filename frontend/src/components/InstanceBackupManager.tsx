@@ -4,13 +4,14 @@ import {
   createInstanceBackup,
   deleteInstanceBackup,
   fetchInstanceBackups,
+  fetchRestoreStatus,
   fetchSettings,
   instanceBackupDownloadUrl,
   restoreInstanceBackup,
   updateSetting,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
-import type { InstanceBackup, RestoreReport } from '../types/api';
+import type { InstanceBackup, RestoreReport, RestoreStatus } from '../types/api';
 import { validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
 
 const statusColors: Record<string, string> = {
@@ -39,6 +40,7 @@ export function InstanceBackupManager() {
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
   const [restoreError, setRestoreError] = useState('');
+  const [restoreStatus, setRestoreStatus] = useState<RestoreStatus | null>(null);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreConfirmed, setRestoreConfirmed] = useState(false);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
@@ -95,6 +97,7 @@ export function InstanceBackupManager() {
         if (settings['instance_backup_retention_count'] !== undefined) {
           setRetentionCount(settings['instance_backup_retention_count']);
         }
+        setRestoreStatus(await fetchRestoreStatus());
       } catch {
         // non-fatal
       } finally {
@@ -111,6 +114,7 @@ export function InstanceBackupManager() {
         try {
           const data = await fetchInstanceBackups();
           setBackups(data);
+          setRestoreStatus(await fetchRestoreStatus());
           setCreating(false);
         } catch {
           // non-fatal
@@ -330,18 +334,10 @@ export function InstanceBackupManager() {
       setRestoreFile(null);
       setRestoreReport(null);
       setRestoreConfirmed(false);
-      setCreateError(
-        'Restore initiated. The application is restarting. Please refresh the page in a few seconds.',
-      );
+      setCreateError('Restore staged. Restart pending.');
     } catch (err) {
       if (err instanceof TypeError) {
-        setShowRestoreModal(false);
-        setRestoreFile(null);
-        setRestoreReport(null);
-        setRestoreConfirmed(false);
-        setCreateError(
-          'Restore initiated. The application is restarting. Please refresh the page in a few seconds.',
-        );
+        setRestoreError('Restore request was interrupted. Reconnect and check restore status.');
         return;
       }
       const message = err instanceof Error ? err.message : 'Restore failed';
@@ -381,6 +377,39 @@ export function InstanceBackupManager() {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
+
+  const restoreStatusMessages = (status: RestoreStatus | null): string[] => {
+    if (!status) return [];
+    switch (status.phase) {
+      case 'staged_restart_pending':
+        return ['Restore staged. Restart pending.'];
+      case 'startup_restore_detected':
+      case 'applying_postgres':
+      case 'postgres_applied':
+      case 'verifying_keyring':
+      case 'running_credential_rewrap':
+        return ['Restore applying on startup.'];
+      case 'completed':
+        return ['Restore completed.'];
+      case 'failed_retryable':
+        return ['Restore failed but can retry on restart.', status.last_error].filter(Boolean);
+      case 'failed_operator_action_required': {
+        const keyId = status.missing_key_id || 'unknown';
+        const guidance =
+          keyId === 'legacy'
+            ? 'Add legacy=<old secret> to THEIA_ENCRYPTION_KEYS or set THEIA_ENCRYPTION_KEY as fallback, restart, then create and restore-test a fresh backup.'
+            : `Add ${keyId}=<old secret> to THEIA_ENCRYPTION_KEYS, restart, then create and restore-test a fresh backup.`;
+        return [
+          `Restore blocked because key id ${keyId} is missing from THEIA_ENCRYPTION_KEYS.`,
+          guidance,
+        ];
+      }
+      default:
+        return [];
+    }
+  };
+
+  const restoreMessages = restoreStatusMessages(restoreStatus);
 
   const formatProgress = (backup: InstanceBackup): string => {
     if (!backup.progress) return '';
@@ -530,6 +559,14 @@ export function InstanceBackupManager() {
       {createError && (
         <div className="rounded-md border border-status-down/20 bg-status-down/5 p-2 text-xs text-status-down">
           {createError}
+        </div>
+      )}
+
+      {restoreMessages.length > 0 && (
+        <div className="rounded-md border border-outline-subtle bg-surface-high p-2 text-xs text-on-bg-secondary">
+          {restoreMessages.map((message) => (
+            <p key={message}>{message}</p>
+          ))}
         </div>
       )}
 

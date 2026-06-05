@@ -3,6 +3,8 @@ import {
   type InstanceBackupProgress,
   type InstanceBackupStatus,
   type RestoreReport,
+  type RestoreStatus,
+  type RestoreStatusPhase,
 } from '../types/api';
 
 // parseInstanceBackup normalizes backend backup rows while preserving existing field defaults.
@@ -54,5 +56,35 @@ export function parseRestoreReport(data: Record<string, unknown>): RestoreReport
     current_migration_version:
       typeof data.current_migration_version === 'number' ? data.current_migration_version : 0,
     message: typeof data.message === 'string' ? data.message : '',
+  };
+}
+
+const restoreStatusPhases: RestoreStatusPhase[] = [
+  'validation_passed',
+  'staged_restart_pending',
+  'startup_restore_detected',
+  'applying_postgres',
+  'postgres_applied',
+  'verifying_keyring',
+  'running_credential_rewrap',
+  'completed',
+  'failed_retryable',
+  'failed_operator_action_required',
+];
+
+export function parseRestoreStatus(data: unknown): RestoreStatus | null {
+  if (!data || typeof data !== 'object') return null;
+  const record = data as Record<string, unknown>;
+  const phase = typeof record.phase === 'string' ? record.phase : '';
+  return {
+    operation_id: typeof record.operation_id === 'string' ? record.operation_id : '',
+    phase: (restoreStatusPhases.includes(phase as RestoreStatusPhase)
+      ? phase
+      : 'validation_passed') as RestoreStatusPhase,
+    attempt_count: typeof record.attempt_count === 'number' ? record.attempt_count : 0,
+    last_error: typeof record.last_error === 'string' ? record.last_error : '',
+    missing_key_id: typeof record.missing_key_id === 'string' ? record.missing_key_id : '',
+    created_at: typeof record.created_at === 'string' ? record.created_at : '',
+    updated_at: typeof record.updated_at === 'string' ? record.updated_at : '',
   };
 }
