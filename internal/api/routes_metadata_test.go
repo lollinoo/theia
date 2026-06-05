@@ -90,6 +90,17 @@ func TestIsAuthRouteUsesRouteMetadata(t *testing.T) {
 	}
 }
 
+func TestAuthRoutesDeclareAuthEndpointDispatch(t *testing.T) {
+	for _, spec := range apiRouteSpecs {
+		if spec.handlerKey != routeHandlerAuth {
+			continue
+		}
+		if spec.authEndpoint == routeAuthEndpointNone {
+			t.Fatalf("auth route %s does not declare auth endpoint dispatch", spec.pattern)
+		}
+	}
+}
+
 func TestRouteMetadataBuildsServeMuxRegistrations(t *testing.T) {
 	handlers := make(map[routeHandlerKey]http.Handler)
 	for _, spec := range apiRouteSpecs {

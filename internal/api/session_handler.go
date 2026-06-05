@@ -59,44 +59,28 @@ type safeUserResponse struct {
 
 // ServeHTTP handles /api/v1/auth/* and read-only legacy session aliases.
 func (h *AuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.URL.Path {
-	case "/api/v1/auth/login":
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
+	spec, ok := apiRouteMetadata.matchPath(r.URL.Path)
+	if !ok || spec.handlerKey != routeHandlerAuth {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if !spec.supportsMethod(r.Method) {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	switch spec.authEndpoint {
+	case routeAuthEndpointLogin:
 		h.handleLogin(w, r)
-	case "/api/v1/auth/logout":
-		if r.Method != http.MethodPost && r.Method != http.MethodDelete {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
+	case routeAuthEndpointLogout:
 		h.handleLogout(w, r)
-	case "/api/v1/auth/me":
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
+	case routeAuthEndpointMe:
 		h.handleMe(w, r)
-	case "/api/v1/me":
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		h.handleMe(w, r)
-	case "/api/v1/auth/password/change":
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
+	case routeAuthEndpointPasswordChange:
 		h.handlePasswordChange(w, r)
-	case "/api/v1/auth/password/reset":
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
+	case routeAuthEndpointPasswordReset:
 		h.handlePasswordReset(w, r)
-	case "/api/v1/session":
+	case routeAuthEndpointLegacySession:
 		h.handleLegacySession(w, r)
 	default:
 		writeError(w, http.StatusNotFound, "not found")

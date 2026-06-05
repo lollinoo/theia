@@ -82,11 +82,24 @@ const (
 	routeHandlerWebSocket                   routeHandlerKey = "webSocket"
 )
 
+type routeAuthEndpoint int
+
+const (
+	routeAuthEndpointNone routeAuthEndpoint = iota
+	routeAuthEndpointLogin
+	routeAuthEndpointLogout
+	routeAuthEndpointMe
+	routeAuthEndpointPasswordChange
+	routeAuthEndpointPasswordReset
+	routeAuthEndpointLegacySession
+)
+
 type apiRouteSpec struct {
 	name              string
 	pattern           string
 	serveMuxPattern   string
 	handlerKey        routeHandlerKey
+	authEndpoint      routeAuthEndpoint
 	authMode          routeAuthMode
 	middlewareProfile routeMiddlewareProfile
 	methodPolicies    map[string][]string
@@ -180,6 +193,9 @@ func (r apiRouteMetadataRegistry) validate() error {
 		if spec.handlerKey == "" {
 			return fmt.Errorf("api route %s has no handler key", spec.name)
 		}
+		if spec.handlerKey == routeHandlerAuth && spec.authEndpoint == routeAuthEndpointNone {
+			return fmt.Errorf("api auth route %s has no auth endpoint", spec.name)
+		}
 		if spec.authMode == 0 {
 			return fmt.Errorf("api route %s has no auth mode", spec.name)
 		}
@@ -247,6 +263,12 @@ func publicRoute(name, pattern string, methods []string, handlerKey routeHandler
 		middlewareProfile: routeMiddlewarePublicJSONSmallBody,
 		methodPolicies:    methodsWithoutPermissions(methods),
 	}
+}
+
+func publicAuthRoute(name, pattern string, methods []string, endpoint routeAuthEndpoint) apiRouteSpec {
+	spec := publicRoute(name, pattern, methods, routeHandlerAuth)
+	spec.authEndpoint = endpoint
+	return spec
 }
 
 func protectedRoute(name, pattern, serveMuxPattern string, handlerKey routeHandlerKey, profile routeMiddlewareProfile, methodPolicies map[string][]string) apiRouteSpec {
@@ -333,13 +355,13 @@ func methodPolicy(method string, permissions ...string) routeMethodPolicyEntry {
 }
 
 var apiRouteSpecs = []apiRouteSpec{
-	publicRoute("auth login", "/api/v1/auth/login", []string{http.MethodPost}, routeHandlerAuth),
-	publicRoute("auth logout", "/api/v1/auth/logout", []string{http.MethodPost, http.MethodDelete}, routeHandlerAuth),
-	publicRoute("auth me", "/api/v1/auth/me", []string{http.MethodGet}, routeHandlerAuth),
-	publicRoute("legacy me", "/api/v1/me", []string{http.MethodGet}, routeHandlerAuth),
-	publicRoute("auth password change", "/api/v1/auth/password/change", []string{http.MethodPost}, routeHandlerAuth),
-	publicRoute("auth password reset", "/api/v1/auth/password/reset", []string{http.MethodPost}, routeHandlerAuth),
-	publicRoute("legacy session", "/api/v1/session", []string{http.MethodGet, http.MethodDelete, http.MethodPost}, routeHandlerAuth),
+	publicAuthRoute("auth login", "/api/v1/auth/login", []string{http.MethodPost}, routeAuthEndpointLogin),
+	publicAuthRoute("auth logout", "/api/v1/auth/logout", []string{http.MethodPost, http.MethodDelete}, routeAuthEndpointLogout),
+	publicAuthRoute("auth me", "/api/v1/auth/me", []string{http.MethodGet}, routeAuthEndpointMe),
+	publicAuthRoute("legacy me", "/api/v1/me", []string{http.MethodGet}, routeAuthEndpointMe),
+	publicAuthRoute("auth password change", "/api/v1/auth/password/change", []string{http.MethodPost}, routeAuthEndpointPasswordChange),
+	publicAuthRoute("auth password reset", "/api/v1/auth/password/reset", []string{http.MethodPost}, routeAuthEndpointPasswordReset),
+	publicAuthRoute("legacy session", "/api/v1/session", []string{http.MethodGet, http.MethodDelete, http.MethodPost}, routeAuthEndpointLegacySession),
 	publicRoute("bridge connector launch", "/api/v1/bridge/connector/launch", []string{http.MethodPost}, routeHandlerBridgeConnectorLaunch),
 
 	protectedRoute("settings me", "/api/v1/settings/me", "/api/v1/settings/me", routeHandlerSettingsMe, routeMiddlewareNormalJSON, policy(
