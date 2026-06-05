@@ -532,6 +532,7 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 	if !strings.HasSuffix(marker.StagedDB, postgresArchiveDBEntry) {
 		t.Fatalf("marker.StagedDB = %q, want suffix %q", marker.StagedDB, postgresArchiveDBEntry)
 	}
+	assertRestoreStatusFilePhase(t, ts.stateDir, "staged_restart_pending", 0, "")
 }
 
 func TestMoveOrCopyFileForRestoreStagingRenamesOnSameFilesystem(t *testing.T) {
@@ -899,6 +900,7 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
 		t.Fatalf("staging dir should be removed, stat err = %v", err)
 	}
+	assertRestoreStatusFilePhase(t, stateDir, "completed", 1, "")
 }
 
 // TestRestoreCoordinatorApplyPendingRestore_PostgresRestoreFailureKeepsRetryState preserves retry safety after DB activation fails.
@@ -1003,6 +1005,7 @@ func TestRestoreCoordinatorApplyPendingRestore_PostgresRestoreFailureKeepsRetryS
 	if _, err := os.Stat(stagingDir); err != nil {
 		t.Fatalf("restore staging dir should remain for retry: %v", err)
 	}
+	assertRestoreStatusFilePhase(t, stateDir, "failed_retryable", 1, "restore failed")
 	if _, err := os.Stat(filepath.Join(stateDir, "postgres.pre-restore.dump")); err != nil {
 		t.Fatalf("pre-restore dump should remain after failed restore: %v", err)
 	}
@@ -1138,6 +1141,7 @@ func TestRestoreCoordinatorApplyPendingRestore_OptionalArtifactFailureRefreshesS
 	if string(stagedBytes) != "retry-pg-dump" {
 		t.Fatalf("staged dump = %q, want retry-pg-dump", string(stagedBytes))
 	}
+	assertRestoreStatusFilePhase(t, stateDir, "failed_retryable", 1, "validate live backup dir")
 	if info, err := os.Lstat(deviceBackupDir); err != nil {
 		t.Fatalf("lstat live backup symlink: %v", err)
 	} else if info.Mode()&os.ModeSymlink == 0 {
@@ -1298,5 +1302,43 @@ func TestPostgresCLIConnInfo_MovesKeywordPasswordToEnvironment(t *testing.T) {
 	}
 	if commandEnvValue(conn.env, "PGPASSWORD") != sensitive {
 		t.Fatal("PGPASSWORD env does not match keyword DSN password")
+	}
+}
+
+func assertRestoreStatusFilePhase(t *testing.T, stateDir, wantPhase string, wantAttempts int, wantErrorSubstring string) {
+	t.Helper()
+	statusPath := filepath.Join(stateDir, ".theia-restore-status.json")
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("reading restore status file: %v", err)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatalf("unmarshal restore status file: %v", err)
+	}
+	if got, ok := status["operation_id"].(string); !ok || got == "" {
+		t.Fatalf("restore status operation_id = %#v, want non-empty string", status["operation_id"])
+	}
+	if got, ok := status["phase"].(string); !ok || got != wantPhase {
+		t.Fatalf("restore status phase = %#v, want %q", status["phase"], wantPhase)
+	}
+	if got, ok := status["attempt_count"].(float64); !ok || int(got) != wantAttempts {
+		t.Fatalf("restore status attempt_count = %#v, want %d", status["attempt_count"], wantAttempts)
+	}
+	if got, ok := status["created_at"].(string); !ok || got == "" {
+		t.Fatalf("restore status created_at = %#v, want non-empty string", status["created_at"])
+	}
+	if got, ok := status["updated_at"].(string); !ok || got == "" {
+		t.Fatalf("restore status updated_at = %#v, want non-empty string", status["updated_at"])
+	}
+	lastError, _ := status["last_error"].(string)
+	if wantErrorSubstring == "" {
+		if lastError != "" {
+			t.Fatalf("restore status last_error = %q, want empty", lastError)
+		}
+		return
+	}
+	if !strings.Contains(lastError, wantErrorSubstring) {
+		t.Fatalf("restore status last_error = %q, want substring %q", lastError, wantErrorSubstring)
 	}
 }

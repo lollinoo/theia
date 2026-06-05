@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ func TestRestoreMarkerReadWriteRemoveRoundTrip(t *testing.T) {
 	if mode := info.Mode().Perm(); mode != 0o600 {
 		t.Fatalf("marker mode = %v, want 0600", mode)
 	}
+	assertRestoreMarkerOperationJSON(t, markerPath, "validation_passed")
 
 	got, exists, err := readRestoreMarker(markerPath)
 	if err != nil {
@@ -41,8 +43,14 @@ func TestRestoreMarkerReadWriteRemoveRoundTrip(t *testing.T) {
 	if !exists {
 		t.Fatal("readRestoreMarker() exists = false, want true")
 	}
-	if *got != marker {
-		t.Fatalf("readRestoreMarker() = %#v, want %#v", *got, marker)
+	if got.StagedDB != marker.StagedDB ||
+		got.StagedBackups != marker.StagedBackups ||
+		got.StagedKnownHosts != marker.StagedKnownHosts ||
+		got.StateDir != marker.StateDir ||
+		got.DeviceBackupDir != marker.DeviceBackupDir ||
+		got.KnownHostsPath != marker.KnownHostsPath ||
+		got.Timestamp != marker.Timestamp {
+		t.Fatalf("readRestoreMarker() = %#v, want restore paths from %#v", *got, marker)
 	}
 
 	if err := removeRestoreMarker(markerPath); err != nil {
@@ -50,6 +58,73 @@ func TestRestoreMarkerReadWriteRemoveRoundTrip(t *testing.T) {
 	}
 	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
 		t.Fatalf("marker should be removed, stat err = %v", err)
+	}
+}
+
+func TestWriteRestoreMarkerDoesNotLeavePartialJSONOrTempFiles(t *testing.T) {
+	stateDir := t.TempDir()
+	markerPath := restoreMarkerFilePath(stateDir)
+	marker := newRestoreMarker(
+		filepath.Join(stateDir, ".restore-staging", postgresArchiveDBEntry),
+		"",
+		"",
+		stateDir,
+		filepath.Join(stateDir, "device-backups"),
+		filepath.Join(stateDir, "known_hosts"),
+		"2026-04-23T00:00:00Z",
+	)
+
+	if err := writeRestoreMarker(markerPath, marker); err != nil {
+		t.Fatalf("writeRestoreMarker() error = %v", err)
+	}
+
+	data, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("reading marker: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("marker contains partial or malformed JSON: %v", err)
+	}
+	if decoded["staged_db"] == "" {
+		t.Fatal("marker missing staged_db after atomic publication")
+	}
+
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		t.Fatalf("reading state dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".tmp") || strings.Contains(entry.Name(), "restore-pending-") {
+			t.Fatalf("atomic marker write left temp file %q", entry.Name())
+		}
+	}
+}
+
+func assertRestoreMarkerOperationJSON(t *testing.T, markerPath string, wantPhase string) {
+	t.Helper()
+	data, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("reading marker json: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal marker json: %v", err)
+	}
+	if got, ok := decoded["operation_id"].(string); !ok || got == "" {
+		t.Fatalf("marker operation_id = %#v, want non-empty string", decoded["operation_id"])
+	}
+	if got, ok := decoded["phase"].(string); !ok || got != wantPhase {
+		t.Fatalf("marker phase = %#v, want %q", decoded["phase"], wantPhase)
+	}
+	if got, ok := decoded["attempt_count"].(float64); !ok || got != 0 {
+		t.Fatalf("marker attempt_count = %#v, want 0", decoded["attempt_count"])
+	}
+	if got, ok := decoded["created_at"].(string); !ok || got == "" {
+		t.Fatalf("marker created_at = %#v, want non-empty string", decoded["created_at"])
+	}
+	if got, ok := decoded["updated_at"].(string); !ok || got == "" {
+		t.Fatalf("marker updated_at = %#v, want non-empty string", decoded["updated_at"])
 	}
 }
 

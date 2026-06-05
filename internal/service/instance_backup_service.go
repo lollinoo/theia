@@ -780,7 +780,11 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 		s.knownHostsPath,
 		time.Now().UTC().Format(time.RFC3339),
 	)
+	updateRestoreOperationFields(&marker, restorePhaseStagedRestartPending, "", "")
 	if err := writeRestoreMarker(markerPath, marker); err != nil {
+		return nil, cleanupStagingOnError(err)
+	}
+	if err := writeRestoreOperationStatus(s.stateDir, restoreOperationStatusFromMarker(marker)); err != nil {
 		return nil, cleanupStagingOnError(err)
 	}
 

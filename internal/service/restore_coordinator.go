@@ -40,6 +40,13 @@ type restoreMarker struct {
 	DeviceBackupDir  string `json:"device_backup_dir"`
 	KnownHostsPath   string `json:"known_hosts_path"`
 	Timestamp        string `json:"timestamp"`
+	OperationID      string `json:"operation_id"`
+	Phase            string `json:"phase"`
+	AttemptCount     int    `json:"attempt_count"`
+	LastError        string `json:"last_error"`
+	MissingKeyID     string `json:"missing_key_id,omitempty"`
+	CreatedAt        string `json:"created_at"`
+	UpdatedAt        string `json:"updated_at"`
 }
 
 // newRestoreMarker records staged restore paths and runtime targets for restart-safe activation.
@@ -101,27 +108,44 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 	if err := validatePendingRestoreMarker(*marker, c.stateDir, c.deviceBackupDir, c.knownHostsPath, stagingDir); err != nil {
 		return false, err
 	}
+	if err := c.persistRestoreStatus(marker, restorePhaseStartupRestoreDetected, "", ""); err != nil {
+		return false, err
+	}
 
 	if err := ensureSupportedPostgresCLITools(ctx, "pg_dump", "pg_restore", "psql"); err != nil {
+		_ = c.persistRestoreStatus(marker, restorePhaseFailedRetryable, err.Error(), "")
 		return false, err
 	}
 
 	if err := c.backupLiveDB(); err != nil {
+		_ = c.persistRestoreStatus(marker, restorePhaseFailedRetryable, err.Error(), "")
 		return false, err
 	}
 
+	marker.AttemptCount++
+	if err := c.persistRestoreStatus(marker, restorePhaseApplyingPostgres, "", ""); err != nil {
+		return false, err
+	}
 	if err := runPostgresRestore(ctx, c.dbDSN, marker.StagedDB); err != nil {
+		_ = c.persistRestoreStatus(marker, restorePhaseFailedRetryable, err.Error(), "")
+		return false, err
+	}
+	if err := c.persistRestoreStatus(marker, restorePhasePostgresApplied, "", ""); err != nil {
 		return false, err
 	}
 
 	if restoreCoordinatorAfterDBActivationHook != nil {
 		if err := restoreCoordinatorAfterDBActivationHook(); err != nil {
-			return false, c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("after db activation hook: %w", err))
+			retryErr := c.restoreRetryableError(marker.StagedDB, stagingDir, fmt.Errorf("after db activation hook: %w", err))
+			_ = c.persistRestoreStatus(marker, restorePhaseFailedRetryable, retryErr.Error(), "")
+			return false, retryErr
 		}
 	}
 
 	if err := activateOptionalRestoreArtifacts(*marker, stagingDir); err != nil {
-		return false, c.restoreRetryableError(marker.StagedDB, stagingDir, err)
+		retryErr := c.restoreRetryableError(marker.StagedDB, stagingDir, err)
+		_ = c.persistRestoreStatus(marker, restorePhaseFailedRetryable, retryErr.Error(), "")
+		return false, retryErr
 	}
 
 	if err := removeRestoreMarker(markerPath); err != nil {
@@ -134,7 +158,18 @@ func (c *RestoreCoordinator) ApplyPendingRestore() (bool, error) {
 		}
 	}
 
+	if err := c.persistRestoreStatus(marker, restorePhaseCompleted, "", ""); err != nil {
+		return false, err
+	}
 	return true, nil
+}
+
+func (c *RestoreCoordinator) persistRestoreStatus(marker *restoreMarker, phase restoreOperationPhase, lastError, missingKeyID string) error {
+	if marker == nil {
+		return nil
+	}
+	updateRestoreOperationFields(marker, phase, lastError, missingKeyID)
+	return writeRestoreOperationStatus(c.stateDir, restoreOperationStatusFromMarker(*marker))
 }
 
 // backupLiveDB captures the current database once before applying a staged restore.
