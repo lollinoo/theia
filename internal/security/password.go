@@ -10,15 +10,17 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode/utf8"
+	"unicode"
 
 	"golang.org/x/crypto/argon2"
 )
 
 const (
-	passwordMinLength = 12
-	// MaxPasswordLength bounds password processing while still allowing long passphrases.
-	MaxPasswordLength = 1024
+	passwordMinLength = 10
+	passwordMaxLength = 24
+
+	// PasswordPolicyMessage is safe to show to users when password validation fails.
+	PasswordPolicyMessage = "Password must be 10 to 24 characters and include uppercase, lowercase, number, and special character."
 
 	argon2idMemory      = 64 * 1024
 	argon2idIterations  = 3
@@ -35,33 +37,35 @@ var (
 	errInvalidPasswordHash     = errors.New("invalid password hash")
 )
 
-var commonWeakPasswords = map[string]struct{}{
-	"1234567890":    {},
-	"123456789012":  {},
-	"administrator": {},
-	"admin":         {},
-	"letmein":       {},
-	"password":      {},
-	"password123":   {},
-	"qwerty123456":  {},
-	"theia":         {},
-}
-
 // ValidatePasswordPolicy validates a user-managed password.
 func ValidatePasswordPolicy(password string) error {
-	if len(password) > MaxPasswordLength {
-		return fmt.Errorf("%w: password is too long", ErrPasswordPolicyViolation)
-	}
 	trimmed := strings.TrimSpace(password)
-	if utf8.RuneCountInString(trimmed) < passwordMinLength {
-		return fmt.Errorf("%w: password must be at least %d characters", ErrPasswordPolicyViolation, passwordMinLength)
+	characterCount := len([]rune(trimmed))
+	if characterCount < passwordMinLength || characterCount > passwordMaxLength {
+		return fmt.Errorf("%w: password must be 10 to 24 characters", ErrPasswordPolicyViolation)
 	}
-	normalized := strings.ToLower(trimmed)
-	if _, ok := commonWeakPasswords[normalized]; ok {
-		return fmt.Errorf("%w: password is too common", ErrPasswordPolicyViolation)
+	var hasUpper, hasLower, hasNumber, hasSpecial bool
+	for _, r := range trimmed {
+		switch {
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsDigit(r):
+			hasNumber = true
+		case unicode.IsPunct(r) || unicode.IsSymbol(r):
+			hasSpecial = true
+		}
 	}
-	if allRunesSame(normalized) {
-		return fmt.Errorf("%w: password is too repetitive", ErrPasswordPolicyViolation)
+	switch {
+	case !hasUpper:
+		return fmt.Errorf("%w: password must include an uppercase letter", ErrPasswordPolicyViolation)
+	case !hasLower:
+		return fmt.Errorf("%w: password must include a lowercase letter", ErrPasswordPolicyViolation)
+	case !hasNumber:
+		return fmt.Errorf("%w: password must include a number", ErrPasswordPolicyViolation)
+	case !hasSpecial:
+		return fmt.Errorf("%w: password must include a special character", ErrPasswordPolicyViolation)
 	}
 	return nil
 }
@@ -206,18 +210,4 @@ func parseArgon2idParams(raw string) (argon2idParams, error) {
 		iterations:  uint32(iterations),
 		parallelism: uint8(parallelism),
 	}, nil
-}
-
-func allRunesSame(value string) bool {
-	var first rune
-	for i, r := range value {
-		if i == 0 {
-			first = r
-			continue
-		}
-		if r != first {
-			return false
-		}
-	}
-	return true
 }

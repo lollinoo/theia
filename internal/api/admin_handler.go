@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/security"
 	"github.com/lollinoo/theia/internal/service"
 )
 
@@ -554,7 +555,9 @@ func writeAdminError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrPermissionDenied):
 		writeAuthCodeError(w, http.StatusForbidden, "permission_denied", "permission denied")
-	case errors.Is(err, service.ErrPasswordPolicyViolation), errors.Is(err, service.ErrAdminInvalidInput):
+	case errors.Is(err, service.ErrPasswordPolicyViolation):
+		writeError(w, http.StatusBadRequest, security.PasswordPolicyMessage)
+	case errors.Is(err, service.ErrAdminInvalidInput):
 		writeError(w, http.StatusBadRequest, "invalid request")
 	case errors.Is(err, domain.ErrAuthUserNotFound), errors.Is(err, domain.ErrAuthRoleNotFound):
 		writeError(w, http.StatusNotFound, "not found")

@@ -527,7 +527,7 @@ func TestAuthServicePasswordResetTokensExpire(t *testing.T) {
 	h.now = h.now.Add(31 * time.Minute)
 	err = h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
 		Token:       reset.Token,
-		NewPassword: "Another Correct Horse Battery Staple 2026!",
+		NewPassword: "AnotherPass1!",
 	})
 	if !errors.Is(err, ErrPasswordResetExpired) {
 		t.Fatalf("CompletePasswordReset expired error = %v, want ErrPasswordResetExpired", err)
@@ -560,7 +560,7 @@ func TestAuthServiceCompletePasswordResetUpdatesPasswordAndRevokesSessions(t *te
 		t.Fatalf("CreatePasswordResetToken: %v", err)
 	}
 
-	newPassword := "Reset Correct Horse Battery Staple 2026!"
+	newPassword := "ResetPass1!"
 	if err := h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
 		Token:       reset.Token,
 		NewPassword: newPassword,
@@ -607,7 +607,7 @@ func TestAuthServiceCompletePasswordResetRejectsReplay(t *testing.T) {
 		t.Fatalf("CreatePasswordResetToken: %v", err)
 	}
 
-	firstPassword := "First Reset Correct Horse Battery Staple 2026!"
+	firstPassword := "FirstReset1!"
 	if err := h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
 		Token:       reset.Token,
 		NewPassword: firstPassword,
@@ -617,7 +617,7 @@ func TestAuthServiceCompletePasswordResetRejectsReplay(t *testing.T) {
 
 	err = h.service.CompletePasswordReset(context.Background(), PasswordResetCompleteInput{
 		Token:       reset.Token,
-		NewPassword: "Replay Correct Horse Battery Staple 2026!",
+		NewPassword: "ReplayPass1!",
 	})
 	if !errors.Is(err, ErrPasswordResetExpired) {
 		t.Fatalf("CompletePasswordReset replay error = %v, want ErrPasswordResetExpired", err)
@@ -658,7 +658,7 @@ func TestAuthServicePasswordChangeRevokesOtherSessionsAndClearsMustChange(t *tes
 		t.Fatalf("CreateSession other: %v", err)
 	}
 
-	newPassword := "New Correct Horse Battery Staple 2026!"
+	newPassword := "NewPass123!"
 	if err := h.service.ChangePassword(context.Background(), PasswordChangeInput{
 		UserID:           user.ID,
 		CurrentSessionID: &login.Session.ID,
@@ -819,7 +819,7 @@ func TestAuthServiceAdminCreateUserSetsSafeDefaultsAndAudits(t *testing.T) {
 		Username:    "new-admin",
 		Email:       "new-admin@example.test",
 		DisplayName: "New Admin",
-		Password:    "Created Correct Horse Battery 2026!",
+		Password:    "CreatedUser1!",
 		Roles:       []string{domain.RoleAdmin},
 	})
 	if err != nil {
@@ -832,7 +832,7 @@ func TestAuthServiceAdminCreateUserSetsSafeDefaultsAndAudits(t *testing.T) {
 		t.Fatalf("CreatedBy = %#v, want actor %s", created.User.CreatedBy, actorUser.ID)
 	}
 	stored := h.store.user(t, created.User.ID)
-	ok, err := security.VerifyPassword("Created Correct Horse Battery 2026!", stored.PasswordHash)
+	ok, err := security.VerifyPassword("CreatedUser1!", stored.PasswordHash)
 	if err != nil {
 		t.Fatalf("VerifyPassword: %v", err)
 	}
@@ -865,7 +865,7 @@ func TestAuthServiceAdminCreateUserWithRolesRequiresRolesAssign(t *testing.T) {
 	_, err := h.service.CreateAdminUser(ctx, actor, AdminCreateUserInput{
 		Username: "created-with-role",
 		Email:    "created-with-role@example.test",
-		Password: "Created Correct Horse Battery 2026!",
+		Password: "CreatedUser1!",
 		Roles:    []string{domain.RoleViewer},
 	})
 	if !errors.Is(err, ErrPermissionDenied) {

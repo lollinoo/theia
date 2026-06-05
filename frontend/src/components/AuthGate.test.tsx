@@ -127,17 +127,17 @@ describe('AuthGate', () => {
       target: { value: 'old-password' },
     });
     fireEvent.change(screen.getByLabelText('New password'), {
-      target: { value: 'new-password-123' },
+      target: { value: 'NewPass123!' },
     });
     fireEvent.change(screen.getByLabelText('Confirm new password'), {
-      target: { value: 'new-password-123' },
+      target: { value: 'NewPass123!' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
 
     await waitFor(() => {
       expect(changePassword).toHaveBeenCalledWith({
         current_password: 'old-password',
-        new_password: 'new-password-123',
+        new_password: 'NewPass123!',
       });
     });
     expect(await screen.findByText('secured app')).toBeInTheDocument();
@@ -147,10 +147,11 @@ describe('AuthGate', () => {
     await renderForcedPasswordChange();
 
     expect(screen.getByText('Password requirements')).toBeInTheDocument();
-    expect(screen.getByText('At least 12 characters')).toBeInTheDocument();
-    expect(screen.getByText('No more than 1024 bytes')).toBeInTheDocument();
-    expect(screen.getByText('Not a common password')).toBeInTheDocument();
-    expect(screen.getByText('Not the same character repeated')).toBeInTheDocument();
+    expect(screen.getByText('10 to 24 characters')).toBeInTheDocument();
+    expect(screen.getByText('At least one uppercase letter')).toBeInTheDocument();
+    expect(screen.getByText('At least one lowercase letter')).toBeInTheDocument();
+    expect(screen.getByText('At least one number')).toBeInTheDocument();
+    expect(screen.getByText('At least one special character')).toBeInTheDocument();
     expect(screen.getByText('Passwords match')).toBeInTheDocument();
   });
 
@@ -178,10 +179,10 @@ describe('AuthGate', () => {
       target: { value: 'old-password' },
     });
     fireEvent.change(screen.getByLabelText('New password'), {
-      target: { value: 'Correct Horse Battery Staple 2026!' },
+      target: { value: 'NewPass123!' },
     });
     fireEvent.change(screen.getByLabelText('Confirm new password'), {
-      target: { value: 'Correct Horse Battery Staple 2026!' },
+      target: { value: 'NewPass123!' },
     });
 
     expect(screen.getByRole('button', { name: 'Change password' })).not.toBeDisabled();
@@ -194,31 +195,48 @@ describe('AuthGate', () => {
       target: { value: 'old-password' },
     });
     fireEvent.change(screen.getByLabelText('New password'), {
-      target: { value: 'Correct Horse Battery Staple 2026!' },
+      target: { value: 'NewPass123!' },
     });
     fireEvent.change(screen.getByLabelText('Confirm new password'), {
-      target: { value: 'Correct Horse Battery Staple 2027!' },
+      target: { value: 'OtherPass1!' },
     });
 
     expect(screen.getByRole('button', { name: 'Change password' })).toBeDisabled();
     expect(screen.getByText('Passwords match').closest('li')).toHaveTextContent('Not met');
   });
 
-  it('rejects common passwords client-side during a required password change', async () => {
+  it('keeps password change disabled when composition requirements are not met', async () => {
     await renderForcedPasswordChange();
 
     fireEvent.change(screen.getByLabelText('Current password'), {
       target: { value: 'old-password' },
     });
     fireEvent.change(screen.getByLabelText('New password'), {
-      target: { value: 'password123' },
+      target: { value: 'nouppercase1!' },
     });
     fireEvent.change(screen.getByLabelText('Confirm new password'), {
-      target: { value: 'password123' },
+      target: { value: 'nouppercase1!' },
     });
 
     expect(screen.getByRole('button', { name: 'Change password' })).toBeDisabled();
-    expect(screen.getByText('Not a common password').closest('li')).toHaveTextContent('Not met');
+    expect(screen.getByText('At least one uppercase letter').closest('li')).toHaveTextContent(
+      'Not met',
+    );
+  });
+
+  it('shows password reveal controls on the required password change form even when empty', async () => {
+    await renderForcedPasswordChange();
+
+    const currentPasswordInput = screen.getByLabelText('Current password');
+    expect(screen.getByRole('button', { name: 'Show current password' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show new password' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show confirm password' })).toBeInTheDocument();
+    expect(currentPasswordInput).toHaveAttribute('type', 'password');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show current password' }));
+
+    expect(currentPasswordInput).toHaveAttribute('type', 'text');
+    expect(screen.getByRole('button', { name: 'Hide current password' })).toBeInTheDocument();
   });
 
   it('keeps the app behind the login form when the session probe fails', async () => {
@@ -241,17 +259,17 @@ describe('AuthGate', () => {
       target: { value: ' reset-token-1 ' },
     });
     fireEvent.change(screen.getByLabelText('New password'), {
-      target: { value: 'Correct Horse Battery Staple 2026!' },
+      target: { value: 'NewPass123!' },
     });
     fireEvent.change(screen.getByLabelText('Confirm new password'), {
-      target: { value: 'Correct Horse Battery Staple 2026!' },
+      target: { value: 'NewPass123!' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Reset password' }));
 
     await waitFor(() => {
       expect(resetPasswordWithToken).toHaveBeenCalledWith({
         token: 'reset-token-1',
-        new_password: 'Correct Horse Battery Staple 2026!',
+        new_password: 'NewPass123!',
       });
     });
     expect(loginUser).not.toHaveBeenCalled();

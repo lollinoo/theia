@@ -503,6 +503,34 @@ func TestAdminUsersCreateReturnsSafePayload(t *testing.T) {
 	}
 }
 
+func TestAdminUsersCreateReturnsClearPasswordPolicyError(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("admin", false, domain.PermissionUsersCreate))
+	auth.createAdminUserErr = service.ErrPasswordPolicyViolation
+	router := newAuthTestRouter(auth)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/users",
+		strings.NewReader(`{"username":"created","email":"created@example.test","password":"short"}`),
+	)
+	addSessionCookie(req, testSessionToken)
+	addCSRFCookieAndHeader(req, testCSRFToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "invalid request") {
+		t.Fatalf("body = %s, should not use generic invalid request", body)
+	}
+	if !strings.Contains(body, "Password must be 10 to 24 characters") {
+		t.Fatalf("body = %s, want password policy detail", body)
+	}
+}
+
 func TestNewRouterRejectsNormalRoutesUntilPasswordChanged(t *testing.T) {
 	auth := newFakeAPIAuthProvider()
 	auth.setSession(
@@ -645,6 +673,10 @@ func TestAuthPasswordResetMapsServiceErrorsWithoutTokenLeak(t *testing.T) {
 			}
 			if parsed["code"] != tt.wantCode {
 				t.Fatalf("code = %q, want %q", parsed["code"], tt.wantCode)
+			}
+			if tt.wantCode == "password_policy_violation" &&
+				!strings.Contains(parsed["error"], "Password must be 10 to 24 characters") {
+				t.Fatalf("error = %q, want password policy detail", parsed["error"])
 			}
 		})
 	}
@@ -873,6 +905,7 @@ type fakeAPIAuthProvider struct {
 	completedPasswordReset      service.PasswordResetCompleteInput
 	adminUsers                  []domain.UserWithRolesAndPermissions
 	createdAdminUser            *domain.UserWithRolesAndPermissions
+	createAdminUserErr          error
 	listAdminUsersCalled        bool
 	createAdminUserCalled       bool
 }
@@ -981,6 +1014,9 @@ func (f *fakeAPIAuthProvider) ListAdminUsers(context.Context, *service.Authentic
 
 func (f *fakeAPIAuthProvider) CreateAdminUser(context.Context, *service.AuthenticatedUser, service.AdminCreateUserInput) (*domain.UserWithRolesAndPermissions, error) {
 	f.createAdminUserCalled = true
+	if f.createAdminUserErr != nil {
+		return nil, f.createAdminUserErr
+	}
 	if f.createdAdminUser == nil {
 		return nil, domain.ErrAuthUserNotFound
 	}

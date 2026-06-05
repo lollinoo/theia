@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useState } from 'react';
+import { type FormEvent, type ReactNode, useId, useState } from 'react';
 import { resetPasswordWithToken } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { MaterialIcon } from './MaterialIcon';
@@ -12,45 +12,29 @@ function messageFromError(error: unknown, fallback: string): string {
 }
 
 type PasswordPolicyResult = {
-  minLength: boolean;
-  maxBytes: boolean;
-  notCommon: boolean;
-  notRepeated: boolean;
+  length: boolean;
+  uppercase: boolean;
+  lowercase: boolean;
+  number: boolean;
+  special: boolean;
   valid: boolean;
 };
 
-const commonWeakPasswords = new Set([
-  '1234567890',
-  '123456789012',
-  'administrator',
-  'admin',
-  'letmein',
-  'password',
-  'password123',
-  'qwerty123456',
-  'theia',
-]);
-
-const passwordEncoder = new TextEncoder();
-
 function evaluatePasswordPolicy(password: string): PasswordPolicyResult {
   const trimmed = password.trim();
-  const normalized = trimmed.toLowerCase();
-  const normalizedCharacters = Array.from(normalized);
-  const repeated =
-    normalizedCharacters.length > 0 &&
-    normalizedCharacters.every((character) => character === normalizedCharacters[0]);
+  const characters = Array.from(trimmed);
 
   const result = {
-    minLength: Array.from(trimmed).length >= 12,
-    maxBytes: passwordEncoder.encode(password).length <= 1024,
-    notCommon: !commonWeakPasswords.has(normalized),
-    notRepeated: !repeated,
+    length: characters.length >= 10 && characters.length <= 24,
+    uppercase: /\p{Lu}/u.test(trimmed),
+    lowercase: /\p{Ll}/u.test(trimmed),
+    number: /\p{Nd}/u.test(trimmed),
+    special: /[\p{P}\p{S}]/u.test(trimmed),
   };
 
   return {
     ...result,
-    valid: result.minLength && result.maxBytes && result.notCommon && result.notRepeated,
+    valid: result.length && result.uppercase && result.lowercase && result.number && result.special,
   };
 }
 
@@ -62,6 +46,52 @@ function PasswordRequirementItem({ met, children }: { met: boolean; children: Re
         {met ? 'Met' : 'Not met'}
       </span>
     </li>
+  );
+}
+
+function PasswordInput({
+  label,
+  revealLabel,
+  autoComplete,
+  value,
+  onChange,
+  className = 'mb-4',
+}: {
+  label: string;
+  revealLabel: string;
+  autoComplete: string;
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  const inputId = useId();
+  const [visible, setVisible] = useState(false);
+  const action = visible ? 'Hide' : 'Show';
+
+  return (
+    <div className={`${className} block`}>
+      <label htmlFor={inputId} className="mb-2 block text-sm font-medium">
+        {label}
+      </label>
+      <div className="flex rounded-md border border-outline-subtle bg-bg focus-within:border-primary">
+        <input
+          id={inputId}
+          className="min-w-0 flex-1 rounded-l-md bg-transparent px-3 py-2 text-sm outline-none"
+          autoComplete={autoComplete}
+          type={visible ? 'text' : 'password'}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <button
+          aria-label={`${action} ${revealLabel}`}
+          className="flex shrink-0 items-center rounded-r-md border-l border-outline-subtle px-3 py-2 text-on-bg-secondary transition-colors hover:bg-surface-container hover:text-on-bg"
+          type="button"
+          onClick={() => setVisible((current) => !current)}
+        >
+          <MaterialIcon name={visible ? 'visibility_off' : 'visibility'} size={16} />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -190,56 +220,51 @@ export function AuthGate({ children }: AuthGateProps) {
               <p className="mt-1 text-sm text-on-bg-secondary">Set a new password to continue.</p>
             </div>
           </div>
-          <label className="mb-4 block">
-            <span className="mb-2 block text-sm font-medium">Current password</span>
-            <input
-              className="w-full rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-              autoComplete="current-password"
-              type="password"
-              value={currentPassword}
-              onChange={(event) => setCurrentPassword(event.target.value)}
-            />
-          </label>
-          <label className="mb-4 block">
-            <span className="mb-2 block text-sm font-medium">New password</span>
-            <input
-              className="w-full rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-              autoComplete="new-password"
-              type="password"
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-            />
-          </label>
+          <PasswordInput
+            label="Current password"
+            revealLabel="current password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={setCurrentPassword}
+          />
+          <PasswordInput
+            label="New password"
+            revealLabel="new password"
+            autoComplete="new-password"
+            value={newPassword}
+            onChange={setNewPassword}
+          />
           <section className="mb-4 rounded-md border border-outline-subtle bg-bg/60 p-3 text-xs text-on-bg-secondary">
             <h2 className="mb-2 text-sm font-medium text-on-bg">Password requirements</h2>
             <ul className="space-y-1">
-              <PasswordRequirementItem met={forcedPasswordPolicy.minLength}>
-                At least 12 characters
+              <PasswordRequirementItem met={forcedPasswordPolicy.length}>
+                10 to 24 characters
               </PasswordRequirementItem>
-              <PasswordRequirementItem met={forcedPasswordPolicy.maxBytes}>
-                No more than 1024 bytes
+              <PasswordRequirementItem met={forcedPasswordPolicy.uppercase}>
+                At least one uppercase letter
               </PasswordRequirementItem>
-              <PasswordRequirementItem met={forcedPasswordPolicy.notCommon}>
-                Not a common password
+              <PasswordRequirementItem met={forcedPasswordPolicy.lowercase}>
+                At least one lowercase letter
               </PasswordRequirementItem>
-              <PasswordRequirementItem met={forcedPasswordPolicy.notRepeated}>
-                Not the same character repeated
+              <PasswordRequirementItem met={forcedPasswordPolicy.number}>
+                At least one number
+              </PasswordRequirementItem>
+              <PasswordRequirementItem met={forcedPasswordPolicy.special}>
+                At least one special character
               </PasswordRequirementItem>
               <PasswordRequirementItem met={forcedPasswordConfirmationMatches}>
                 Passwords match
               </PasswordRequirementItem>
             </ul>
           </section>
-          <label className="mb-5 block">
-            <span className="mb-2 block text-sm font-medium">Confirm new password</span>
-            <input
-              className="w-full rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-              autoComplete="new-password"
-              type="password"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-            />
-          </label>
+          <PasswordInput
+            label="Confirm new password"
+            revealLabel="confirm password"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={setConfirmPassword}
+            className="mb-5"
+          />
           {error && <div className="mb-4 text-sm text-warning">{error}</div>}
           <button
             className="w-full rounded-md bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-60"
@@ -278,26 +303,21 @@ export function AuthGate({ children }: AuthGateProps) {
               onChange={(event) => setResetToken(event.target.value)}
             />
           </label>
-          <label className="mb-4 block">
-            <span className="mb-2 block text-sm font-medium">New password</span>
-            <input
-              className="w-full rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-              autoComplete="new-password"
-              type="password"
-              value={resetNewPassword}
-              onChange={(event) => setResetNewPassword(event.target.value)}
-            />
-          </label>
-          <label className="mb-5 block">
-            <span className="mb-2 block text-sm font-medium">Confirm new password</span>
-            <input
-              className="w-full rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-              autoComplete="new-password"
-              type="password"
-              value={resetConfirmPassword}
-              onChange={(event) => setResetConfirmPassword(event.target.value)}
-            />
-          </label>
+          <PasswordInput
+            label="New password"
+            revealLabel="new password"
+            autoComplete="new-password"
+            value={resetNewPassword}
+            onChange={setResetNewPassword}
+          />
+          <PasswordInput
+            label="Confirm new password"
+            revealLabel="confirm password"
+            autoComplete="new-password"
+            value={resetConfirmPassword}
+            onChange={setResetConfirmPassword}
+            className="mb-5"
+          />
           {error && <div className="mb-4 text-sm text-warning">{error}</div>}
           <button
             className="w-full rounded-md bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-60"
@@ -345,16 +365,14 @@ export function AuthGate({ children }: AuthGateProps) {
             onChange={(event) => setIdentifier(event.target.value)}
           />
         </label>
-        <label className="mb-5 block">
-          <span className="mb-2 block text-sm font-medium">Password</span>
-          <input
-            className="w-full rounded-md border border-outline-subtle bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-            autoComplete="current-password"
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </label>
+        <PasswordInput
+          label="Password"
+          revealLabel="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={setPassword}
+          className="mb-5"
+        />
         {(error || sessionError) && (
           <div className="mb-4 text-sm text-warning">{error ?? sessionError}</div>
         )}
