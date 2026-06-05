@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -11,7 +12,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/collector"
+	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
@@ -39,7 +42,33 @@ func wireRuntimeResetter(deviceService *service.DeviceService, resetter deviceRu
 }
 
 func applyPendingPostgresRestore(stateDir, dbDSN, deviceBackupDir, knownHostsPath string) error {
-	applied, err := service.NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath).ApplyPendingRestore()
+	coordinator := service.NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath)
+	coordinator.SetCompletionVerifier(func(ctx context.Context, reportPhase func(service.RestoreOperationPhase) error) error {
+		if err := reportPhase(service.RestorePhaseVerifyingKeyring); err != nil {
+			return err
+		}
+		keyring, err := crypto.LoadKeyringFromEnv()
+		if err != nil {
+			return fmt.Errorf("load restore credential keyring: %w", err)
+		}
+		db, err := openPrimaryRuntimeDB(dbDSN)
+		if err != nil {
+			return fmt.Errorf("open restored database for credential lifecycle verification: %w", err)
+		}
+		defer db.Close()
+		postgres.ConfigureDB(db)
+		if err := db.PingContext(ctx); err != nil {
+			return fmt.Errorf("connect to restored database for credential lifecycle verification: %w", err)
+		}
+		if err := reportPhase(service.RestorePhaseRunningCredentialRewrap); err != nil {
+			return err
+		}
+		if err := postgres.RunMigrations(db, keyring); err != nil {
+			return fmt.Errorf("run credential lifecycle migrations after restore: %w", err)
+		}
+		return nil
+	})
+	applied, err := coordinator.ApplyPendingRestore()
 	if err != nil {
 		return fmt.Errorf("apply pending restore: %w", err)
 	}

@@ -532,6 +532,7 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 	if !strings.HasSuffix(marker.StagedDB, postgresArchiveDBEntry) {
 		t.Fatalf("marker.StagedDB = %q, want suffix %q", marker.StagedDB, postgresArchiveDBEntry)
 	}
+	assertRestoreStatusFilePhase(t, ts.stateDir, "staged_restart_pending", 0, "")
 }
 
 func TestMoveOrCopyFileForRestoreStagingRenamesOnSameFilesystem(t *testing.T) {
@@ -899,6 +900,7 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 	if _, err := os.Stat(stagingDir); !os.IsNotExist(err) {
 		t.Fatalf("staging dir should be removed, stat err = %v", err)
 	}
+	assertRestoreStatusFilePhase(t, stateDir, "completed", 1, "")
 }
 
 // TestRestoreCoordinatorApplyPendingRestore_PostgresRestoreFailureKeepsRetryState preserves retry safety after DB activation fails.
@@ -1000,9 +1002,20 @@ func TestRestoreCoordinatorApplyPendingRestore_PostgresRestoreFailureKeepsRetryS
 	if _, err := os.Stat(markerPath); err != nil {
 		t.Fatalf("restore marker should remain for retry: %v", err)
 	}
+	markerAfterFailure, exists, err := readRestoreMarker(markerPath)
+	if err != nil {
+		t.Fatalf("reading marker after failed restore: %v", err)
+	}
+	if !exists {
+		t.Fatal("restore marker missing after failed restore")
+	}
+	if markerAfterFailure.Phase != "failed_retryable" {
+		t.Fatalf("restore marker phase = %q, want failed_retryable", markerAfterFailure.Phase)
+	}
 	if _, err := os.Stat(stagingDir); err != nil {
 		t.Fatalf("restore staging dir should remain for retry: %v", err)
 	}
+	assertRestoreStatusFilePhase(t, stateDir, "failed_retryable", 1, "restore failed")
 	if _, err := os.Stat(filepath.Join(stateDir, "postgres.pre-restore.dump")); err != nil {
 		t.Fatalf("pre-restore dump should remain after failed restore: %v", err)
 	}
@@ -1019,6 +1032,88 @@ func TestRestoreCoordinatorApplyPendingRestore_PostgresRestoreFailureKeepsRetryS
 	}
 	if string(knownHostsBytes) != "live-known-hosts" {
 		t.Fatalf("live known_hosts = %q, want unchanged live-known-hosts", string(knownHostsBytes))
+	}
+}
+
+func TestRestoreCoordinatorApplyPendingRestoreRunsCompletionVerifierBeforeCompletion(t *testing.T) {
+	const dbDSN = "postgres://theia:strong-password@localhost:5432/theia?sslmode=disable"
+
+	stateDir := t.TempDir()
+	deviceBackupDir := filepath.Join(stateDir, "device-backups")
+	knownHostsPath := filepath.Join(stateDir, "known_hosts")
+	stagingDir := filepath.Join(stateDir, ".restore-staging")
+	stagedDump := filepath.Join(stagingDir, postgresArchiveDBEntry)
+	prepareMinimalPendingPostgresRestore(t, stateDir, deviceBackupDir, knownHostsPath, stagedDump)
+	stubSuccessfulPendingPostgresRestoreCommands(t)
+
+	coordinator := NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath)
+	coordinator.SetCompletionVerifier(func(ctx context.Context, reportPhase func(restoreOperationPhase) error) error {
+		if err := reportPhase(restorePhaseVerifyingKeyring); err != nil {
+			return err
+		}
+		assertRestoreStatusFilePhase(t, stateDir, "verifying_keyring", 1, "")
+		if err := reportPhase(restorePhaseRunningCredentialRewrap); err != nil {
+			return err
+		}
+		assertRestoreStatusFilePhase(t, stateDir, "running_credential_rewrap", 1, "")
+		return nil
+	})
+
+	applied, err := coordinator.ApplyPendingRestore()
+	if err != nil {
+		t.Fatalf("ApplyPendingRestore() error = %v", err)
+	}
+	if !applied {
+		t.Fatal("ApplyPendingRestore() applied = false, want true")
+	}
+	assertRestoreStatusFilePhase(t, stateDir, "completed", 1, "")
+}
+
+func TestRestoreCoordinatorApplyPendingRestoreMissingKeyBlocksCompletionWithOperatorStatus(t *testing.T) {
+	const dbDSN = "postgres://theia:strong-password@localhost:5432/theia?sslmode=disable"
+
+	stateDir := t.TempDir()
+	deviceBackupDir := filepath.Join(stateDir, "device-backups")
+	knownHostsPath := filepath.Join(stateDir, "known_hosts")
+	stagingDir := filepath.Join(stateDir, ".restore-staging")
+	stagedDump := filepath.Join(stagingDir, postgresArchiveDBEntry)
+	prepareMinimalPendingPostgresRestore(t, stateDir, deviceBackupDir, knownHostsPath, stagedDump)
+	stubSuccessfulPendingPostgresRestoreCommands(t)
+
+	coordinator := NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath)
+	coordinator.SetCompletionVerifier(func(ctx context.Context, reportPhase func(restoreOperationPhase) error) error {
+		if err := reportPhase(restorePhaseVerifyingKeyring); err != nil {
+			return err
+		}
+		return fmt.Errorf(`credential lifecycle check failed: archive or ciphertext requires encryption key id "kid-old", but it is not configured`)
+	})
+
+	applied, err := coordinator.ApplyPendingRestore()
+	if err == nil {
+		t.Fatal("ApplyPendingRestore() error = nil, want missing key error")
+	}
+	if applied {
+		t.Fatal("ApplyPendingRestore() applied = true, want false")
+	}
+	if got := err.Error(); !strings.Contains(got, "kid-old") || !strings.Contains(got, "THEIA_ENCRYPTION_KEYS") {
+		t.Fatalf("ApplyPendingRestore() error = %q, want missing-key operator guidance", got)
+	}
+	if _, err := os.Stat(restoreMarkerFilePath(stateDir)); err != nil {
+		t.Fatalf("restore marker should remain for operator recovery: %v", err)
+	}
+	if _, err := os.Stat(stagingDir); err != nil {
+		t.Fatalf("restore staging dir should remain for operator recovery: %v", err)
+	}
+
+	status := readRestoreStatusMap(t, stateDir)
+	if got := status["phase"]; got != "failed_operator_action_required" {
+		t.Fatalf("restore status phase = %#v, want failed_operator_action_required", got)
+	}
+	if got := status["missing_key_id"]; got != "kid-old" {
+		t.Fatalf("restore status missing_key_id = %#v, want kid-old", got)
+	}
+	if got, _ := status["last_error"].(string); !strings.Contains(got, "THEIA_ENCRYPTION_KEYS") {
+		t.Fatalf("restore status last_error = %q, want THEIA_ENCRYPTION_KEYS guidance", got)
 	}
 }
 
@@ -1138,6 +1233,7 @@ func TestRestoreCoordinatorApplyPendingRestore_OptionalArtifactFailureRefreshesS
 	if string(stagedBytes) != "retry-pg-dump" {
 		t.Fatalf("staged dump = %q, want retry-pg-dump", string(stagedBytes))
 	}
+	assertRestoreStatusFilePhase(t, stateDir, "failed_retryable", 1, "validate live backup dir")
 	if info, err := os.Lstat(deviceBackupDir); err != nil {
 		t.Fatalf("lstat live backup symlink: %v", err)
 	} else if info.Mode()&os.ModeSymlink == 0 {
@@ -1299,4 +1395,107 @@ func TestPostgresCLIConnInfo_MovesKeywordPasswordToEnvironment(t *testing.T) {
 	if commandEnvValue(conn.env, "PGPASSWORD") != sensitive {
 		t.Fatal("PGPASSWORD env does not match keyword DSN password")
 	}
+}
+
+func assertRestoreStatusFilePhase(t *testing.T, stateDir, wantPhase string, wantAttempts int, wantErrorSubstring string) {
+	t.Helper()
+	status := readRestoreStatusMap(t, stateDir)
+	if got, ok := status["operation_id"].(string); !ok || got == "" {
+		t.Fatalf("restore status operation_id = %#v, want non-empty string", status["operation_id"])
+	}
+	if got, ok := status["phase"].(string); !ok || got != wantPhase {
+		t.Fatalf("restore status phase = %#v, want %q", status["phase"], wantPhase)
+	}
+	if got, ok := status["attempt_count"].(float64); !ok || int(got) != wantAttempts {
+		t.Fatalf("restore status attempt_count = %#v, want %d", status["attempt_count"], wantAttempts)
+	}
+	if got, ok := status["created_at"].(string); !ok || got == "" {
+		t.Fatalf("restore status created_at = %#v, want non-empty string", status["created_at"])
+	}
+	if got, ok := status["updated_at"].(string); !ok || got == "" {
+		t.Fatalf("restore status updated_at = %#v, want non-empty string", status["updated_at"])
+	}
+	lastError, _ := status["last_error"].(string)
+	if wantErrorSubstring == "" {
+		if lastError != "" {
+			t.Fatalf("restore status last_error = %q, want empty", lastError)
+		}
+		return
+	}
+	if !strings.Contains(lastError, wantErrorSubstring) {
+		t.Fatalf("restore status last_error = %q, want substring %q", lastError, wantErrorSubstring)
+	}
+}
+
+func readRestoreStatusMap(t *testing.T, stateDir string) map[string]any {
+	t.Helper()
+	statusPath := filepath.Join(stateDir, ".theia-restore-status.json")
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("reading restore status file: %v", err)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatalf("unmarshal restore status file: %v", err)
+	}
+	return status
+}
+
+func prepareMinimalPendingPostgresRestore(t *testing.T, stateDir, deviceBackupDir, knownHostsPath, stagedDump string) {
+	t.Helper()
+	stagingDir := filepath.Dir(stagedDump)
+	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
+		t.Fatalf("creating staging dir: %v", err)
+	}
+	if err := os.WriteFile(stagedDump, []byte("staged-pg-dump"), 0o600); err != nil {
+		t.Fatalf("writing staged dump: %v", err)
+	}
+	marker := newRestoreMarker(
+		stagedDump,
+		"",
+		"",
+		stateDir,
+		deviceBackupDir,
+		knownHostsPath,
+		"2026-04-23T00:00:00Z",
+	)
+	if err := writeRestoreMarker(restoreMarkerFilePath(stateDir), marker); err != nil {
+		t.Fatalf("writing restore marker: %v", err)
+	}
+}
+
+func stubSuccessfulPendingPostgresRestoreCommands(t *testing.T) {
+	t.Helper()
+	originalTerminate := terminatePostgresConnections
+	terminatePostgresConnections = func(ctx context.Context, dsn string) error { return nil }
+	t.Cleanup(func() { terminatePostgresConnections = originalTerminate })
+
+	stubExternalCommandsWithEnv(t, func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "pg_dump":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+			}
+			dest := commandFlagValue(args, "--file")
+			if dest == "" {
+				t.Fatal("pg_dump missing --file argument")
+			}
+			if err := os.WriteFile(dest, []byte("pre-restore-pg-dump"), 0o600); err != nil {
+				t.Fatalf("writing pg_dump destination: %v", err)
+			}
+			return nil, nil
+		case "pg_restore":
+			if commandArgsEqual(args, "--version") {
+				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+			}
+			return nil, nil
+		case "psql":
+			if commandArgsEqual(args, "--version") {
+				return []byte("psql (PostgreSQL) 17.4\n"), nil
+			}
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+	})
 }

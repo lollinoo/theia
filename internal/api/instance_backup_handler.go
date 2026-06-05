@@ -234,6 +234,27 @@ func (h *InstanceBackupHandler) HandleCancel(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": instanceBackupToMap(*backup)})
 }
 
+// HandleRestoreStatus handles GET /api/v1/instance-backups/restore-status.
+func (h *InstanceBackupHandler) HandleRestoreStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	status, exists, err := h.svc.RestoreOperationStatus()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "reading restore status", err)
+		return
+	}
+	if !exists {
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": nil})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": status})
+}
+
 // HandleRestore handles POST /api/v1/instance-backups/restore.
 // Accepts multipart/form-data with a "file" field containing a .tar.gz archive.
 // Query param dry_run=true validates without staging.

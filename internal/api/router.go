@@ -717,6 +717,14 @@ func NewRouter(
 	})
 
 	// Instance backup restore (multipart upload, bypass middleware)
+	mux.HandleFunc("/api/v1/instance-backups/restore-status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		instanceBackupHandler.HandleRestoreStatus(w, r)
+	})
+
 	mux.HandleFunc("/api/v1/instance-backups/restore", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")

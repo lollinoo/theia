@@ -4,15 +4,68 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/service"
 )
+
+func TestInstanceBackupHandlerRestoreStatusReturnsPersistedOperation(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stateDir, ".theia-restore-status.json"), []byte(`{
+		"operation_id": "restore-1",
+		"phase": "failed_operator_action_required",
+		"attempt_count": 2,
+		"last_error": "Restore is blocked because key id \"kid-old\" is missing from THEIA_ENCRYPTION_KEYS",
+		"missing_key_id": "kid-old",
+		"created_at": "2026-06-05T00:00:00Z",
+		"updated_at": "2026-06-05T00:01:00Z"
+	}`), 0o600); err != nil {
+		t.Fatalf("writing restore status: %v", err)
+	}
+	handler := NewInstanceBackupHandler(newInstanceBackupRestoreTestServiceWithStateDir(t, stateDir, service.DefaultRestoreArchiveLimits))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instance-backups/restore-status", nil)
+	handler.HandleRestoreStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	data := payload["data"]
+	if data["phase"] != "failed_operator_action_required" {
+		t.Fatalf("phase = %#v, want failed_operator_action_required", data["phase"])
+	}
+	if data["missing_key_id"] != "kid-old" {
+		t.Fatalf("missing_key_id = %#v, want kid-old", data["missing_key_id"])
+	}
+}
+
+func TestInstanceBackupHandlerRestoreStatusReturnsNullWhenAbsent(t *testing.T) {
+	handler := NewInstanceBackupHandler(newInstanceBackupRestoreTestService(t, service.DefaultRestoreArchiveLimits))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instance-backups/restore-status", nil)
+	handler.HandleRestoreStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"data":null}` {
+		t.Fatalf("body = %s, want data null", got)
+	}
+}
 
 func TestInstanceBackupHandlerRestoreReportsCompressedUploadLimitRejection(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
@@ -60,6 +113,11 @@ func TestInstanceBackupHandlerRestoreReportsArchiveQuotaLimitRejection(t *testin
 
 func newInstanceBackupRestoreTestService(t *testing.T, limits service.RestoreArchiveLimits) *service.InstanceBackupService {
 	t.Helper()
+	return newInstanceBackupRestoreTestServiceWithStateDir(t, t.TempDir(), limits)
+}
+
+func newInstanceBackupRestoreTestServiceWithStateDir(t *testing.T, stateDir string, limits service.RestoreArchiveLimits) *service.InstanceBackupService {
+	t.Helper()
 	tmpDir := t.TempDir()
 	svc := service.NewInstanceBackupService(
 		nil,
@@ -68,7 +126,7 @@ func newInstanceBackupRestoreTestService(t *testing.T, limits service.RestoreArc
 		tmpDir,
 		t.TempDir(),
 		"",
-		t.TempDir(),
+		stateDir,
 		"",
 		[]byte("0123456789abcdef"),
 	)

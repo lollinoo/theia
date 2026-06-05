@@ -53,17 +53,12 @@ func parseRestoreMarker(markerData []byte) (*restoreMarker, error) {
 
 // writeRestoreMarker persists a pending restore marker with owner-only permissions.
 func writeRestoreMarker(path string, marker restoreMarker) error {
-	markerJSON, err := json.MarshalIndent(marker, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling marker JSON: %w", err)
+	phase := restorePhaseValidationPassed
+	if marker.Phase != "" {
+		phase = restoreOperationPhase(marker.Phase)
 	}
-	if err := os.WriteFile(path, markerJSON, 0600); err != nil {
-		return fmt.Errorf("writing restore marker: %w", err)
-	}
-	if err := os.Chmod(path, 0600); err != nil {
-		return fmt.Errorf("restricting restore marker permissions: %w", err)
-	}
-	return nil
+	updateRestoreOperationFields(&marker, phase, marker.LastError, marker.MissingKeyID)
+	return writeRestoreJSONFileAtomic(path, marker)
 }
 
 // removeRestoreMarker clears a pending restore marker while preserving missing-marker no-op behavior.

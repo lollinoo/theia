@@ -17,6 +17,7 @@ vi.mock('../api/client', () => ({
     created_at: new Date().toISOString(),
   }),
   deleteInstanceBackup: vi.fn().mockResolvedValue(undefined),
+  fetchRestoreStatus: vi.fn().mockResolvedValue(null),
   instanceBackupDownloadUrl: vi.fn().mockReturnValue('/api/v1/instance-backups/download'),
   restoreInstanceBackup: vi.fn().mockResolvedValue({ success: true }),
 }));
@@ -205,6 +206,55 @@ function selectRestoreFile(file: File) {
 }
 
 describe('InstanceBackupManager — SC-5: restore UI', () => {
+  it.each([
+    ['staged_restart_pending', 'Restore staged. Restart pending.'],
+    ['startup_restore_detected', 'Restore applying on startup.'],
+    ['applying_postgres', 'Restore applying on startup.'],
+    ['completed', 'Restore completed.'],
+    ['failed_retryable', 'Restore failed but can retry on restart.'],
+  ])('renders restore status message for %s', async (phase, message) => {
+    const { fetchRestoreStatus } = await import('../api/client');
+    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      operation_id: 'restore-1',
+      phase,
+      attempt_count: 1,
+      last_error: phase === 'failed_retryable' ? 'pg_restore failed' : '',
+      missing_key_id: '',
+      created_at: '2026-06-05T00:00:00Z',
+      updated_at: '2026-06-05T00:01:00Z',
+    });
+
+    await renderAndWait();
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+  });
+
+  it('renders missing key restore status with legacy recovery guidance', async () => {
+    const { fetchRestoreStatus } = await import('../api/client');
+    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      operation_id: 'restore-1',
+      phase: 'failed_operator_action_required',
+      attempt_count: 1,
+      last_error: '',
+      missing_key_id: 'legacy',
+      created_at: '2026-06-05T00:00:00Z',
+      updated_at: '2026-06-05T00:01:00Z',
+    });
+
+    await renderAndWait();
+
+    expect(
+      screen.getByText(
+        'Restore blocked because key id legacy is missing from THEIA_ENCRYPTION_KEYS.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Add legacy=<old secret> to THEIA_ENCRYPTION_KEYS or set THEIA_ENCRYPTION_KEY as fallback, restart, then create and restore-test a fresh backup.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('renders the Restore Backup button', async () => {
     await renderAndWait();
     expect(screen.getByRole('button', { name: 'Restore Backup' })).toBeInTheDocument();

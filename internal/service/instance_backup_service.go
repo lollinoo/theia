@@ -188,6 +188,13 @@ func (s *InstanceBackupService) RestoreArchiveLimits() RestoreArchiveLimits {
 	return normalizeRestoreArchiveLimits(s.restoreLimits)
 }
 
+func (s *InstanceBackupService) RestoreOperationStatus() (*RestoreOperationStatus, bool, error) {
+	if s == nil {
+		return nil, false, nil
+	}
+	return readRestoreOperationStatus(s.stateDir)
+}
+
 // SetBackupArchiveLimitsForTest overrides backup archive quotas in focused tests.
 func (s *InstanceBackupService) SetBackupArchiveLimitsForTest(limits BackupArchiveLimits) {
 	s.SetBackupArchiveLimits(limits)
@@ -392,6 +399,11 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 		cleanupOnError(fmt.Sprintf("collecting backup files: %v", err), err)
 		return nil, err
 	}
+	requiredKeyIDs, err := s.collectRequiredCredentialKeyIDs(ctx)
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("collecting credential encryption metadata: %v", err), err)
+		return nil, err
+	}
 
 	// Step 5: Build manifest
 	manifestPlan, err := buildInstanceBackupArchiveManifestPlan(instanceBackupArchiveManifestInput{
@@ -405,6 +417,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 		archiveFileEntries: archiveFileEntries,
 		encryptionKey:      s.encryptionKey,
 		encryptionKeyring:  s.keyring,
+		requiredKeyIDs:     requiredKeyIDs,
 		limits:             limits,
 	})
 	if err != nil {
@@ -780,7 +793,11 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 		s.knownHostsPath,
 		time.Now().UTC().Format(time.RFC3339),
 	)
+	updateRestoreOperationFields(&marker, restorePhaseStagedRestartPending, "", "")
 	if err := writeRestoreMarker(markerPath, marker); err != nil {
+		return nil, cleanupStagingOnError(err)
+	}
+	if err := writeRestoreOperationStatus(s.stateDir, restoreOperationStatusFromMarker(marker)); err != nil {
 		return nil, cleanupStagingOnError(err)
 	}
 

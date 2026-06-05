@@ -563,6 +563,7 @@ var routePermissionSpecs = []routePermissionSpec{
 		http.MethodHead: {domain.PermissionBackupsRead},
 		http.MethodPost: {domain.PermissionBackupsUpdate},
 	})},
+	{pattern: "/api/v1/instance-backups/restore-status", permissions: readOnlyRoutePermissions(domain.PermissionBackupsRead)},
 	{pattern: "/api/v1/instance-backups/restore", permissions: postOnlyRoutePermissions(domain.PermissionBackupsUpdate)},
 	{pattern: "/api/v1/instance-backups/{backupID}/download", permissions: readOnlyRoutePermissions(domain.PermissionBackupsRead)},
 	{pattern: "/api/v1/instance-backups/{backupID}/cancel", permissions: postOnlyRoutePermissions(domain.PermissionBackupsUpdate)},
