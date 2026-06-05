@@ -43,6 +43,17 @@ function authUser(overrides: Partial<AuthUser> = {}): AuthUser {
   };
 }
 
+async function renderForcedPasswordChange() {
+  vi.mocked(fetchCurrentUser).mockResolvedValue({
+    authenticated: true,
+    user: authUser({ must_change_password: true }),
+  });
+
+  renderGate();
+
+  expect(await screen.findByText('Password change required')).toBeInTheDocument();
+}
+
 describe('AuthGate', () => {
   beforeEach(() => {
     vi.mocked(fetchCurrentUser).mockReset();
@@ -130,6 +141,84 @@ describe('AuthGate', () => {
       });
     });
     expect(await screen.findByText('secured app')).toBeInTheDocument();
+  });
+
+  it('shows password requirements during a required password change', async () => {
+    await renderForcedPasswordChange();
+
+    expect(screen.getByText('Password requirements')).toBeInTheDocument();
+    expect(screen.getByText('At least 12 characters')).toBeInTheDocument();
+    expect(screen.getByText('No more than 1024 bytes')).toBeInTheDocument();
+    expect(screen.getByText('Not a common password')).toBeInTheDocument();
+    expect(screen.getByText('Not the same character repeated')).toBeInTheDocument();
+    expect(screen.getByText('Passwords match')).toBeInTheDocument();
+  });
+
+  it('keeps password change disabled for invalid new passwords', async () => {
+    await renderForcedPasswordChange();
+
+    fireEvent.change(screen.getByLabelText('Current password'), {
+      target: { value: 'old-password' },
+    });
+    fireEvent.change(screen.getByLabelText('New password'), {
+      target: { value: 'short' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'short' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Change password' })).toBeDisabled();
+    expect(changePassword).not.toHaveBeenCalled();
+  });
+
+  it('enables password change for a valid new password and matching confirmation', async () => {
+    await renderForcedPasswordChange();
+
+    fireEvent.change(screen.getByLabelText('Current password'), {
+      target: { value: 'old-password' },
+    });
+    fireEvent.change(screen.getByLabelText('New password'), {
+      target: { value: 'Correct Horse Battery Staple 2026!' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'Correct Horse Battery Staple 2026!' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Change password' })).not.toBeDisabled();
+  });
+
+  it('keeps password change disabled when confirmation does not match', async () => {
+    await renderForcedPasswordChange();
+
+    fireEvent.change(screen.getByLabelText('Current password'), {
+      target: { value: 'old-password' },
+    });
+    fireEvent.change(screen.getByLabelText('New password'), {
+      target: { value: 'Correct Horse Battery Staple 2026!' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'Correct Horse Battery Staple 2027!' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Change password' })).toBeDisabled();
+    expect(screen.getByText('Passwords match').closest('li')).toHaveTextContent('Not met');
+  });
+
+  it('rejects common passwords client-side during a required password change', async () => {
+    await renderForcedPasswordChange();
+
+    fireEvent.change(screen.getByLabelText('Current password'), {
+      target: { value: 'old-password' },
+    });
+    fireEvent.change(screen.getByLabelText('New password'), {
+      target: { value: 'password123' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'password123' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Change password' })).toBeDisabled();
+    expect(screen.getByText('Not a common password').closest('li')).toHaveTextContent('Not met');
   });
 
   it('keeps the app behind the login form when the session probe fails', async () => {

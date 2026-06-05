@@ -11,6 +11,60 @@ function messageFromError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+type PasswordPolicyResult = {
+  minLength: boolean;
+  maxBytes: boolean;
+  notCommon: boolean;
+  notRepeated: boolean;
+  valid: boolean;
+};
+
+const commonWeakPasswords = new Set([
+  '1234567890',
+  '123456789012',
+  'administrator',
+  'admin',
+  'letmein',
+  'password',
+  'password123',
+  'qwerty123456',
+  'theia',
+]);
+
+const passwordEncoder = new TextEncoder();
+
+function evaluatePasswordPolicy(password: string): PasswordPolicyResult {
+  const trimmed = password.trim();
+  const normalized = trimmed.toLowerCase();
+  const normalizedCharacters = Array.from(normalized);
+  const repeated =
+    normalizedCharacters.length > 0 &&
+    normalizedCharacters.every((character) => character === normalizedCharacters[0]);
+
+  const result = {
+    minLength: Array.from(trimmed).length >= 12,
+    maxBytes: passwordEncoder.encode(password).length <= 1024,
+    notCommon: !commonWeakPasswords.has(normalized),
+    notRepeated: !repeated,
+  };
+
+  return {
+    ...result,
+    valid: result.minLength && result.maxBytes && result.notCommon && result.notRepeated,
+  };
+}
+
+function PasswordRequirementItem({ met, children }: { met: boolean; children: ReactNode }) {
+  return (
+    <li className="flex items-center justify-between gap-3">
+      <span>{children}</span>
+      <span className={met ? 'font-medium text-status-up' : 'font-medium text-on-bg-secondary'}>
+        {met ? 'Met' : 'Not met'}
+      </span>
+    </li>
+  );
+}
+
 export function AuthGate({ children }: AuthGateProps) {
   const { status, user, error: sessionError, login, changePassword } = useAuth();
   const [mode, setMode] = useState<'login' | 'reset'>('login');
@@ -25,6 +79,14 @@ export function AuthGate({ children }: AuthGateProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const forcedPasswordPolicy = evaluatePasswordPolicy(newPassword);
+  const forcedPasswordConfirmationMatches =
+    newPassword !== '' && confirmPassword !== '' && newPassword === confirmPassword;
+  const canSubmitForcedPasswordChange =
+    !submitting &&
+    currentPassword.trim() !== '' &&
+    forcedPasswordPolicy.valid &&
+    forcedPasswordConfirmationMatches;
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -49,6 +111,9 @@ export function AuthGate({ children }: AuthGateProps) {
     event.preventDefault();
     setError(null);
     setSuccess(null);
+    if (!canSubmitForcedPasswordChange) {
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setError('New passwords do not match');
       return;
@@ -145,6 +210,26 @@ export function AuthGate({ children }: AuthGateProps) {
               onChange={(event) => setNewPassword(event.target.value)}
             />
           </label>
+          <section className="mb-4 rounded-md border border-outline-subtle bg-bg/60 p-3 text-xs text-on-bg-secondary">
+            <h2 className="mb-2 text-sm font-medium text-on-bg">Password requirements</h2>
+            <ul className="space-y-1">
+              <PasswordRequirementItem met={forcedPasswordPolicy.minLength}>
+                At least 12 characters
+              </PasswordRequirementItem>
+              <PasswordRequirementItem met={forcedPasswordPolicy.maxBytes}>
+                No more than 1024 bytes
+              </PasswordRequirementItem>
+              <PasswordRequirementItem met={forcedPasswordPolicy.notCommon}>
+                Not a common password
+              </PasswordRequirementItem>
+              <PasswordRequirementItem met={forcedPasswordPolicy.notRepeated}>
+                Not the same character repeated
+              </PasswordRequirementItem>
+              <PasswordRequirementItem met={forcedPasswordConfirmationMatches}>
+                Passwords match
+              </PasswordRequirementItem>
+            </ul>
+          </section>
           <label className="mb-5 block">
             <span className="mb-2 block text-sm font-medium">Confirm new password</span>
             <input
@@ -158,12 +243,7 @@ export function AuthGate({ children }: AuthGateProps) {
           {error && <div className="mb-4 text-sm text-warning">{error}</div>}
           <button
             className="w-full rounded-md bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={
-              submitting ||
-              currentPassword.trim() === '' ||
-              newPassword.trim() === '' ||
-              confirmPassword.trim() === ''
-            }
+            disabled={!canSubmitForcedPasswordChange}
             type="submit"
           >
             {submitting ? 'Changing password' : 'Change password'}
