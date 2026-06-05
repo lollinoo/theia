@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ func TestBuildInstanceBackupArchiveManifestPlanSetsStableMetadataAndFinalSize(t 
 		totalSourceBytes:   20,
 		archiveFileEntries: 4,
 		encryptionKeyring:  mustManifestTestKeyring(t),
+		requiredKeyIDs:     []string{"kid-a", "legacy"},
 		limits: BackupArchiveLimits{
 			MaxTotalBytes:  1 << 20,
 			MaxEntryBytes:  1 << 20,
@@ -63,11 +65,48 @@ func TestBuildInstanceBackupArchiveManifestPlanSetsStableMetadataAndFinalSize(t 
 	if manifest.Encryption.ActiveKeyID != "kid-b" {
 		t.Fatalf("manifest.Encryption.ActiveKeyID = %q, want kid-b", manifest.Encryption.ActiveKeyID)
 	}
-	if got, want := manifest.Encryption.RequiredKeyIDs, []string{"kid-b"}; !equalStringSlices(got, want) {
+	if got, want := manifest.Encryption.RequiredKeyIDs, []string{"kid-a", "kid-b", "legacy"}; !equalStringSlices(got, want) {
 		t.Fatalf("manifest.Encryption.RequiredKeyIDs = %#v, want %#v", got, want)
 	}
 	if manifest.EncryptionKeyHash != "" {
 		t.Fatalf("manifest.EncryptionKeyHash = %q, want empty for keyring manifest", manifest.EncryptionKeyHash)
+	}
+}
+
+func TestRequiredCredentialKeyIDsFromValuesIncludesActiveOldAndLegacyCiphertext(t *testing.T) {
+	keyring := mustManifestTestKeyring(t)
+	activeEnvelope, err := keyring.EncryptString("active-secret")
+	if err != nil {
+		t.Fatalf("EncryptString active failed: %v", err)
+	}
+	oldKeyring, err := crypto.NewKeyring("kid-a", map[string]string{
+		"kid-a": "old manifest secret",
+		"kid-b": "new manifest secret",
+	})
+	if err != nil {
+		t.Fatalf("NewKeyring old failed: %v", err)
+	}
+	oldEnvelope, err := oldKeyring.EncryptString("old-secret")
+	if err != nil {
+		t.Fatalf("EncryptString old failed: %v", err)
+	}
+	legacyRaw, err := crypto.Encrypt([]byte("legacy-secret"), crypto.DeriveKey("legacy manifest secret"))
+	if err != nil {
+		t.Fatalf("legacy Encrypt failed: %v", err)
+	}
+
+	got, err := requiredCredentialKeyIDsFromValues([]string{
+		activeEnvelope,
+		oldEnvelope,
+		base64.StdEncoding.EncodeToString(legacyRaw),
+		"plain-secret",
+		"",
+	})
+	if err != nil {
+		t.Fatalf("requiredCredentialKeyIDsFromValues() error = %v", err)
+	}
+	if want := []string{"kid-a", "kid-b", "legacy"}; !equalStringSlices(got, want) {
+		t.Fatalf("requiredCredentialKeyIDsFromValues() = %#v, want %#v", got, want)
 	}
 }
 

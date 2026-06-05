@@ -392,6 +392,11 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 		cleanupOnError(fmt.Sprintf("collecting backup files: %v", err), err)
 		return nil, err
 	}
+	requiredKeyIDs, err := s.collectRequiredCredentialKeyIDs(ctx)
+	if err != nil {
+		cleanupOnError(fmt.Sprintf("collecting credential encryption metadata: %v", err), err)
+		return nil, err
+	}
 
 	// Step 5: Build manifest
 	manifestPlan, err := buildInstanceBackupArchiveManifestPlan(instanceBackupArchiveManifestInput{
@@ -405,6 +410,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 		archiveFileEntries: archiveFileEntries,
 		encryptionKey:      s.encryptionKey,
 		encryptionKeyring:  s.keyring,
+		requiredKeyIDs:     requiredKeyIDs,
 		limits:             limits,
 	})
 	if err != nil {
