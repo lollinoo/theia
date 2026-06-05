@@ -876,18 +876,7 @@ func NewRouter(
 
 // isAuthRoute identifies public auth routes that bypass protected RBAC middleware.
 func isAuthRoute(path string) bool {
-	switch path {
-	case "/api/v1/auth/login",
-		"/api/v1/auth/logout",
-		"/api/v1/auth/me",
-		"/api/v1/me",
-		"/api/v1/auth/password/change",
-		"/api/v1/auth/password/reset",
-		"/api/v1/session":
-		return true
-	default:
-		return false
-	}
+	return apiRouteMetadata.isPublicAuthPath(path)
 }
 
 // parseCanvasMapRoute extracts the map ID and action suffix from saved-map routes.
