@@ -245,7 +245,7 @@ func normalizeDevicePrimaryReason(device domain.Device, deviceState state.Device
 	if isPrometheusBlocked(device, deviceState, promStatus) {
 		return normalizedReasonUpstreamUnavailable
 	}
-	if deviceState.Reachability == state.ReachabilitySoftDown || deviceState.Reachability == state.ReachabilityHardDown {
+	if deviceState.Reachability == state.ReachabilityHardDown {
 		return normalizedReasonDeviceUnreachable
 	}
 	if freshness == "awaiting_poll" {
@@ -264,7 +264,9 @@ func normalizeOperationalStatus(device domain.Device, deviceState state.DeviceSt
 	switch deviceState.Reachability {
 	case state.ReachabilityUp:
 		return "up"
-	case state.ReachabilitySoftDown, state.ReachabilityHardDown:
+	case state.ReachabilitySoftDown:
+		return "probing"
+	case state.ReachabilityHardDown:
 		return "down"
 	}
 	if freshness == "awaiting_poll" {
@@ -280,7 +282,7 @@ func normalizeDeviceMetricsStatus(device domain.Device, deviceState state.Device
 	if isPrometheusBlocked(device, deviceState, promStatus) {
 		return "unavailable", normalizedReasonUpstreamUnavailable
 	}
-	if deviceState.Reachability == state.ReachabilitySoftDown || deviceState.Reachability == state.ReachabilityHardDown {
+	if deviceState.Reachability == state.ReachabilityHardDown {
 		return "unavailable", normalizedReasonDeviceUnreachable
 	}
 	if freshness == "stale" {

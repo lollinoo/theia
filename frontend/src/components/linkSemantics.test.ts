@@ -125,7 +125,7 @@ describe('linkSemantics', () => {
     });
   });
 
-  it('colors physical links warning when a ping-reachable endpoint is SNMP degraded without alerts', () => {
+  it('keeps physical links up when endpoints are network-reachable with SNMP-only degradation', () => {
     expect(
       resolveEdgeTone({
         sourceDeviceStatus: 'up',
@@ -142,8 +142,8 @@ describe('linkSemantics', () => {
         negotiationState: 'matched',
       }),
     ).toMatchObject({
-      color: 'var(--color-edge-warning)',
-      semanticState: 'warning',
+      color: 'var(--color-status-up)',
+      semanticState: 'up',
     });
   });
 

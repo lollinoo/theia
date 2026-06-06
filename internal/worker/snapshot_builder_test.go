@@ -399,8 +399,8 @@ func TestBuildPipelineSnapshotMapsReachabilityToExistingStatusStrings(t *testing
 	if got := snapshot.DeviceStatuses[upID.String()]; got != string(domain.DeviceStatusUp) {
 		t.Fatalf("expected up to map to up, got %q", got)
 	}
-	if got := snapshot.DeviceStatuses[softID.String()]; got != string(domain.DeviceStatusDown) {
-		t.Fatalf("expected soft_down to map to down, got %q", got)
+	if got := snapshot.DeviceStatuses[softID.String()]; got != string(domain.DeviceStatusProbing) {
+		t.Fatalf("expected soft_down to map to probing, got %q", got)
 	}
 	if got := snapshot.DeviceStatuses[hardID.String()]; got != string(domain.DeviceStatusDown) {
 		t.Fatalf("expected hard_down to map to down, got %q", got)

@@ -344,7 +344,7 @@ describe('DeviceCard', () => {
       }),
     });
 
-    expect(screen.getByText('Warning')).toBeInTheDocument();
+    expect(screen.getByText('Up')).toBeInTheDocument();
     expect(screen.getByText('SNMP unreachable')).toBeInTheDocument();
     expect(screen.getByText('CPU')).toBeInTheDocument();
     expect(screen.getByText('MEM')).toBeInTheDocument();

@@ -401,7 +401,15 @@ function hasRuntimeReachabilityFailure(metrics?: DeviceVisualMetrics): boolean {
   );
 }
 
+function hasConfirmedNetworkReachability(metrics?: DeviceVisualMetrics): boolean {
+  return metrics?.network_reachable === 'true' || metrics?.reachability === 'up';
+}
+
 function hasSnmpReachabilityWarning(metrics?: DeviceVisualMetrics): boolean {
+  if (hasConfirmedNetworkReachability(metrics)) {
+    return false;
+  }
+
   return (
     metrics?.primary_health === 'snmp_degraded' ||
     metrics?.reachability === 'soft_down' ||
@@ -476,7 +484,11 @@ export function resolveDeviceVisualState(
         labelClass: healthLabelClass('critical'),
       };
     default:
-      if (metrics?.primary_health === 'up_fresh' || metrics?.primary_health === 'up_stale') {
+      if (
+        metrics?.primary_health === 'up_fresh' ||
+        metrics?.primary_health === 'up_stale' ||
+        (metrics?.primary_health === 'snmp_degraded' && hasConfirmedNetworkReachability(metrics))
+      ) {
         return {
           dotStatus: 'up',
           label: 'Up',
