@@ -32,10 +32,11 @@ export function BridgeSettingsSection({
     <div className="grid gap-4">
       <label className="grid gap-1 text-sm">
         <span className="flex items-center justify-between gap-3">
-          <span className={fieldLabelClass}>Timezone</span>
+          <span className={fieldLabelClass}>Display timezone</span>
           <SavedIndicator visible={savedTimezone} />
         </span>
         <select
+          aria-label="Display timezone"
           value={timezone}
           onChange={(e) => onTimezoneChange(e.target.value)}
           className={controlClass()}
@@ -47,7 +48,7 @@ export function BridgeSettingsSection({
           ))}
         </select>
         <span className="text-xs text-on-bg-secondary">
-          Affects backup filenames and zip timestamps.
+          Admin audit log times, backup filenames, and zip timestamps use this timezone.
         </span>
       </label>
 

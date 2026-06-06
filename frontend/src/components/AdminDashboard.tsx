@@ -16,6 +16,7 @@ import {
   fetchAdminPermissions,
   fetchAdminRoles,
   fetchAdminUsers,
+  fetchSettings,
   removeAdminUserRole,
   setAdminUserStatus,
   updateAdminUser,
@@ -61,6 +62,86 @@ function rolesLabel(user: AuthUser): string {
   return user.roles.length > 0 ? user.roles.join(', ') : 'No roles';
 }
 
+function userDisplayName(user: AuthUser): string {
+  return user.display_name || user.username || user.email || 'Unknown user';
+}
+
+function normalizeTimezone(value?: string): string {
+  if (!value) return 'UTC';
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(new Date());
+    return value;
+  } catch {
+    return 'UTC';
+  }
+}
+
+function timezoneFromSettings(value: unknown): string {
+  if (typeof value !== 'object' || value === null) {
+    return 'UTC';
+  }
+  const timezone = (value as Record<string, unknown>).timezone;
+  return normalizeTimezone(typeof timezone === 'string' ? timezone : undefined);
+}
+
+function formatAuditTime(value: string, timezone: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const normalizedTimezone = normalizeTimezone(timezone);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: normalizedTimezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value ?? '00';
+  return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part(
+    'minute',
+  )}:${part('second')} ${normalizedTimezone}`;
+}
+
+function humanizeResource(value?: string): string {
+  if (!value) return 'None';
+  return value
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function isUserResource(resource?: string): boolean {
+  return resource === 'auth' || resource === 'auth_user' || resource === 'user';
+}
+
+function auditUserLabel(userId: string | undefined, usersById: Map<string, AuthUser>): string {
+  if (!userId) return 'System';
+  const user = usersById.get(userId);
+  return user ? userDisplayName(user) : 'Unknown user';
+}
+
+function auditResourceLabel(log: AdminAuditLog, usersById: Map<string, AuthUser>): string {
+  const userResourceId =
+    log.target_user_id || (isUserResource(log.resource) ? log.resource_id : '');
+  if (userResourceId) {
+    return `User: ${auditUserLabel(userResourceId, usersById)}`;
+  }
+  if (!log.resource && !log.resource_id) {
+    return 'None';
+  }
+  const resourceName = humanizeResource(log.resource);
+  if (!log.resource_id || log.resource_id === log.resource) {
+    return resourceName;
+  }
+  return `${resourceName}: ${log.resource_id}`;
+}
+
 interface AdminDashboardProps {
   visible?: boolean;
 }
@@ -74,6 +155,7 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   const [roles, setRoles] = useState<AdminRole[]>([]);
   const [permissions, setPermissions] = useState<string[]>([]);
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([]);
+  const [timezone, setTimezone] = useState('UTC');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -100,7 +182,8 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   const canReadRoles = hasPermission('roles:read');
   const canAssignRoles = hasPermission('roles:assign');
   const canReadAuditLogs = hasPermission('audit_logs:read');
-  const canManageSettings = hasPermission('settings:read') && hasPermission('settings:update');
+  const canReadSettings = hasPermission('settings:read');
+  const canManageSettings = canReadSettings && hasPermission('settings:update');
 
   const visibleTabs = useMemo(() => {
     const nextTabs: Array<{ id: AdminTab; label: string }> = [overviewTab];
@@ -124,25 +207,27 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
     setError(null);
     setResetToken(null);
     try {
-      const [nextDashboard, nextUsers, nextRoles, nextPermissions, nextAuditLogs] =
+      const [nextDashboard, nextUsers, nextRoles, nextPermissions, nextAuditLogs, nextSettings] =
         await Promise.all([
           fetchAdminDashboard(),
           canReadUsers ? fetchAdminUsers() : Promise.resolve<AuthUser[]>([]),
           canReadRoles ? fetchAdminRoles() : Promise.resolve<AdminRole[]>([]),
           canReadRoles ? fetchAdminPermissions() : Promise.resolve<string[]>([]),
           canReadAuditLogs ? fetchAdminAuditLogs() : Promise.resolve<AdminAuditLog[]>([]),
+          canReadSettings ? fetchSettings().catch(() => ({})) : Promise.resolve({}),
         ]);
       setDashboard(nextDashboard);
       setUsers(nextUsers);
       setRoles(nextRoles);
       setPermissions(nextPermissions);
       setAuditLogs(nextAuditLogs);
+      setTimezone(timezoneFromSettings(nextSettings));
     } catch (loadError) {
       setError(errorMessage(loadError, 'Failed to load admin data'));
     } finally {
       setLoading(false);
     }
-  }, [canReadAuditLogs, canReadRoles, canReadUsers]);
+  }, [canReadAuditLogs, canReadRoles, canReadSettings, canReadUsers]);
 
   useEffect(() => {
     void load();
@@ -174,6 +259,16 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
       return matchesStatus && (query === '' || haystack.includes(query));
     });
   }, [search, statusFilter, users]);
+
+  const usersById = useMemo(() => {
+    return new Map(users.map((user) => [user.id, user]));
+  }, [users]);
+
+  function handleSettingsChange(changed?: { timezone?: string }) {
+    if (changed?.timezone) {
+      setTimezone(normalizeTimezone(changed.timezone));
+    }
+  }
 
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -412,7 +507,12 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
                     value={dashboard.stats.recent_failed_login_attempts}
                   />
                 </div>
-                <AuditTable logs={dashboard.recent_audit_logs} compact />
+                <AuditTable
+                  logs={dashboard.recent_audit_logs}
+                  usersById={usersById}
+                  timezone={timezone}
+                  compact
+                />
               </section>
             )}
 
@@ -540,10 +640,12 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
             )}
 
             {activeTab === 'roles' && <RolesTable roles={roles} permissions={permissions} />}
-            {activeTab === 'audit' && <AuditTable logs={auditLogs} />}
+            {activeTab === 'audit' && (
+              <AuditTable logs={auditLogs} usersById={usersById} timezone={timezone} />
+            )}
             {activeTab === 'settings' && canManageSettings && (
               <section className="rounded-lg border border-outline-subtle bg-surface">
-                <SettingsPanel />
+                <SettingsPanel onSettingsChange={handleSettingsChange} />
               </section>
             )}
           </>
@@ -830,7 +932,17 @@ function RolesTable({ roles, permissions }: { roles: AdminRole[]; permissions: s
   );
 }
 
-function AuditTable({ logs, compact = false }: { logs: AdminAuditLog[]; compact?: boolean }) {
+function AuditTable({
+  logs,
+  usersById,
+  timezone,
+  compact = false,
+}: {
+  logs: AdminAuditLog[];
+  usersById: Map<string, AuthUser>;
+  timezone: string;
+  compact?: boolean;
+}) {
   return (
     <div className="overflow-hidden rounded-lg border border-outline-subtle bg-surface">
       {logs.length === 0 ? (
@@ -847,17 +959,27 @@ function AuditTable({ logs, compact = false }: { logs: AdminAuditLog[]; compact?
           </thead>
           <tbody>
             {logs.map((log) => {
-              const resourceLabel =
-                [log.resource, log.resource_id].filter(Boolean).join(':') ||
-                (log.target_user_id ? `user:${log.target_user_id}` : 'none');
+              const resourceLabel = auditResourceLabel(log, usersById);
               return (
                 <tr key={log.id} className="border-t border-outline-subtle">
-                  <td className="px-3 py-3 font-mono text-xs text-on-bg-secondary">
-                    {log.created_at}
+                  <td
+                    className="px-3 py-3 font-mono text-xs text-on-bg-secondary"
+                    title={log.created_at}
+                  >
+                    {formatAuditTime(log.created_at, timezone)}
                   </td>
-                  <td className="px-3 py-3 text-on-bg">{log.actor_user_id ?? 'system'}</td>
+                  <td className="px-3 py-3 text-on-bg" title={log.actor_user_id ?? 'system'}>
+                    {auditUserLabel(log.actor_user_id, usersById)}
+                  </td>
                   <td className="px-3 py-3 font-medium text-on-bg">{log.action}</td>
-                  {!compact && <td className="px-3 py-3 text-on-bg-secondary">{resourceLabel}</td>}
+                  {!compact && (
+                    <td
+                      className="px-3 py-3 text-on-bg-secondary"
+                      title={[log.resource, log.resource_id].filter(Boolean).join(':')}
+                    >
+                      {resourceLabel}
+                    </td>
+                  )}
                 </tr>
               );
             })}

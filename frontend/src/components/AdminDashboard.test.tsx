@@ -1,7 +1,7 @@
 /**
  * Exercises admin dashboard component behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assignAdminUserRole,
@@ -12,6 +12,7 @@ import {
   fetchAdminPermissions,
   fetchAdminRoles,
   fetchAdminUsers,
+  fetchSettings,
   removeAdminUserRole,
   setAdminUserStatus,
   updateAdminUser,
@@ -27,6 +28,7 @@ vi.mock('../api/client', () => ({
   fetchAdminRoles: vi.fn(),
   fetchAdminPermissions: vi.fn(),
   fetchAdminAuditLogs: vi.fn(),
+  fetchSettings: vi.fn(),
   createAdminUser: vi.fn(),
   updateAdminUser: vi.fn(),
   setAdminUserStatus: vi.fn(),
@@ -36,7 +38,7 @@ vi.mock('../api/client', () => ({
 }));
 
 vi.mock('./SettingsPanel', () => ({
-  SettingsPanel: (props: { onSettingsChange?: () => void }) => {
+  SettingsPanel: (props: { onSettingsChange?: (changed?: { timezone?: string }) => void }) => {
     settingsPanelPropsMock(props);
     return <div data-testid="global-settings-panel">Global settings</div>;
   },
@@ -73,6 +75,14 @@ const adminUser = {
   permissions: ['topology:read'],
 };
 
+const actorUser = {
+  ...adminUser,
+  id: 'admin-user-1',
+  username: 'administrator',
+  email: 'administrator@example.test',
+  display_name: 'Administrator',
+};
+
 const adminRole = {
   id: 'role-1',
   name: 'operator',
@@ -89,6 +99,7 @@ describe('AdminDashboard', () => {
     vi.mocked(fetchAdminRoles).mockReset();
     vi.mocked(fetchAdminPermissions).mockReset();
     vi.mocked(fetchAdminAuditLogs).mockReset();
+    vi.mocked(fetchSettings).mockReset();
     vi.mocked(createAdminUser).mockReset();
     vi.mocked(updateAdminUser).mockReset();
     vi.mocked(setAdminUserStatus).mockReset();
@@ -129,9 +140,10 @@ describe('AdminDashboard', () => {
         },
       ],
     });
-    vi.mocked(fetchAdminUsers).mockResolvedValue([adminUser]);
+    vi.mocked(fetchAdminUsers).mockResolvedValue([adminUser, actorUser]);
     vi.mocked(fetchAdminRoles).mockResolvedValue([adminRole]);
     vi.mocked(fetchAdminPermissions).mockResolvedValue(['topology:read', 'admin:dashboard:read']);
+    vi.mocked(fetchSettings).mockResolvedValue({ timezone: 'UTC' });
     vi.mocked(fetchAdminAuditLogs).mockResolvedValue([
       {
         id: 'audit-2',
@@ -171,8 +183,25 @@ describe('AdminDashboard', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Audit Logs' }));
     expect(await screen.findByText('user.update')).toBeInTheDocument();
-    expect(screen.getByText('admin-user-1')).toBeInTheDocument();
-    expect(screen.getByText('user:user-1')).toBeInTheDocument();
+    expect(screen.getByText('Administrator')).toBeInTheDocument();
+    expect(screen.getByText('User: Alice')).toBeInTheDocument();
+  });
+
+  it('renders audit names and normalizes audit times with the configured timezone', async () => {
+    vi.mocked(fetchAdminUsers).mockResolvedValue([adminUser, actorUser]);
+    vi.mocked(fetchSettings).mockResolvedValue({ timezone: 'Europe/Rome' });
+
+    render(<AdminDashboard />);
+
+    expect(await screen.findByText('2026-05-21 12:00:00 Europe/Rome')).toBeInTheDocument();
+    expect(screen.getByText('Administrator')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Audit Logs' }));
+
+    expect(await screen.findByText('2026-05-21 13:00:00 Europe/Rome')).toBeInTheDocument();
+    expect(screen.getByText('User: Alice')).toBeInTheDocument();
+    expect(screen.queryByText('admin-user-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('user:user-1')).not.toBeInTheDocument();
   });
 
   it('loads overview without requesting admin sections the user cannot read', async () => {
@@ -194,7 +223,25 @@ describe('AdminDashboard', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Settings' }));
 
     expect(screen.getByTestId('global-settings-panel')).toBeInTheDocument();
-    expect(settingsPanelPropsMock).toHaveBeenLastCalledWith({});
+    expect(settingsPanelPropsMock).toHaveBeenLastCalledWith({
+      onSettingsChange: expect.any(Function),
+    });
+  });
+
+  it('updates audit timestamps when admin settings reports a timezone change', async () => {
+    render(<AdminDashboard />);
+
+    expect(await screen.findByText('2026-05-21 10:00:00 UTC')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+    const props = settingsPanelPropsMock.mock.lastCall?.[0];
+    act(() => {
+      props?.onSettingsChange?.({ timezone: 'Europe/Rome' });
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+
+    expect(screen.getByText('2026-05-21 12:00:00 Europe/Rome')).toBeInTheDocument();
   });
 
   it('hides global settings from admin users without settings update permission', async () => {

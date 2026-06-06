@@ -43,7 +43,7 @@ import { controlClass, fieldLabelClass } from './settings-panel/settingsPanelSty
 
 /** Props for the admin settings container; changes notify parents that runtime config may need refresh. */
 interface SettingsPanelProps {
-  onSettingsChange?: () => void;
+  onSettingsChange?: (changed?: { timezone?: string }) => void;
 }
 
 /**
@@ -315,9 +315,10 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   /** Persists timezone immediately because the select only exposes valid IANA timezone values. */
   function handleTimezoneChange(value: string) {
     setTimezone(value);
-    void updateSetting('timezone', value).then(() =>
-      showSaved(setSavedTimezone, savedTimezoneTimerRef),
-    );
+    void updateSetting('timezone', value).then(() => {
+      showSaved(setSavedTimezone, savedTimezoneTimerRef);
+      onSettingsChange?.({ timezone: value });
+    });
   }
 
   function handleBridgePortBlur() {
@@ -431,8 +432,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
       <div data-testid="settings-panel-right-column" className="grid min-w-0 content-start gap-6">
         <SettingsSection
           id="settings-bridge-heading"
-          title="Bridge"
-          description="Local WinBox bridge listener and timestamp preferences."
+          title="Bridge & Time"
+          description="Local WinBox bridge listener and display timezone."
           icon="settings_ethernet"
           accent="warning"
         >
