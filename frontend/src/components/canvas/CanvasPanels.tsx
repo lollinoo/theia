@@ -30,6 +30,13 @@ import type { RuntimeState } from './runtimeAdapters';
 
 const emptyAlerts: AlertDTO[] = [];
 
+function sameAreaIds(first: string[] = [], second: string[] = []): boolean {
+  if (first.length !== second.length) return false;
+  const sortedFirst = [...first].sort();
+  const sortedSecond = [...second].sort();
+  return sortedFirst.every((value, index) => value === sortedSecond[index]);
+}
+
 interface CanvasPanelsProps {
   panelContent: { type: string; data?: unknown } | null;
   setPanelContent: (content: { type: string; data?: unknown } | null) => void;
@@ -198,6 +205,9 @@ export function CanvasPanels({
                 onRemoveFromMap={onRemoveDeviceFromMap}
                 onDeviceUpdated={(updated) => {
                   const ipChanged = device.ip !== updated.ip;
+                  const mapScopedAreaChanged =
+                    Boolean(mapId && onRemoveDeviceFromMap) &&
+                    !sameAreaIds(device.area_ids ?? [], updated.area_ids ?? []);
                   setDevices((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
                   setNodes((prev) =>
                     prev.map((n) =>
@@ -234,6 +244,9 @@ export function CanvasPanels({
                     type: 'deviceConfig',
                     data: { deviceId: updated.id },
                   });
+                  if (mapScopedAreaChanged) {
+                    void loadTopology(true);
+                  }
                 }}
                 onDeviceDeleted={() => {
                   setPanelContent(null);

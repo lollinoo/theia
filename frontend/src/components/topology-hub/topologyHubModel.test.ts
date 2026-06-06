@@ -12,7 +12,7 @@ function mockArea(overrides: Partial<Area> = {}): Area {
     name: 'Backbone',
     description: '',
     color: '#2979FF',
-    device_count: 0,
+    device_count: 1,
     created_at: '',
     updated_at: '',
     ...overrides,
@@ -263,6 +263,21 @@ describe('buildTopologyHubModel', () => {
     });
 
     expect(model.unassignedDevices.map((device) => device.id)).toEqual(['device-2', 'device-3']);
+  });
+
+  it('uses refreshed map-local area device counts when device assignments are stale', () => {
+    const area = mockArea({ device_count: 1 });
+    const staleDevice = mockDevice({ area_ids: [] });
+
+    const model = buildTopologyHubModel({
+      areas: [area],
+      devices: [staleDevice],
+      links: [],
+      snapshot: null,
+      maps: [],
+    });
+
+    expect(model.areas[0].deviceCount).toBe(1);
   });
 
   it('counts cross-area links where at least one endpoint is in an area', () => {

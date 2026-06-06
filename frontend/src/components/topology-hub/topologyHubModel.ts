@@ -91,6 +91,7 @@ export function buildTopologyHubModel({
 
   const areaModels = areas.map((area) => {
     const areaDevices = devices.filter((device) => device.area_ids?.includes(area.id));
+    const deviceCount = area.device_count;
     const areaDeviceIds = new Set(areaDevices.map((device) => device.id));
     const degradedDeviceCount = areaDevices.filter((device) =>
       isDeviceDegraded(device, snapshot),
@@ -100,10 +101,10 @@ export function buildTopologyHubModel({
 
     return {
       area,
-      deviceCount: areaDevices.length,
+      deviceCount,
       activeLinkCount: countAreaLinks(links, areaDeviceIds),
       degradedDeviceCount,
-      healthPercentage: healthPercentage(areaDevices.length, degradedDeviceCount),
+      healthPercentage: healthPercentage(deviceCount, degradedDeviceCount),
       healthLabel,
     };
   });
