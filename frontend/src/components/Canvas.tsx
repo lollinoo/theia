@@ -3,6 +3,7 @@ import {
   type Connection,
   ConnectionMode,
   type EdgeChange,
+  type FitViewOptions,
   MiniMap,
   type NodeChange,
   type OnMove,
@@ -23,12 +24,12 @@ import { resolveGrafanaDashboardUrl } from '../utils/grafanaDashboard';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
-import { MaterialIcon } from './MaterialIcon';
 import SearchOverlay from './SearchOverlay';
 import { ShortcutHelp } from './ShortcutHelp';
 import { SidePanel } from './SidePanel';
 import { Toolbar } from './Toolbar';
 import ZoomControls from './ZoomControls';
+import { CanvasChromeControls } from './canvas/CanvasChromeControls';
 import { CanvasContextMenus } from './canvas/CanvasContextMenus';
 import { CanvasDiagnosticsPanel } from './canvas/CanvasDiagnosticsPanel';
 import { CanvasErrorState } from './canvas/CanvasErrorState';
@@ -54,6 +55,7 @@ import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
 import { buildRuntimeState } from './canvas/runtimeAdapters';
 import { type TopologyZoomBand, resolveTopologyZoomBand } from './canvas/topologyZoom';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
+import { useCanvasChrome } from './canvas/useCanvasChrome';
 import { useCanvasData } from './canvas/useCanvasData';
 import { useCanvasDiagnosticsToggle } from './canvas/useCanvasDiagnosticsToggle';
 import { useCanvasFitView } from './canvas/useCanvasFitView';
@@ -145,6 +147,8 @@ interface CanvasProps {
   onChromeHiddenChange?: (hidden: boolean) => void;
 }
 
+type FitViewPadding = NonNullable<FitViewOptions['padding']>;
+
 export default function Canvas({
   snapshot,
   alerts = emptyAlerts,
@@ -180,7 +184,6 @@ export default function Canvas({
   const { diagnosticsVisible, closeDiagnostics } = useCanvasDiagnosticsToggle();
   const { canvasInteractionActive, beginCanvasInteraction, endCanvasInteraction } =
     useCanvasInteractionState({ onInteractionActiveChange });
-  const [internalChromeHidden, setInternalChromeHidden] = useState(false);
   const canvasRootRef = useRef<HTMLDivElement | null>(null);
   const deviceNodeReadabilityScaleRef = useRef('1');
   const linkBadgeReadabilityScaleRef = useRef('1');
@@ -221,11 +224,33 @@ export default function Canvas({
     shortcuts,
     getPanelTitle,
   } = useCanvasMenus({ reactFlow });
+  const fitTopologyView = useCallback(
+    (padding: FitViewPadding) => {
+      void reactFlow.fitView({
+        padding,
+        duration: 280,
+      });
+    },
+    [reactFlow],
+  );
+  const closeCanvasOverlays = useCallback(() => {
+    setPanelContent(null);
+    setDeviceMenu(null);
+    setEdgeMenu(null);
+    setShowSearch(false);
+    setShowShortcuts(false);
+  }, [setDeviceMenu, setEdgeMenu, setPanelContent, setShowSearch, setShowShortcuts]);
+  const { effectiveChromeHidden, currentTopologyFitViewPadding, handleToggleChrome } =
+    useCanvasChrome({
+      chromeHidden,
+      onChromeHiddenChange,
+      mapId,
+      normalPadding: topologyFitViewPadding,
+      hiddenPadding: topologyCleanViewFitPadding,
+      fitTopologyView,
+      closeCanvasOverlays,
+    });
   const selectedMapKey = mapId ?? '__default__';
-  const effectiveChromeHidden = chromeHidden ?? internalChromeHidden;
-  const currentTopologyFitViewPadding = effectiveChromeHidden
-    ? topologyCleanViewFitPadding
-    : topologyFitViewPadding;
   const previousMapKeyRef = useRef<string | null>(null);
   const previousTopologyRefreshRevisionRef = useRef(topologyRefreshRevision);
 
@@ -754,62 +779,6 @@ export default function Canvas({
     return grafanaUrlRef.current;
   }
 
-  const fitTopologyView = useCallback(
-    (padding = currentTopologyFitViewPadding) => {
-      void reactFlow.fitView({
-        padding,
-        duration: 280,
-      });
-    },
-    [currentTopologyFitViewPadding, reactFlow],
-  );
-  const canvasChromeButtonClassName =
-    'topology-glass topology-floating-shadow flex h-11 w-11 items-center justify-center rounded-[16px] text-on-bg-secondary transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg';
-
-  const handleToggleChrome = useCallback(() => {
-    const nextHidden = !effectiveChromeHidden;
-    setInternalChromeHidden(nextHidden);
-    onChromeHiddenChange?.(nextHidden);
-
-    if (nextHidden) {
-      setPanelContent(null);
-      setDeviceMenu(null);
-      setEdgeMenu(null);
-      setShowSearch(false);
-      setShowShortcuts(false);
-    }
-
-    const fitAfterLayout = () => {
-      fitTopologyView(nextHidden ? topologyCleanViewFitPadding : topologyFitViewPadding);
-      recordCanvasDiagnosticEvent({
-        level: 'debug',
-        source: 'reactflow',
-        event: 'reactflow.fit_view',
-        message: 'React Flow fitView requested after canvas chrome toggle',
-        metadata: {
-          chromeHidden: nextHidden,
-          mapId: mapId ?? 'default',
-        },
-      });
-    };
-
-    if (typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(fitAfterLayout);
-    } else {
-      fitAfterLayout();
-    }
-  }, [
-    effectiveChromeHidden,
-    fitTopologyView,
-    mapId,
-    onChromeHiddenChange,
-    setDeviceMenu,
-    setEdgeMenu,
-    setPanelContent,
-    setShowSearch,
-    setShowShortcuts,
-  ]);
-
   if (loading) {
     return <CanvasLoadingState />;
   }
@@ -832,48 +801,20 @@ export default function Canvas({
       data-topology-zoom-band={topologyZoomBandRef.current}
       className={`topology-backdrop relative h-full w-full bg-bg ${canvasInteractionActive ? 'topology-interacting' : ''}`}
     >
-      <div className="absolute right-4 top-4 z-[70] flex items-center gap-2">
-        {effectiveChromeHidden && (
-          <>
-            <button
-              type="button"
-              aria-label="Search devices"
-              title="Search devices"
-              onClick={() => setShowSearch((current) => !current)}
-              className={canvasChromeButtonClassName}
-            >
-              <MaterialIcon name="search" />
-            </button>
-            <button
-              type="button"
-              aria-label="Fit view"
-              title="Fit view"
-              onClick={() => {
-                fitTopologyView(topologyCleanViewFitPadding);
-                recordCanvasDiagnosticEvent({
-                  level: 'debug',
-                  source: 'reactflow',
-                  event: 'reactflow.fit_view',
-                  message: 'React Flow fitView requested from hidden chrome controls',
-                });
-              }}
-              className={canvasChromeButtonClassName}
-            >
-              <MaterialIcon name="fit_screen" />
-            </button>
-          </>
-        )}
-        <button
-          type="button"
-          aria-label={effectiveChromeHidden ? 'Show canvas controls' : 'Hide canvas controls'}
-          title={effectiveChromeHidden ? 'Show canvas controls' : 'Hide canvas controls'}
-          aria-pressed={effectiveChromeHidden}
-          onClick={handleToggleChrome}
-          className={canvasChromeButtonClassName}
-        >
-          <MaterialIcon name={effectiveChromeHidden ? 'close_fullscreen' : 'open_in_full'} />
-        </button>
-      </div>
+      <CanvasChromeControls
+        chromeHidden={effectiveChromeHidden}
+        onToggleChrome={handleToggleChrome}
+        onSearch={() => setShowSearch((current) => !current)}
+        onFitView={() => {
+          fitTopologyView(topologyCleanViewFitPadding);
+          recordCanvasDiagnosticEvent({
+            level: 'debug',
+            source: 'reactflow',
+            event: 'reactflow.fit_view',
+            message: 'React Flow fitView requested from hidden chrome controls',
+          });
+        }}
+      />
       {showSearch && <SearchOverlay devices={devices} onSelectDevice={focusOnDevice} />}
       {!effectiveChromeHidden && (
         <Toolbar
@@ -975,7 +916,7 @@ export default function Canvas({
             void reactFlow.zoomOut({ duration: 200 });
           }}
           onFitView={() => {
-            fitTopologyView();
+            fitTopologyView(currentTopologyFitViewPadding);
             recordCanvasDiagnosticEvent({
               level: 'debug',
               source: 'reactflow',
