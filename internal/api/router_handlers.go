@@ -48,9 +48,6 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 	backupHandlerOptions := []BackupHandlerOption{WithBackupAuditLogs(routerOpts.auditLogs)}
 	if deps.db != nil {
 		bulkOperationLeaseRepo := postgres.NewBulkOperationLeaseRepo(deps.db)
-		if deps.backupService != nil {
-			deps.backupService.SetBulkOperationLeaseRepository(bulkOperationLeaseRepo)
-		}
 		backupHandlerOptions = append(backupHandlerOptions, WithBulkDownloadLeaseRepository(bulkOperationLeaseRepo))
 	}
 	backupHandler := NewBackupHandler(deps.backupService, deps.settingsRepo, backupHandlerOptions...)
@@ -477,13 +474,6 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 				return
 			}
 			backupHandler.HandleGetBulkBackupRun(w, r)
-		}),
-		routeHandlerBackupBulk: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			backupHandler.HandleBulkBackup(w, r)
 		}),
 		routeHandlerBackupBulkDownload: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost {

@@ -23,6 +23,7 @@ func TestRequiredPermissionsForPrefixRegressionRoutesFailClosed(t *testing.T) {
 		{name: "settings me extra child", method: http.MethodPatch, path: "/api/v1/settings/me/profile"},
 		{name: "instance backups adjacent root", method: http.MethodGet, path: "/api/v1/instance-backups-restore"},
 		{name: "instance backup restore child", method: http.MethodPost, path: "/api/v1/instance-backups/restore/status"},
+		{name: "legacy bulk backup removed", method: http.MethodPost, path: "/api/v1/backups/bulk"},
 		{name: "bridge download missing arch", method: http.MethodGet, path: "/api/v1/bridge/download/linux"},
 		{name: "bridge token missing id", method: http.MethodPost, path: "/api/v1/bridge/token"},
 		{name: "admin users roles adjacent root", method: http.MethodGet, path: "/api/v1/admin/users-roles"},

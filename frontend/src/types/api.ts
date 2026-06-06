@@ -895,20 +895,6 @@ export interface BulkBackupRun {
 
 /** BulkOperationStatus advertises backend quota and concurrency limits for bulk actions. */
 export interface BulkOperationStatus {
-  bulk_backup: {
-    max_devices: number;
-    max_queued_jobs: number;
-    concurrency: {
-      max_concurrent: number;
-      configurable: boolean;
-      distributed: boolean;
-      distributed_max_concurrent: number;
-    };
-    legacy_endpoint: {
-      path: string;
-      deprecated: boolean;
-    };
-  };
   bulk_backup_run: {
     max_devices: number;
     max_queued_jobs: number;

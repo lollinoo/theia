@@ -884,22 +884,6 @@ func TestBackupHandlerTriggerBackup_InvalidID(t *testing.T) {
 	}
 }
 
-func TestBackupHandlerBulkBackupRejectsInvalidRequestedDeviceID(t *testing.T) {
-	handler, _, _, _, _ := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
-
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/api/v1/backups/bulk",
-		strings.NewReader(`{"device_ids":["not-a-uuid"]}`),
-	)
-	rec := httptest.NewRecorder()
-	handler.HandleBulkBackup(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
 func TestBackupHandlerStartBulkBackupRunReturnsPersistedRun(t *testing.T) {
 	handler, _, _, deviceRepo, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
 	deviceID := uuid.New()
@@ -1108,7 +1092,6 @@ func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilitie
 		BulkDownloadMaxConcurrentPerActor: 2,
 		BulkDownloadMaxConcurrentGlobal:   3,
 	})
-	handler.svc.SetBulkOperationLeaseRepository(newBulkOperationLeaseRepoForHandler())
 	WithBulkDownloadLeaseRepository(newBulkOperationLeaseRepoForHandler())(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/backups/bulk/status", nil)
@@ -1120,20 +1103,6 @@ func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilitie
 	}
 	var resp struct {
 		Data struct {
-			BulkBackup struct {
-				MaxDevices    int `json:"max_devices"`
-				MaxQueuedJobs int `json:"max_queued_jobs"`
-				Concurrency   struct {
-					MaxConcurrent            int  `json:"max_concurrent"`
-					Configurable             bool `json:"configurable"`
-					Distributed              bool `json:"distributed"`
-					DistributedMaxConcurrent int  `json:"distributed_max_concurrent"`
-				} `json:"concurrency"`
-				LegacyEndpoint struct {
-					Path       string `json:"path"`
-					Deprecated bool   `json:"deprecated"`
-				} `json:"legacy_endpoint"`
-			} `json:"bulk_backup"`
 			BulkBackupRun struct {
 				MaxDevices               int  `json:"max_devices"`
 				MaxQueuedJobs            int  `json:"max_queued_jobs"`
@@ -1162,18 +1131,6 @@ func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilitie
 		t.Fatalf("Decode response: %v", err)
 	}
 
-	if resp.Data.BulkBackup.MaxDevices != 11 || resp.Data.BulkBackup.MaxQueuedJobs != 12 {
-		t.Fatalf("bulk backup limits = %#v", resp.Data.BulkBackup)
-	}
-	if resp.Data.BulkBackup.Concurrency.MaxConcurrent != 1 ||
-		resp.Data.BulkBackup.Concurrency.Configurable ||
-		!resp.Data.BulkBackup.Concurrency.Distributed ||
-		resp.Data.BulkBackup.Concurrency.DistributedMaxConcurrent != 1 {
-		t.Fatalf("legacy backup concurrency = %#v", resp.Data.BulkBackup.Concurrency)
-	}
-	if resp.Data.BulkBackup.LegacyEndpoint.Path != "/api/v1/backups/bulk" || !resp.Data.BulkBackup.LegacyEndpoint.Deprecated {
-		t.Fatalf("legacy endpoint metadata = %#v", resp.Data.BulkBackup.LegacyEndpoint)
-	}
 	if resp.Data.BulkBackupRun.MaxDevices != 11 ||
 		resp.Data.BulkBackupRun.MaxQueuedJobs != 12 ||
 		resp.Data.BulkBackupRun.BatchSize != 10 ||
@@ -1407,85 +1364,6 @@ func TestBackupHandlerResumeBulkBackupRunMarksRunning(t *testing.T) {
 	}
 	if resp.Data.ID != runID.String() || resp.Data.Status != "running" {
 		t.Fatalf("unexpected resume response: %#v", resp.Data)
-	}
-}
-
-func TestBackupHandlerBulkBackupMapsLimitErrorToRequestEntityTooLarge(t *testing.T) {
-	registry := observability.ResetDefaultForTest()
-	t.Cleanup(func() {
-		observability.ResetDefaultForTest()
-	})
-	handler, _, _, deviceRepo, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
-	backupSvc.SetBulkOperationLimits(service.BulkOperationLimits{
-		BulkBackupMaxDevices:    1,
-		BulkBackupMaxQueuedJobs: 10,
-		BulkDownloadMaxDevices:  10,
-		BulkDownloadMaxFiles:    10,
-		BulkDownloadMaxBytes:    1024,
-	})
-
-	firstID := uuid.New()
-	secondID := uuid.New()
-	for i, id := range []uuid.UUID{firstID, secondID} {
-		if err := deviceRepo.Create(&domain.Device{
-			ID: id, IP: fmt.Sprintf("10.0.0.%d", i+1), Vendor: "default",
-			Managed: true, Status: domain.DeviceStatusUp,
-		}); err != nil {
-			t.Fatalf("Create device: %v", err)
-		}
-	}
-
-	body := fmt.Sprintf(`{"device_ids":[%q,%q]}`, firstID.String(), secondID.String())
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-	handler.HandleBulkBackup(rec, req)
-
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Header().Get("Content-Type"), "application/zip") {
-		t.Fatalf("limit response must not be a zip response; headers: %#v", rec.Header())
-	}
-	metrics := string(registry.MarshalPrometheus())
-	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_legacy",reason="device_count_limit",source="local"} 1`) {
-		t.Fatalf("expected legacy bulk backup limit rejection metric, got:\n%s", metrics)
-	}
-}
-
-func TestBackupHandlerBulkBackupMapsActiveLegacyBulkLeaseToTooManyRequests(t *testing.T) {
-	registry := observability.ResetDefaultForTest()
-	t.Cleanup(func() {
-		observability.ResetDefaultForTest()
-	})
-	handler, _, _, _, backupSvc := setupBackupHandlerForBulkLimitTests(t, t.TempDir())
-	leaseRepo := newBulkOperationLeaseRepoForHandler()
-	lease, acquired, err := leaseRepo.TryAcquireBulkOperationLease(context.Background(), "backup.bulk_backup:legacy")
-	if err != nil {
-		t.Fatalf("TryAcquireBulkOperationLease: %v", err)
-	}
-	if !acquired {
-		t.Fatal("expected test lease acquisition")
-	}
-	t.Cleanup(func() {
-		if err := lease.Release(); err != nil {
-			t.Fatalf("Release lease: %v", err)
-		}
-	})
-	backupSvc.SetBulkOperationLeaseRepository(leaseRepo)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/backups/bulk", strings.NewReader(`{}`))
-	rec := httptest.NewRecorder()
-	handler.HandleBulkBackup(rec, req)
-
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected 429, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-	if rec.Header().Get("Retry-After") == "" {
-		t.Fatalf("expected Retry-After header, got headers: %#v", rec.Header())
-	}
-	metrics := string(registry.MarshalPrometheus())
-	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_legacy",reason="global_concurrency_limit",source="local"} 1`) {
-		t.Fatalf("expected legacy bulk backup active rejection metric, got:\n%s", metrics)
 	}
 }
 
