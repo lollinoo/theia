@@ -79,8 +79,13 @@ type DeviceService struct {
 	reprobeBooked      map[uuid.UUID]time.Time
 	reprobeInFlight    atomic.Int32
 
-	probeWg        sync.WaitGroup
-	TopologyNotify chan struct{} // signaled when probeDevice creates new links
+	lifecycleParent context.Context
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+	stopOnce        sync.Once
+	asyncMu         sync.Mutex
+	probeWg         sync.WaitGroup
+	TopologyNotify  chan struct{} // signaled when probeDevice creates new links
 }
 
 // DeviceServiceOption represents device service option data used by the service orchestration.
@@ -115,6 +120,7 @@ func NewDeviceService(
 		reprobeCooldown: incompleteLinkReprobeCooldown,
 		reprobeWindow:   incompleteLinkReprobeWindow,
 		reprobeBooked:   make(map[uuid.UUID]time.Time),
+		lifecycleParent: context.Background(),
 		TopologyNotify:  topologyNotify,
 	}
 	for _, option := range options {
@@ -122,12 +128,25 @@ func NewDeviceService(
 			option(svc)
 		}
 	}
+	if svc.lifecycleParent == nil {
+		svc.lifecycleParent = context.Background()
+	}
+	svc.lifecycleCtx, svc.lifecycleCancel = context.WithCancel(svc.lifecycleParent)
 	svc.mutation = newDeviceMutationService(svc)
 	svc.discovery = newDeviceDiscoveryCoordinator(svc)
 	if svc.delayedReprobe == nil {
 		svc.delayedReprobe = svc.discovery.runDelayedReprobe
 	}
 	return svc
+}
+
+// WithLifecycleContext binds async device probes and delayed reprobes to a service parent context.
+func WithLifecycleContext(ctx context.Context) DeviceServiceOption {
+	return func(s *DeviceService) {
+		if ctx != nil {
+			s.lifecycleParent = ctx
+		}
+	}
 }
 
 func WithTopologyObservationStore(store topology.ObservationStore) DeviceServiceOption {
@@ -172,6 +191,64 @@ func (s *DeviceService) SetBootstrapScheduler(scheduler bootstrapScheduler) {
 
 func (s *DeviceService) SetRuntimeResetter(resetter runtimeResetter) {
 	s.runtimeResetter = resetter
+}
+
+func (s *DeviceService) lifecycleErr() error {
+	if s.lifecycleCtx == nil {
+		return nil
+	}
+	select {
+	case <-s.lifecycleCtx.Done():
+		return s.lifecycleCtx.Err()
+	default:
+		return nil
+	}
+}
+
+func (s *DeviceService) beginLifecycleWork() (context.Context, func(), bool) {
+	if err := s.lifecycleErr(); err != nil {
+		return nil, nil, false
+	}
+
+	s.asyncMu.Lock()
+	defer s.asyncMu.Unlock()
+
+	if err := s.lifecycleErr(); err != nil {
+		return nil, nil, false
+	}
+	s.probeWg.Add(1)
+	workCtx := s.lifecycleCtx
+	if workCtx == nil {
+		workCtx = context.Background()
+	}
+	return workCtx, s.probeWg.Done, true
+}
+
+func (s *DeviceService) startLifecycleProbe(device *domain.Device) bool {
+	workCtx, done, ok := s.beginLifecycleWork()
+	if !ok {
+		return false
+	}
+	go func() {
+		defer done()
+		if workCtx.Err() != nil {
+			return
+		}
+		s.probeDevice(device)
+	}()
+	return true
+}
+
+// Stop cancels service-owned async probe work and waits for tracked probes to drain.
+func (s *DeviceService) Stop() {
+	s.stopOnce.Do(func() {
+		if s.lifecycleCancel != nil {
+			s.lifecycleCancel()
+		}
+	})
+	s.asyncMu.Lock()
+	s.asyncMu.Unlock()
+	s.WaitForProbes()
 }
 
 // AddDevice creates a new device and triggers an async SNMP probe for

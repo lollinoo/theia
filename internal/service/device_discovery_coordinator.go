@@ -22,10 +22,17 @@ func newDeviceDiscoveryCoordinator(parent *DeviceService) *deviceDiscoveryCoordi
 	return &deviceDiscoveryCoordinator{parent: parent}
 }
 
-func (d *deviceDiscoveryCoordinator) runDelayedReprobe(_ context.Context, id uuid.UUID) error {
+func (d *deviceDiscoveryCoordinator) runDelayedReprobe(ctx context.Context, id uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	device, err := d.parent.deviceRepo.GetByID(id)
 	if err != nil {
 		return fmt.Errorf("getting device: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	d.probeDevice(device)
@@ -40,6 +47,14 @@ func (d *deviceDiscoveryCoordinator) scheduleIncompleteLinkReprobeAttempt(
 ) {
 	s := d.parent
 	s.scheduleFunc(delay, func() {
+		workCtx, done, ok := s.beginLifecycleWork()
+		if !ok {
+			return
+		}
+		defer done()
+		if err := workCtx.Err(); err != nil {
+			return
+		}
 		if !s.hasIncompleteLLDPLinks(targetID) {
 			return
 		}
@@ -56,6 +71,9 @@ func (d *deviceDiscoveryCoordinator) scheduleIncompleteLinkReprobeAttempt(
 					targetLabel,
 					incompleteLinkReprobeRetry,
 				)
+				if err := workCtx.Err(); err != nil {
+					return
+				}
 				d.scheduleIncompleteLinkReprobeAttempt(
 					targetID,
 					targetLabel,
@@ -69,7 +87,10 @@ func (d *deviceDiscoveryCoordinator) scheduleIncompleteLinkReprobeAttempt(
 		}
 		defer s.reprobeInFlight.Add(-1)
 
-		if err := s.delayedReprobe(context.Background(), targetID); err != nil {
+		if err := workCtx.Err(); err != nil {
+			return
+		}
+		if err := s.delayedReprobe(workCtx, targetID); err != nil {
 			log.Printf("Delayed LLDP re-probe failed for %s: %v", targetLabel, err)
 		}
 	})
@@ -77,6 +98,9 @@ func (d *deviceDiscoveryCoordinator) scheduleIncompleteLinkReprobeAttempt(
 
 func (d *deviceDiscoveryCoordinator) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, deviceIP string) bool {
 	s := d.parent
+	if err := s.lifecycleErr(); err != nil {
+		return false
+	}
 	type reprobeTarget struct {
 		id    uuid.UUID
 		label string
@@ -109,6 +133,9 @@ func (d *deviceDiscoveryCoordinator) scheduleIncompleteLinkReprobe(deviceID uuid
 
 	scheduled := false
 	for _, target := range targets {
+		if err := s.lifecycleErr(); err != nil {
+			return scheduled
+		}
 		bookedAt, reserved := s.reserveIncompleteLinkReprobe(target.id)
 		if !reserved {
 			continue
@@ -207,6 +234,10 @@ func (d *deviceDiscoveryCoordinator) probeDevice(device *domain.Device) {
 }
 
 func (d *deviceDiscoveryCoordinator) ProbeDevice(ctx context.Context, id uuid.UUID) error {
+	if err := d.parent.lifecycleErr(); err != nil {
+		return err
+	}
+
 	device, err := d.parent.deviceRepo.GetByID(id)
 	if err != nil {
 		return fmt.Errorf("getting device: %w", err)
@@ -217,26 +248,26 @@ func (d *deviceDiscoveryCoordinator) ProbeDevice(ctx context.Context, id uuid.UU
 		return fmt.Errorf("updating device status: %w", err)
 	}
 
-	d.parent.probeWg.Add(1)
-	go func() {
-		defer d.parent.probeWg.Done()
-		d.probeDevice(device)
-	}()
+	if !d.parent.startLifecycleProbe(device) {
+		return d.parent.lifecycleErr()
+	}
 
 	return nil
 }
 
 func (d *deviceDiscoveryCoordinator) ReprobeDevice(ctx context.Context, id uuid.UUID) error {
+	if err := d.parent.lifecycleErr(); err != nil {
+		return err
+	}
+
 	device, err := d.parent.deviceRepo.GetByID(id)
 	if err != nil {
 		return fmt.Errorf("getting device: %w", err)
 	}
 
-	d.parent.probeWg.Add(1)
-	go func() {
-		defer d.parent.probeWg.Done()
-		d.probeDevice(device)
-	}()
+	if !d.parent.startLifecycleProbe(device) {
+		return d.parent.lifecycleErr()
+	}
 
 	return nil
 }
