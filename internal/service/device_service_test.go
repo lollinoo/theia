@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"strings"
@@ -610,6 +611,32 @@ func TestAddDevice_BootstrapOnceStartsPendingAndEffectiveModeFollowsDefault(t *t
 	}
 }
 
+func TestAddDevice_ReturnsCanceledAfterServiceStop(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	discoverCalls := 0
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		discoverCalls++
+		return &snmp.DiscoveryResult{}, nil
+	}, nil)
+
+	svc.Stop()
+	_, err := svc.AddDevice(context.Background(), "10.0.0.10", "edge-stopped",
+		domain.DeviceTypeUnknown,
+		domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		}, nil, "", domain.MetricsSourceSNMP, "", "", "", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("AddDevice error = %v, want context.Canceled", err)
+	}
+	svc.WaitForProbes()
+	if discoverCalls != 0 {
+		t.Fatalf("expected stopped service not to start discovery, got %d calls", discoverCalls)
+	}
+}
+
 func TestAddDeviceSchedulesBootstrapInsteadOfStartingDiscoveryGoroutine(t *testing.T) {
 	deviceRepo := newMockDeviceRepo()
 	linkRepo := newMockLinkRepo()
@@ -744,6 +771,51 @@ func TestProbeDevice_BootstrapOnceCompletesWithoutNeighbors(t *testing.T) {
 	}
 	if updated.LastTopologyDiscoveryResult != "no_neighbors" {
 		t.Fatalf("expected last_topology_discovery_result no_neighbors, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
+func TestProbeDevice_ReturnsCanceledAfterServiceStop(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	device := &domain.Device{
+		ID:            uuid.New(),
+		IP:            "10.0.0.20",
+		Hostname:      "edge-stopped",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		MetricsSource: domain.MetricsSourceSNMP,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	discoverCalls := 0
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		discoverCalls++
+		return &snmp.DiscoveryResult{}, nil
+	}, nil)
+
+	svc.Stop()
+	err := svc.ProbeDevice(context.Background(), device.ID)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ProbeDevice error = %v, want context.Canceled", err)
+	}
+	svc.WaitForProbes()
+	if discoverCalls != 0 {
+		t.Fatalf("expected stopped service not to start discovery, got %d calls", discoverCalls)
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.Status != domain.DeviceStatusUp {
+		t.Fatalf("expected stopped probe not to update status, got %s", updated.Status)
 	}
 }
 
@@ -1251,6 +1323,188 @@ func TestProbeDevice_DoesNotScheduleDelayedLLDPReprobeForOlderDevices(t *testing
 	if scheduled {
 		t.Fatal("expected no delayed LLDP reprobe to be scheduled for older devices")
 	}
+}
+
+func TestScheduleIncompleteLinkReprobe_DoesNotRunAfterServiceStop(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	localDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "edge-01",
+		IP:            "192.0.2.51",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+	}
+	if err := deviceRepo.Create(localDevice); err != nil {
+		t.Fatalf("Create local device failed: %v", err)
+	}
+	remoteDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "distribution-01",
+		IP:            "192.0.2.61",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourcePrometheus,
+	}
+	if err := deviceRepo.Create(remoteDevice); err != nil {
+		t.Fatalf("Create remote device failed: %v", err)
+	}
+	if err := linkRepo.Create(&domain.Link{
+		SourceDeviceID:    localDevice.ID,
+		SourceIfName:      "",
+		TargetDeviceID:    remoteDevice.ID,
+		TargetIfName:      "ether8",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("Create link failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	var callbacks []func()
+	svc.scheduleFunc = func(delay time.Duration, fn func()) {
+		callbacks = append(callbacks, fn)
+	}
+	reprobeCalls := 0
+	svc.delayedReprobe = func(ctx context.Context, id uuid.UUID) error {
+		reprobeCalls++
+		return nil
+	}
+
+	if !svc.scheduleIncompleteLinkReprobe(localDevice.ID, localDevice.IP) {
+		t.Fatal("expected incomplete link reprobe to be scheduled")
+	}
+	svc.Stop()
+	for _, callback := range callbacks {
+		callback()
+	}
+
+	if reprobeCalls != 0 {
+		t.Fatalf("expected stopped service to skip delayed reprobe, got %d calls", reprobeCalls)
+	}
+}
+
+func TestScheduleIncompleteLinkReprobe_DoesNotRetryAfterServiceStop(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	localDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "edge-01",
+		IP:            "192.0.2.51",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+	}
+	if err := deviceRepo.Create(localDevice); err != nil {
+		t.Fatalf("Create local device failed: %v", err)
+	}
+	remoteDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "distribution-01",
+		IP:            "192.0.2.61",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourcePrometheus,
+	}
+	if err := deviceRepo.Create(remoteDevice); err != nil {
+		t.Fatalf("Create remote device failed: %v", err)
+	}
+	if err := linkRepo.Create(&domain.Link{
+		SourceDeviceID:    localDevice.ID,
+		SourceIfName:      "",
+		TargetDeviceID:    remoteDevice.ID,
+		TargetIfName:      "ether8",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("Create link failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	var callbacks []func()
+	svc.scheduleFunc = func(delay time.Duration, fn func()) {
+		callbacks = append(callbacks, fn)
+	}
+	svc.delayedReprobe = func(ctx context.Context, id uuid.UUID) error {
+		t.Fatal("delayed reprobe should not run after stop")
+		return nil
+	}
+
+	if !svc.scheduleIncompleteLinkReprobe(localDevice.ID, localDevice.IP) {
+		t.Fatal("expected incomplete link reprobe to be scheduled")
+	}
+	svc.reprobeInFlight.Store(int32(svc.staticReprobeBudget()))
+	svc.Stop()
+	callbacks[0]()
+
+	if got := len(callbacks); got != 1 {
+		t.Fatalf("expected stopped service not to schedule a retry, got %d scheduled callbacks", got)
+	}
+}
+
+func TestScheduleIncompleteLinkReprobe_StaleCallbackAfterDeleteDoesNotReprobe(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	localDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "edge-01",
+		IP:            "192.0.2.51",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+	}
+	if err := deviceRepo.Create(localDevice); err != nil {
+		t.Fatalf("Create local device failed: %v", err)
+	}
+	remoteDevice := &domain.Device{
+		ID:            uuid.New(),
+		Hostname:      "distribution-01",
+		IP:            "192.0.2.61",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourcePrometheus,
+	}
+	if err := deviceRepo.Create(remoteDevice); err != nil {
+		t.Fatalf("Create remote device failed: %v", err)
+	}
+	if err := linkRepo.Create(&domain.Link{
+		SourceDeviceID:    localDevice.ID,
+		SourceIfName:      "",
+		TargetDeviceID:    remoteDevice.ID,
+		TargetIfName:      "ether8",
+		DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("Create link failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	var callback func()
+	svc.scheduleFunc = func(delay time.Duration, fn func()) {
+		callback = fn
+	}
+	svc.delayedReprobe = func(ctx context.Context, id uuid.UUID) error {
+		t.Fatal("delayed reprobe should not run for a deleted device")
+		return nil
+	}
+
+	if !svc.scheduleIncompleteLinkReprobe(localDevice.ID, localDevice.IP) {
+		t.Fatal("expected incomplete link reprobe to be scheduled")
+	}
+	if err := svc.DeleteDevice(context.Background(), localDevice.ID); err != nil {
+		t.Fatalf("DeleteDevice failed: %v", err)
+	}
+	callback()
 }
 
 func TestScheduleIncompleteLinkReprobe_RetriesWhenStaticBudgetIsTemporarilyExhausted(t *testing.T) {

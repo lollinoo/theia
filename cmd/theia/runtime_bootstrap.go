@@ -409,6 +409,8 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	backupJobRepo := postgres.NewBackupJobRepo(db)
 	backupFileRepo := postgres.NewBackupFileRepo(db)
 	bulkBackupRunRepo := postgres.NewBulkBackupRunRepo(db)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	discoverFunc := newSNMPDiscoverFunc(settingsRepo, vendorRegistry)
 	topologyNotify := make(chan struct{}, 1)
@@ -418,6 +420,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		settingsRepo,
 		discoverFunc,
 		topologyNotify,
+		service.WithLifecycleContext(ctx),
 		service.WithTopologyObservationStore(topologyObservationRepo),
 	)
 
@@ -472,8 +475,6 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	backupScheduler = worker.NewBackupScheduler(instanceBackupService, instanceBackupRepo, settingsRepo)
 
 	deviceBackupScheduler := worker.NewDeviceBackupScheduler(backupService, backupJobRepo, settingsRepo)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	backupService.ResumeBulkBackupRuns(ctx)
 
 	prometheusURL := ""
@@ -542,7 +543,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		pipeline.GetPrometheusStatus,
 		ws.WithAllowedOrigins(cfg.AllowedOrigins),
 	)
-	children := runtimeChildren{pipeline}
+	children := runtimeChildren{deviceService, pipeline}
 	if backupScheduler != nil {
 		children = append(children, backupScheduler)
 	}

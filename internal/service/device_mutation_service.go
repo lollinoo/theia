@@ -56,6 +56,9 @@ func (m *deviceMutationService) AddDevice(
 	notes ...*string,
 ) (*domain.Device, error) {
 	_ = ctx
+	if err := m.parent.lifecycleErr(); err != nil {
+		return nil, err
+	}
 	if tags == nil {
 		tags = map[string]string{}
 	}
@@ -137,11 +140,7 @@ func (m *deviceMutationService) AddDevice(
 		return device, nil
 	}
 
-	m.probeWg.Add(1)
-	go func() {
-		defer m.probeWg.Done()
-		m.parent.probeDevice(device)
-	}()
+	m.parent.startLifecycleProbe(device)
 
 	m.parent.populateEffectiveTopologyDiscoveryMode(device)
 	return device, nil
