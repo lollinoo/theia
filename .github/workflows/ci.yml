@@ -3,25 +3,22 @@ name: CI
 on:
   push:
     branches: ['**']
-    tags: ['v*.*.*']
-    paths-ignore:
-      - '.planning/**'
-      - '*.md'
-      - 'docs/**'
-      - 'scripts/**'
-      - '.claude/**'
-      - '.agents/**'
-      - '.gemini/**'
   pull_request:
     branches: [master]
-    paths-ignore:
-      - '.planning/**'
-      - '*.md'
-      - 'docs/**'
-      - 'scripts/**'
-      - '.claude/**'
-      - '.agents/**'
-      - '.gemini/**'
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: Image channel to publish
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: Optional additional image tag
+        required: false
+        type: string
 
 concurrency:
   group: ci-${{ github.head_ref || github.ref }}
@@ -35,6 +32,7 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
       browser_e2e: ${{ steps.filter.outputs.browser_e2e }}
+      bridge: ${{ steps.filter.outputs.bridge }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,20 +47,16 @@ jobs:
           backend=false
           frontend=false
           browser_e2e=false
+          bridge=false
 
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base="${{ github.event.pull_request.base.sha }}"
-            head="${{ github.event.pull_request.head.sha }}"
-          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             backend=true
             frontend=true
             browser_e2e=true
-            {
-              echo "backend=$backend"
-              echo "frontend=$frontend"
-              echo "browser_e2e=$browser_e2e"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
+            bridge=true
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
           else
             base="${{ github.event.before }}"
             head="${{ github.sha }}"
@@ -71,35 +65,45 @@ jobs:
             fi
           fi
 
-          git diff --name-only "$base" "$head" > /tmp/theia-changed-files
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            git diff --name-only "$base" "$head" > /tmp/theia-changed-files
 
-          while IFS= read -r path; do
-            case "$path" in
-              cmd/*|internal/*|go.mod|go.sum|config.example.yaml|Dockerfile|docker-compose*.yml|Makefile|scripts/*.sh|scripts/*.ps1)
-                backend=true
-                browser_e2e=true
-                ;;
-            esac
+            while IFS= read -r path; do
+              case "$path" in
+                cmd/*|internal/*|go.mod|go.sum|config.example.yaml|Dockerfile|docker-compose*.yml|Makefile|scripts/*.sh|scripts/*.ps1|.env*.example)
+                  backend=true
+                  browser_e2e=true
+                  ;;
+              esac
 
-            case "$path" in
-              frontend/*)
-                frontend=true
-                browser_e2e=true
-                ;;
-            esac
+              case "$path" in
+                frontend/*|Dockerfile.frontend)
+                  frontend=true
+                  browser_e2e=true
+                  ;;
+              esac
 
-            case "$path" in
-              .github/workflows/ci.yml)
-                backend=true
-                browser_e2e=true
-                ;;
-            esac
-          done < /tmp/theia-changed-files
+              case "$path" in
+                cmd/winbox-bridge/*|scripts/build-winbox-bridge.ps1|scripts/test-build-winbox-bridge-safety.ps1|Makefile|go.mod|go.sum|.github/workflows/ci.yml)
+                  bridge=true
+                  ;;
+              esac
+
+              case "$path" in
+                .github/workflows/ci.yml)
+                  backend=true
+                  frontend=true
+                  browser_e2e=true
+                  ;;
+              esac
+            done < /tmp/theia-changed-files
+          fi
 
           {
             echo "backend=$backend"
             echo "frontend=$frontend"
             echo "browser_e2e=$browser_e2e"
+            echo "bridge=$bridge"
           } >> "$GITHUB_OUTPUT"
 
   backend-fast:
@@ -135,7 +139,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Run frontend-fast quality gate
@@ -144,7 +148,7 @@ jobs:
   browser-e2e:
     name: browser-e2e
     needs: changes
-    if: needs.changes.outputs.browser_e2e == 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    if: needs.changes.outputs.browser_e2e == 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -172,7 +176,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Run browser-e2e gate
@@ -188,160 +192,10 @@ jobs:
             frontend/test-results
           if-no-files-found: ignore
 
-  branch-images:
-    name: Branch Images
-    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-    needs: [changes, backend-fast, frontend-fast, browser-e2e]
-    runs-on: ubuntu-latest
-    concurrency:
-      group: branch-images-${{ github.ref }}
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Compute branch tag
-        id: branch
-        run: |
-          TAG=$(echo "$GITHUB_REF_NAME" | sed 's|/|-|g' | sed 's|^-||' | tr '[:upper:]' '[:lower:]')
-          DATED="staging-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "dated=$DATED" >> "$GITHUB_OUTPUT"
-          echo "Branch tag: $TAG"
-          echo "Dated tag:  $DATED"
-
-      - uses: docker/setup-buildx-action@v4
-
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT }}
-
-      - name: Backend image metadata
-        id: meta-backend
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/lollinoo/theia-backend
-          tags: |
-            type=raw,value=${{ steps.branch.outputs.tag }}
-            type=raw,value=staging,enable=${{ github.ref == 'refs/heads/master' }}
-            type=raw,value=${{ steps.branch.outputs.dated }},enable=${{ github.ref == 'refs/heads/master' }}
-
-      - name: Build and push backend image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          target: production
-          push: true
-          tags: ${{ steps.meta-backend.outputs.tags }}
-          labels: ${{ steps.meta-backend.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.branch.outputs.tag }}-${{ github.sha }}
-            GIT_COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
-          cache-from: type=gha,scope=backend-${{ steps.branch.outputs.tag }}
-          cache-to: type=gha,mode=max,scope=backend-${{ steps.branch.outputs.tag }}
-
-      - name: Frontend image metadata
-        id: meta-frontend
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/lollinoo/theia-frontend
-          tags: |
-            type=raw,value=${{ steps.branch.outputs.tag }}
-            type=raw,value=staging,enable=${{ github.ref == 'refs/heads/master' }}
-            type=raw,value=${{ steps.branch.outputs.dated }},enable=${{ github.ref == 'refs/heads/master' }}
-
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v7
-        with:
-          context: ./frontend
-          file: ./Dockerfile.frontend
-          target: production
-          push: true
-          tags: ${{ steps.meta-frontend.outputs.tags }}
-          labels: ${{ steps.meta-frontend.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.branch.outputs.tag }}-${{ github.sha }}
-          cache-from: type=gha,scope=frontend-${{ steps.branch.outputs.tag }}
-          cache-to: type=gha,mode=max,scope=frontend-${{ steps.branch.outputs.tag }}
-
-  release:
-    name: Release Images
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    concurrency:
-      group: release-${{ github.ref }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Extract version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v4
-
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT }}
-
-      - name: Backend image metadata
-        id: meta-backend
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/lollinoo/theia-backend
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=staging
-
-      - name: Build and push backend image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          target: production
-          push: true
-          tags: ${{ steps.meta-backend.outputs.tags }}
-          labels: ${{ steps.meta-backend.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-            GIT_COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
-
-      - name: Frontend image metadata
-        id: meta-frontend
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/lollinoo/theia-frontend
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=staging
-
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v7
-        with:
-          context: ./frontend
-          file: ./Dockerfile.frontend
-          target: production
-          push: true
-          tags: ${{ steps.meta-frontend.outputs.tags }}
-          labels: ${{ steps.meta-frontend.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
-
   build-bridge:
     name: "Bridge: ${{ matrix.goos }}/${{ matrix.goarch }}"
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
+    needs: changes
+    if: needs.changes.outputs.bridge == 'true'
     strategy:
       matrix:
         include:
@@ -349,38 +203,38 @@ jobs:
             goarch: amd64
             ext: .exe
             runs-on: ubuntu-latest
-            cgo: "0"
-            ldflags: "-s -w -H=windowsgui"
+            cgo: '0'
+            ldflags: -s -w -H=windowsgui
           - goos: windows
             goarch: arm64
             ext: .exe
             runs-on: ubuntu-latest
-            cgo: "0"
-            ldflags: "-s -w -H=windowsgui"
+            cgo: '0'
+            ldflags: -s -w -H=windowsgui
           - goos: linux
             goarch: amd64
-            ext: ""
+            ext: ''
             runs-on: ubuntu-latest
-            cgo: "0"
-            ldflags: "-s -w"
+            cgo: '0'
+            ldflags: -s -w
           - goos: linux
             goarch: arm64
-            ext: ""
+            ext: ''
             runs-on: ubuntu-latest
-            cgo: "0"
-            ldflags: "-s -w"
+            cgo: '0'
+            ldflags: -s -w
           - goos: darwin
             goarch: amd64
-            ext: ""
+            ext: ''
             runs-on: macos-latest
-            cgo: "1"
-            ldflags: "-s -w"
+            cgo: '1'
+            ldflags: -s -w
           - goos: darwin
             goarch: arm64
-            ext: ""
+            ext: ''
             runs-on: macos-latest
-            cgo: "1"
-            ldflags: "-s -w"
+            cgo: '1'
+            ldflags: -s -w
     runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@v4
@@ -398,9 +252,94 @@ jobs:
           mkdir -p bridge_binaries
           go build -ldflags="${{ matrix.ldflags }}" -o "bridge_binaries/winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/winbox-bridge/
 
-      - name: Upload release asset
-        uses: softprops/action-gh-release@v2
+      - name: Upload bridge artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: bridge_binaries/winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bridge_binaries/winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  branch-images:
+    name: Branch Images
+    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [changes, backend-fast, frontend-fast, browser-e2e, build-bridge]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: branch-images-${{ github.ref }}-${{ github.event.inputs.target_environment || 'branch' }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tags
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw_ref="${GITHUB_REF_NAME:-manual}"
+          sanitized="$(echo "$raw_ref" | tr '[:upper:]' '[:lower:]' | sed -E 's|[^a-z0-9_.-]+|-|g; s|^-+||; s|-+$||')"
+          if [[ -z "$sanitized" ]]; then
+            sanitized="manual"
+          fi
+          short_sha="${GITHUB_SHA::7}"
+          custom_tag="$(echo "${{ github.event.inputs.image_tag || '' }}" | tr '[:upper:]' '[:lower:]' | sed -E 's|[^a-z0-9_.-]+|-|g; s|^-+||; s|-+$||')"
+          {
+            echo "branch_tag=$sanitized"
+            echo "sha_tag=branch-${sanitized}-sha-${short_sha}"
+            echo "custom_tag=$custom_tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
+
+      - name: Backend image metadata
+        id: meta-backend
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/lollinoo/theia-backend
+          tags: |
+            type=raw,value=${{ steps.image.outputs.branch_tag }},enable=${{ github.event_name == 'push' }}
+            type=raw,value=${{ steps.image.outputs.sha_tag }},enable=${{ github.event_name == 'push' }}
+            type=raw,value=staging,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event.inputs.target_environment == 'staging' }}
+            type=raw,value=production,enable=${{ github.ref == 'refs/heads/production' || github.event.inputs.target_environment == 'production' }}
+            type=raw,value=${{ steps.image.outputs.custom_tag }},enable=${{ steps.image.outputs.custom_tag != '' }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: production
+          push: true
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha,scope=backend-${{ steps.image.outputs.branch_tag }}
+          cache-to: type=gha,mode=max,scope=backend-${{ steps.image.outputs.branch_tag }}
+
+      - name: Frontend image metadata
+        id: meta-frontend
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/lollinoo/theia-frontend
+          tags: |
+            type=raw,value=${{ steps.image.outputs.branch_tag }},enable=${{ github.event_name == 'push' }}
+            type=raw,value=${{ steps.image.outputs.sha_tag }},enable=${{ github.event_name == 'push' }}
+            type=raw,value=staging,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event.inputs.target_environment == 'staging' }}
+            type=raw,value=production,enable=${{ github.ref == 'refs/heads/production' || github.event.inputs.target_environment == 'production' }}
+            type=raw,value=${{ steps.image.outputs.custom_tag }},enable=${{ steps.image.outputs.custom_tag != '' }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          file: ./Dockerfile.frontend
+          target: production
+          push: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha,scope=frontend-${{ steps.image.outputs.branch_tag }}
+          cache-to: type=gha,mode=max,scope=frontend-${{ steps.image.outputs.branch_tag }}
