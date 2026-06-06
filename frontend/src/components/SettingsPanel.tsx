@@ -20,15 +20,15 @@ import { GrafanaDashboardProfileManager } from './GrafanaDashboardProfileManager
 import { InstanceBackupManager } from './InstanceBackupManager';
 import { MaterialIcon } from './MaterialIcon';
 import { SNMPProfileManager } from './SNMPProfileManager';
+import { BridgeSettingsSection } from './settings-panel/BridgeSettingsSection';
 import { DeviceBackupSettingsSection } from './settings-panel/DeviceBackupSettingsSection';
+import { PollingSettingsSection } from './settings-panel/PollingSettingsSection';
+import { PrometheusSettingsSection } from './settings-panel/PrometheusSettingsSection';
 import { SavedIndicator } from './settings-panel/SavedIndicator';
 import { SettingsSection } from './settings-panel/SettingsSection';
-import { WorkerSettingsSection } from './settings-panel/WorkerSettingsSection';
 import {
   DEFAULT_WORKER_SETTINGS,
-  POLLING_PRESETS,
   PRESET_VALUES,
-  TIMEZONES,
   WORKER_SETTINGS,
   type WorkerSetting,
   type WorkerSettingKey,
@@ -265,6 +265,49 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }
   }
 
+  function handleCustomPollingChange(value: string) {
+    setCustomPolling(value);
+    setFieldError('customPolling', null);
+    schedulePollingUpdate(value);
+  }
+
+  function handleCustomPollingBlur() {
+    const trimmed = customPolling.trim();
+    const num = parseInt(trimmed, 10);
+    if (!/^\d+$/.test(trimmed) || num < 5 || num > 3600) {
+      setFieldError('customPolling', 'Polling interval must be between 5 and 3600 seconds');
+    } else {
+      setFieldError('customPolling', null);
+    }
+  }
+
+  function handlePrometheusChange(value: string) {
+    setPrometheusUrl(value);
+    setFieldError('prometheusUrl', null);
+    schedulePrometheusUpdate(value);
+  }
+
+  function handlePrometheusBlur() {
+    setFieldError('prometheusUrl', validateURL(prometheusUrl, 'Prometheus URL'));
+  }
+
+  function handleTimezoneChange(value: string) {
+    setTimezone(value);
+    void updateSetting('timezone', value).then(() =>
+      showSaved(setSavedTimezone, savedTimezoneTimerRef),
+    );
+  }
+
+  function handleBridgePortBlur() {
+    const trimmed = bridgePort.trim();
+    const num = parseInt(trimmed, 10);
+    if (!/^\d+$/.test(trimmed) || num < 1 || num > 65535) {
+      setFieldError('bridgePort', 'Bridge port must be an integer between 1 and 65535');
+    } else {
+      setFieldError('bridgePort', null);
+    }
+  }
+
   function handleWorkerSettingBlur(setting: WorkerSetting) {
     setFieldError(
       setting.key,
@@ -285,76 +328,22 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           icon="speed"
           accent="primary"
         >
-          <div className="grid gap-4">
-            <label className="grid gap-1 text-sm">
-              <span className="flex items-center justify-between gap-3">
-                <span className={fieldLabelClass}>Polling Interval</span>
-                <SavedIndicator visible={savedPolling} />
-              </span>
-              <select
-                value={pollingValue}
-                onChange={(e) => handlePollingPresetChange(e.target.value)}
-                className={controlClass()}
-              >
-                {POLLING_PRESETS.map((preset) => (
-                  <option key={preset.value} value={preset.value}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {pollingValue === 'custom' && (
-              <div className="grid gap-1 text-sm">
-                <label htmlFor="custom-polling-seconds" className={fieldLabelClass}>
-                  Custom interval
-                </label>
-                <div className="flex items-center gap-2">
-                  <div className="min-w-0 flex-1">
-                    <input
-                      id="custom-polling-seconds"
-                      type="number"
-                      min={5}
-                      max={3600}
-                      value={customPolling}
-                      placeholder="Seconds (5-3600)"
-                      onChange={(e) => {
-                        setCustomPolling(e.target.value);
-                        setFieldError('customPolling', null);
-                        schedulePollingUpdate(e.target.value);
-                      }}
-                      onBlur={() => {
-                        const trimmed = customPolling.trim();
-                        const num = parseInt(trimmed, 10);
-                        if (!/^\d+$/.test(trimmed) || num < 5 || num > 3600) {
-                          setFieldError(
-                            'customPolling',
-                            'Polling interval must be between 5 and 3600 seconds',
-                          );
-                        } else {
-                          setFieldError('customPolling', null);
-                        }
-                      }}
-                      className={controlClass(Boolean(fieldErrors.customPolling))}
-                    />
-                    {fieldErrors.customPolling && (
-                      <p className="mt-1 text-xs text-status-down">{fieldErrors.customPolling}</p>
-                    )}
-                  </div>
-                  <span className="text-xs text-on-bg-secondary">sec</span>
-                </div>
-              </div>
-            )}
-
-            <WorkerSettingsSection
-              open={workerSectionOpen}
-              workerSettings={workerSettings}
-              savedWorkerSettings={savedWorkerSettings}
-              fieldErrors={fieldErrors}
-              onToggle={() => setWorkerSectionOpen((prev) => !prev)}
-              onSettingChange={handleWorkerSettingChange}
-              onSettingBlur={handleWorkerSettingBlur}
-            />
-          </div>
+          <PollingSettingsSection
+            pollingValue={pollingValue}
+            customPolling={customPolling}
+            savedPolling={savedPolling}
+            customPollingError={fieldErrors.customPolling}
+            workerSectionOpen={workerSectionOpen}
+            workerSettings={workerSettings}
+            savedWorkerSettings={savedWorkerSettings}
+            fieldErrors={fieldErrors}
+            onPollingPresetChange={handlePollingPresetChange}
+            onCustomPollingChange={handleCustomPollingChange}
+            onCustomPollingBlur={handleCustomPollingBlur}
+            onWorkerSectionToggle={() => setWorkerSectionOpen((prev) => !prev)}
+            onWorkerSettingChange={handleWorkerSettingChange}
+            onWorkerSettingBlur={handleWorkerSettingBlur}
+          />
         </SettingsSection>
 
         <SettingsSection
@@ -407,31 +396,13 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           icon="hub"
           accent="primary"
         >
-          <div className="grid gap-4">
-            <label className="grid gap-1 text-sm">
-              <span className="flex items-center justify-between gap-3">
-                <span className={fieldLabelClass}>Prometheus URL</span>
-                <SavedIndicator visible={savedPrometheus} />
-              </span>
-              <input
-                type="url"
-                value={prometheusUrl}
-                placeholder="http://localhost:9090"
-                onChange={(e) => {
-                  setPrometheusUrl(e.target.value);
-                  setFieldError('prometheusUrl', null);
-                  schedulePrometheusUpdate(e.target.value);
-                }}
-                onBlur={() =>
-                  setFieldError('prometheusUrl', validateURL(prometheusUrl, 'Prometheus URL'))
-                }
-                className={controlClass(Boolean(fieldErrors.prometheusUrl))}
-              />
-              {fieldErrors.prometheusUrl && (
-                <span className="text-xs text-status-down">{fieldErrors.prometheusUrl}</span>
-              )}
-            </label>
-          </div>
+          <PrometheusSettingsSection
+            prometheusUrl={prometheusUrl}
+            savedPrometheus={savedPrometheus}
+            prometheusError={fieldErrors.prometheusUrl}
+            onPrometheusChange={handlePrometheusChange}
+            onPrometheusBlur={handlePrometheusBlur}
+          />
         </SettingsSection>
       </div>
 
@@ -443,68 +414,16 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           icon="settings_ethernet"
           accent="warning"
         >
-          <div className="grid gap-4">
-            <label className="grid gap-1 text-sm">
-              <span className="flex items-center justify-between gap-3">
-                <span className={fieldLabelClass}>Timezone</span>
-                <SavedIndicator visible={savedTimezone} />
-              </span>
-              <select
-                value={timezone}
-                onChange={(e) => {
-                  setTimezone(e.target.value);
-                  void updateSetting('timezone', e.target.value).then(() =>
-                    showSaved(setSavedTimezone, savedTimezoneTimerRef),
-                  );
-                }}
-                className={controlClass()}
-              >
-                {TIMEZONES.map((tz) => (
-                  <option key={tz.value} value={tz.value}>
-                    {tz.label}
-                  </option>
-                ))}
-              </select>
-              <span className="text-xs text-on-bg-secondary">
-                Affects backup filenames and zip timestamps.
-              </span>
-            </label>
-
-            <label className="grid gap-1 text-sm">
-              <span className="flex items-center justify-between gap-3">
-                <span className={fieldLabelClass}>WinBox Bridge Port</span>
-                <SavedIndicator visible={savedBridgePort} />
-              </span>
-              <input
-                type="number"
-                min={1}
-                max={65535}
-                value={bridgePort}
-                placeholder="1337"
-                onChange={(e) => handleBridgePortChange(e.target.value)}
-                onBlur={() => {
-                  const trimmed = bridgePort.trim();
-                  const num = parseInt(trimmed, 10);
-                  if (!/^\d+$/.test(trimmed) || num < 1 || num > 65535) {
-                    setFieldError(
-                      'bridgePort',
-                      'Bridge port must be an integer between 1 and 65535',
-                    );
-                  } else {
-                    setFieldError('bridgePort', null);
-                  }
-                }}
-                className={controlClass(Boolean(fieldErrors.bridgePort), 'font-mono')}
-              />
-              {fieldErrors.bridgePort && (
-                <span className="text-xs text-status-down">{fieldErrors.bridgePort}</span>
-              )}
-              <span className="text-xs text-on-bg-secondary">
-                Default is <span className="font-mono">1337</span>. Must match{' '}
-                <span className="font-mono">ListenPort</span> in the bridge config.
-              </span>
-            </label>
-          </div>
+          <BridgeSettingsSection
+            timezone={timezone}
+            bridgePort={bridgePort}
+            savedTimezone={savedTimezone}
+            savedBridgePort={savedBridgePort}
+            bridgePortError={fieldErrors.bridgePort}
+            onTimezoneChange={handleTimezoneChange}
+            onBridgePortChange={handleBridgePortChange}
+            onBridgePortBlur={handleBridgePortBlur}
+          />
         </SettingsSection>
 
         <SettingsSection
