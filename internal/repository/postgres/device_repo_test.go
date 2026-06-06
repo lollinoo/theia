@@ -4,9 +4,12 @@ package postgres
 
 import (
 	"database/sql"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lollinoo/theia/internal/domain"
 )
 
@@ -88,6 +91,109 @@ func TestDeviceRepoGetBySysName_NormalizedLookup(t *testing.T) {
 				t.Fatalf("expected device %s, got %s", tc.expectedID, device.ID)
 			}
 		})
+	}
+}
+
+func TestDeviceRepoFindPhysicalVirtualIPConflictUsesScopedNormalizedLookup(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+
+	virtual := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "virtual-edge",
+		IP:         " Example.Host ",
+		DeviceType: domain.DeviceTypeVirtual,
+		Managed:    true,
+		Status:     domain.DeviceStatusUnknown,
+		Tags:       map[string]string{},
+	}
+	if err := repo.Create(virtual); err != nil {
+		t.Fatalf("Create virtual device failed: %v", err)
+	}
+	physical := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "physical-edge",
+		IP:         "10.0.0.10",
+		DeviceType: domain.DeviceTypeRouter,
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := repo.Create(physical); err != nil {
+		t.Fatalf("Create physical device failed: %v", err)
+	}
+
+	conflict, err := repo.FindPhysicalVirtualIPConflict("example.host", domain.DeviceTypeRouter, uuid.Nil)
+	if err != nil {
+		t.Fatalf("FindPhysicalVirtualIPConflict failed: %v", err)
+	}
+	if conflict == nil {
+		t.Fatal("expected physical candidate to conflict with virtual device")
+	}
+	if conflict.ID != virtual.ID {
+		t.Fatalf("conflict ID = %s, want %s", conflict.ID, virtual.ID)
+	}
+	if conflict.DeviceType != domain.DeviceTypeVirtual {
+		t.Fatalf("conflict device type = %s, want virtual", conflict.DeviceType)
+	}
+
+	conflict, err = repo.FindPhysicalVirtualIPConflict("example.host", domain.DeviceTypeVirtual, uuid.Nil)
+	if err != nil {
+		t.Fatalf("FindPhysicalVirtualIPConflict same type failed: %v", err)
+	}
+	if conflict != nil {
+		t.Fatalf("same-type virtual candidate returned conflict: %+v", conflict)
+	}
+
+	conflict, err = repo.FindPhysicalVirtualIPConflict("example.host", domain.DeviceTypeRouter, virtual.ID)
+	if err != nil {
+		t.Fatalf("FindPhysicalVirtualIPConflict excluded device failed: %v", err)
+	}
+	if conflict != nil {
+		t.Fatalf("excluded device returned conflict: %+v", conflict)
+	}
+}
+
+func TestDeviceRepoDatabaseRejectsPhysicalVirtualDuplicateIP(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+
+	physical := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "physical-edge",
+		IP:         "10.0.0.99",
+		DeviceType: domain.DeviceTypeRouter,
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := repo.Create(physical); err != nil {
+		t.Fatalf("Create physical device failed: %v", err)
+	}
+
+	virtual := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "virtual-edge",
+		IP:         " 10.0.0.99 ",
+		DeviceType: domain.DeviceTypeVirtual,
+		Managed:    true,
+		Status:     domain.DeviceStatusUnknown,
+		Tags:       map[string]string{},
+	}
+	err := repo.Create(virtual)
+	if err == nil {
+		t.Fatal("expected database to reject physical/virtual duplicate IP")
+	}
+	if !isDeviceIPInvariantError(err) {
+		t.Fatalf("Create duplicate error = %v, want device IP invariant error", err)
 	}
 }
 
@@ -629,4 +735,16 @@ func TestDeviceRepo_NotesRoundTrip(t *testing.T) {
 	if updated.Notes != nil {
 		t.Fatalf("Notes after clear: got %#v, want nil", updated.Notes)
 	}
+}
+
+func isDeviceIPInvariantError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505" || pgErr.Code == "23P01"
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "idx_devices_ip") ||
+		strings.Contains(message, "devices_ip_physical_virtual_excl") ||
+		strings.Contains(message, "duplicate key") ||
+		strings.Contains(message, "exclusion constraint")
 }

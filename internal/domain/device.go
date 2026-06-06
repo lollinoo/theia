@@ -212,6 +212,9 @@ type DeviceRepository interface {
 	Create(device *Device) error
 	GetByID(id uuid.UUID) (*Device, error)
 	GetByIP(ip string) (*Device, error)
+	// FindPhysicalVirtualIPConflict returns a device with the same address and
+	// opposite virtualness, excluding the supplied device ID when non-zero.
+	FindPhysicalVirtualIPConflict(ip string, deviceType DeviceType, excludeID uuid.UUID) (*Device, error)
 	GetBySysName(sysName string) (*Device, error)
 	GetAll() ([]Device, error)
 	Update(device *Device) error

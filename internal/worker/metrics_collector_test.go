@@ -70,6 +70,10 @@ func (r *mockWorkerDeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 
 func (r *mockWorkerDeviceRepo) GetByIP(_ string) (*domain.Device, error) { return nil, nil }
 
+func (r *mockWorkerDeviceRepo) FindPhysicalVirtualIPConflict(_ string, _ domain.DeviceType, _ uuid.UUID) (*domain.Device, error) {
+	return nil, nil
+}
+
 func (r *mockWorkerDeviceRepo) GetBySysName(_ string) (*domain.Device, error) { return nil, nil }
 
 func (r *mockWorkerDeviceRepo) GetAll() ([]domain.Device, error) {

@@ -24,8 +24,10 @@ type mockDeviceRepo struct {
 	mu                       sync.Mutex
 	devices                  map[uuid.UUID]*domain.Device
 	updateHook               func(*domain.Device) error
+	findIPConflictCalls      int
 	getByIDsCalls            int
 	getByIDsForTopologyCalls int
+	failGetAll               bool
 	failGetByIDs             bool
 }
 
@@ -72,11 +74,38 @@ func (r *mockDeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 func (r *mockDeviceRepo) GetAll() ([]domain.Device, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.failGetAll {
+		return nil, fmt.Errorf("full device scan should not be used")
+	}
 	var result []domain.Device
 	for _, d := range r.devices {
 		result = append(result, *d)
 	}
 	return result, nil
+}
+
+func (r *mockDeviceRepo) FindPhysicalVirtualIPConflict(ip string, deviceType domain.DeviceType, excludeID uuid.UUID) (*domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.findIPConflictCalls++
+	address := strings.TrimSpace(ip)
+	if address == "" {
+		return nil, nil
+	}
+	candidateVirtual := deviceType == domain.DeviceTypeVirtual
+	for _, d := range r.devices {
+		if excludeID != uuid.Nil && d.ID == excludeID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(d.IP), address) {
+			continue
+		}
+		if (d.DeviceType == domain.DeviceTypeVirtual) != candidateVirtual {
+			cp := *d
+			return &cp, nil
+		}
+	}
+	return nil, nil
 }
 
 func (r *mockDeviceRepo) GetByIDs(ids []uuid.UUID) ([]domain.Device, error) {
@@ -3362,6 +3391,38 @@ func TestAddDevice_RejectsPhysicalIPWhenVirtualDeviceUsesAddress(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "device ip conflict") {
 		t.Fatalf("expected device IP conflict error, got %v", err)
+	}
+}
+
+func TestAddDevice_PhysicalVirtualIPConflictCheckUsesScopedRepositoryLookup(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	deviceRepo.failGetAll = true
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	virtual := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "virtual-edge",
+		IP:         " 10.0.0.99 ",
+		DeviceType: domain.DeviceTypeVirtual,
+		Managed:    true,
+	}
+	if err := deviceRepo.Create(virtual); err != nil {
+		t.Fatalf("seed virtual device: %v", err)
+	}
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+
+	_, err := svc.AddDevice(context.Background(), "10.0.0.99", "physical-edge",
+		domain.DeviceTypeRouter,
+		domain.SNMPCredentials{}, nil, "", "", "", "", "", nil)
+
+	if err == nil {
+		t.Fatal("expected physical device with virtual IP conflict to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "device ip conflict") {
+		t.Fatalf("expected device IP conflict error, got %v", err)
+	}
+	if deviceRepo.findIPConflictCalls != 1 {
+		t.Fatalf("scoped conflict lookups = %d, want 1", deviceRepo.findIPConflictCalls)
 	}
 }
 

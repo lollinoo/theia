@@ -915,6 +915,8 @@ func isDeviceIPConflict(err error) bool {
 
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "idx_devices_ip") ||
+		strings.Contains(message, "devices_ip_physical_virtual_excl") ||
+		strings.Contains(message, "exclusion constraint") ||
 		(strings.Contains(message, "duplicate key value violates unique constraint") && strings.Contains(message, "devices")) ||
 		strings.Contains(message, "unique constraint failed: devices.ip") ||
 		strings.Contains(message, "device ip conflict")
