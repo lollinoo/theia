@@ -6,11 +6,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Area, CanvasMap } from '../types/api';
 import NavigationPill from './NavigationPill';
 
-// Mock fetchHealthVersion
-vi.mock('../api/client', () => ({
-  fetchHealthVersion: vi.fn().mockImplementation(() => new Promise<never>(() => {})),
-}));
-
 // Mock useTheme
 const mockSetTheme = vi.fn();
 vi.mock('../contexts/ThemeContext', () => ({
@@ -72,18 +67,10 @@ describe('NavigationPill', () => {
     vi.clearAllMocks();
   });
 
-  it('renders THEIA branding text and version', async () => {
-    const { fetchHealthVersion } = await import('../api/client');
-    (fetchHealthVersion as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      version: '1.3.0',
-      git_commit: 'abc',
-      build_date: '2026-01-01',
-    });
-
+  it('renders THEIA branding text without application version text', () => {
     render(<NavigationPill {...defaultProps} />);
     expect(screen.getByText('THEIA')).toBeDefined();
-    const version = await screen.findByText('v1.3.0');
-    expect(version).toBeDefined();
+    expect(screen.queryByText(/^v\d/)).toBeNull();
   });
 
   it('renders the map selector and area buttons for each area', () => {

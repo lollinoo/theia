@@ -4,7 +4,6 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ActiveView } from '../App';
-import { fetchHealthVersion } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import type { Area, CanvasMap } from '../types/api';
 import { MapSelector } from './MapSelector';
@@ -43,7 +42,6 @@ function NavigationPill({
   onManageMaps,
   onLogout,
 }: NavigationPillProps) {
-  const [version, setVersion] = useState('');
   const areaScrollerRef = useRef<HTMLDivElement>(null);
   const areaScrollUpdateTimerRef = useRef<number | null>(null);
   const [areaScrollState, setAreaScrollState] = useState({
@@ -56,10 +54,6 @@ function NavigationPill({
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const { resolvedTheme, setTheme } = useTheme();
-
-  useEffect(() => {
-    fetchHealthVersion().then((v) => setVersion(v.version));
-  }, []);
 
   const toggleTheme = () => {
     setTheme(resolvedTheme === 'dark' ? 'light' : 'dark');
@@ -226,11 +220,6 @@ function NavigationPill({
     <div className="topology-glass topology-floating-shadow fixed left-1/2 top-4 z-30 flex w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-2xl px-2 py-2 transition-colors dark:backdrop-blur-[16px] sm:w-auto sm:max-w-[calc(100vw-1.5rem)] sm:flex-nowrap sm:justify-start sm:rounded-full sm:px-3">
       {/* BRANDING */}
       <span className="px-1 text-sm font-semibold tracking-[0.14em] text-on-bg sm:px-2">THEIA</span>
-      {version && version !== 'unknown' && (
-        <span className="hidden text-[11px] font-medium text-on-bg-secondary sm:inline">
-          {`v${version}`}
-        </span>
-      )}
 
       <div className="mx-1 hidden h-5 w-px bg-outline/40 sm:block" />
 

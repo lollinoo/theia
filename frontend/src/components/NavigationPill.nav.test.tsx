@@ -11,11 +11,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CanvasMap } from '../types/api';
 import NavigationPill from './NavigationPill';
 
-// Mock API client
-vi.mock('../api/client', () => ({
-  fetchHealthVersion: vi.fn().mockImplementation(() => new Promise<never>(() => {})),
-}));
-
 // Mock ThemeContext - resolvedTheme=dark to check light_mode icon
 const mockSetTheme = vi.fn();
 vi.mock('../contexts/ThemeContext', () => ({

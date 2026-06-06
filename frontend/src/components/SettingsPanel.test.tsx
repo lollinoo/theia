@@ -13,7 +13,7 @@ vi.mock('../api/client', () => {
     fetchSettings: vi.fn().mockImplementation(pendingApiCall),
     fetchSettingsWithMetadata: vi.fn().mockImplementation(pendingApiCall),
     updateSetting: vi.fn().mockResolvedValue(undefined),
-    fetchHealthVersion: vi.fn().mockImplementation(pendingApiCall),
+    fetchHealthRuntime: vi.fn().mockResolvedValue({ environment: 'staging' }),
   };
 });
 
@@ -49,7 +49,7 @@ describe('SettingsPanel (COMP-05)', () => {
       'Bridge',
       'Profiles',
       'Backups',
-      'About',
+      'Runtime',
     ]) {
       const title = screen.getByRole('heading', { name: heading });
       const section = title.closest('section');
@@ -102,7 +102,7 @@ describe('SettingsPanel (COMP-05)', () => {
       'Bridge',
       'Profiles',
       'Backups',
-      'About',
+      'Runtime',
     ]) {
       const section = screen.getByRole('heading', { name: heading }).closest('section');
       expect(section?.className).toContain('h-[22rem]');
@@ -186,6 +186,15 @@ describe('SettingsPanel (COMP-05)', () => {
     const html = container.innerHTML;
     expect(html).not.toContain('yellow-500');
     expect(html).not.toContain('yellow-400');
+  });
+
+  it('renders deployment environment without build metadata', async () => {
+    render(<SettingsPanel />);
+
+    expect(await screen.findByText('staging')).toBeInTheDocument();
+    expect(screen.queryByText(/Theia\s+v/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Commit:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Built:/i)).not.toBeInTheDocument();
   });
 
   it('does not render area management controls in global settings', () => {
