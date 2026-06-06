@@ -160,7 +160,6 @@ func TestRequiredPermissionsForRegisteredProtectedRoutes(t *testing.T) {
 		{name: "backup bulk run pause", method: http.MethodPost, path: "/api/v1/backups/bulk-runs/" + id + "/pause", want: []string{domain.PermissionBackupsUpdate}},
 		{name: "backup bulk run resume", method: http.MethodPost, path: "/api/v1/backups/bulk-runs/" + id + "/resume", want: []string{domain.PermissionBackupsUpdate}},
 		{name: "backup bulk run cancel", method: http.MethodPost, path: "/api/v1/backups/bulk-runs/" + id + "/cancel", want: []string{domain.PermissionBackupsUpdate}},
-		{name: "backup bulk legacy", method: http.MethodPost, path: "/api/v1/backups/bulk", want: []string{domain.PermissionBackupsUpdate}},
 		{name: "backup bulk download", method: http.MethodPost, path: "/api/v1/backups/bulk-download", want: []string{domain.PermissionBackupsUpdate}},
 		{name: "backup job get", method: http.MethodGet, path: "/api/v1/backup-jobs/" + id, want: []string{domain.PermissionBackupsRead}},
 		{name: "backup job delete", method: http.MethodDelete, path: "/api/v1/backup-jobs/" + id, want: []string{domain.PermissionBackupsUpdate}},

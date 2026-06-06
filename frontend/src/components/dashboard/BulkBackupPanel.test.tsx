@@ -40,20 +40,6 @@ vi.mock('../../api/client', () => ({
   }),
   fetchLatestBulkBackupRun: vi.fn().mockResolvedValue(null),
   fetchBulkOperationStatus: vi.fn().mockResolvedValue({
-    bulk_backup: {
-      max_devices: 100,
-      max_queued_jobs: 1000,
-      concurrency: {
-        max_concurrent: 1,
-        configurable: false,
-        distributed: true,
-        distributed_max_concurrent: 1,
-      },
-      legacy_endpoint: {
-        path: '/api/v1/backups/bulk',
-        deprecated: true,
-      },
-    },
     bulk_backup_run: {
       max_devices: 100,
       max_queued_jobs: 1000,
@@ -108,14 +94,6 @@ vi.mock('../../api/client', () => ({
   cancelBulkBackupRun: vi.fn(),
   pauseBulkBackupRun: vi.fn(),
   resumeBulkBackupRun: vi.fn(),
-  triggerBulkBackup: vi.fn().mockResolvedValue([
-    {
-      device_id: 'dev-1',
-      device_name: 'router-01',
-      status: 'queued',
-      job_id: 'job-1',
-    },
-  ]),
   triggerBulkDownload: vi.fn().mockResolvedValue('saved'),
   fetchBackupJob: vi.fn().mockResolvedValue({ id: 'job-1', status: 'success', error_message: '' }),
   fetchDeviceCredentialProfiles: vi
@@ -190,20 +168,6 @@ function mockBulkOperationStatus(
   } = {},
 ) {
   return {
-    bulk_backup: {
-      max_devices: 100,
-      max_queued_jobs: 1000,
-      concurrency: {
-        max_concurrent: 1,
-        configurable: false,
-        distributed: true,
-        distributed_max_concurrent: 1,
-      },
-      legacy_endpoint: {
-        path: '/api/v1/backups/bulk',
-        deprecated: true,
-      },
-    },
     bulk_backup_run: {
       max_devices: 100,
       max_queued_jobs: 1000,
@@ -320,9 +284,7 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
   });
 
   it('starts one persistent run and maps queued/skipped items', async () => {
-    const { startBulkBackupRun, triggerBackup, triggerBulkBackup } = await import(
-      '../../api/client'
-    );
+    const { startBulkBackupRun, triggerBackup } = await import('../../api/client');
     (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       mockBulkRun({}, [
         mockRunItem({
@@ -355,7 +317,6 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
       expect(startBulkBackupRun).toHaveBeenCalledWith(['dev-1', 'dev-2']);
     });
     expect(triggerBackup).not.toHaveBeenCalled();
-    expect(triggerBulkBackup).not.toHaveBeenCalled();
     expect(await screen.findByText('device unreachable')).toBeInTheDocument();
   });
 

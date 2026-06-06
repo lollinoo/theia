@@ -13,8 +13,7 @@ import {
   type BulkBackupRunStatus,
   type BulkOperationStatus,
 } from '../types/api';
-import type { BulkBackupResult } from './backup';
-import { recordField, stringField } from './parsers';
+import { recordField } from './parsers';
 
 // parseBackupFile normalizes backup file rows while preserving empty-string and zero defaults.
 export function parseBackupFile(data: Record<string, unknown>): BackupFile {
@@ -42,18 +41,6 @@ export function parseBackupJob(data: Record<string, unknown>): BackupJob {
     error_message: typeof data.error_message === 'string' ? data.error_message : '',
     created_at: typeof data.created_at === 'string' ? data.created_at : '',
     files: filesRaw.map((file) => parseBackupFile(file as Record<string, unknown>)),
-  };
-}
-
-// parseBulkBackupResult normalizes legacy bulk-backup enqueue results.
-export function parseBulkBackupResult(data: Record<string, unknown>): BulkBackupResult {
-  const status = data.status === 'queued' ? 'queued' : 'skipped';
-  return {
-    device_id: typeof data.device_id === 'string' ? data.device_id : '',
-    device_name: typeof data.device_name === 'string' ? data.device_name : '',
-    status,
-    reason: typeof data.reason === 'string' ? data.reason : undefined,
-    job_id: typeof data.job_id === 'string' ? data.job_id : undefined,
   };
 }
 
@@ -156,30 +143,10 @@ function booleanField(record: Record<string, unknown> | undefined, key: string):
 export function parseBulkOperationStatus(payload: unknown): BulkOperationStatus {
   const payloadRecord = recordField(payload) ?? {};
   const data = recordField(payloadRecord.data) ?? {};
-  const bulkBackup = recordField(data.bulk_backup) ?? {};
-  const bulkBackupConcurrency = recordField(bulkBackup.concurrency) ?? {};
-  const bulkBackupLegacyEndpoint = recordField(bulkBackup.legacy_endpoint) ?? {};
   const bulkBackupRun = recordField(data.bulk_backup_run) ?? {};
   const bulkDownload = recordField(data.bulk_download) ?? {};
 
   return {
-    bulk_backup: {
-      max_devices: numericField(bulkBackup, 'max_devices'),
-      max_queued_jobs: numericField(bulkBackup, 'max_queued_jobs'),
-      concurrency: {
-        max_concurrent: numericField(bulkBackupConcurrency, 'max_concurrent'),
-        configurable: booleanField(bulkBackupConcurrency, 'configurable'),
-        distributed: booleanField(bulkBackupConcurrency, 'distributed'),
-        distributed_max_concurrent: numericField(
-          bulkBackupConcurrency,
-          'distributed_max_concurrent',
-        ),
-      },
-      legacy_endpoint: {
-        path: stringField(bulkBackupLegacyEndpoint, 'path'),
-        deprecated: booleanField(bulkBackupLegacyEndpoint, 'deprecated'),
-      },
-    },
     bulk_backup_run: {
       max_devices: numericField(bulkBackupRun, 'max_devices'),
       max_queued_jobs: numericField(bulkBackupRun, 'max_queued_jobs'),

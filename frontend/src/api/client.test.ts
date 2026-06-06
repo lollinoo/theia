@@ -57,7 +57,6 @@ import {
   setAdminUserStatus,
   setCanvasMapPrimary,
   startBulkBackupRun,
-  triggerBulkBackup,
   triggerBulkDownload,
   updateAdminUser,
   updateCanvasMap,
@@ -1946,77 +1945,6 @@ describe('triggerBulkDownload', () => {
   });
 });
 
-describe('triggerBulkBackup', () => {
-  it('posts selected devices to the bulk backup endpoint and parses results', async () => {
-    Object.defineProperty(document, 'cookie', {
-      configurable: true,
-      value: 'theia_csrf=bulk-csrf',
-    });
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse({
-        data: [
-          {
-            device_id: 'dev-1',
-            device_name: 'router-01',
-            status: 'queued',
-            job_id: 'job-1',
-          },
-          {
-            device_id: 'dev-2',
-            device_name: 'router-02',
-            status: 'skipped',
-            reason: 'device unreachable',
-          },
-        ],
-      }),
-    );
-    vi.stubGlobal('fetch', fetchMock);
-
-    const results = await triggerBulkBackup(['dev-1', 'dev-2']);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/backups/bulk',
-      expect.objectContaining({
-        method: 'POST',
-        headers: expect.objectContaining({ 'X-CSRF-Token': 'bulk-csrf' }),
-        body: JSON.stringify({ device_ids: ['dev-1', 'dev-2'] }),
-      }),
-    );
-    expect(results).toEqual([
-      {
-        device_id: 'dev-1',
-        device_name: 'router-01',
-        status: 'queued',
-        job_id: 'job-1',
-      },
-      {
-        device_id: 'dev-2',
-        device_name: 'router-02',
-        status: 'skipped',
-        reason: 'device unreachable',
-      },
-    ]);
-  });
-
-  it('normalizes 413 responses to a readable bulk backup limit error', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(
-          {
-            error: 'bulk backup exceeds devices limit: requested 101, maximum 100',
-          },
-          { ok: false, status: 413, statusText: 'Payload Too Large' },
-        ),
-      ),
-    );
-
-    await expect(triggerBulkBackup(['dev-1'])).rejects.toThrow(
-      'Too many devices selected for bulk backup. Maximum 100, requested 101.',
-    );
-  });
-});
-
 describe('bulk backup runs', () => {
   const runPayload = {
     id: 'run-1',
@@ -2154,20 +2082,6 @@ describe('bulk backup runs', () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockResponse({
         data: {
-          bulk_backup: {
-            max_devices: 101,
-            max_queued_jobs: 202,
-            concurrency: {
-              max_concurrent: 1,
-              configurable: false,
-              distributed: true,
-              distributed_max_concurrent: 1,
-            },
-            legacy_endpoint: {
-              path: '/api/v1/backups/bulk',
-              deprecated: true,
-            },
-          },
           bulk_backup_run: {
             max_devices: 303,
             max_queued_jobs: 404,
@@ -2196,20 +2110,6 @@ describe('bulk backup runs', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(fetchBulkOperationStatus()).resolves.toEqual({
-      bulk_backup: {
-        max_devices: 101,
-        max_queued_jobs: 202,
-        concurrency: {
-          max_concurrent: 1,
-          configurable: false,
-          distributed: true,
-          distributed_max_concurrent: 1,
-        },
-        legacy_endpoint: {
-          path: '/api/v1/backups/bulk',
-          deprecated: true,
-        },
-      },
       bulk_backup_run: {
         max_devices: 303,
         max_queued_jobs: 404,

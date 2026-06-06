@@ -24,14 +24,9 @@ var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 
 const defaultBulkBackupWorkerCount = 4
 const defaultBulkBackupRunBatchSize = 10
-const legacyBulkBackupLeaseKey = "backup.bulk_backup:legacy"
-const legacyBulkBackupMetricOperation = "bulk_backup_legacy"
 
 // ErrBulkBackupRunAlreadyActive prevents more than one durable bulk run from mutating backup state.
 var ErrBulkBackupRunAlreadyActive = errors.New("bulk backup run already active")
-
-// ErrBulkBackupAlreadyActive prevents the legacy bulk endpoint from overlapping with another legacy request.
-var ErrBulkBackupAlreadyActive = errors.New("bulk backup already active")
 
 // ErrBackupJobActive prevents deletion while a backup executor can still write artifacts.
 var ErrBackupJobActive = errors.New("backup job is active")
@@ -39,27 +34,22 @@ var ErrBackupJobActive = errors.New("backup job is active")
 // ErrBackupJobReferencedByActiveBulkRun prevents deletion while a bulk-run item still owns the job.
 var ErrBackupJobReferencedByActiveBulkRun = errors.New("backup job is referenced by an active bulk backup run")
 
-// ErrBulkOperationLimiterUnavailable reports that a distributed lease backend is required but missing.
-var ErrBulkOperationLimiterUnavailable = errors.New("bulk operation limiter unavailable")
-
 // BackupService orchestrates credential profile management and config backups.
 type BackupService struct {
-	jobRepo                domain.BackupJobRepository
-	fileRepo               domain.BackupFileRepository
-	credentialProfileRepo  domain.CredentialProfileRepository
-	deviceRepo             domain.DeviceRepository
-	settingsRepo           domain.SettingsRepository
-	vendorRegistry         *vendor.Registry
-	sshDialer              ssh.Dialer
-	encryptionKeyring      *crypto.Keyring
-	legacyEncryptionKey    []byte
-	backupDir              string
-	hostKeyCallback        gossh.HostKeyCallback
-	deviceLocks            sync.Map // per-device mutex: map[uuid.UUID]*sync.Mutex
-	bulkLimits             BulkOperationLimits
-	bulkRunRepo            domain.BulkBackupRunRepository
-	bulkOperationLeaseRepo domain.BulkOperationLeaseRepository
-	legacyBulkBackupGate   bulkOperationGate
+	jobRepo               domain.BackupJobRepository
+	fileRepo              domain.BackupFileRepository
+	credentialProfileRepo domain.CredentialProfileRepository
+	deviceRepo            domain.DeviceRepository
+	settingsRepo          domain.SettingsRepository
+	vendorRegistry        *vendor.Registry
+	sshDialer             ssh.Dialer
+	encryptionKeyring     *crypto.Keyring
+	legacyEncryptionKey   []byte
+	backupDir             string
+	hostKeyCallback       gossh.HostKeyCallback
+	deviceLocks           sync.Map // per-device mutex: map[uuid.UUID]*sync.Mutex
+	bulkLimits            BulkOperationLimits
+	bulkRunRepo           domain.BulkBackupRunRepository
 }
 
 // BackupServiceOption wires optional collaborators without changing the public constructor signature.
@@ -69,16 +59,6 @@ type BackupServiceOption func(*BackupService)
 func WithBulkBackupRunRepo(repo domain.BulkBackupRunRepository) BackupServiceOption {
 	return func(s *BackupService) {
 		s.bulkRunRepo = repo
-	}
-}
-
-// WithBulkOperationLeaseRepository enables distributed concurrency limits for bulk operations.
-func WithBulkOperationLeaseRepository(repo domain.BulkOperationLeaseRepository) BackupServiceOption {
-	return func(s *BackupService) {
-		s.bulkOperationLeaseRepo = repo
-		if repo != nil {
-			recordLegacyBulkBackupDistributedConcurrencyLimit()
-		}
 	}
 }
 
@@ -115,7 +95,6 @@ func NewBackupService(
 	for _, opt := range opts {
 		opt(svc)
 	}
-	recordLegacyBulkBackupLocalConcurrencyLimit()
 	return svc
 }
 
@@ -146,10 +125,6 @@ func (s *BackupService) BulkOperationLimits() BulkOperationLimits {
 	return normalizeBulkOperationLimits(s.bulkLimits)
 }
 
-func (s *BackupService) BulkOperationLeaseRepositoryConfigured() bool {
-	return s != nil && s.bulkOperationLeaseRepo != nil
-}
-
 // BulkBackupRunRepositoryConfigured reports whether durable run orchestration is available.
 func (s *BackupService) BulkBackupRunRepositoryConfigured() bool {
 	return s != nil && s.bulkRunRepo != nil
@@ -158,14 +133,6 @@ func (s *BackupService) BulkBackupRunRepositoryConfigured() bool {
 // BulkBackupRunBatchSize returns the fixed device batch size used by durable bulk backup runs.
 func (s *BackupService) BulkBackupRunBatchSize() int {
 	return defaultBulkBackupRunBatchSize
-}
-
-// SetBulkOperationLeaseRepository swaps the distributed lease backend used by bulk operations.
-func (s *BackupService) SetBulkOperationLeaseRepository(repo domain.BulkOperationLeaseRepository) {
-	s.bulkOperationLeaseRepo = repo
-	if repo != nil {
-		recordLegacyBulkBackupDistributedConcurrencyLimit()
-	}
 }
 
 // getDeviceLock returns or creates a per-device mutex.
@@ -188,149 +155,11 @@ func (s *BackupService) nowInConfiguredTZ() time.Time {
 	return time.Now().In(loc)
 }
 
-// BulkBackupResult describes the outcome of a bulk backup request per device.
-type BulkBackupResult struct {
-	DeviceID   uuid.UUID  `json:"device_id"`
-	DeviceName string     `json:"device_name"`
-	Status     string     `json:"status"` // "queued", "skipped"
-	Reason     string     `json:"reason,omitempty"`
-	JobID      *uuid.UUID `json:"job_id,omitempty"`
-}
-
 type queuedDeviceBackup struct {
 	device    domain.Device
 	profile   *domain.CredentialProfile
 	backupCfg vendor.BackupConfig
 	jobID     uuid.UUID
-}
-
-type preparedDeviceBackup struct {
-	device      domain.Device
-	profile     *domain.CredentialProfile
-	backupCfg   vendor.BackupConfig
-	resultIndex int
-}
-
-// TriggerBulkBackup validates requested devices and queues legacy per-device backup jobs.
-// It acquires a bulk lease before reading devices and transfers that lease to background workers.
-func (s *BackupService) TriggerBulkBackup(ctx context.Context, requestedDeviceIDs ...uuid.UUID) ([]BulkBackupResult, error) {
-	lease, err := s.acquireLegacyBulkBackupLease(ctx)
-	if err != nil {
-		return nil, err
-	}
-	leaseTransferred := false
-	defer func() {
-		if !leaseTransferred {
-			releaseBulkOperationLease("legacy backup", lease)
-		}
-	}()
-
-	devices, err := s.bulkBackupDevices(ctx, requestedDeviceIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	var results []BulkBackupResult
-	preparedBackups := make([]preparedDeviceBackup, 0)
-	for i := range devices {
-		if err := contextError(ctx); err != nil {
-			return nil, err
-		}
-		d := &devices[i]
-		name := d.Tags["display_name"]
-		if name == "" {
-			name = d.SysName
-		}
-		if name == "" {
-			name = d.IP
-		}
-
-		profile, err := s.credentialProfileRepo.GetBackupProfileForDevice(d.ID)
-		if err != nil {
-			results = append(results, BulkBackupResult{
-				DeviceID: d.ID, DeviceName: name,
-				Status: "skipped", Reason: "no credential profile assigned",
-			})
-			continue
-		}
-
-		backupCfg := s.vendorRegistry.ResolveBackupConfig(d.Vendor)
-		if !backupCfg.Supported {
-			results = append(results, BulkBackupResult{
-				DeviceID: d.ID, DeviceName: name,
-				Status: "skipped", Reason: "backup not supported for vendor",
-			})
-			continue
-		}
-
-		// Fast reachability check before creating the job
-		if err := ssh.CheckReachable(d.IP, profile.Port, 5*time.Second); err != nil {
-			results = append(results, BulkBackupResult{
-				DeviceID: d.ID, DeviceName: name,
-				Status: "skipped", Reason: "device unreachable",
-			})
-			continue
-		}
-
-		results = append(results, BulkBackupResult{
-			DeviceID: d.ID, DeviceName: name,
-			Status: "queued",
-		})
-		preparedBackups = append(preparedBackups, preparedDeviceBackup{
-			device:      *d,
-			profile:     profile,
-			backupCfg:   backupCfg,
-			resultIndex: len(results) - 1,
-		})
-	}
-
-	limits := s.BulkOperationLimits()
-	if len(preparedBackups) > limits.BulkBackupMaxQueuedJobs {
-		return nil, &BulkLimitError{
-			Operation: "bulk backup",
-			Limit:     "queued jobs",
-			Max:       int64(limits.BulkBackupMaxQueuedJobs),
-			Actual:    int64(len(preparedBackups)),
-		}
-	}
-
-	queuedBackups := make([]queuedDeviceBackup, 0, len(preparedBackups))
-	for _, prepared := range preparedBackups {
-		if err := contextError(ctx); err != nil {
-			return nil, err
-		}
-		job := &domain.BackupJob{
-			ID:       uuid.New(),
-			DeviceID: prepared.device.ID,
-			Status:   domain.BackupStatusPending,
-		}
-		if err := s.jobRepo.Create(job); err != nil {
-			results[prepared.resultIndex].Status = "skipped"
-			results[prepared.resultIndex].Reason = fmt.Sprintf("failed to create job: %v", err)
-			continue
-		}
-
-		queuedBackups = append(queuedBackups, queuedDeviceBackup{
-			device:    prepared.device,
-			profile:   prepared.profile,
-			backupCfg: prepared.backupCfg,
-			jobID:     job.ID,
-		})
-
-		jobID := job.ID
-		results[prepared.resultIndex].JobID = &jobID
-	}
-
-	if len(queuedBackups) == 0 {
-		return results, nil
-	}
-
-	leaseTransferred = true
-	s.startBulkBackupWorkers(queuedBackups, func() {
-		releaseBulkOperationLease("legacy backup", lease)
-	})
-
-	return results, nil
 }
 
 func (s *BackupService) startBulkBackupWorkers(queuedBackups []queuedDeviceBackup, onComplete ...func()) {

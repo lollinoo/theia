@@ -7,9 +7,7 @@ import {
   fetchBackupJobs,
   fetchBulkOperationStatus,
   startBulkBackupRun,
-  triggerBulkBackup,
 } from './backup';
-import { ValidationError } from './errors';
 
 function mockResponse(
   body: unknown,
@@ -63,35 +61,12 @@ describe('backup client', () => {
     });
   });
 
-  it('keeps bulk backup limit errors user-readable', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          mockResponse(
-            { error: 'bulk backup exceeds devices limit: requested 150, maximum 100' },
-            { ok: false, status: 413, statusText: 'Payload Too Large' },
-          ),
-        ),
-    );
-
-    await expect(triggerBulkBackup(['dev-1'])).rejects.toThrow(ValidationError);
-    await expect(triggerBulkBackup(['dev-1'])).rejects.toThrow(
-      'Too many devices selected for bulk backup. Maximum 100, requested 150.',
-    );
-  });
-
   it('parses bulk operation status metadata defaults', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
         mockResponse({
           data: {
-            bulk_backup: {
-              max_devices: 100,
-              concurrency: { max_concurrent: 4, configurable: true },
-            },
             bulk_backup_run: { can_pause: true, can_resume: true, can_cancel: true },
             bulk_download: { max_files: 250, distributed: true },
           },
@@ -100,7 +75,6 @@ describe('backup client', () => {
     );
 
     await expect(fetchBulkOperationStatus()).resolves.toMatchObject({
-      bulk_backup: { max_devices: 100, concurrency: { max_concurrent: 4, configurable: true } },
       bulk_backup_run: { can_pause: true, can_resume: true, can_cancel: true },
       bulk_download: { max_files: 250, distributed: true },
     });

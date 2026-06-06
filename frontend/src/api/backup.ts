@@ -11,21 +11,11 @@ import {
 import {
   parseBackupFileContent,
   parseBackupJob,
-  parseBulkBackupResult,
   parseBulkBackupRunResponse,
   parseBulkOperationStatus,
 } from './backupParsers';
 import { ServerError, ValidationError } from './errors';
 import { type ErrorPayload, headersWithCsrf, requestJSON, requestJSONWithBody } from './transport';
-
-/** Describes the bulk backup result contract used by the frontend API boundary. */
-export type BulkBackupResult = {
-  device_id: string;
-  device_name: string;
-  status: 'queued' | 'skipped';
-  reason?: string;
-  job_id?: string;
-};
 
 // triggerBackup starts a device backup and parses the created job envelope.
 export async function triggerBackup(deviceId: string): Promise<BackupJob> {
@@ -35,18 +25,6 @@ export async function triggerBackup(deviceId: string): Promise<BackupJob> {
   );
   const data = (response as Record<string, unknown>)?.data as Record<string, unknown>;
   return parseBackupJob(data);
-}
-
-// triggerBulkBackup starts the legacy bulk-backup endpoint and preserves readable limit errors.
-export async function triggerBulkBackup(deviceIds: string[]): Promise<BulkBackupResult[]> {
-  const payload = await requestBulkJSON(
-    '/api/v1/backups/bulk',
-    { device_ids: deviceIds },
-    'bulk backup',
-  );
-  const data = (payload as Record<string, unknown>)?.data;
-  if (!Array.isArray(data)) return [];
-  return data.map((item) => parseBulkBackupResult(item as Record<string, unknown>));
 }
 
 // startBulkBackupRun starts a tracked bulk backup run and accepts conflict payloads as current state.

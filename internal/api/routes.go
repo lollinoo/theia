@@ -39,7 +39,6 @@ const (
 	routeHandlerAuth                        routeHandlerKey = "auth"
 	routeHandlerAreaCollection              routeHandlerKey = "areaCollection"
 	routeHandlerAreaItem                    routeHandlerKey = "areaItem"
-	routeHandlerBackupBulk                  routeHandlerKey = "backupBulk"
 	routeHandlerBackupBulkDownload          routeHandlerKey = "backupBulkDownload"
 	routeHandlerBackupBulkRunCollection     routeHandlerKey = "backupBulkRunCollection"
 	routeHandlerBackupBulkRunItem           routeHandlerKey = "backupBulkRunItem"
@@ -544,7 +543,6 @@ var apiRouteSpecs = []apiRouteSpec{
 	protectedRoute("backup bulk run resume", "/api/v1/backups/bulk-runs/{runID}/resume", "/api/v1/backups/bulk-runs/", routeHandlerBackupBulkRunItem, routeMiddlewareNormalJSON, postPolicy(domain.PermissionBackupsUpdate)),
 	protectedRoute("backup bulk run cancel", "/api/v1/backups/bulk-runs/{runID}/cancel", "/api/v1/backups/bulk-runs/", routeHandlerBackupBulkRunItem, routeMiddlewareNormalJSON, postPolicy(domain.PermissionBackupsUpdate)),
 	protectedRoute("backup bulk run", "/api/v1/backups/bulk-runs/{runID}", "/api/v1/backups/bulk-runs/", routeHandlerBackupBulkRunItem, routeMiddlewareNormalJSON, readPolicy(domain.PermissionBackupsRead)),
-	protectedRoute("backup bulk", "/api/v1/backups/bulk", "/api/v1/backups/bulk", routeHandlerBackupBulk, routeMiddlewareNormalJSON, postPolicy(domain.PermissionBackupsUpdate)),
 	protectedRoute("backup bulk download", "/api/v1/backups/bulk-download", "/api/v1/backups/bulk-download", routeHandlerBackupBulkDownload, routeMiddlewareNormalJSON, postPolicy(domain.PermissionBackupsUpdate)),
 	protectedRoute("backup job", "/api/v1/backup-jobs/{jobID}", "/api/v1/backup-jobs/", routeHandlerBackupJob, routeMiddlewareNormalJSON, policy(
 		methodPolicy(http.MethodGet, domain.PermissionBackupsRead),

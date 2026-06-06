@@ -397,32 +397,16 @@ func (h *BackupHandler) HandleStartBulkBackupRun(w http.ResponseWriter, r *http.
 func (h *BackupHandler) HandleGetBulkOperationStatus(w http.ResponseWriter, r *http.Request) {
 	limits := service.DefaultBulkOperationLimits
 	batchSize := 10
-	legacyBackupDistributed := false
 	bulkBackupRunDistributed := false
 	if h.svc != nil {
 		limits = h.svc.BulkOperationLimits()
 		batchSize = h.svc.BulkBackupRunBatchSize()
-		legacyBackupDistributed = h.svc.BulkOperationLeaseRepositoryConfigured()
 		bulkBackupRunDistributed = h.svc.BulkBackupRunRepositoryConfigured()
 	}
 	bulkDownloadDistributed := h.bulkDownloadLeaseRepo != nil
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"data": map[string]interface{}{
-			"bulk_backup": map[string]interface{}{
-				"max_devices":     limits.BulkBackupMaxDevices,
-				"max_queued_jobs": limits.BulkBackupMaxQueuedJobs,
-				"concurrency": map[string]interface{}{
-					"max_concurrent":             1,
-					"configurable":               false,
-					"distributed":                legacyBackupDistributed,
-					"distributed_max_concurrent": 1,
-				},
-				"legacy_endpoint": map[string]interface{}{
-					"path":       "/api/v1/backups/bulk",
-					"deprecated": true,
-				},
-			},
 			"bulk_backup_run": map[string]interface{}{
 				"max_devices":                 limits.BulkBackupMaxDevices,
 				"max_queued_jobs":             limits.BulkBackupMaxQueuedJobs,
@@ -547,68 +531,6 @@ func (h *BackupHandler) HandleResumeBulkBackupRun(w http.ResponseWriter, r *http
 
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": bulkBackupRunToMap(run)})
-}
-
-// HandleBulkBackup handles POST /api/v1/backups/bulk
-func (h *BackupHandler) HandleBulkBackup(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		DeviceIDs []string `json:"device_ids"`
-	}
-	if r.Body != nil && r.ContentLength != 0 {
-		if !decodeJSON(w, r, &req) {
-			return
-		}
-	}
-
-	deviceIDs := make([]uuid.UUID, 0, len(req.DeviceIDs))
-	for _, idStr := range req.DeviceIDs {
-		parsed, err := uuid.Parse(idStr)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid device_id: %s", idStr))
-			return
-		}
-		deviceIDs = append(deviceIDs, parsed)
-	}
-
-	results, err := h.svc.TriggerBulkBackup(r.Context(), deviceIDs...)
-	if err != nil {
-		if errors.Is(err, service.ErrBulkBackupAlreadyActive) {
-			observability.Default().IncBulkOperationRejection("bulk_backup_legacy", "global_concurrency_limit", "local")
-			w.Header().Set("Retry-After", fmt.Sprint(bulkOperationRetryAfterSeconds))
-			writeError(w, http.StatusTooManyRequests, "bulk backup already in progress")
-			return
-		}
-		if errors.Is(err, service.ErrBulkOperationLimiterUnavailable) {
-			writeError(w, http.StatusServiceUnavailable, "bulk backup limiter unavailable")
-			return
-		}
-		if service.IsBulkLimitError(err) {
-			observability.Default().IncBulkOperationRejection("bulk_backup_legacy", bulkLimitRejectionReason(err), "local")
-			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal error", err)
-		return
-	}
-
-	data := make([]map[string]interface{}, 0, len(results))
-	for _, res := range results {
-		entry := map[string]interface{}{
-			"device_id":   res.DeviceID.String(),
-			"device_name": res.DeviceName,
-			"status":      res.Status,
-		}
-		if res.Reason != "" {
-			entry["reason"] = res.Reason
-		}
-		if res.JobID != nil {
-			entry["job_id"] = res.JobID.String()
-		}
-		data = append(data, entry)
-	}
-
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
 }
 
 // HandleBulkDownload handles POST /api/v1/backups/bulk-download
