@@ -3,10 +3,12 @@ package postgres
 // This file exercises bulk backup run repo behavior so refactors preserve the documented contract.
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lollinoo/theia/internal/domain"
 )
 
@@ -79,6 +81,11 @@ func TestBulkBackupRunRepoAllowsOnlyOneActiveRun(t *testing.T) {
 	}
 	if err := repo.CreateRun(second, nil); err == nil {
 		t.Fatal("creating second active run error = nil, want unique active run violation")
+	} else {
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.ConstraintName != "backup_bulk_runs_one_active" {
+			t.Fatalf("second active run error = %v, want backup_bulk_runs_one_active constraint", err)
+		}
 	}
 	if err := repo.CreateRun(cancelling, nil); err == nil {
 		t.Fatal("creating cancelling run while running exists error = nil, want unique active run violation")
@@ -92,6 +99,134 @@ func TestBulkBackupRunRepoAllowsOnlyOneActiveRun(t *testing.T) {
 	}
 	if err := repo.CreateRun(second, nil); err != nil {
 		t.Fatalf("creating second active run after first terminal: %v", err)
+	}
+}
+
+func TestBulkBackupRunRepoProcessorLeaseAllowsOneOwner(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewBulkBackupRunRepo(db)
+	runID := uuid.New()
+	if err := repo.CreateRun(&domain.BulkBackupRun{ID: runID, Status: domain.BulkBackupRunStatusRunning, BatchSize: 10}, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	acquired, err := repo.TryAcquireBulkRunProcessor(runID, "owner-1", time.Now().UTC().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("TryAcquire owner-1: %v", err)
+	}
+	if !acquired {
+		t.Fatal("owner-1 acquired = false, want true")
+	}
+	acquired, err = repo.TryAcquireBulkRunProcessor(runID, "owner-2", time.Now().UTC().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("TryAcquire owner-2: %v", err)
+	}
+	if acquired {
+		t.Fatal("owner-2 acquired = true, want false while owner-1 lease is active")
+	}
+	if err := repo.ReleaseBulkRunProcessor(runID, "owner-1"); err != nil {
+		t.Fatalf("Release owner-1: %v", err)
+	}
+	acquired, err = repo.TryAcquireBulkRunProcessor(runID, "owner-2", time.Now().UTC().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("TryAcquire owner-2 after release: %v", err)
+	}
+	if !acquired {
+		t.Fatal("owner-2 acquired after release = false, want true")
+	}
+}
+
+func TestBulkBackupRunRepoClaimBulkRunItemIsAtomic(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewBulkBackupRunRepo(db)
+	runID := uuid.New()
+	itemID := uuid.New()
+	if err := repo.CreateRun(
+		&domain.BulkBackupRun{ID: runID, Status: domain.BulkBackupRunStatusRunning, BatchSize: 10},
+		[]domain.BulkBackupRunItem{{
+			ID: itemID, RunID: runID, DeviceID: uuid.New(),
+			Status: domain.BulkBackupRunItemStatusChecking,
+		}},
+	); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	claimed, ok, err := repo.ClaimBulkRunItem(runID, itemID)
+	if err != nil {
+		t.Fatalf("Claim first: %v", err)
+	}
+	if !ok || claimed == nil || claimed.Status != domain.BulkBackupRunItemStatusActive {
+		t.Fatalf("first claim = %+v/%v, want active item", claimed, ok)
+	}
+	claimed, ok, err = repo.ClaimBulkRunItem(runID, itemID)
+	if err != nil {
+		t.Fatalf("Claim second: %v", err)
+	}
+	if ok || claimed != nil {
+		t.Fatalf("second claim = %+v/%v, want no claim", claimed, ok)
+	}
+}
+
+func TestBulkBackupRunRepoTerminalStatusDoesNotRegressFromStaleUpdate(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewBulkBackupRunRepo(db)
+	runID := uuid.New()
+	startedAt := time.Now().UTC()
+	stale := &domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusRunning,
+		BatchSize: 10,
+		StartedAt: &startedAt,
+	}
+	if err := repo.CreateRun(stale, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	completedAt := time.Now().UTC()
+	updated, err := repo.FinishBulkRun(runID, domain.BulkBackupRunStatusSuccess, completedAt)
+	if err != nil {
+		t.Fatalf("FinishBulkRun: %v", err)
+	}
+	if !updated {
+		t.Fatal("FinishBulkRun updated = false, want true")
+	}
+	stale.Status = domain.BulkBackupRunStatusPausing
+	if err := repo.UpdateRun(stale); err != nil {
+		t.Fatalf("stale UpdateRun: %v", err)
+	}
+	got, err := repo.GetRun(runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.Status != domain.BulkBackupRunStatusSuccess {
+		t.Fatalf("status = %s, want success after stale pausing update", got.Status)
+	}
+}
+
+func TestBulkBackupRunRepoStaleUpdateDoesNotClearCancelRequested(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewBulkBackupRunRepo(db)
+	runID := uuid.New()
+	stale := &domain.BulkBackupRun{
+		ID:        runID,
+		Status:    domain.BulkBackupRunStatusRunning,
+		BatchSize: 10,
+	}
+	if err := repo.CreateRun(stale, nil); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if _, err := repo.RequestBulkRunCancel(runID); err != nil {
+		t.Fatalf("RequestBulkRunCancel: %v", err)
+	}
+	stale.CancelRequested = false
+	if err := repo.UpdateRun(stale); err != nil {
+		t.Fatalf("stale UpdateRun: %v", err)
+	}
+	got, err := repo.GetRun(runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if !got.CancelRequested {
+		t.Fatal("CancelRequested = false, want true after stale update")
 	}
 }
 

@@ -216,8 +216,12 @@ func (r *BulkBackupRunRepo) UpdateRun(run *domain.BulkBackupRun) error {
 		`UPDATE backup_bulk_runs
 		 SET status = ?, batch_size = ?, total_count = ?, queued_count = ?, success_count = ?,
 			failed_count = ?, skipped_count = ?, cancelled_count = ?, error_message = ?,
-			cancel_requested = ?, created_by = ?, started_at = ?, completed_at = ?
-		 WHERE id = ?`,
+			cancel_requested = (cancel_requested OR ?), created_by = ?, started_at = ?, completed_at = ?
+		 WHERE id = ?
+		   AND (
+			status NOT IN ('success', 'partial', 'failed', 'cancelled')
+			OR status = ?
+		   )`,
 		string(run.Status),
 		run.BatchSize,
 		run.TotalCount,
@@ -232,15 +236,169 @@ func (r *BulkBackupRunRepo) UpdateRun(run *domain.BulkBackupRun) error {
 		run.StartedAt,
 		run.CompletedAt,
 		run.ID.String(),
+		string(run.Status),
 	)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
+		existing, getErr := r.GetRun(run.ID)
+		if getErr != nil {
+			return getErr
+		}
+		if existing != nil {
+			return nil
+		}
 		return fmt.Errorf("bulk backup run %s not found", run.ID)
 	}
 	return nil
+}
+
+func (r *BulkBackupRunRepo) RequestBulkRunPause(runID uuid.UUID) error {
+	_, err := r.db.Exec(
+		`UPDATE backup_bulk_runs
+		 SET status = 'pausing'
+		 WHERE id = ?
+		   AND status = 'running'
+		   AND cancel_requested = FALSE`,
+		runID.String(),
+	)
+	return err
+}
+
+func (r *BulkBackupRunRepo) RequestBulkRunResume(runID uuid.UUID) (bool, error) {
+	res, err := r.db.Exec(
+		`UPDATE backup_bulk_runs
+		 SET status = 'running'
+		 WHERE id = ?
+		   AND status = 'paused'
+		   AND cancel_requested = FALSE`,
+		runID.String(),
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		return true, nil
+	}
+	_, err = r.db.Exec(
+		`UPDATE backup_bulk_runs
+		 SET status = 'running'
+		 WHERE id = ?
+		   AND status = 'pausing'
+		   AND cancel_requested = FALSE`,
+		runID.String(),
+	)
+	return false, err
+}
+
+func (r *BulkBackupRunRepo) RequestBulkRunCancel(runID uuid.UUID) (bool, error) {
+	res, err := r.db.Exec(
+		`UPDATE backup_bulk_runs
+		 SET status = 'cancelling', cancel_requested = TRUE
+		 WHERE id = ?
+		   AND status = 'paused'`,
+		runID.String(),
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		return true, nil
+	}
+	_, err = r.db.Exec(
+		`UPDATE backup_bulk_runs
+		 SET status = CASE
+				WHEN status IN ('running', 'pausing') THEN 'cancelling'
+				ELSE status
+			END,
+			cancel_requested = TRUE
+		 WHERE id = ?
+		   AND status IN ('running', 'pausing', 'cancelling')`,
+		runID.String(),
+	)
+	return false, err
+}
+
+func (r *BulkBackupRunRepo) TryAcquireBulkRunProcessor(runID uuid.UUID, owner string, leaseUntil time.Time) (bool, error) {
+	res, err := r.db.Exec(
+		`UPDATE backup_bulk_runs
+		 SET processing_owner = ?, processing_lease_expires_at = ?
+		 WHERE id = ?
+		   AND status IN ('running', 'pausing', 'cancelling')
+		   AND (
+			processing_owner = ''
+			OR processing_lease_expires_at IS NULL
+			OR processing_lease_expires_at < NOW()
+		   )`,
+		owner,
+		leaseUntil,
+		runID.String(),
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+func (r *BulkBackupRunRepo) RefreshBulkRunProcessor(runID uuid.UUID, owner string, leaseUntil time.Time) error {
+	_, err := r.db.Exec(
+		`UPDATE backup_bulk_runs
+		 SET processing_lease_expires_at = ?
+		 WHERE id = ?
+		   AND processing_owner = ?`,
+		leaseUntil,
+		runID.String(),
+		owner,
+	)
+	return err
+}
+
+func (r *BulkBackupRunRepo) ReleaseBulkRunProcessor(runID uuid.UUID, owner string) error {
+	_, err := r.db.Exec(
+		`UPDATE backup_bulk_runs
+		 SET processing_owner = '', processing_lease_expires_at = NULL
+		 WHERE id = ?
+		   AND processing_owner = ?`,
+		runID.String(),
+		owner,
+	)
+	return err
+}
+
+func (r *BulkBackupRunRepo) ClaimBulkRunItem(runID uuid.UUID, itemID uuid.UUID) (*domain.BulkBackupRunItem, bool, error) {
+	now := time.Now().UTC()
+	res, err := r.db.Exec(
+		`UPDATE backup_bulk_run_items
+		 SET status = 'active', reason = '', backup_job_id = NULL, updated_at = ?, completed_at = NULL
+		 WHERE id = ?
+		   AND run_id = ?
+		   AND status = 'checking'`,
+		now,
+		itemID.String(),
+		runID.String(),
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, false, nil
+	}
+	items, err := r.ListRunItems(runID)
+	if err != nil {
+		return nil, false, err
+	}
+	for i := range items {
+		if items[i].ID == itemID {
+			return &items[i], true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 // ListRunItems lists run items data from the persistence boundary.
@@ -326,10 +484,53 @@ func (r *BulkBackupRunRepo) RecalculateRunCounters(runID uuid.UUID) (*domain.Bul
 		}
 	}
 	run.Items = items
-	if err := r.UpdateRun(run); err != nil {
+	if err := r.updateRunCounters(run); err != nil {
 		return nil, err
 	}
 	return run, nil
+}
+
+func (r *BulkBackupRunRepo) updateRunCounters(run *domain.BulkBackupRun) error {
+	res, err := r.db.Exec(
+		`UPDATE backup_bulk_runs
+		 SET batch_size = ?, total_count = ?, queued_count = ?, success_count = ?,
+			failed_count = ?, skipped_count = ?, cancelled_count = ?, error_message = ?
+		 WHERE id = ?`,
+		run.BatchSize,
+		run.TotalCount,
+		run.QueuedCount,
+		run.SuccessCount,
+		run.FailedCount,
+		run.SkippedCount,
+		run.CancelledCount,
+		run.ErrorMessage,
+		run.ID.String(),
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("bulk backup run %s not found", run.ID)
+	}
+	return nil
+}
+
+func (r *BulkBackupRunRepo) FinishBulkRun(runID uuid.UUID, status domain.BulkBackupRunStatus, completedAt time.Time) (bool, error) {
+	res, err := r.db.Exec(
+		`UPDATE backup_bulk_runs
+		 SET status = ?, completed_at = ?
+		 WHERE id = ?
+		   AND status NOT IN ('success', 'partial', 'failed', 'cancelled')`,
+		string(status),
+		completedAt,
+		runID.String(),
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 func (r *BulkBackupRunRepo) getRunByQuery(query string, args ...interface{}) (*domain.BulkBackupRun, error) {
