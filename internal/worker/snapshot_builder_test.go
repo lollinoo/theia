@@ -1,5 +1,7 @@
 package worker
 
+// This file exercises snapshot builder behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"strings"

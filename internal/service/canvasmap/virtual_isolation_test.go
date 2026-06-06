@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file exercises virtual isolation behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"testing"
@@ -162,12 +164,10 @@ type fakeVirtualIsolationMapRepo struct {
 	replaced    map[uuid.UUID]domain.CanvasMapMembership
 }
 
-// List returns fake maps so isolation can detect shared virtual-device membership.
 func (r *fakeVirtualIsolationMapRepo) List() ([]domain.CanvasMap, error) {
 	return append([]domain.CanvasMap(nil), r.maps...), nil
 }
 
-// GetMembership returns the current fake membership for a map.
 func (r *fakeVirtualIsolationMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership, error) {
 	return r.memberships[id], nil
 }
@@ -202,7 +202,6 @@ type fakeVirtualIsolationAddedDevice struct {
 	notes                 []*string
 }
 
-// GetDevicesByIDs returns source devices used to identify clone candidates.
 func (s *fakeVirtualIsolationDeviceService) GetDevicesByIDs(context.Context, []uuid.UUID) ([]domain.Device, error) {
 	return append([]domain.Device(nil), s.devices...), nil
 }
@@ -245,7 +244,6 @@ func (s *fakeVirtualIsolationDeviceService) UpdateClonedVirtualDevice(_ context.
 	return nil
 }
 
-// GetDevice returns the reloaded clone expected by the isolation workflow.
 func (s *fakeVirtualIsolationDeviceService) GetDevice(context.Context, uuid.UUID) (*domain.Device, error) {
 	return &s.clone, nil
 }
@@ -256,7 +254,6 @@ type fakeVirtualIsolationLinkRepo struct {
 	created []domain.Link
 }
 
-// GetAll returns source links for clone endpoint remapping.
 func (r *fakeVirtualIsolationLinkRepo) GetAll() ([]domain.Link, error) {
 	return append([]domain.Link(nil), r.links...), nil
 }
@@ -273,7 +270,6 @@ type fakeVirtualIsolationPositionRepo struct {
 	saved     map[uuid.UUID][]domain.DevicePosition
 }
 
-// GetAllForMap returns source positions that should be remapped to clone IDs.
 func (r *fakeVirtualIsolationPositionRepo) GetAllForMap(mapID uuid.UUID) ([]domain.DevicePosition, error) {
 	return append([]domain.DevicePosition(nil), r.positions[mapID]...), nil
 }

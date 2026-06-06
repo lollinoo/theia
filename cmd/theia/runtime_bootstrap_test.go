@@ -1,5 +1,7 @@
 package main
 
+// This file exercises runtime bootstrap behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"database/sql"

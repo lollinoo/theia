@@ -1,14 +1,20 @@
+/**
+ * Defines canvas presentation patches behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { AlertDTO, AlertStatus, SnapshotPayload } from '../../types/metrics';
 import { alertStatusForDevice } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { alertStatusForLink } from './edgeBuilder';
 
+/** Describes the canvas graph item indices contract used by the topology canvas. */
 export interface CanvasGraphItemIndices {
   nodeIndexById?: ReadonlyMap<string, number>;
   edgeIndexById?: ReadonlyMap<string, number>;
 }
 
+/** Describes the canvas graph items patch contract used by the topology canvas. */
 export interface CanvasGraphItemsPatch {
   nodes: DeviceNode[];
   edges: LinkEdgeType[];
@@ -22,6 +28,7 @@ function runtimeAlertStatusForDevice(
   return snapshot?.devices[deviceId]?.alert_status ?? alertStatusForDevice(deviceId, alerts);
 }
 
+/** Patches edit mode for the topology canvas. */
 export function patchEditMode(nodes: DeviceNode[], editMode: boolean): DeviceNode[] {
   let nextNodes: DeviceNode[] | null = null;
 
@@ -43,6 +50,7 @@ export function patchEditMode(nodes: DeviceNode[], editMode: boolean): DeviceNod
   return nextNodes ?? nodes;
 }
 
+/** Patches highlighted node for the topology canvas. */
 export function patchHighlightedNode(
   nodes: DeviceNode[],
   nodeIndexById: ReadonlyMap<string, number> | undefined,
@@ -70,6 +78,7 @@ export function patchHighlightedNode(
   return nextNodes;
 }
 
+/** Patches highlighted node transition for the topology canvas. */
 export function patchHighlightedNodeTransition(
   nodes: DeviceNode[],
   nodeIndexById: ReadonlyMap<string, number> | undefined,
@@ -87,6 +96,7 @@ export function patchHighlightedNodeTransition(
   return patchHighlightedNode(nextNodes, nodeIndexById, deviceId, true);
 }
 
+/** Clears selected graph items for the topology canvas. */
 export function clearSelectedGraphItems(
   nodes: DeviceNode[],
   edges: LinkEdgeType[],
@@ -302,6 +312,7 @@ function patchAlertEdgesByIndex(
   return nextEdges ?? edges;
 }
 
+/** Patches alert statuses for the topology canvas. */
 export function patchAlertStatuses(
   nodes: DeviceNode[],
   edges: LinkEdgeType[],

@@ -1,5 +1,7 @@
 package api
 
+// This file exercises grafana dashboard handler behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"net/http"

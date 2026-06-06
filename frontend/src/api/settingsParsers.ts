@@ -1,3 +1,7 @@
+/**
+ * Normalizes backend settings payloads into frontend-safe shapes.
+ * Keeps API boundary validation close to the transport helpers that consume it.
+ */
 import { recordField, stringField } from './parsers';
 import type {
   BridgeConnectorConfigResponse,

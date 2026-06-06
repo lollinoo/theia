@@ -1,7 +1,13 @@
+/**
+ * Coordinates canvas diagnostics toggle state for the topology canvas.
+ * Keeps canvas lifecycle, projected graph state, and cleanup behavior explicit for callers.
+ */
 import { useCallback, useEffect, useState } from 'react';
 
+/** Defines canvas diagnostics storage key constants and helper contracts for the topology canvas. */
 export const canvasDiagnosticsStorageKey = 'theia.canvas.diagnostics';
 
+/** Initial canvas diagnostics visible for the topology canvas. */
 export function initialCanvasDiagnosticsVisible(): boolean {
   const queryEnabled = new URLSearchParams(window.location.search).get('canvasDiagnostics') === '1';
   const storageEnabled = window.localStorage.getItem(canvasDiagnosticsStorageKey) === 'true';
@@ -11,11 +17,13 @@ export function initialCanvasDiagnosticsVisible(): boolean {
   return queryEnabled || storageEnabled;
 }
 
+/** Identifies canvas diagnostics shortcut for the topology canvas. */
 export function isCanvasDiagnosticsShortcut(event: KeyboardEvent): boolean {
   const isPhysicalD = event.code === 'KeyD' || event.key.toLowerCase() === 'd';
   return event.altKey && (event.ctrlKey || event.metaKey) && isPhysicalD;
 }
 
+/** Coordinates canvas diagnostics toggle behavior for the topology canvas. */
 export function useCanvasDiagnosticsToggle(): {
   diagnosticsVisible: boolean;
   closeDiagnostics: () => void;

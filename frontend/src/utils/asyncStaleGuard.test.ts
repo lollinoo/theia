@@ -1,3 +1,6 @@
+/**
+ * Exercises async stale guard utility behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 
 import { createAsyncStaleGuard } from './asyncStaleGuard';

@@ -1,5 +1,10 @@
+/**
+ * Defines topology view projection behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Device, Link } from '../../types/api';
 
+/** Describes the topology view filter contract used by the topology canvas. */
 export interface TopologyViewFilter {
   areaId?: string | null;
   deviceIds?: string[];
@@ -8,12 +13,14 @@ export interface TopologyViewFilter {
   tagFilter?: Record<string, string>;
 }
 
+/** Describes the topology view projection contract used by the topology canvas. */
 export interface TopologyViewProjection {
   filteredDevices: Device[];
   filteredLinks: Link[];
   ghostDevices: Device[];
 }
 
+/** Project topology view for the topology canvas. */
 export function projectTopologyView(input: {
   devices: Device[];
   links: Link[];

@@ -1,3 +1,7 @@
+/**
+ * Renders link create panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createLink, fetchDeviceInterfaces } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
@@ -202,6 +206,7 @@ function InterfaceSelect({
   );
 }
 
+/** Renders the LinkCreatePanel component within the UI component boundary. */
 export function LinkCreatePanel({
   devices,
   onCreated,

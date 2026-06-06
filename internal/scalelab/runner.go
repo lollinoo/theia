@@ -1,5 +1,7 @@
 package scalelab
 
+// This file defines runner behavior for its package.
+
 import (
 	"fmt"
 	"math"

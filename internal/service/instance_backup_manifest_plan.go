@@ -1,5 +1,7 @@
 package service
 
+// This file defines instance backup manifest plan backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"encoding/base64"
 	"encoding/json"

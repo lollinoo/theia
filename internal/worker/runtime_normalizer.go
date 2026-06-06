@@ -1,5 +1,7 @@
 package worker
 
+// This file defines runtime normalizer worker behavior, background lifecycle, and runtime state updates.
+
 import (
 	"sort"
 	"strings"

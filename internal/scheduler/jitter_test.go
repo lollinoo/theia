@@ -1,5 +1,7 @@
 package scheduler
 
+// This file exercises jitter behavior so refactors preserve the documented contract.
+
 import (
 	"math"
 	"math/rand"

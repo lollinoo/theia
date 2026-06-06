@@ -1,3 +1,7 @@
+/**
+ * Provides validation utility behavior shared by frontend workflows.
+ * Keeps non-UI policy and formatting rules reusable across components.
+ */
 // --- Constants ---
 
 /** Maximum length for general string fields (mirrors Phase 20 backend limit). */

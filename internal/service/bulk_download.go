@@ -1,5 +1,7 @@
 package service
 
+// This file defines bulk download service behavior and domain orchestration rules.
+
 import (
 	"context"
 	"errors"

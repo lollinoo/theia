@@ -1,3 +1,7 @@
+/**
+ * Owns top-level application routing and provider composition.
+ * Keeps global layout decisions separate from feature-specific components.
+ */
 import { ReactFlowProvider } from '@xyflow/react';
 import { useCallback, useEffect, useState } from 'react';
 import {

@@ -1,5 +1,7 @@
 package main
 
+// This file defines main behavior for the Winbox bridge command.
+
 import (
 	"encoding/json"
 	"flag"

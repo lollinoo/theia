@@ -1,3 +1,7 @@
+/**
+ * Defines edge builder behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO, AlertStatus } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
@@ -108,6 +112,7 @@ function canonicalLinkGroupKey(link: Link): string {
     .join('|')}`;
 }
 
+/** Prefers visible links for the topology canvas. */
 export function preferVisibleLinks(links: Link[]): Link[] {
   const bestByGroup = new Map<string, Link>();
 
@@ -142,6 +147,7 @@ export function preferVisibleLinks(links: Link[]): Link[] {
   return visible;
 }
 
+/** Builds edge data for the topology canvas. */
 export function buildEdgeData(
   link: Link,
   devicesByID: Map<string, Device>,
@@ -259,6 +265,7 @@ export function buildEdgeData(
   };
 }
 
+/** Returns handle side for the topology canvas. */
 export function getHandleSide(
   sourcePosition: { x: number; y: number },
   targetPosition: { x: number; y: number },
@@ -282,6 +289,7 @@ export function getHandleSide(
     : { sourceHandle: 'top', targetHandle: 'bottom' };
 }
 
+/** Builds topology edges for the topology canvas. */
 export function buildTopologyEdges(
   links: Link[],
   devicesByID: Map<string, Device>,
@@ -387,6 +395,7 @@ export function buildTopologyEdges(
   return filteredEdges;
 }
 
+/** Alert status for link state in the topology canvas. */
 export function alertStatusForLink(link: Link, alerts: AlertDTO[]): AlertStatus {
   const deviceIds = new Set([link.source_device_id, link.target_device_id]);
   const sourceIfName = (link.source_if_name ?? '').toLowerCase();

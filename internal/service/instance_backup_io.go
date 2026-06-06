@@ -1,5 +1,7 @@
 package service
 
+// This file defines instance backup io backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"context"
 	"crypto/sha256"

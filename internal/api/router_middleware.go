@@ -1,5 +1,7 @@
 package api
 
+// This file defines router middleware API routing, middleware, and permission policy behavior.
+
 import (
 	"net/http"
 

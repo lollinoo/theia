@@ -1,3 +1,7 @@
+/**
+ * Defines topology composer behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';

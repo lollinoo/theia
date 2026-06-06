@@ -1,5 +1,7 @@
 package api
 
+// This file defines canvas map handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"context"
 	"crypto/sha256"
@@ -20,6 +22,7 @@ import (
 	"github.com/lollinoo/theia/internal/ws"
 )
 
+// CanvasMapHandler represents canvas map handler data used by the HTTP boundary and route policy.
 type CanvasMapHandler struct {
 	mapRepo             domain.CanvasMapRepository
 	mapPositionRepo     domain.CanvasMapPositionRepository

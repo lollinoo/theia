@@ -1,5 +1,7 @@
 package api
 
+// This file exercises link handler behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"net/http"

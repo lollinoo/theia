@@ -1,5 +1,7 @@
 package collector
 
+// This file defines performance metrics collection behavior and normalized collector output.
+
 import (
 	"context"
 	"errors"
@@ -153,6 +155,7 @@ type instrumentedSNMPBulkWalkClient struct {
 	earlyExitReasons map[string]string
 }
 
+// Get retrieves get data from the collector.
 func (c instrumentedSNMPBulkWalkClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
 	operation := c.getOperation(oids)
 	if operation == "" {

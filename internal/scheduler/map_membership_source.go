@@ -1,5 +1,7 @@
 package scheduler
 
+// This file defines map membership source scheduling behavior, timing policy, and queue ownership.
+
 import (
 	"fmt"
 
@@ -32,6 +34,7 @@ func NewSavedMapDeviceSource(source DeviceSource, mapRepo canvasMapMembershipSou
 	return savedMapDeviceSource{source: source, mapRepo: mapRepo}
 }
 
+// GetDevices retrieves devices data from the scheduler.
 func (s savedMapDeviceSource) GetDevices() ([]domain.Device, error) {
 	devices, err := s.source.GetDevices()
 	if err != nil {

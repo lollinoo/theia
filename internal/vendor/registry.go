@@ -1,5 +1,7 @@
 package vendor
 
+// This file defines registry vendor metadata loading and registry contracts.
+
 import (
 	"encoding/json"
 	"fmt"

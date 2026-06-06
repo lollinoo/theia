@@ -1,3 +1,6 @@
+/**
+ * Exercises device destructive actions section device configuration behavior so refactors preserve the documented contract.
+ */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useLayoutEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

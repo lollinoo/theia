@@ -1,5 +1,7 @@
 package service
 
+// This file defines instance backup limits backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"fmt"
 	"time"

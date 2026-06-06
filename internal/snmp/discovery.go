@@ -1,5 +1,7 @@
 package snmp
 
+// This file defines discovery SNMP collection and device-detection behavior.
+
 import (
 	"fmt"
 	"strconv"
@@ -929,12 +931,14 @@ func PollDeviceMetrics(client ClientInterface, perfOIDs vendor.PerformanceOIDs) 
 	return
 }
 
+// EssentialMetricField represents essential metric field data used by the SNMP integration.
 type EssentialMetricField struct {
 	Value *float64
 	State string
 	Error string
 }
 
+// EssentialMetricsResult represents essential metrics result data used by the SNMP integration.
 type EssentialMetricsResult struct {
 	Uptime *EssentialMetricField
 	CPU    *EssentialMetricField

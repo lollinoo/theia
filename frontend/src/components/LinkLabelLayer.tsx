@@ -1,3 +1,7 @@
+/**
+ * Renders link label layer UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { EdgeLabelRenderer } from '@xyflow/react';
 import { useSyncExternalStore } from 'react';
 import {
@@ -51,6 +55,7 @@ function LinkLabelStack({ label }: { label: RegisteredLinkLabel }) {
   );
 }
 
+/** Renders the LinkLabelLayer component within the UI component boundary. */
 export function LinkLabelLayer() {
   const labels = useSyncExternalStore(
     subscribeLinkLabels,

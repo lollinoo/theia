@@ -1,5 +1,7 @@
 package worker
 
+// This file exercises runtime normalizer behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 	"time"

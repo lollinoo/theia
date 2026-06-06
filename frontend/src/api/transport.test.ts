@@ -1,3 +1,6 @@
+/**
+ * Exercises transport API boundary behavior so refactors preserve the documented contract.
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerError, ValidationError } from './errors';
 import { headersWithCsrf, requestJSON, requestJSONWithBody } from './transport';

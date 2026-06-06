@@ -1,5 +1,7 @@
 package service
 
+// This file exercises restore marker behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"errors"

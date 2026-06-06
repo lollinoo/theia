@@ -1,3 +1,7 @@
+/**
+ * Defines sshcredential form behavior for the operations dashboard.
+ * Keeps table, backup, and device-management responsibilities isolated by module.
+ */
 import { useCallback, useEffect, useState } from 'react';
 import {
   assignCredentialProfile,
@@ -19,6 +23,7 @@ const inputClass =
 const selectClass =
   'w-full rounded-md border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg outline-none focus:border-primary focus:ring-1 focus:ring-primary/30 transition-colors';
 
+/** Renders the SSHCredentialForm component within the operations dashboard. */
 export function SSHCredentialForm({
   deviceId,
   currentProfileId,

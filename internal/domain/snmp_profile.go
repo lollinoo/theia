@@ -1,5 +1,7 @@
 package domain
 
+// This file defines snmp profile domain contracts and lifecycle invariants.
+
 import (
 	"time"
 

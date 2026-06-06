@@ -1,5 +1,7 @@
 package scheduler
 
+// This file defines types scheduling behavior, timing policy, and queue ownership.
+
 import (
 	"time"
 
@@ -9,12 +11,14 @@ import (
 	"github.com/lollinoo/theia/internal/polling"
 )
 
+// TaskKey represents task key data used by the scheduler.
 type TaskKey struct {
 	DeviceID        uuid.UUID
 	Kind            polling.TaskKind
 	VolatilityClass domain.VolatilityClass
 }
 
+// PollTask represents poll task data used by the scheduler.
 type PollTask struct {
 	Key              TaskKey
 	RunID            uint64
@@ -31,16 +35,19 @@ type PollTask struct {
 	SkippedWindows   int
 }
 
+// Completion represents completion data used by the scheduler.
 type Completion struct {
 	RunID      uint64
 	Key        TaskKey
 	FinishedAt time.Time
 }
 
+// NewTaskKey constructs task key state for the scheduler.
 func NewTaskKey(deviceID uuid.UUID, volatility domain.VolatilityClass) TaskKey {
 	return NewBackgroundTaskKey(deviceID, volatility)
 }
 
+// NewEssentialTaskKey constructs essential task key state for the scheduler.
 func NewEssentialTaskKey(deviceID uuid.UUID) TaskKey {
 	return TaskKey{
 		DeviceID: deviceID,
@@ -48,6 +55,7 @@ func NewEssentialTaskKey(deviceID uuid.UUID) TaskKey {
 	}
 }
 
+// NewBackgroundTaskKey constructs background task key state for the scheduler.
 func NewBackgroundTaskKey(deviceID uuid.UUID, volatility domain.VolatilityClass) TaskKey {
 	return TaskKey{
 		DeviceID:        deviceID,
@@ -56,6 +64,7 @@ func NewBackgroundTaskKey(deviceID uuid.UUID, volatility domain.VolatilityClass)
 	}
 }
 
+// NewBootstrapTaskKey constructs bootstrap task key state for the scheduler.
 func NewBootstrapTaskKey(deviceID uuid.UUID) TaskKey {
 	return TaskKey{
 		DeviceID: deviceID,

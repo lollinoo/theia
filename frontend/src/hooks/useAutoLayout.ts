@@ -1,3 +1,7 @@
+/**
+ * Coordinates auto layout state and side effects for consuming components.
+ * Owns cleanup-sensitive lifecycle work so callers receive stable state and actions.
+ */
 import {
   type SimulationLinkDatum,
   type SimulationNodeDatum,
@@ -8,6 +12,7 @@ import {
   forceSimulation,
 } from 'd3-force';
 
+/** Describes the auto layout node contract used by the React hook lifecycle. */
 export interface AutoLayoutNode {
   id: string;
   x?: number;
@@ -15,6 +20,7 @@ export interface AutoLayoutNode {
   pinned?: boolean;
 }
 
+/** Describes the auto layout edge contract used by the React hook lifecycle. */
 export interface AutoLayoutEdge {
   source: string;
   target: string;
@@ -211,6 +217,7 @@ function computeLayerSeedPositions(
   return positions;
 }
 
+/** Computes force layout for the React hook lifecycle. */
 export function computeForceLayout(
   nodes: AutoLayoutNode[],
   edges: AutoLayoutEdge[],
@@ -271,4 +278,5 @@ export function computeForceLayout(
   );
 }
 
+/** Defines use auto layout constants and helper contracts for the React hook lifecycle. */
 export const useAutoLayout = computeForceLayout;

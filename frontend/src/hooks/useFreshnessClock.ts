@@ -1,6 +1,11 @@
+/**
+ * Coordinates freshness clock state and side effects for consuming components.
+ * Owns cleanup-sensitive lifecycle work so callers receive stable state and actions.
+ */
 import { useEffect, useState } from 'react';
 import { nextFreshnessUpdateDelayMs } from '../utils/freshness';
 
+/** Coordinates freshness clock behavior for the React hook lifecycle. */
 export function useFreshnessClock(
   lastPolledAt: string | undefined,
   expectedIntervalSeconds: number | null | undefined,

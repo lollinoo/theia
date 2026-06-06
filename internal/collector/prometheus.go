@@ -1,5 +1,7 @@
 package collector
 
+// This file defines prometheus metrics collection behavior and normalized collector output.
+
 import (
 	"context"
 	"errors"

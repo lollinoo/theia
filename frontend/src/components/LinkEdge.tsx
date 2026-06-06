@@ -1,9 +1,14 @@
+/**
+ * Renders link edge UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { BaseEdge, type Edge, type EdgeProps, getBezierPath } from '@xyflow/react';
 import { memo, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { buildSelfLoopPathModel } from './linkEdgeGeometry';
 import { registerLinkLabel, unregisterLinkLabel } from './linkLabelRegistry';
 import { type LinkEdgeData, resolveEdgeTone, resolveLinkBadgePresentation } from './linkSemantics';
 
+/** Describes the link edge type contract used by the UI component boundary. */
 export type LinkEdgeType = Edge<LinkEdgeData>;
 
 function LinkEdgeInner({

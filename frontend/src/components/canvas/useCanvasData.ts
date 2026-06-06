@@ -1,3 +1,7 @@
+/**
+ * Coordinates canvas data state for the topology canvas.
+ * Keeps canvas lifecycle, projected graph state, and cleanup behavior explicit for callers.
+ */
 import type { ReactFlowInstance } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 

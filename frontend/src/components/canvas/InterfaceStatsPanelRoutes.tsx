@@ -1,3 +1,7 @@
+/**
+ * Defines interface stats panel routes behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import { useEffect, useState } from 'react';
 
 import { fetchDeviceInterfaces } from '../../api/client';
@@ -60,6 +64,7 @@ function useDeviceInterfaces(
   };
 }
 
+/** Renders the DeviceInterfaceStatsPanelRoute component within the topology canvas. */
 export function DeviceInterfaceStatsPanelRoute({
   device,
   runtimeState,
@@ -93,6 +98,7 @@ export function DeviceInterfaceStatsPanelRoute({
   );
 }
 
+/** Renders the LinkInterfaceStatsPanelRoute component within the topology canvas. */
 export function LinkInterfaceStatsPanelRoute({
   link,
   sourceDevice,

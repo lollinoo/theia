@@ -1,5 +1,7 @@
 package domain
 
+// This file defines canvas map domain contracts and lifecycle invariants.
+
 import (
 	"encoding/json"
 	"fmt"
@@ -174,6 +176,7 @@ func canonicalCanvasMapDeviceIDs(deviceIDs []uuid.UUID) []uuid.UUID {
 	return deduplicated
 }
 
+// ParseCanvasMapFilter parses canvas map filter input for the domain model.
 func ParseCanvasMapFilter(raw string) (CanvasMapFilter, error) {
 	if strings.TrimSpace(raw) == "" {
 		return CanvasMapFilter{DeviceIDs: []uuid.UUID{}, Tags: map[string]string{}}, nil

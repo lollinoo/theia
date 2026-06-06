@@ -1,3 +1,7 @@
+/**
+ * Provides frontend API helpers for credentials endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import {
   type CredentialProfile,
   parseCredentialProfileResponse,
@@ -10,6 +14,7 @@ export async function fetchCredentialProfiles(): Promise<CredentialProfile[]> {
   return parseCredentialProfilesResponse(await requestJSON('/api/v1/credential-profiles'));
 }
 
+/** Describes the credential profile payload contract used by the frontend API boundary. */
 export interface CredentialProfilePayload {
   name: string;
   description?: string;

@@ -1,3 +1,7 @@
+/**
+ * Renders area card UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useMemo, useState } from 'react';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import type { Area } from '../types/api';

@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines bridge repo persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"context"
 	"database/sql"
@@ -11,14 +13,17 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// BridgeRepo represents bridge repo data used by the persistence boundary.
 type BridgeRepo struct {
 	db *DB
 }
 
+// NewBridgeRepo constructs bridge repo state for the persistence boundary.
 func NewBridgeRepo(db *sql.DB) *BridgeRepo {
 	return &BridgeRepo{db: wrapDB(db)}
 }
 
+// GetUserSettings retrieves user settings data from the persistence boundary.
 func (r *BridgeRepo) GetUserSettings(ctx context.Context, userID uuid.UUID) (*domain.UserSettings, error) {
 	now := time.Now().UTC()
 	if _, err := r.execContext(ctx,
@@ -91,6 +96,7 @@ func (r *BridgeRepo) UpsertUserSettings(ctx context.Context, settings *domain.Us
 	return nil
 }
 
+// GetActiveBridgeCredentialForUser retrieves active bridge credential for user data from the persistence boundary.
 func (r *BridgeRepo) GetActiveBridgeCredentialForUser(ctx context.Context, userID uuid.UUID) (*domain.BridgeCredential, error) {
 	credential, err := r.scanBridgeCredentialRow(r.queryRowContext(ctx,
 		bridgeCredentialSelectSQL()+` WHERE user_id = ? AND status = ?`,
@@ -102,6 +108,7 @@ func (r *BridgeRepo) GetActiveBridgeCredentialForUser(ctx context.Context, userI
 	return credential, nil
 }
 
+// GetBridgeCredentialByPrefix retrieves bridge credential by prefix data from the persistence boundary.
 func (r *BridgeRepo) GetBridgeCredentialByPrefix(ctx context.Context, prefix string) (*domain.BridgeCredential, error) {
 	credential, err := r.scanBridgeCredentialRow(r.queryRowContext(ctx,
 		bridgeCredentialSelectSQL()+` WHERE secret_prefix = ?`,
@@ -113,6 +120,7 @@ func (r *BridgeRepo) GetBridgeCredentialByPrefix(ctx context.Context, prefix str
 	return credential, nil
 }
 
+// CreateBridgeCredential creates bridge credential data through the persistence boundary.
 func (r *BridgeRepo) CreateBridgeCredential(ctx context.Context, credential *domain.BridgeCredential) error {
 	if err := normalizeBridgeCredential(credential); err != nil {
 		return err
@@ -123,6 +131,7 @@ func (r *BridgeRepo) CreateBridgeCredential(ctx context.Context, credential *dom
 	return nil
 }
 
+// CreateBridgeCredentialWithAudit creates bridge credential with audit data through the persistence boundary.
 func (r *BridgeRepo) CreateBridgeCredentialWithAudit(ctx context.Context, credential *domain.BridgeCredential, log *domain.AuditLog) error {
 	tx, err := r.db.raw.BeginTx(ctx, nil)
 	if err != nil {
@@ -297,6 +306,7 @@ func (r *BridgeRepo) TouchBridgeCredentialLastUsed(ctx context.Context, credenti
 	return nil
 }
 
+// CreateBridgeLaunchRequest creates bridge launch request data through the persistence boundary.
 func (r *BridgeRepo) CreateBridgeLaunchRequest(ctx context.Context, request *domain.BridgeLaunchRequest) error {
 	if request.ID == uuid.Nil {
 		request.ID = uuid.New()
@@ -323,6 +333,7 @@ func (r *BridgeRepo) CreateBridgeLaunchRequest(ctx context.Context, request *dom
 	return nil
 }
 
+// GetBridgeLaunchRequestByTokenHash retrieves bridge launch request by token hash data from the persistence boundary.
 func (r *BridgeRepo) GetBridgeLaunchRequestByTokenHash(ctx context.Context, tokenHash string) (*domain.BridgeLaunchRequest, error) {
 	request, err := scanBridgeLaunchRequestRow(r.queryRowContext(ctx,
 		bridgeLaunchRequestSelectSQL()+` WHERE token_hash = ?`,

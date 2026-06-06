@@ -1,5 +1,7 @@
 package ws
 
+// This file defines messages WebSocket protocol behavior, subscriptions, and runtime update delivery.
+
 import (
 	"crypto/sha256"
 	"encoding/json"
@@ -294,6 +296,7 @@ type DeviceRuntimeDTO struct {
 	Stale                       *bool             `json:"-"`
 }
 
+// LinkRuntimeDTO represents link runtime dto data used by the WebSocket protocol.
 type LinkRuntimeDTO struct {
 	LinkID          string   `json:"link_id"`
 	SourceDeviceID  string   `json:"source_device_id"`

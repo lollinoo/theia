@@ -1,3 +1,7 @@
+/**
+ * Normalizes backend grafana payloads into frontend-safe shapes.
+ * Keeps API boundary validation close to the transport helpers that consume it.
+ */
 import type { PrometheusHealthResult } from './grafana';
 
 // parsePrometheusHealthPayload normalizes health payloads and preserves invalid-response fallback behavior.

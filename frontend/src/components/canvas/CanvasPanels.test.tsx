@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas panels topology canvas behavior so refactors preserve the documented contract.
+ */
 import { fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { describe, expect, it, vi } from 'vitest';

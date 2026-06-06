@@ -1,3 +1,7 @@
+/**
+ * Defines node builder behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Device, Link } from '../../types/api';
 import { type AlertDTO, type SnapshotPayload, alertStatusForDevice } from '../../types/metrics';
 import type { DeviceNode, DeviceNodeRuntimeData } from '../DeviceCard';
@@ -41,6 +45,7 @@ function selfLinkScore(link: Link): number {
   return score;
 }
 
+/** Builds topology nodes for the topology canvas. */
 export function buildTopologyNodes(
   devices: Device[],
   savedPositions: Map<string, { x: number; y: number; pinned?: boolean }>,

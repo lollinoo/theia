@@ -1,3 +1,7 @@
+/**
+ * Coordinates canvas menus state for the topology canvas.
+ * Keeps canvas lifecycle, projected graph state, and cleanup behavior explicit for callers.
+ */
 import type { ReactFlowInstance } from '@xyflow/react';
 import { useMemo, useState } from 'react';
 
@@ -6,8 +10,11 @@ import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { topologyFitViewPadding } from './canvasHelpers';
 
+/** Describes the canvas device menu contract used by the topology canvas. */
 export type CanvasDeviceMenu = { deviceId: string; x: number; y: number };
+/** Describes the canvas edge menu contract used by the topology canvas. */
 export type CanvasEdgeMenu = { edgeID: string; x: number; y: number };
+/** Describes the canvas panel content contract used by the topology canvas. */
 export type CanvasPanelContent = { type: string; data?: unknown };
 
 interface UseCanvasMenusParams {
@@ -34,6 +41,7 @@ interface UseCanvasMenusReturn {
   getPanelTitle: () => string;
 }
 
+/** Coordinates canvas menus behavior for the topology canvas. */
 export function useCanvasMenus({ reactFlow }: UseCanvasMenusParams): UseCanvasMenusReturn {
   const [deviceMenu, setDeviceMenu] = useState<CanvasDeviceMenu | null>(null);
   const [edgeMenu, setEdgeMenu] = useState<CanvasEdgeMenu | null>(null);

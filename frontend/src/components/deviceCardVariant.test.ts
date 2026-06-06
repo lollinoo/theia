@@ -1,3 +1,6 @@
+/**
+ * Exercises device card variant component behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 
 import { resolveDeviceCardRenderModel, resolveDeviceCardVariant } from './deviceCardVariant';

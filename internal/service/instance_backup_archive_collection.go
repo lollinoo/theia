@@ -1,5 +1,7 @@
 package service
 
+// This file defines instance backup archive collection backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"context"
 	"errors"

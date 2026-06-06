@@ -1,5 +1,7 @@
 package collector
 
+// This file exercises rates behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 	"time"

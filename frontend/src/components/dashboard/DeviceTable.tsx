@@ -1,3 +1,7 @@
+/**
+ * Defines device table behavior for the operations dashboard.
+ * Keeps table, backup, and device-management responsibilities isolated by module.
+ */
 import { useState } from 'react';
 import type { ResolvedTheme } from '../../contexts/ThemeContext';
 import type { Area, Device } from '../../types/api';
@@ -26,6 +30,7 @@ interface DeviceTableProps {
   onDeletePermanently?: (device: Device) => void;
 }
 
+/** Renders the DeviceTable component within the operations dashboard. */
 export function DeviceTable({
   rows,
   areaMap,

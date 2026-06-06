@@ -1,5 +1,7 @@
 package ws
 
+// This file exercises messages behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"strings"

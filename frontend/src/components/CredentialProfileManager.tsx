@@ -1,3 +1,7 @@
+/**
+ * Renders credential profile manager UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useState } from 'react';
 import {
   createCredentialProfile,
@@ -322,6 +326,7 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel, isEdit }: ProfileFo
   );
 }
 
+/** Renders the CredentialProfileManager component within the UI component boundary. */
 export function CredentialProfileManager() {
   const [profiles, setProfiles] = useState<CredentialProfile[]>([]);
   const [loading, setLoading] = useState(true);

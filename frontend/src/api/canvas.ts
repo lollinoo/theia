@@ -1,3 +1,7 @@
+/**
+ * Provides frontend API helpers for canvas endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import {
   type Area,
   type CanvasMap,
@@ -11,6 +15,7 @@ import {
 } from '../types/api';
 import { type ErrorPayload, requestJSON, requestJSONWithBody } from './transport';
 
+/** Represents canvas topology fetch error state crossing the frontend API boundary. */
 export class CanvasTopologyFetchError extends Error {
   status: number;
 
@@ -21,6 +26,7 @@ export class CanvasTopologyFetchError extends Error {
   }
 }
 
+/** Describes the canvas topology fetch result contract used by the frontend API boundary. */
 export type CanvasTopologyFetchResult =
   | {
       status: 'ok';

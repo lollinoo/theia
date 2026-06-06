@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises sql store behavior so refactors preserve the documented contract.
+
 import "testing"
 
 func TestRebindQuery_Postgres(t *testing.T) {

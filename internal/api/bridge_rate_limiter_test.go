@@ -1,5 +1,7 @@
 package api
 
+// This file exercises bridge rate limiter behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 	"time"

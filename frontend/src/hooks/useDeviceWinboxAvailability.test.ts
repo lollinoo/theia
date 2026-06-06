@@ -1,3 +1,6 @@
+/**
+ * Exercises use device Winbox availability hook lifecycle behavior so refactors preserve the documented contract.
+ */
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDeviceWinboxAvailability } from './useDeviceWinboxAvailability';

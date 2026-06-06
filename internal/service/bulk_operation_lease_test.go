@@ -1,5 +1,7 @@
 package service
 
+// This file exercises bulk operation lease behavior so refactors preserve the documented contract.
+
 import (
 	"fmt"
 	"testing"

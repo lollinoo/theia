@@ -1,5 +1,10 @@
+/**
+ * Coordinates hello WebSocket lifecycle and runtime update semantics.
+ * Keeps reconnect, resync, and subscription behavior isolated from canvas rendering.
+ */
 const canvasSchemaVersion = 1;
 
+/** Describes the canvas hello payload contract used by the React hook lifecycle. */
 export interface CanvasHelloPayload {
   canvas_schema_version: number;
   topology_version?: string;
@@ -23,6 +28,7 @@ interface BuildCanvasHelloPayloadOptions {
   detailDeviceId: string | null;
 }
 
+/** Builds canvas hello payload for the React hook lifecycle. */
 export function buildCanvasHelloPayload({
   topologyVersion,
   hasRuntimeSnapshot,

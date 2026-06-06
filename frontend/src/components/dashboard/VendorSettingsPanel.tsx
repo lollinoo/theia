@@ -1,3 +1,7 @@
+/**
+ * Defines vendor settings panel behavior for the operations dashboard.
+ * Keeps table, backup, and device-management responsibilities isolated by module.
+ */
 import { useEffect, useState } from 'react';
 import { fetchVendorConfig, updateVendorConfig } from '../../api/client';
 import { type VendorConfig } from '../../types/api';
@@ -6,6 +10,7 @@ interface VendorSettingsPanelProps {
   vendorName?: string;
 }
 
+/** Renders the VendorSettingsPanel component within the operations dashboard. */
 export function VendorSettingsPanel({ vendorName = 'mikrotik' }: VendorSettingsPanelProps) {
   const [vendor, setVendor] = useState<VendorConfig | null>(null);
   const [loading, setLoading] = useState(true);

@@ -1,3 +1,7 @@
+/**
+ * Coordinates canvas interaction state state for the topology canvas.
+ * Keeps canvas lifecycle, projected graph state, and cleanup behavior explicit for callers.
+ */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const canvasInteractionIdleDelayMs = 140;
@@ -6,6 +10,7 @@ interface UseCanvasInteractionStateParams {
   onInteractionActiveChange?: (active: boolean) => void;
 }
 
+/** Coordinates canvas interaction state behavior for the topology canvas. */
 export function useCanvasInteractionState({
   onInteractionActiveChange,
 }: UseCanvasInteractionStateParams): {

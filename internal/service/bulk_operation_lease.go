@@ -1,5 +1,7 @@
 package service
 
+// This file defines bulk operation lease service behavior and domain orchestration rules.
+
 import (
 	"context"
 	"fmt"

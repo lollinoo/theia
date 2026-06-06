@@ -1,6 +1,11 @@
+/**
+ * Coordinates diagnostics WebSocket lifecycle and runtime update semantics.
+ * Keeps reconnect, resync, and subscription behavior isolated from canvas rendering.
+ */
 import { recordCanvasDiagnosticEvent } from '../../components/canvas/canvasDiagnostics';
 import type { ResyncRequiredPayload } from '../../types/metrics';
 
+/** Dispatch backend resync required for the React hook lifecycle. */
 export function dispatchBackendResyncRequired(payload: ResyncRequiredPayload): void {
   window.dispatchEvent(
     new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
@@ -9,6 +14,7 @@ export function dispatchBackendResyncRequired(payload: ResyncRequiredPayload): v
   );
 }
 
+/** Records ignored stale runtime delta for the React hook lifecycle. */
 export function recordIgnoredStaleRuntimeDelta({
   messageType,
   baseVersion,
@@ -35,6 +41,7 @@ export function recordIgnoredStaleRuntimeDelta({
   });
 }
 
+/** Records ignored stale runtime snapshot for the React hook lifecycle. */
 export function recordIgnoredStaleRuntimeSnapshot({
   version,
   currentVersion,
@@ -58,6 +65,7 @@ export function recordIgnoredStaleRuntimeSnapshot({
   });
 }
 
+/** Returns raw web socket message type for the React hook lifecycle. */
 export function getRawWebSocketMessageType(raw: unknown): string | null {
   if (raw === null || typeof raw !== 'object') {
     return null;

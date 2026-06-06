@@ -1,3 +1,7 @@
+/**
+ * Defines panel adapters behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Device, InterfaceInfo, Link } from '../../types/api';
 import {
   type AlertDTO,
@@ -27,6 +31,7 @@ const UNKNOWN_UTILIZATION_COLOR = 'var(--color-status-unknown)';
 type EndpointNegotiationTone = Extract<LinkNegotiationModel['tone'], 'up' | 'warning' | 'critical'>;
 type RuntimeAlertDraft = AlertsPanelAlertModel & { priority: number };
 
+/** Describes the adapted interface stats contract used by the topology canvas. */
 export interface AdaptedInterfaceStats {
   txLabel: string;
   rxLabel: string;
@@ -869,6 +874,7 @@ function runtimeBackedFiringAlerts(
   return rawAlerts.slice(0, normalizedCount);
 }
 
+/** Builds alerts panel model for the topology canvas. */
 export function buildAlertsPanelModel({
   alerts,
   runtimeState,
@@ -919,6 +925,7 @@ export function buildAlertsPanelModel({
   };
 }
 
+/** Builds device interface panel model for the topology canvas. */
 export function buildDeviceInterfacePanelModel({
   device,
   runtimeState,
@@ -959,6 +966,7 @@ export function buildDeviceInterfacePanelModel({
   };
 }
 
+/** Builds link interface panel model for the topology canvas. */
 export function buildLinkInterfacePanelModel({
   link,
   sourceDevice,

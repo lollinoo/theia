@@ -1,3 +1,7 @@
+/**
+ * Normalizes backend parsers payloads into frontend-safe shapes.
+ * Keeps API boundary validation close to the transport helpers that consume it.
+ */
 // stringField returns a string field or the API client's existing empty-string fallback.
 export function stringField(record: Record<string, unknown>, key: string): string {
   return typeof record[key] === 'string' ? record[key] : '';

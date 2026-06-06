@@ -1,5 +1,7 @@
 package main
 
+// This file defines main behavior for Theia server startup.
+
 import (
 	"context"
 	"flag"

@@ -1,5 +1,10 @@
+/**
+ * Renders edge badge anchors UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+/** Describes the edge badge anchor contract used by the UI component boundary. */
 export interface EdgeBadgeAnchor {
   x: number;
   y: number;
@@ -42,6 +47,7 @@ function resolveParallelPathOffset(parallelIndex: number | undefined, laneStep: 
   return sign * magnitude;
 }
 
+/** Measures edge path length for the UI component boundary. */
 export function measureEdgePathLength(path: string): number {
   const pathElement = getMeasurementPath();
 
@@ -54,6 +60,7 @@ export function measureEdgePathLength(path: string): number {
   return Number.isFinite(totalLength) && totalLength > 0 ? totalLength : 0;
 }
 
+/** Resolves badge path lengths for the UI component boundary. */
 export function resolveBadgePathLengths(totalLength: number, badgeCount: number): number[] {
   if (badgeCount <= 0 || !Number.isFinite(totalLength) || totalLength <= 0) {
     return [];
@@ -77,6 +84,7 @@ export function resolveBadgePathLengths(totalLength: number, badgeCount: number)
   });
 }
 
+/** Computes link badge anchor for the UI component boundary. */
 export function computeLinkBadgeAnchor({
   path,
   fallbackX,

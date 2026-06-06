@@ -1,3 +1,7 @@
+/**
+ * Renders admin dashboard UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   type AdminAuditLog,
@@ -61,6 +65,7 @@ interface AdminDashboardProps {
   visible?: boolean;
 }
 
+/** Renders the AdminDashboard component within the UI component boundary. */
 export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   const { hasPermission } = useAuth();
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');

@@ -1,5 +1,7 @@
 package service
 
+// This file exercises bulk download behavior so refactors preserve the documented contract.
+
 import "testing"
 
 func TestSafeBulkDownloadZipPathNormalizesSafeEntries(t *testing.T) {

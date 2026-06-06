@@ -1,3 +1,7 @@
+/**
+ * Defines Vitest frontend test-runner behavior.
+ * Keeps this module's responsibility visible before implementation details.
+ */
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 

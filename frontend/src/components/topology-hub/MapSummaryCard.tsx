@@ -1,7 +1,12 @@
+/**
+ * Defines map summary card behavior for the topology hub.
+ * Keeps saved-map and area workflows separate from the live canvas surface.
+ */
 import type { MouseEvent } from 'react';
 import type { CanvasMap } from '../../types/api';
 import { MaterialIcon } from '../MaterialIcon';
 
+/** Defines the props contract for MapSummaryCard within the topology hub. */
 export interface MapSummaryCardProps {
   map: CanvasMap;
   selected: boolean;
@@ -13,6 +18,7 @@ export interface MapSummaryCardProps {
   onSetPrimary?: (map: CanvasMap) => void;
 }
 
+/** Renders the MapSummaryCard component within the topology hub. */
 export function MapSummaryCard({
   map,
   selected,

@@ -1,5 +1,7 @@
 package domain
 
+// This file defines auth domain contracts and lifecycle invariants.
+
 import (
 	"context"
 	"errors"

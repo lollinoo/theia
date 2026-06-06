@@ -1,3 +1,7 @@
+/**
+ * Normalizes backend auth payloads into frontend-safe shapes.
+ * Keeps API boundary validation close to the transport helpers that consume it.
+ */
 import type { AuthSession, AuthUser } from './auth';
 import { permissionKeysArray, stringArray, stringField } from './parsers';
 

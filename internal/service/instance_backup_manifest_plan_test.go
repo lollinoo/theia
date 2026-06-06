@@ -1,5 +1,7 @@
 package service
 
+// This file exercises instance backup manifest plan behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/base64"
 	"encoding/json"

@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises auth repo behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"errors"

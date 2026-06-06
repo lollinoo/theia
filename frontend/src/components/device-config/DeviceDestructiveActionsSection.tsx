@@ -1,3 +1,7 @@
+/**
+ * Renders device destructive actions section controls within the device configuration workflow.
+ * Keeps this section focused on one editable device responsibility.
+ */
 import { useEffect, useState } from 'react';
 import { deleteDevice } from '../../api/client';
 
@@ -12,6 +16,7 @@ interface DeviceDestructiveActionsSectionProps {
   onRemoveFromMap?: (deviceId: string) => void | Promise<void>;
 }
 
+/** Renders the DeviceDestructiveActionsSection component within the device configuration workflow. */
 export function DeviceDestructiveActionsSection({
   deviceId,
   readOnly = false,

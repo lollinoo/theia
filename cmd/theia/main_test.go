@@ -1,5 +1,7 @@
 package main
 
+// This file exercises main behavior so refactors preserve the documented contract.
+
 import (
 	"errors"
 	"reflect"
@@ -74,10 +76,13 @@ func (r stubSettingsRepo) GetAll() (map[string]string, error) {
 type fakeCollectorSNMPClient struct{}
 
 func (fakeCollectorSNMPClient) Connect() error { return nil }
-func (fakeCollectorSNMPClient) Close() error   { return nil }
+
+func (fakeCollectorSNMPClient) Close() error { return nil }
+
 func (fakeCollectorSNMPClient) Get([]string) ([]gosnmp.SnmpPDU, error) {
 	return nil, nil
 }
+
 func (fakeCollectorSNMPClient) BulkWalk(string) ([]gosnmp.SnmpPDU, error) {
 	return nil, nil
 }

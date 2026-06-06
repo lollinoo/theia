@@ -1,3 +1,7 @@
+/**
+ * Defines topology composition cache behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import {
@@ -9,6 +13,7 @@ import {
 type PositionMap = Map<string, { x: number; y: number; pinned?: boolean }>;
 type ComputedPositionMap = Map<string, { x: number; y: number }>;
 
+/** Describes the canvas topology composition cache key contract used by the topology canvas. */
 export interface CanvasTopologyCompositionCacheKey {
   signature: string;
   runtimeIdentity?: string | null;
@@ -19,6 +24,7 @@ export interface CanvasTopologyCompositionCacheKey {
   openSelfLinkDetails?: unknown;
 }
 
+/** Describes the build canvas topology composition cache key input contract used by the topology canvas. */
 export interface BuildCanvasTopologyCompositionCacheKeyInput {
   mapKey: string;
   topologySignature: string;
@@ -43,6 +49,7 @@ export interface BuildCanvasTopologyCompositionCacheKeyInput {
   openSelfLinkDetails?: unknown;
 }
 
+/** Describes the canvas topology composer contract used by the topology canvas. */
 export type CanvasTopologyComposer = (
   input: ComposeCanvasTopologyInput,
 ) => ComposeCanvasTopologyResult;

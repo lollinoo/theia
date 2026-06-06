@@ -1,5 +1,7 @@
 package state
 
+// This file defines health in-memory state ownership and snapshot behavior.
+
 import (
 	"math"
 

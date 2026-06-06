@@ -1,3 +1,7 @@
+/**
+ * Renders side panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { MaterialIcon } from './MaterialIcon';
@@ -10,6 +14,7 @@ interface SidePanelProps {
   testId?: string;
 }
 
+/** Renders the SidePanel component within the UI component boundary. */
 export function SidePanel({ open, onClose, title, children, testId }: SidePanelProps) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

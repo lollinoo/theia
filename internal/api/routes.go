@@ -1,5 +1,7 @@
 package api
 
+// This file defines routes API routing, middleware, and permission policy behavior.
+
 import (
 	"fmt"
 	"net/http"

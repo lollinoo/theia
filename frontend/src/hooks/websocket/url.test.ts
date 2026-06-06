@@ -1,3 +1,6 @@
+/**
+ * Exercises url hook lifecycle behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 import { appendHelloQueryParams, buildWebSocketURL } from './url';
 

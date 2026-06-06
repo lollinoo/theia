@@ -1,5 +1,7 @@
 package logging
 
+// This file exercises logger behavior so refactors preserve the documented contract.
+
 import (
 	"bytes"
 	"log"

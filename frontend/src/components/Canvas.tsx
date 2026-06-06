@@ -1,3 +1,7 @@
+/**
+ * Renders canvas UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import {
   Background,
   type Connection,

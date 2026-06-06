@@ -1,7 +1,12 @@
+/**
+ * Provides topology discovery utility behavior shared by frontend workflows.
+ * Keeps non-UI policy and formatting rules reusable across components.
+ */
 import type { TopologyBootstrapState, TopologyDiscoveryMode } from '../types/api';
 
 const TOPOLOGY_DISCOVERY_FOLLOWUP_DELAY_SECONDS = 20;
 
+/** Defines topology discovery mode options constants and helper contracts for the shared frontend utility layer. */
 export const TOPOLOGY_DISCOVERY_MODE_OPTIONS: Array<{
   value: TopologyDiscoveryMode;
   label: string;
@@ -13,6 +18,7 @@ export const TOPOLOGY_DISCOVERY_MODE_OPTIONS: Array<{
   { value: 'bootstrap_once', label: 'Bootstrap once' },
 ];
 
+/** Defines topology discovery default options constants and helper contracts for the shared frontend utility layer. */
 export const TOPOLOGY_DISCOVERY_DEFAULT_OPTIONS: Array<{
   value: Exclude<TopologyDiscoveryMode, 'inherit'>;
   label: string;
@@ -29,6 +35,7 @@ function humanizeSnakeCase(value: string): string {
     .join(' ');
 }
 
+/** Formats topology discovery mode for the shared frontend utility layer. */
 export function formatTopologyDiscoveryMode(mode?: TopologyDiscoveryMode): string {
   return (
     TOPOLOGY_DISCOVERY_MODE_OPTIONS.find((option) => option.value === mode)?.label ??
@@ -36,6 +43,7 @@ export function formatTopologyDiscoveryMode(mode?: TopologyDiscoveryMode): strin
   );
 }
 
+/** Formats topology bootstrap state for the shared frontend utility layer. */
 export function formatTopologyBootstrapState(state?: TopologyBootstrapState): string {
   switch (state) {
     case 'pending':
@@ -49,6 +57,7 @@ export function formatTopologyBootstrapState(state?: TopologyBootstrapState): st
   }
 }
 
+/** Formats topology discovery result for the shared frontend utility layer. */
 export function formatTopologyDiscoveryResult(result?: string): string {
   if (!result) {
     return 'Never run';
@@ -67,6 +76,7 @@ export function formatTopologyDiscoveryResult(result?: string): string {
   }
 }
 
+/** Formats topology discovery timestamp for the shared frontend utility layer. */
 export function formatTopologyDiscoveryTimestamp(value?: string | null): string {
   if (!value) {
     return 'Never';
@@ -78,6 +88,7 @@ export function formatTopologyDiscoveryTimestamp(value?: string | null): string 
   return parsed.toLocaleString();
 }
 
+/** Formats topology followup expectation for the shared frontend utility layer. */
 export function formatTopologyFollowupExpectation(
   state?: TopologyBootstrapState,
   lastDiscoveryAt?: string | null,

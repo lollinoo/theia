@@ -1,5 +1,7 @@
 package main
 
+// This file defines runtime fs behavior for Theia server startup.
+
 import (
 	"errors"
 	"os"

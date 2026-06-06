@@ -1,5 +1,7 @@
 package ws
 
+// This file defines hub WebSocket protocol behavior, subscriptions, and runtime update delivery.
+
 import (
 	"encoding/json"
 	"log"
@@ -57,6 +59,7 @@ type Hub struct {
 	mu         sync.RWMutex
 }
 
+// HubOption represents hub option data used by the WebSocket protocol.
 type HubOption func(*Hub)
 
 func WithBroadcastRecorder() HubOption {

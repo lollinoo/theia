@@ -1,3 +1,6 @@
+/**
+ * Exercises manual edge migration diagnostics topology canvas behavior so refactors preserve the documented contract.
+ */
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { exportCanvasDiagnostics, resetCanvasDiagnostics } from './canvasDiagnostics';

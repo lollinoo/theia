@@ -1,3 +1,7 @@
+/**
+ * Defines metrics type contracts shared across frontend modules.
+ * Keeps backend-facing domain shapes explicit at compile time.
+ */
 /** WSMessageType enumerates server-pushed canvas runtime protocol messages understood by the client. */
 export type WSMessageType =
   | 'ready'
@@ -224,6 +228,7 @@ export interface RuntimeDeltaEnvelopePayload {
   delta: RuntimePatchPayload;
 }
 
+/** Describes the polling health queue payload contract used by the frontend domain model. */
 export interface PollingHealthQueuePayload {
   ready_depth: number;
   lag_seconds: number;
@@ -231,6 +236,7 @@ export interface PollingHealthQueuePayload {
   configured_workers: number;
 }
 
+/** Describes the polling health warning payload contract used by the frontend domain model. */
 export interface PollingHealthWarningPayload {
   code: string;
   message: string;
@@ -254,51 +260,61 @@ export interface WSMessage {
   payload: unknown;
 }
 
+/** Describes the snapshot wsmessage contract used by the frontend domain model. */
 export interface SnapshotWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'snapshot';
   payload: SnapshotEnvelopePayload;
 }
 
+/** Describes the snapshot delta wsmessage contract used by the frontend domain model. */
 export interface SnapshotDeltaWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'snapshot_delta';
   payload: SnapshotDeltaEnvelopePayload;
 }
 
+/** Describes the runtime delta wsmessage contract used by the frontend domain model. */
 export interface RuntimeDeltaWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'runtime_delta';
   payload: RuntimeDeltaEnvelopePayload;
 }
 
+/** Describes the polling health changed wsmessage contract used by the frontend domain model. */
 export interface PollingHealthChangedWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'polling_health_changed';
   payload: PollingHealthPayload;
 }
 
+/** Describes the prometheus status wsmessage contract used by the frontend domain model. */
 export interface PrometheusStatusWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'prometheus_status';
   payload: PrometheusStatusPayload;
 }
 
+/** Describes the resync required wsmessage contract used by the frontend domain model. */
 export interface ResyncRequiredWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'resync_required';
   payload: ResyncRequiredPayload;
 }
 
+/** Describes the alert wsmessage contract used by the frontend domain model. */
 export interface AlertWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'alert';
   payload: AlertEnvelopePayload;
 }
 
+/** Describes the topology changed wsmessage contract used by the frontend domain model. */
 export interface TopologyChangedWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'topology_changed';
   payload: TopologyChangedPayload;
 }
 
+/** Describes the ready wsmessage contract used by the frontend domain model. */
 export interface ReadyWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'ready';
   payload: ReadyPayload;
 }
 
+/** Describes the alert envelope payload contract used by the frontend domain model. */
 export interface AlertEnvelopePayload {
   version?: number;
   alerts: AlertDTO[];

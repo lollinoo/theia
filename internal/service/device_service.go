@@ -1,5 +1,7 @@
 package service
 
+// This file defines device service service behavior and domain orchestration rules.
+
 import (
 	"context"
 	"log"
@@ -81,6 +83,7 @@ type DeviceService struct {
 	TopologyNotify chan struct{} // signaled when probeDevice creates new links
 }
 
+// DeviceServiceOption represents device service option data used by the service orchestration.
 type DeviceServiceOption func(*DeviceService)
 
 const (

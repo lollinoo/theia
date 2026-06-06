@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas component behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DeviceNode } from './DeviceCard';

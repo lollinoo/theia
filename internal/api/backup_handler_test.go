@@ -1,5 +1,7 @@
 package api
 
+// This file exercises backup handler behavior so refactors preserve the documented contract.
+
 import (
 	"archive/zip"
 	"bytes"
@@ -578,7 +580,6 @@ func (r *bulkBackupRunRepoForHandler) copyRunLocked(id uuid.UUID) *domain.BulkBa
 	return &cp
 }
 
-// setupBackupHandler creates a BackupHandler backed by mock repos.
 func setupBackupHandler(t *testing.T) (*BackupHandler, *backupJobRepoForHandler, *backupFileRepoForHandler) {
 	t.Helper()
 	jobRepo := newBackupJobRepoForHandler()

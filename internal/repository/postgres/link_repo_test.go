@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises link repo behavior so refactors preserve the documented contract.
+
 import (
 	"sync"
 	"testing"

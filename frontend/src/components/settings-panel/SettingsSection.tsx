@@ -1,3 +1,7 @@
+/**
+ * Defines settings section behavior for settings screens.
+ * Keeps validation, saved-state display, and defaults close to the controls that use them.
+ */
 import type { ReactNode } from 'react';
 
 import { MaterialIcon } from '../MaterialIcon';
@@ -13,6 +17,7 @@ interface SettingsSectionProps {
   children: ReactNode;
 }
 
+/** Renders the SettingsSection component within the settings workflow. */
 export function SettingsSection({
   id,
   title,

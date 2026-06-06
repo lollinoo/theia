@@ -1,5 +1,7 @@
 package api
 
+// This file exercises router auth behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"encoding/json"

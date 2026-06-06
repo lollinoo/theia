@@ -1,5 +1,7 @@
 package service
 
+// This file exercises restore manifest validation behavior so refactors preserve the documented contract.
+
 import (
 	"os"
 	"path/filepath"

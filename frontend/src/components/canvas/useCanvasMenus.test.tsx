@@ -1,3 +1,6 @@
+/**
+ * Exercises use canvas menus topology canvas behavior so refactors preserve the documented contract.
+ */
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 

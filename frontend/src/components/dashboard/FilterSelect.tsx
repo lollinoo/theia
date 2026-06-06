@@ -1,6 +1,11 @@
+/**
+ * Defines filter select behavior for the operations dashboard.
+ * Keeps table, backup, and device-management responsibilities isolated by module.
+ */
 import { useEffect, useRef, useState } from 'react';
 import { MaterialIcon } from '../MaterialIcon';
 
+/** Describes the filter option contract used by the operations dashboard. */
 export interface FilterOption {
   value: string;
   label: string;

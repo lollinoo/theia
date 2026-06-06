@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises area repo behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 

@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises snmp profile repo behavior so refactors preserve the documented contract.
+
 import (
 	"strings"
 	"testing"

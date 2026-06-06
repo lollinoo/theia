@@ -1,5 +1,7 @@
 package service
 
+// This file defines restore status backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"encoding/json"
 	"fmt"
@@ -14,6 +16,7 @@ const restoreStatusFileName = ".theia-restore-status.json"
 
 type restoreOperationPhase string
 
+// RestoreOperationPhase represents restore operation phase data used by the service orchestration.
 type RestoreOperationPhase = restoreOperationPhase
 
 const (
@@ -34,6 +37,7 @@ const (
 	RestorePhaseRunningCredentialRewrap RestoreOperationPhase = restorePhaseRunningCredentialRewrap
 )
 
+// RestoreOperationStatus represents restore operation status data used by the service orchestration.
 type RestoreOperationStatus struct {
 	OperationID  string `json:"operation_id"`
 	Phase        string `json:"phase"`

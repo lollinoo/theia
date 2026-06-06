@@ -1,3 +1,7 @@
+/**
+ * Defines canvas perf benchmark behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { AutoLayoutEdge, AutoLayoutNode } from '../../hooks/useAutoLayout';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
 import type { Device } from '../../types/api';
@@ -38,6 +42,7 @@ import {
 } from './topologyCompositionCache';
 import { buildTopologyIdentity } from './topologyIdentity';
 
+/** Defines canvas perf benchmark metrics constants and helper contracts for the topology canvas. */
 export const CANVAS_PERF_BENCHMARK_METRICS = [
   'buildTopologyNodes',
   'buildTopologyEdges',
@@ -52,6 +57,7 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'computeForceLayout',
 ] as const satisfies CanvasMetricName[];
 
+/** Describes the canvas perf benchmark scenario result contract used by the topology canvas. */
 export interface CanvasPerfBenchmarkScenarioResult {
   input: {
     deviceCount: number;
@@ -60,6 +66,7 @@ export interface CanvasPerfBenchmarkScenarioResult {
   metrics: Record<string, CanvasMetricAggregate>;
 }
 
+/** Describes the canvas perf benchmark result contract used by the topology canvas. */
 export interface CanvasPerfBenchmarkResult {
   version: 1;
   generatedAt: string;
@@ -68,6 +75,7 @@ export interface CanvasPerfBenchmarkResult {
   scenarios: Record<CanvasPerfScenarioName, CanvasPerfBenchmarkScenarioResult>;
 }
 
+/** Describes the run canvas perf benchmark options contract used by the topology canvas. */
 export interface RunCanvasPerfBenchmarkOptions {
   iterations?: number;
   warmupIterations?: number;
@@ -559,6 +567,7 @@ function metricsForScenario(
   );
 }
 
+/** Runs canvas perf benchmark for the topology canvas. */
 export function runCanvasPerfBenchmark(
   options: RunCanvasPerfBenchmarkOptions = {},
 ): CanvasPerfBenchmarkResult {

@@ -1,3 +1,7 @@
+/**
+ * Defines prometheus settings section behavior for settings screens.
+ * Keeps validation, saved-state display, and defaults close to the controls that use them.
+ */
 import { SavedIndicator } from './SavedIndicator';
 import { controlClass, fieldLabelClass } from './settingsPanelStyles';
 
@@ -9,6 +13,7 @@ interface PrometheusSettingsSectionProps {
   onPrometheusBlur: () => void;
 }
 
+/** Renders the PrometheusSettingsSection component within the settings workflow. */
 export function PrometheusSettingsSection({
   prometheusUrl,
   savedPrometheus,

@@ -1,5 +1,7 @@
 package main
 
+// This file defines main behavior for scale-lab command execution.
+
 import (
 	"encoding/json"
 	"flag"

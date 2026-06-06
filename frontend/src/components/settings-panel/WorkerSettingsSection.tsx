@@ -1,3 +1,7 @@
+/**
+ * Defines worker settings section behavior for settings screens.
+ * Keeps validation, saved-state display, and defaults close to the controls that use them.
+ */
 import { MaterialIcon } from '../MaterialIcon';
 import {
   WORKER_SETTING_GROUPS,
@@ -16,6 +20,7 @@ interface WorkerSettingsSectionProps {
   onSettingBlur: (setting: WorkerSetting) => void;
 }
 
+/** Renders the WorkerSettingsSection component within the settings workflow. */
 export function WorkerSettingsSection({
   open,
   workerSettings,

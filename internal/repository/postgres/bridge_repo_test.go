@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises bridge repo behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"database/sql"

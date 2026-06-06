@@ -1,5 +1,7 @@
 package api
 
+// This file exercises settings handler behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"net/http"
@@ -13,8 +15,10 @@ import (
 // failingSettingsRepo always returns an error for all operations.
 type failingSettingsRepo struct{}
 
-func (f *failingSettingsRepo) Get(key string) (string, error)     { return "", errMock }
-func (f *failingSettingsRepo) Set(key, value string) error        { return errMock }
+func (f *failingSettingsRepo) Get(key string) (string, error) { return "", errMock }
+
+func (f *failingSettingsRepo) Set(key, value string) error { return errMock }
+
 func (f *failingSettingsRepo) GetAll() (map[string]string, error) { return nil, errMock }
 
 func TestSettingsHandlerGetAll(t *testing.T) {

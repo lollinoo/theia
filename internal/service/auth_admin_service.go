@@ -1,5 +1,7 @@
 package service
 
+// This file defines auth admin service service behavior and domain orchestration rules.
+
 import (
 	"context"
 	"encoding/json"

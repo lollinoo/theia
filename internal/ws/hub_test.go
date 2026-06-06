@@ -1,5 +1,7 @@
 package ws
 
+// This file exercises hub behavior so refactors preserve the documented contract.
+
 import (
 	"math"
 	"strings"

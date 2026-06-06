@@ -1,5 +1,7 @@
 package config
 
+// This file defines config configuration loading, defaults, and validation behavior.
+
 import (
 	"fmt"
 	"math"

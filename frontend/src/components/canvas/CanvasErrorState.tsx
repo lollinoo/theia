@@ -1,8 +1,13 @@
+/**
+ * Defines canvas error state behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 interface CanvasErrorStateProps {
   error: string;
   onRetry: () => void;
 }
 
+/** Renders the CanvasErrorState component within the topology canvas. */
 export function CanvasErrorState({ error, onRetry }: CanvasErrorStateProps) {
   return (
     <div className="topology-backdrop flex h-full items-center justify-center bg-bg px-6">

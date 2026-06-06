@@ -1,3 +1,7 @@
+/**
+ * Provides polling utility behavior shared by frontend workflows.
+ * Keeps non-UI policy and formatting rules reusable across components.
+ */
 import type { Device, DevicePollClass } from '../types/api';
 
 const DEFAULT_POLLING_INTERVAL_SECONDS_BY_CLASS: Record<DevicePollClass, number> = {
@@ -6,6 +10,7 @@ const DEFAULT_POLLING_INTERVAL_SECONDS_BY_CLASS: Record<DevicePollClass, number>
   low: 300,
 };
 
+/** Returns default polling interval seconds for the shared frontend utility layer. */
 export function getDefaultPollingIntervalSeconds(pollClass: DevicePollClass | undefined): number {
   if (!pollClass) {
     return DEFAULT_POLLING_INTERVAL_SECONDS_BY_CLASS.standard;
@@ -17,6 +22,7 @@ export function getDefaultPollingIntervalSeconds(pollClass: DevicePollClass | un
   );
 }
 
+/** Returns effective polling interval seconds for the shared frontend utility layer. */
 export function getEffectivePollingIntervalSeconds(
   device: Partial<Pick<Device, 'poll_class' | 'poll_interval_override'>>,
 ): number {

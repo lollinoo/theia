@@ -1,3 +1,7 @@
+/**
+ * Defines canvas loading state behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 export function CanvasLoadingState() {
   return (
     <div className="topology-backdrop flex h-full items-center justify-center bg-bg">

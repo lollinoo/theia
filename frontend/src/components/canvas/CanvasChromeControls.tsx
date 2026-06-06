@@ -1,3 +1,7 @@
+/**
+ * Defines canvas chrome controls behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import { MaterialIcon } from '../MaterialIcon';
 
 const canvasChromeButtonClassName =
@@ -10,6 +14,7 @@ interface CanvasChromeControlsProps {
   onFitView: () => void;
 }
 
+/** Renders the CanvasChromeControls component within the topology canvas. */
 export function CanvasChromeControls({
   chromeHidden,
   onToggleChrome,

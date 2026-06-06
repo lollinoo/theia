@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file defines topology load canvas-map service behavior and topology ownership rules.
+
 import (
 	"context"
 	"fmt"

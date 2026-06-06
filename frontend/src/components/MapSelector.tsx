@@ -1,3 +1,7 @@
+/**
+ * Renders map selector UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CanvasMap } from '../types/api';
 import { MaterialIcon } from './MaterialIcon';
@@ -29,6 +33,7 @@ function isSelectedMap(map: CanvasMap, selectedMapId: string | null) {
   return (map.is_default && selectedMapId === null) || map.id === selectedMapId;
 }
 
+/** Renders the MapSelector component within the UI component boundary. */
 export function MapSelector({
   maps,
   selectedMapId,

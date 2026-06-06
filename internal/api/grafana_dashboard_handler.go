@@ -1,5 +1,7 @@
 package api
 
+// This file defines grafana dashboard handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"encoding/json"
 	"fmt"
@@ -13,10 +15,12 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// GrafanaDashboardHandler represents grafana dashboard handler data used by the HTTP boundary and route policy.
 type GrafanaDashboardHandler struct {
 	repo domain.SettingsRepository
 }
 
+// NewGrafanaDashboardHandler constructs grafana dashboard handler state for the HTTP boundary and route policy.
 func NewGrafanaDashboardHandler(repo domain.SettingsRepository) *GrafanaDashboardHandler {
 	return &GrafanaDashboardHandler{repo: repo}
 }

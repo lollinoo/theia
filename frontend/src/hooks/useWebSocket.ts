@@ -1,3 +1,7 @@
+/**
+ * Coordinates web socket WebSocket lifecycle and runtime update semantics.
+ * Keeps reconnect, resync, and subscription behavior isolated from canvas rendering.
+ */
 import { useEffect, useRef, useState } from 'react';
 import {
   getCanvasDiagnosticsSnapshot,

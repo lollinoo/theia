@@ -1,5 +1,7 @@
 package polling
 
+// This file exercises health behavior so refactors preserve the documented contract.
+
 import "testing"
 
 func TestHealthSnapshotStatus(t *testing.T) {

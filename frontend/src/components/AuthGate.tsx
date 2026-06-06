@@ -1,3 +1,7 @@
+/**
+ * Renders auth gate UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { type FormEvent, type ReactNode, useId, useState } from 'react';
 import { resetPasswordWithToken } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
@@ -130,6 +134,7 @@ function PasswordInput({
   );
 }
 
+/** Renders the AuthGate component within the UI component boundary. */
 export function AuthGate({ children }: AuthGateProps) {
   const { status, user, error: sessionError, login, changePassword } = useAuth();
   const [mode, setMode] = useState<'login' | 'reset'>('login');

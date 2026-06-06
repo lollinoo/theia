@@ -1,5 +1,7 @@
 package main
 
+// This file defines server behavior for the Winbox bridge command.
+
 import (
 	"context"
 	"errors"

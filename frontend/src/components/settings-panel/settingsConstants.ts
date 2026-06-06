@@ -1,3 +1,7 @@
+/**
+ * Defines settings constants behavior for settings screens.
+ * Keeps validation, saved-state display, and defaults close to the controls that use them.
+ */
 const TIMEZONES = [
   { label: 'UTC', value: 'UTC' },
   { label: 'Europe/London (GMT/BST)', value: 'Europe/London' },

@@ -1,5 +1,7 @@
 package main
 
+// This file defines install behavior for the Winbox bridge command.
+
 import (
 	"fmt"
 	"io"

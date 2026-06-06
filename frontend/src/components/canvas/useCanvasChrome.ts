@@ -1,3 +1,7 @@
+/**
+ * Coordinates canvas chrome state for the topology canvas.
+ * Keeps canvas lifecycle, projected graph state, and cleanup behavior explicit for callers.
+ */
 import type { FitViewOptions } from '@xyflow/react';
 import { useCallback, useState } from 'react';
 

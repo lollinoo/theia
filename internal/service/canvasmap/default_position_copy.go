@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file defines default position copy canvas-map service behavior and topology ownership rules.
+
 import (
 	"fmt"
 

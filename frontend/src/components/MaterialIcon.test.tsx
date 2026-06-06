@@ -1,3 +1,6 @@
+/**
+ * Exercises material icon component behavior so refactors preserve the documented contract.
+ */
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { MaterialIcon } from './MaterialIcon';

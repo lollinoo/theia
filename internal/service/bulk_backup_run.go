@@ -1,5 +1,7 @@
 package service
 
+// This file defines bulk backup run backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"context"
 	"errors"
@@ -83,6 +85,7 @@ func (s *BackupService) StartBulkBackupRun(ctx context.Context, requestedDeviceI
 	return s.getBulkBackupRunWithFileTotals(run.ID)
 }
 
+// GetBulkBackupRun retrieves bulk backup run data from the service orchestration.
 func (s *BackupService) GetBulkBackupRun(ctx context.Context, id uuid.UUID) (*domain.BulkBackupRun, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
@@ -93,6 +96,7 @@ func (s *BackupService) GetBulkBackupRun(ctx context.Context, id uuid.UUID) (*do
 	return s.getBulkBackupRunWithFileTotals(id)
 }
 
+// GetLatestBulkBackupRun retrieves latest bulk backup run data from the service orchestration.
 func (s *BackupService) GetLatestBulkBackupRun(ctx context.Context) (*domain.BulkBackupRun, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err

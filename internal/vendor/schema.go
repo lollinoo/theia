@@ -1,5 +1,7 @@
 package vendor
 
+// This file defines schema vendor metadata loading and registry contracts.
+
 // VendorConfig represents a vendor definition loaded from YAML.
 type VendorConfig struct {
 	Vendor          VendorInfo       `yaml:"vendor" json:"vendor"`

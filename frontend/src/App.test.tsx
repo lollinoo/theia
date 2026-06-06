@@ -1,3 +1,6 @@
+/**
+ * Exercises app frontend behavior so refactors preserve the documented contract.
+ */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

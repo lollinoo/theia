@@ -1,7 +1,12 @@
+/**
+ * Provides frontend API helpers for auth endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import { parseAuthSession } from './authParsers';
 import { requestJSON, requestJSONWithBody } from './transport';
 export { parseAuthUser } from './authParsers';
 
+/** Describes the auth user contract used by the frontend API boundary. */
 export interface AuthUser {
   id: string;
   username: string;
@@ -13,21 +18,25 @@ export interface AuthUser {
   permissions: string[];
 }
 
+/** Describes the auth session contract used by the frontend API boundary. */
 export interface AuthSession {
   authenticated: boolean;
   user?: AuthUser;
 }
 
+/** Describes the login payload contract used by the frontend API boundary. */
 export interface LoginPayload {
   identifier: string;
   password: string;
 }
 
+/** Describes the change password payload contract used by the frontend API boundary. */
 export interface ChangePasswordPayload {
   current_password: string;
   new_password: string;
 }
 
+/** Describes the reset password payload contract used by the frontend API boundary. */
 export interface ResetPasswordPayload {
   token: string;
   new_password: string;

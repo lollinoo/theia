@@ -1,5 +1,7 @@
 package main
 
+// This file defines tray behavior for the Winbox bridge command.
+
 import (
 	"fmt"
 	"log"

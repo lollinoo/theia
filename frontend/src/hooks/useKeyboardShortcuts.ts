@@ -1,5 +1,10 @@
+/**
+ * Coordinates keyboard shortcuts state and side effects for consuming components.
+ * Owns cleanup-sensitive lifecycle work so callers receive stable state and actions.
+ */
 import { useEffect } from 'react';
 
+/** Describes the shortcut handler contract used by the React hook lifecycle. */
 export interface ShortcutHandler {
   key: string;
   ctrl?: boolean;
@@ -7,6 +12,7 @@ export interface ShortcutHandler {
   description: string;
 }
 
+/** Coordinates keyboard shortcuts behavior for the React hook lifecycle. */
 export function useKeyboardShortcuts(shortcuts: Record<string, ShortcutHandler>) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

@@ -1,5 +1,7 @@
 package worker
 
+// This file exercises pipeline runtime state behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 	"time"

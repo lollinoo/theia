@@ -1,3 +1,6 @@
+/**
+ * Exercises saved maps browser workflow behavior so refactors preserve the documented contract.
+ */
 import { type APIRequestContext, type Page, expect, test } from '@playwright/test';
 
 const TEST_MAP_NAME = 'Backbone e2e';

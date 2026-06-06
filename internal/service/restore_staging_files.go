@@ -1,5 +1,7 @@
 package service
 
+// This file defines restore staging files backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"context"
 	"errors"

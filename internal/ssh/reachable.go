@@ -1,5 +1,7 @@
 package ssh
 
+// This file defines reachable SSH connectivity and host-key trust behavior.
+
 import (
 	"fmt"
 	"net"

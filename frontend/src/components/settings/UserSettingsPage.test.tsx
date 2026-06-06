@@ -1,3 +1,6 @@
+/**
+ * Exercises user settings page settings behavior so refactors preserve the documented contract.
+ */
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {

@@ -1,3 +1,6 @@
+/**
+ * Exercises no line audit component behavior so refactors preserve the documented contract.
+ */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 /**

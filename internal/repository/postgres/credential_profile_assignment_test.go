@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises credential profile assignment behavior so refactors preserve the documented contract.
+
 import (
 	"database/sql"
 	"testing"
@@ -10,7 +12,6 @@ import (
 )
 
 // setupCredentialProfileAssignmentTest creates a PostgreSQL test DB, runs migrations,
-// and returns a CredentialProfileRepo ready for assignment/WinBox tests.
 func setupCredentialProfileAssignmentTest(t *testing.T) (*CredentialProfileRepo, *sql.DB) {
 	t.Helper()
 
@@ -35,7 +36,6 @@ func insertTestDevice(t *testing.T, db *sql.DB) uuid.UUID {
 	return deviceID
 }
 
-// insertTestProfile creates a credential profile and returns its ID.
 func insertTestProfile(t *testing.T, repo *CredentialProfileRepo, name string) uuid.UUID {
 	t.Helper()
 	profile := &domain.CredentialProfile{
@@ -366,7 +366,6 @@ func TestCredentialProfileAssignProfile_MultipleProfiles(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestGetBackupProfileForDevice_NoProfileAssigned verifies that
-// GetBackupProfileForDevice returns an error when no profiles are assigned.
 func TestGetBackupProfileForDevice_NoProfileAssigned(t *testing.T) {
 	repo, db := setupCredentialProfileAssignmentTest(t)
 	deviceID := insertTestDevice(t, db)
@@ -381,7 +380,6 @@ func TestGetBackupProfileForDevice_NoProfileAssigned(t *testing.T) {
 }
 
 // TestGetBackupProfileForDevice_ReturnsProfile verifies that
-// GetBackupProfileForDevice returns the assigned profile when one exists.
 func TestGetBackupProfileForDevice_ReturnsProfile(t *testing.T) {
 	repo, db := setupCredentialProfileAssignmentTest(t)
 	deviceID := insertTestDevice(t, db)

@@ -1,5 +1,7 @@
 package vendor
 
+// This file exercises schema behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 

@@ -1,5 +1,7 @@
 package api
 
+// This file exercises instance backup handler behavior so refactors preserve the documented contract.
+
 import (
 	"archive/tar"
 	"bytes"

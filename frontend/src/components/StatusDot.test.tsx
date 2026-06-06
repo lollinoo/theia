@@ -1,3 +1,6 @@
+/**
+ * Exercises status dot component behavior so refactors preserve the documented contract.
+ */
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { StatusDot } from './StatusDot';

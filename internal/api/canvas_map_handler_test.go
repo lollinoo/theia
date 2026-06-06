@@ -1,5 +1,7 @@
 package api
 
+// This file exercises canvas map handler behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"net/http"
@@ -59,7 +61,6 @@ func (r *fakeCanvasMapHandlerMapRepo) Create(domain.CanvasMapCreate) (domain.Can
 	return domain.CanvasMap{}, errMock
 }
 
-// GetByID returns the seeded map for handler path lookups.
 func (r *fakeCanvasMapHandlerMapRepo) GetByID(id uuid.UUID) (domain.CanvasMap, error) {
 	if canvasMap, ok := r.maps[id]; ok {
 		return canvasMap, nil
@@ -67,22 +68,18 @@ func (r *fakeCanvasMapHandlerMapRepo) GetByID(id uuid.UUID) (domain.CanvasMap, e
 	return domain.CanvasMap{}, errMock
 }
 
-// GetDefault returns an error because default lookup is outside this handler test.
 func (r *fakeCanvasMapHandlerMapRepo) GetDefault() (domain.CanvasMap, error) {
 	return domain.CanvasMap{}, errMock
 }
 
-// List returns no maps because list behavior is outside this handler test.
 func (r *fakeCanvasMapHandlerMapRepo) List() ([]domain.CanvasMap, error) {
 	return nil, errMock
 }
 
-// Update returns an error because update behavior is outside this handler test.
 func (r *fakeCanvasMapHandlerMapRepo) Update(uuid.UUID, domain.CanvasMapUpdate) (domain.CanvasMap, error) {
 	return domain.CanvasMap{}, errMock
 }
 
-// SetPrimary returns an error because primary selection is outside this handler test.
 func (r *fakeCanvasMapHandlerMapRepo) SetPrimary(uuid.UUID) (domain.CanvasMap, error) {
 	return domain.CanvasMap{}, errMock
 }
@@ -93,32 +90,26 @@ func (r *fakeCanvasMapHandlerMapRepo) Delete(uuid.UUID) error {
 	return nil
 }
 
-// Duplicate returns an error because duplication is outside this handler test.
 func (r *fakeCanvasMapHandlerMapRepo) Duplicate(uuid.UUID, string) (domain.CanvasMap, error) {
 	return domain.CanvasMap{}, errMock
 }
 
-// GetMembership returns an error because membership is outside this handler test.
 func (r *fakeCanvasMapHandlerMapRepo) GetMembership(uuid.UUID) (domain.CanvasMapMembership, error) {
 	return domain.CanvasMapMembership{}, errMock
 }
 
-// ReplaceMembership returns an error because membership replacement is outside this handler test.
 func (r *fakeCanvasMapHandlerMapRepo) ReplaceMembership(uuid.UUID, domain.CanvasMapMembership) error {
 	return errMock
 }
 
-// UpdateDeviceVisualColor returns an error because visual metadata is outside this handler test.
 func (r *fakeCanvasMapHandlerMapRepo) UpdateDeviceVisualColor(uuid.UUID, uuid.UUID, *string) error {
 	return errMock
 }
 
-// RemoveDevice returns an error because device membership removal is outside this handler test.
 func (r *fakeCanvasMapHandlerMapRepo) RemoveDevice(uuid.UUID, uuid.UUID) error {
 	return errMock
 }
 
-// RemoveLink returns an error because link removal is outside this handler test.
 func (r *fakeCanvasMapHandlerMapRepo) RemoveLink(uuid.UUID, uuid.UUID) error {
 	return errMock
 }
@@ -126,17 +117,14 @@ func (r *fakeCanvasMapHandlerMapRepo) RemoveLink(uuid.UUID, uuid.UUID) error {
 // fakeCanvasMapHandlerPositionRepo satisfies the handler's required position repository dependency.
 type fakeCanvasMapHandlerPositionRepo struct{}
 
-// GetAllForMap returns no positions because delete behavior does not read positions.
 func (r *fakeCanvasMapHandlerPositionRepo) GetAllForMap(uuid.UUID) ([]domain.DevicePosition, error) {
 	return nil, errMock
 }
 
-// SaveAllForMap returns an error because delete behavior does not save positions.
 func (r *fakeCanvasMapHandlerPositionRepo) SaveAllForMap(uuid.UUID, []domain.DevicePosition) error {
 	return errMock
 }
 
-// DeleteByDeviceID returns an error because delete behavior does not prune positions by device.
 func (r *fakeCanvasMapHandlerPositionRepo) DeleteByDeviceID(uuid.UUID) error {
 	return errMock
 }

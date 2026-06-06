@@ -1,5 +1,7 @@
 package service
 
+// This file exercises instance backup service internal behavior so refactors preserve the documented contract.
+
 import (
 	"archive/tar"
 	"context"

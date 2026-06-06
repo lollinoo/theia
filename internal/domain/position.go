@@ -1,5 +1,7 @@
 package domain
 
+// This file defines position domain contracts and lifecycle invariants.
+
 import (
 	"time"
 

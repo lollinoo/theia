@@ -1,3 +1,7 @@
+/**
+ * Coordinates runtime update pause state and side effects for consuming components.
+ * Owns cleanup-sensitive lifecycle work so callers receive stable state and actions.
+ */
 import { useEffect, useState } from 'react';
 
 const runtimeUpdatePauseIdleDelayMs = 1500;

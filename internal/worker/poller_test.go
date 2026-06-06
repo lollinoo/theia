@@ -1,5 +1,7 @@
 package worker
 
+// This file exercises poller behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"sync/atomic"

@@ -1,3 +1,7 @@
+/**
+ * Defines runtime adapters behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Device, DeviceStatus, Link } from '../../types/api';
 import {
   type AlertDTO,
@@ -20,6 +24,7 @@ import {
 } from '../deviceVisualState';
 import { buildThroughputLabel, normalizeInterfaceName } from './canvasHelpers';
 
+/** Describes the runtime device model contract used by the topology canvas. */
 export interface RuntimeDeviceModel {
   device: Device;
   monitoringState: DeviceMonitoringState;
@@ -30,6 +35,7 @@ export interface RuntimeDeviceModel {
   runtimeFlags: RuntimeFlag[];
 }
 
+/** Describes the runtime link model contract used by the topology canvas. */
 export interface RuntimeLinkModel {
   link: Link;
   sourceDeviceStatus: DeviceStatus | 'unknown';
@@ -42,6 +48,7 @@ export interface RuntimeLinkModel {
   utilization: number | null;
 }
 
+/** Describes the runtime state contract used by the topology canvas. */
 export interface RuntimeState {
   prometheusDown: boolean;
   firingAlerts: AlertDTO[];
@@ -58,6 +65,7 @@ interface BuildRuntimeStateParams {
   prometheusStatus: PrometheusStatusPayload | null;
 }
 
+/** Count active alerts from runtime state for the topology canvas. */
 export function countActiveAlertsFromRuntimeState(
   runtimeState: RuntimeState,
   alerts: AlertDTO[],
@@ -140,6 +148,7 @@ function metricsUsable(runtimeLink: LinkMetricsDTO | null): boolean {
   return runtimeLink.metrics_status === 'available' || runtimeLink.metrics_status === 'partial';
 }
 
+/** Builds runtime state for the topology canvas. */
 export function buildRuntimeState({
   devices,
   links,
@@ -205,6 +214,7 @@ export function buildRuntimeState({
   };
 }
 
+/** Primary health priority for the topology canvas. */
 export function primaryHealthPriority(value: PrimaryHealth | null): number {
   switch (value) {
     case 'quarantined':

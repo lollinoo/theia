@@ -1,3 +1,7 @@
+/**
+ * Renders device grafana dashboard section controls within the device configuration workflow.
+ * Keeps this section focused on one editable device responsibility.
+ */
 import { useEffect, useRef, useState } from 'react';
 import {
   fetchGrafanaDashboardConfig,
@@ -14,6 +18,7 @@ interface DeviceGrafanaDashboardSectionProps {
   onSettingsChange?: () => void;
 }
 
+/** Renders the DeviceGrafanaDashboardSection component within the device configuration workflow. */
 export function DeviceGrafanaDashboardSection({
   device,
   readOnly = false,

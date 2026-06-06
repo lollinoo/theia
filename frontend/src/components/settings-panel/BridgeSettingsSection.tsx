@@ -1,3 +1,7 @@
+/**
+ * Defines bridge settings section behavior for settings screens.
+ * Keeps validation, saved-state display, and defaults close to the controls that use them.
+ */
 import { SavedIndicator } from './SavedIndicator';
 import { TIMEZONES } from './settingsConstants';
 import { controlClass, fieldLabelClass } from './settingsPanelStyles';
@@ -13,6 +17,7 @@ interface BridgeSettingsSectionProps {
   onBridgePortBlur: () => void;
 }
 
+/** Renders the BridgeSettingsSection component within the settings workflow. */
 export function BridgeSettingsSection({
   timezone,
   bridgePort,

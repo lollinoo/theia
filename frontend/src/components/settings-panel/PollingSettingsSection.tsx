@@ -1,3 +1,7 @@
+/**
+ * Defines polling settings section behavior for settings screens.
+ * Keeps validation, saved-state display, and defaults close to the controls that use them.
+ */
 import { SavedIndicator } from './SavedIndicator';
 import { WorkerSettingsSection } from './WorkerSettingsSection';
 import { POLLING_PRESETS } from './settingsConstants';
@@ -21,6 +25,7 @@ interface PollingSettingsSectionProps {
   onWorkerSettingBlur: (setting: WorkerSetting) => void;
 }
 
+/** Renders the PollingSettingsSection component within the settings workflow. */
 export function PollingSettingsSection({
   pollingValue,
   customPolling,

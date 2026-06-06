@@ -1,3 +1,7 @@
+/**
+ * Defines canvas context menus behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Dispatch, SetStateAction } from 'react';
 
 import type { Device } from '../../types/api';
@@ -21,6 +25,7 @@ interface CanvasContextMenusProps {
   setPanelContent: Dispatch<SetStateAction<CanvasPanelContent | null>>;
 }
 
+/** Renders the CanvasContextMenus component within the topology canvas. */
 export function CanvasContextMenus({
   deviceMenu,
   edgeMenu,

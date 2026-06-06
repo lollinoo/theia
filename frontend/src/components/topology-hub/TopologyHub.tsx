@@ -1,3 +1,7 @@
+/**
+ * Defines topology hub behavior for the topology hub.
+ * Keeps saved-map and area workflows separate from the live canvas surface.
+ */
 import type { Area, CanvasMap, Device, Link } from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
 import { AreaManager } from '../AreaManager';
@@ -6,6 +10,7 @@ import { AreaSummaryCard } from './AreaSummaryCard';
 import { SavedMapsSection } from './SavedMapsSection';
 import { buildTopologyHubModel } from './topologyHubModel';
 
+/** Defines the props contract for TopologyHub within the topology hub. */
 export interface TopologyHubProps {
   devices: Device[];
   areas: Area[];
@@ -56,6 +61,7 @@ function StatBlock({
   );
 }
 
+/** Renders the TopologyHub component within the topology hub. */
 export function TopologyHub({
   devices,
   areas,

@@ -1,5 +1,7 @@
 package scalelab
 
+// This file defines builtin behavior for its package.
+
 import (
 	"fmt"
 	"strings"

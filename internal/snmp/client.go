@@ -1,11 +1,13 @@
 package snmp
 
+// This file defines client SNMP collection and device-detection behavior.
+
 import (
 	"fmt"
 	"time"
 
-	"github.com/lollinoo/theia/internal/domain"
 	"github.com/gosnmp/gosnmp"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 // Client wraps gosnmp.GoSNMP to provide a simplified interface for the application.
@@ -24,11 +26,11 @@ func NewClient(target string, creds domain.SNMPCredentials, timeout time.Duratio
 	}
 
 	gs := &gosnmp.GoSNMP{
-		Target:    target,
-		Port:      161,
-		Timeout:   timeout,
-		Retries:   retries,
-		MaxOids:   gosnmp.MaxOids,
+		Target:  target,
+		Port:    161,
+		Timeout: timeout,
+		Retries: retries,
+		MaxOids: gosnmp.MaxOids,
 	}
 
 	if creds.Version == domain.SNMPVersionV2c {

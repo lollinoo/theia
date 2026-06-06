@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises position repo behavior so refactors preserve the documented contract.
+
 import (
 	"database/sql"
 	"fmt"

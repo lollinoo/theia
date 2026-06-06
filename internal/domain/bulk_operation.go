@@ -1,5 +1,7 @@
 package domain
 
+// This file defines bulk operation domain contracts and lifecycle invariants.
+
 import "context"
 
 // BulkOperationLease represents a distributed lock held for a bounded bulk operation.

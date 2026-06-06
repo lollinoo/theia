@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file exercises add device plan behavior so refactors preserve the documented contract.
+
 import (
 	"errors"
 	"testing"

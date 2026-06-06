@@ -1,5 +1,7 @@
 package domain
 
+// This file defines settings constraints domain contracts and lifecycle invariants.
+
 import (
 	"fmt"
 	"math"

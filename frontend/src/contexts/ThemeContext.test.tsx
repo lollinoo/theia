@@ -1,3 +1,6 @@
+/**
+ * Exercises theme context shared context behavior so refactors preserve the documented contract.
+ */
 import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider, requireThemeContext, useTheme } from './ThemeContext';

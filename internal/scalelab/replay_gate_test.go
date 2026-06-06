@@ -1,5 +1,7 @@
 package scalelab
 
+// This file exercises replay gate behavior so refactors preserve the documented contract.
+
 import "testing"
 
 func TestBurstReplayFixtureKeepsDeterministicLinkCountsAcrossPasses(t *testing.T) {

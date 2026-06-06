@@ -1,5 +1,7 @@
 package main
 
+// This file exercises main behavior so refactors preserve the documented contract.
+
 import (
 	"bytes"
 	"encoding/json"
@@ -40,7 +42,6 @@ func makeRequest(t *testing.T, method, path string, body interface{}, origin, ho
 	return req
 }
 
-// buildHandler constructs the full handler chain for testing.
 // /health is public; /launch is protected by securityCheck.
 func buildHandler(theiaOrigin string, winboxPath string, expectedHost string) http.Handler {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

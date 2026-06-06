@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas perf benchmark topology canvas behavior so refactors preserve the documented contract.
+ */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CANVAS_PERF_BENCHMARK_METRICS, runCanvasPerfBenchmark } from './canvasPerfBenchmark';

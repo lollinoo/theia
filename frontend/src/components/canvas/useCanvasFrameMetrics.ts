@@ -1,3 +1,7 @@
+/**
+ * Coordinates canvas frame metrics state for the topology canvas.
+ * Keeps canvas lifecycle, projected graph state, and cleanup behavior explicit for callers.
+ */
 import { useEffect } from 'react';
 
 import { recordCanvasDiagnosticEvent } from './canvasDiagnostics';
@@ -16,6 +20,7 @@ function supportsLongTaskObserver(): boolean {
   return Array.isArray(supportedEntryTypes) && supportedEntryTypes.includes('longtask');
 }
 
+/** Coordinates canvas frame metrics behavior for the topology canvas. */
 export function useCanvasFrameMetrics(): void {
   useEffect(() => {
     if (

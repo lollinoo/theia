@@ -1,5 +1,7 @@
 package collector
 
+// This file defines essential metrics collection behavior and normalized collector output.
+
 import (
 	"context"
 	"errors"
@@ -15,6 +17,7 @@ import (
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
+// EssentialResult represents essential result data used by the collector.
 type EssentialResult struct {
 	DeviceID         uuid.UUID
 	PollStatus       polling.PollStatus
@@ -30,6 +33,7 @@ type EssentialResult struct {
 	Err              error
 }
 
+// EssentialCollector represents essential collector data used by the collector.
 type EssentialCollector struct {
 	registry     *vendor.Registry
 	newClient    NewSNMPClientFunc
@@ -37,6 +41,7 @@ type EssentialCollector struct {
 	now          func() time.Time
 }
 
+// NewEssentialCollector constructs essential collector state for the collector.
 func NewEssentialCollector(registry *vendor.Registry, newClient NewSNMPClientFunc) *EssentialCollector {
 	return &EssentialCollector{
 		registry:     registry,

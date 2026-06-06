@@ -1,3 +1,7 @@
+/**
+ * Provides frontend API helpers for areas endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import { type Area, parseAreaResponse, parseAreasResponse } from '../types/api';
 import { requestJSON, requestJSONWithBody } from './transport';
 

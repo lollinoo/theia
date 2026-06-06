@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises bulk operation lease repo behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"testing"

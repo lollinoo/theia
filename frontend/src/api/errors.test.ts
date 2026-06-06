@@ -1,3 +1,6 @@
+/**
+ * Exercises errors API boundary behavior so refactors preserve the documented contract.
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type CreateDevicePayload, createDevice } from './client';
 import { ServerError, ValidationError } from './errors';

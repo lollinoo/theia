@@ -1,3 +1,7 @@
+/**
+ * Coordinates runtime state WebSocket lifecycle and runtime update semantics.
+ * Keeps reconnect, resync, and subscription behavior isolated from canvas rendering.
+ */
 import type { ResyncRequiredPayload } from '../../types/metrics';
 
 type RuntimeDeltaMessageType = 'snapshot_delta' | 'runtime_delta';
@@ -13,11 +17,13 @@ interface RuntimeDeltaClientState {
   hasRuntimeSnapshot: boolean;
 }
 
+/** Describes the runtime delta resync diagnostic reason contract used by the React hook lifecycle. */
 export type RuntimeDeltaResyncDiagnosticReason =
   | 'base_version_mismatch'
   | 'invalid_delta_version'
   | 'missing_base_snapshot';
 
+/** Describes the runtime delta decision contract used by the React hook lifecycle. */
 export type RuntimeDeltaDecision =
   | {
       kind: 'apply_unversioned';
@@ -43,6 +49,7 @@ export type RuntimeDeltaDecision =
       diagnosticReason: RuntimeDeltaResyncDiagnosticReason;
     };
 
+/** Should ignore stale runtime snapshot for the React hook lifecycle. */
 export function shouldIgnoreStaleRuntimeSnapshot(
   incomingVersion: number | null,
   currentVersion: number | null,
@@ -56,6 +63,7 @@ export function shouldIgnoreStaleRuntimeSnapshot(
   );
 }
 
+/** Classify runtime delta for the React hook lifecycle. */
 export function classifyRuntimeDelta(
   messageType: RuntimeDeltaMessageType,
   payload: RuntimeDeltaEnvelope,

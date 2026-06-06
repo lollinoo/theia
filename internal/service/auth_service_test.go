@@ -1,5 +1,7 @@
 package service
 
+// This file exercises auth service behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"errors"

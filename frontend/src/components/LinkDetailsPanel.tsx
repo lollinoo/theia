@@ -1,3 +1,7 @@
+/**
+ * Renders link details panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useState } from 'react';
 import { deleteLink, fetchDeviceInterfaces, updateLink } from '../api/client';
 import type { Device, DeviceInterface, InterfaceInfo, Link } from '../types/api';
@@ -94,6 +98,7 @@ function displayIfName(value: string, ifaces: InterfaceLabelInfo[], pending = fa
   return resolveIfName(value, ifaces) || (pending ? 'Pending discovery' : '—');
 }
 
+/** Renders the LinkDetailsPanel component within the UI component boundary. */
 export function LinkDetailsPanel({
   link,
   devices,

@@ -1,5 +1,7 @@
 package service
 
+// This file defines backup service backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"context"
 	"encoding/base64"

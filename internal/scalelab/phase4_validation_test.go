@@ -1,5 +1,7 @@
 package scalelab
 
+// This file exercises phase4 validation behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"net/http"

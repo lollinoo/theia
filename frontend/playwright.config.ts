@@ -1,3 +1,7 @@
+/**
+ * Defines Playwright browser-test configuration for frontend workflows.
+ * Keeps this module's responsibility visible before implementation details.
+ */
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({

@@ -1,3 +1,6 @@
+/**
+ * Exercises device backup settings section settings behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 
 import { deviceBackupNextBackupText, formatDeviceInterval } from './DeviceBackupSettingsSection';

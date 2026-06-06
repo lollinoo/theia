@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file defines area canvas-map service behavior and topology ownership rules.
+
 import (
 	"errors"
 	"strings"
@@ -7,8 +9,13 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// ErrAreaNameRequired stores shared err area name required state for the canvas-map orchestration.
 var ErrAreaNameRequired = errors.New("name is required")
+
+// ErrAreaNameTooLong stores shared err area name too long state for the canvas-map orchestration.
 var ErrAreaNameTooLong = errors.New("area name too long (max 100 characters)")
+
+// ErrInvalidAreaColor stores shared err invalid area color state for the canvas-map orchestration.
 var ErrInvalidAreaColor = errors.New("invalid color format (must be #RRGGBB)")
 
 // AreaMembershipFromInput normalizes canvas-map area input while preserving legacy validation text.

@@ -1,3 +1,7 @@
+/**
+ * Renders watermark UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { ActiveView } from '../App';
 import type { Area } from '../types/api';
 

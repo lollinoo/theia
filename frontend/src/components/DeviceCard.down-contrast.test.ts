@@ -1,3 +1,6 @@
+/**
+ * Exercises device card down contrast component behavior so refactors preserve the documented contract.
+ */
 import { readFileSync } from 'node:fs';
 
 const css = readFileSync('src/index.css', 'utf8');

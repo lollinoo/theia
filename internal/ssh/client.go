@@ -1,5 +1,7 @@
 package ssh
 
+// This file defines client SSH connectivity and host-key trust behavior.
+
 import (
 	"bytes"
 	"context"

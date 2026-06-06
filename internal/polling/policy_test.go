@@ -1,5 +1,7 @@
 package polling
 
+// This file exercises policy behavior so refactors preserve the documented contract.
+
 import (
 	"errors"
 	"testing"

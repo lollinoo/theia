@@ -1,5 +1,7 @@
 package api
 
+// This file defines user settings handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"context"
 	"encoding/json"
@@ -22,11 +24,13 @@ type userSettingsService interface {
 	RecordConnectorDownload(context.Context, *service.AuthenticatedUser, string, string, string) error
 }
 
+// UserSettingsHandler represents user settings handler data used by the HTTP boundary and route policy.
 type UserSettingsHandler struct {
 	service     userSettingsService
 	binariesDir string
 }
 
+// NewUserSettingsHandler constructs user settings handler state for the HTTP boundary and route policy.
 func NewUserSettingsHandler(service userSettingsService, binariesDir string) *UserSettingsHandler {
 	return &UserSettingsHandler{service: service, binariesDir: binariesDir}
 }

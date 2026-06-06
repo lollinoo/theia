@@ -1,12 +1,18 @@
+/**
+ * Defines duplicate map dialog behavior for the topology hub.
+ * Keeps saved-map and area workflows separate from the live canvas surface.
+ */
 import { useEffect, useState } from 'react';
 import type { CanvasMap } from '../../types/api';
 import { MaterialIcon } from '../MaterialIcon';
 
+/** Describes the duplicate map dialog submit contract used by the topology hub. */
 export interface DuplicateMapDialogSubmit {
   name: string;
   sourceMap: CanvasMap;
 }
 
+/** Defines the props contract for DuplicateMapDialog within the topology hub. */
 export interface DuplicateMapDialogProps {
   open: boolean;
   sourceMap: CanvasMap | null;
@@ -14,6 +20,7 @@ export interface DuplicateMapDialogProps {
   onClose: () => void;
 }
 
+/** Renders the DuplicateMapDialog component within the topology hub. */
 export function DuplicateMapDialog({
   open,
   sourceMap,

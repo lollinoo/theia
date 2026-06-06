@@ -1,5 +1,7 @@
 package security
 
+// This file defines bridge secret security policy helpers and trust-boundary handling.
+
 import (
 	"crypto/rand"
 	"crypto/sha256"
@@ -19,6 +21,7 @@ const (
 	bridgeSecretHashPrefix  = "sha256:"
 )
 
+// ErrInvalidBridgeSecret stores shared err invalid bridge secret state for the security boundary.
 var ErrInvalidBridgeSecret = errors.New("invalid bridge secret")
 
 // GenerateBridgeSecret returns a raw secret and a safe display prefix.

@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file defines add device plan canvas-map service behavior and topology ownership rules.
+
 import (
 	"errors"
 
@@ -7,6 +9,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// ErrDeviceAlreadyInCanvasMap stores shared err device already in canvas map state for the canvas-map orchestration.
 var ErrDeviceAlreadyInCanvasMap = errors.New("device already exists in this map")
 
 // DuplicateDeviceAddressError preserves the user-visible duplicate-address message.

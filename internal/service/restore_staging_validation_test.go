@@ -1,5 +1,7 @@
 package service
 
+// This file exercises restore staging validation behavior so refactors preserve the documented contract.
+
 import (
 	"os"
 	"path/filepath"

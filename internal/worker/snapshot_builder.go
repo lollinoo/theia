@@ -1,5 +1,7 @@
 package worker
 
+// This file defines snapshot builder worker behavior, background lifecycle, and runtime state updates.
+
 import (
 	"fmt"
 	"hash/fnv"

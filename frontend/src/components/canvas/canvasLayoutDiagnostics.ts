@@ -1,3 +1,7 @@
+/**
+ * Defines canvas layout diagnostics behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import { recordCanvasDiagnosticEvent, updateCanvasDiagnosticsState } from './canvasDiagnostics';
 import type { CanvasMeasurementTrigger } from './canvasInstrumentation';
 
@@ -17,6 +21,7 @@ function roundDiagnosticDurationMs(durationMs: number): number {
   return Number(Math.max(0, durationMs).toFixed(3));
 }
 
+/** Records canvas layout started for the topology canvas. */
 export function recordCanvasLayoutStarted({
   reason,
   nodeCount,
@@ -42,6 +47,7 @@ export function recordCanvasLayoutStarted({
   });
 }
 
+/** Records canvas layout completed for the topology canvas. */
 export function recordCanvasLayoutCompleted({
   reason,
   nodeCount,

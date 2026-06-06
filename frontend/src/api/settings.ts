@@ -1,3 +1,7 @@
+/**
+ * Provides frontend API helpers for settings endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import {
   parseBridgeConnectorConfig,
   parseHealthVersionPayload,
@@ -5,6 +9,7 @@ import {
 } from './settingsParsers';
 import { requestJSON, requestJSONWithBody } from './transport';
 
+/** Describes the user settings response contract used by the frontend API boundary. */
 export interface UserSettingsResponse {
   user: {
     id: string;
@@ -24,6 +29,7 @@ export interface UserSettingsResponse {
   bridge: BridgeSettingsState;
 }
 
+/** Describes the bridge credential metadata contract used by the frontend API boundary. */
 export interface BridgeCredentialMetadata {
   id: string;
   secret_prefix: string;
@@ -35,17 +41,20 @@ export interface BridgeCredentialMetadata {
   expires_at?: string;
 }
 
+/** Describes the bridge settings state contract used by the frontend API boundary. */
 export interface BridgeSettingsState {
   configured: boolean;
   credential?: BridgeCredentialMetadata;
 }
 
+/** Describes the bridge secret result contract used by the frontend API boundary. */
 export interface BridgeSecretResult {
   credential: BridgeCredentialMetadata;
   secret: string;
   shown_once: boolean;
 }
 
+/** Describes the bridge connector download contract used by the frontend API boundary. */
 export interface BridgeConnectorDownload {
   label: string;
   os: string;
@@ -54,6 +63,7 @@ export interface BridgeConnectorDownload {
   available: boolean;
 }
 
+/** Describes the update user settings payload contract used by the frontend API boundary. */
 export interface UpdateUserSettingsPayload {
   display_name?: string;
   username?: string;
@@ -64,22 +74,26 @@ export interface UpdateUserSettingsPayload {
   bridge_port_override?: number | null;
 }
 
+/** Describes the bridge connector config response contract used by the frontend API boundary. */
 export interface BridgeConnectorConfigResponse {
   config: Record<string, unknown>;
   downloads: BridgeConnectorDownload[];
 }
 
+/** Describes the health version contract used by the frontend API boundary. */
 export interface HealthVersion {
   version: string;
   git_commit: string;
   build_date: string;
 }
 
+/** Describes the setting secret state contract used by the frontend API boundary. */
 export interface SettingSecretState {
   present: boolean;
   redacted: boolean;
 }
 
+/** Describes the settings with metadata contract used by the frontend API boundary. */
 export interface SettingsWithMetadata {
   data: Record<string, string>;
   secrets: Record<string, SettingSecretState>;

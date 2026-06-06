@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines bulk operation lease repo persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"context"
 	"crypto/sha256"
@@ -18,6 +20,7 @@ type BulkOperationLeaseRepo struct {
 	db *sql.DB
 }
 
+// NewBulkOperationLeaseRepo constructs bulk operation lease repo state for the persistence boundary.
 func NewBulkOperationLeaseRepo(db *sql.DB) *BulkOperationLeaseRepo {
 	return &BulkOperationLeaseRepo{db: db}
 }

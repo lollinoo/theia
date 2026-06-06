@@ -1,5 +1,7 @@
 package snmp
 
+// This file defines detector SNMP collection and device-detection behavior.
+
 import (
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/vendor"

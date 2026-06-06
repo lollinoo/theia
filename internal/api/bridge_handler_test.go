@@ -1,5 +1,7 @@
 package api
 
+// This file exercises bridge handler behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"encoding/json"
@@ -15,7 +17,6 @@ import (
 	"github.com/lollinoo/theia/internal/service"
 )
 
-// setupBridgeTest creates a temp dir and optionally populates it with dummy bridge binaries.
 func setupBridgeTest(t *testing.T, createFiles bool) (*BridgeHandler, string) {
 	t.Helper()
 	dir := t.TempDir()

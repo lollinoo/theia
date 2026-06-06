@@ -1,5 +1,7 @@
 package crypto
 
+// This file defines keyring cryptographic storage and key-handling behavior.
+
 import (
 	"crypto/aes"
 	"crypto/cipher"
@@ -34,6 +36,7 @@ var defaultKDFParams = kdfParams{
 	KeyLength:   32,
 }
 
+// Keyring represents keyring data used by the cryptographic storage.
 type Keyring struct {
 	activeID string
 	keys     map[string]string
@@ -66,6 +69,7 @@ type envelopeAAD struct {
 	Nonce     string    `json:"nonce"`
 }
 
+// NewKeyring constructs keyring state for the cryptographic storage.
 func NewKeyring(activeID string, secrets map[string]string) (*Keyring, error) {
 	activeID = strings.TrimSpace(activeID)
 	if activeID == "" {
@@ -94,12 +98,14 @@ func NewKeyring(activeID string, secrets map[string]string) (*Keyring, error) {
 	return &Keyring{activeID: activeID, keys: keys}, nil
 }
 
+// NewKeyringFromLegacyKey constructs keyring from legacy key state for the cryptographic storage.
 func NewKeyringFromLegacyKey(key []byte) (*Keyring, error) {
 	return NewKeyring(LegacyKeyID, map[string]string{
 		LegacyKeyID: base64.StdEncoding.EncodeToString(key),
 	})
 }
 
+// ParseKeyring parses keyring input for the cryptographic storage.
 func ParseKeyring(activeID, keyList string) (*Keyring, error) {
 	activeID = strings.TrimSpace(activeID)
 	keyList = strings.TrimSpace(keyList)
@@ -133,6 +139,7 @@ func ParseKeyring(activeID, keyList string) (*Keyring, error) {
 	return NewKeyring(activeID, secrets)
 }
 
+// LoadKeyringFromEnv loads keyring from env data for the cryptographic storage.
 func LoadKeyringFromEnv() (*Keyring, error) {
 	activeID := os.Getenv("THEIA_ENCRYPTION_KEY_ID")
 	keyList := os.Getenv("THEIA_ENCRYPTION_KEYS")

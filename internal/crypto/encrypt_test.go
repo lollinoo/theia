@@ -1,5 +1,7 @@
 package crypto
 
+// This file exercises encrypt behavior so refactors preserve the documented contract.
+
 import (
 	"bytes"
 	"encoding/base64"

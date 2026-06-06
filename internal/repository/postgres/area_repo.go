@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines area repo persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"database/sql"
 	"fmt"

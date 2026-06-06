@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas settings refresh topology canvas behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it, vi } from 'vitest';
 
 import type { GrafanaDashboardConfig } from '../../types/api';

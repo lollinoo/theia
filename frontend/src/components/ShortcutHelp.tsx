@@ -1,3 +1,7 @@
+/**
+ * Renders shortcut help UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useState } from 'react';
 import { MaterialIcon } from './MaterialIcon';
 
@@ -6,6 +10,7 @@ interface ShortcutHelpProps {
   onClose: () => void;
 }
 
+/** Renders the ShortcutHelp component within the UI component boundary. */
 export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
   const [isMac, setIsMac] = useState(false);
 

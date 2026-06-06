@@ -1,5 +1,7 @@
 package service
 
+// This file defines instance backup archive writer backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"archive/tar"
 	"compress/gzip"

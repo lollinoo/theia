@@ -1,7 +1,12 @@
+/**
+ * Defines area summary card behavior for the topology hub.
+ * Keeps saved-map and area workflows separate from the live canvas surface.
+ */
 import type { Area } from '../../types/api';
 import { MaterialIcon } from '../MaterialIcon';
 import type { TopologyHubAreaModel } from './topologyHubModel';
 
+/** Defines the props contract for AreaSummaryCard within the topology hub. */
 export interface AreaSummaryCardProps {
   areaModel: TopologyHubAreaModel;
   savedMapsEnabled: boolean;
@@ -9,6 +14,7 @@ export interface AreaSummaryCardProps {
   onCreateMapFromArea: (area: Area) => void;
 }
 
+/** Renders the AreaSummaryCard component within the topology hub. */
 export function AreaSummaryCard({
   areaModel,
   savedMapsEnabled,

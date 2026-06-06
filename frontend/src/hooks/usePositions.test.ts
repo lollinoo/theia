@@ -1,3 +1,6 @@
+/**
+ * Exercises use positions hook lifecycle behavior so refactors preserve the documented contract.
+ */
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 

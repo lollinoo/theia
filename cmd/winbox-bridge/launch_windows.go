@@ -2,6 +2,8 @@
 
 package main
 
+// This file defines launch windows behavior for the Winbox bridge command.
+
 import (
 	"fmt"
 	"strings"
@@ -138,7 +140,7 @@ func forceForeground(hwnd uintptr) {
 	myTID, _, _ := procGetCurrentThread.Call()
 
 	if fgTID != 0 && fgTID != myTID {
-		procAttachThreadInput.Call(myTID, fgTID, 1) // attach
+		procAttachThreadInput.Call(myTID, fgTID, 1)       // attach
 		defer procAttachThreadInput.Call(myTID, fgTID, 0) // detach on return
 	}
 

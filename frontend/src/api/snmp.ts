@@ -1,3 +1,7 @@
+/**
+ * Provides frontend API helpers for snmp endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import {
   type SNMPProfile,
   parseSNMPProfileResponse,
@@ -6,6 +10,7 @@ import {
 import { type SNMPPayload } from './device';
 import { requestJSON, requestJSONWithBody } from './transport';
 
+/** Describes the snmpprofile payload contract used by the frontend API boundary. */
 export interface SNMPProfilePayload {
   name: string;
   description?: string;

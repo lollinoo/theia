@@ -1,5 +1,7 @@
 package api
 
+// This file defines health handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"database/sql"
 	"encoding/json"

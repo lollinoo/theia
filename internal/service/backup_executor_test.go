@@ -1,5 +1,7 @@
 package service
 
+// This file exercises backup executor behavior so refactors preserve the documented contract.
+
 import (
 	"bytes"
 	"errors"

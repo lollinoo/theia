@@ -1,5 +1,7 @@
 package api
 
+// This file defines canvas topology handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -28,6 +30,7 @@ type CanvasTopologyHandler struct {
 	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64)
 }
 
+// NewCanvasTopologyHandler constructs canvas topology handler state for the HTTP boundary and route policy.
 func NewCanvasTopologyHandler(
 	deviceService *service.DeviceService,
 	linkRepo domain.LinkRepository,

@@ -1,3 +1,6 @@
+/**
+ * Exercises topology hub model topology hub behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 import type { Area, CanvasMap, Device, Link } from '../../types/api';
 import type { DeviceRuntimeDTO, SnapshotPayload } from '../../types/metrics';

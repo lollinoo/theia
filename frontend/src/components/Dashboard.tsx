@@ -1,3 +1,7 @@
+/**
+ * Renders dashboard UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useMemo, useState } from 'react';
 import { deleteDevice, fetchDeviceCredentialProfiles, fetchOrphanDevices } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
@@ -35,6 +39,7 @@ interface DashboardProps {
   loading?: boolean;
 }
 
+/** Renders the Dashboard component within the UI component boundary. */
 export function Dashboard({
   devices,
   areas,

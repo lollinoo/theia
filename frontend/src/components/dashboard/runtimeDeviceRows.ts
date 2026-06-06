@@ -1,3 +1,7 @@
+/**
+ * Defines runtime device rows behavior for the operations dashboard.
+ * Keeps table, backup, and device-management responsibilities isolated by module.
+ */
 import type { Device } from '../../types/api';
 import { type SnapshotPayload, formatUptime } from '../../types/metrics';
 import {
@@ -7,6 +11,7 @@ import {
 } from '../deviceVisualState';
 import { resolveOsVersion } from './parseOsVersion';
 
+/** Describes the runtime device row contract used by the operations dashboard. */
 export interface RuntimeDeviceRow {
   id: string;
   device: Device;
@@ -46,6 +51,7 @@ function runtimeMonitoringState(device: Device, snapshot: SnapshotPayload | null
     : resolveDeviceMonitoringState(device);
 }
 
+/** Builds runtime device rows for the operations dashboard. */
 export function buildRuntimeDeviceRows({
   devices,
   snapshot,
@@ -91,6 +97,7 @@ export function buildRuntimeDeviceRows({
   });
 }
 
+/** Computes area health summary for the operations dashboard. */
 export function computeAreaHealthSummary(rows: Array<Pick<RuntimeDeviceRow, 'statusState'>>): {
   percentage: number;
   label: string;

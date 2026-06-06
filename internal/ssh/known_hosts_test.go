@@ -1,5 +1,7 @@
 package ssh
 
+// This file exercises known hosts behavior so refactors preserve the documented contract.
+
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"

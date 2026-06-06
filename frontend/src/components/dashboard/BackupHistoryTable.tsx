@@ -1,3 +1,7 @@
+/**
+ * Defines backup history table behavior for the operations dashboard.
+ * Keeps table, backup, and device-management responsibilities isolated by module.
+ */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { backupFileDownloadUrl, deleteBackupJob, fetchBackupJobs } from '../../api/client';
 import { type BackupJob } from '../../types/api';
@@ -14,6 +18,7 @@ const statusColors: Record<string, string> = {
   pending: 'text-on-bg-secondary',
 };
 
+/** Renders the BackupHistoryTable component within the operations dashboard. */
 export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTableProps) {
   const [jobs, setJobs] = useState<BackupJob[]>([]);
   const [loading, setLoading] = useState(true);

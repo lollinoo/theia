@@ -1,5 +1,7 @@
 package collector
 
+// This file defines rates metrics collection behavior and normalized collector output.
+
 import (
 	"math"
 	"time"

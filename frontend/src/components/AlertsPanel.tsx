@@ -1,3 +1,7 @@
+/**
+ * Renders alerts panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { MaterialIcon } from './MaterialIcon';
 import type { AlertsPanelModel } from './panelModels';
 
@@ -83,6 +87,7 @@ function readableAlertTitle(alertName: string) {
     .join(' ');
 }
 
+/** Renders the AlertsPanel component within the UI component boundary. */
 export function AlertsPanel({ model }: AlertsPanelProps) {
   const { activeAlertCount, firingAlerts, resolvedAlerts, prometheusDiagnostics } = model;
   const hasActiveAlerts = activeAlertCount > 0 || firingAlerts.length > 0;

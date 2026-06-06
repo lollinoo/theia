@@ -1,5 +1,7 @@
 package scheduler
 
+// This file exercises map membership source behavior so refactors preserve the documented contract.
+
 import (
 	"errors"
 	"testing"

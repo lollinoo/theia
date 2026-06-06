@@ -1,5 +1,7 @@
 package main
 
+// This file defines runtime paths behavior for Theia server startup.
+
 import (
 	"os"
 	"path/filepath"

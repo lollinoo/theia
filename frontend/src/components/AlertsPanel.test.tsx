@@ -1,3 +1,6 @@
+/**
+ * Exercises alerts panel component behavior so refactors preserve the documented contract.
+ */
 import { render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AlertsPanel } from './AlertsPanel';

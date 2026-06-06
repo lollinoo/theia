@@ -1,3 +1,7 @@
+/**
+ * Defines canvas instrumentation behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 export type CanvasMetricName =
   | 'topology-load'
   | 'layout'
@@ -20,13 +24,16 @@ export type CanvasMetricName =
   | 'frameOverBudget50'
   | 'longTask';
 
+/** Describes the canvas perf scenario name contract used by the topology canvas. */
 export type CanvasPerfScenarioName = 'runtime' | 'small' | 'medium' | 'large' | 'stress';
 
+/** Describes the canvas measurement name contract used by the topology canvas. */
 export type CanvasMeasurementName =
   | 'theia:canvas:topology-load'
   | 'theia:canvas:layout'
   | 'theia:canvas:snapshot-apply';
 
+/** Describes the canvas measurement trigger contract used by the topology canvas. */
 export type CanvasMeasurementTrigger =
   | 'initial_load'
   | 'backend_reconnected'
@@ -34,8 +41,10 @@ export type CanvasMeasurementTrigger =
   | 'snapshot'
   | 'manual_refresh';
 
+/** Describes the canvas recorded metric name contract used by the topology canvas. */
 export type CanvasRecordedMetricName = CanvasMetricName | CanvasMeasurementName;
 
+/** Describes the canvas metric sample contract used by the topology canvas. */
 export interface CanvasMetricSample {
   name: CanvasRecordedMetricName;
   scenario: CanvasPerfScenarioName;
@@ -46,6 +55,7 @@ export interface CanvasMetricSample {
   recordedAt?: string;
 }
 
+/** Describes the canvas measurement record contract used by the topology canvas. */
 export interface CanvasMeasurementRecord extends CanvasMetricSample {
   name: CanvasMeasurementName;
   scenario: 'runtime';
@@ -53,6 +63,7 @@ export interface CanvasMeasurementRecord extends CanvasMetricSample {
   recordedAt: string;
 }
 
+/** Describes the canvas metric aggregate contract used by the topology canvas. */
 export interface CanvasMetricAggregate {
   count: number;
   minMs: number;
@@ -61,6 +72,7 @@ export interface CanvasMetricAggregate {
   p95Ms: number;
 }
 
+/** Describes the canvas metrics export contract used by the topology canvas. */
 export interface CanvasMetricsExport {
   version: 1;
   generatedAt: string;
@@ -78,6 +90,7 @@ const canvasRuntimeMetricAggregates = new Map<
   { count: number; minMs: number; maxMs: number; totalMs: number; durations: number[] }
 >();
 
+/** Describes the canvas render metric measurement contract used by the topology canvas. */
 export interface CanvasRenderMetricMeasurement {
   component: string;
   startedAt: number;
@@ -130,6 +143,7 @@ function roundMetric(value: number): number {
   return Number(value.toFixed(3));
 }
 
+/** Records canvas metric for the topology canvas. */
 export function recordCanvasMetric(sample: CanvasMetricSample): void {
   const nextBuffer = [...metricSamples(), sample];
   if (nextBuffer.length > maxCanvasMetricSamples) {
@@ -138,6 +152,7 @@ export function recordCanvasMetric(sample: CanvasMetricSample): void {
   setMetricSamples(nextBuffer);
 }
 
+/** Aggregates canvas metric samples for the topology canvas. */
 export function aggregateCanvasMetricSamples(
   samples: CanvasMetricSample[],
 ): Record<string, CanvasMetricAggregate> {
@@ -168,6 +183,7 @@ export function aggregateCanvasMetricSamples(
   return aggregates;
 }
 
+/** Exports canvas metrics for the topology canvas. */
 export function exportCanvasMetrics(): CanvasMetricsExport {
   const samples = [...metricSamples()];
 
@@ -182,16 +198,19 @@ export function exportCanvasMetrics(): CanvasMetricsExport {
   };
 }
 
+/** Clears canvas metrics for the topology canvas. */
 export function clearCanvasMetrics(): void {
   setMetricSamples([]);
   canvasRuntimeMetricAggregates.clear();
 }
 
+/** Sets canvas render metrics enabled for the topology canvas. */
 export function setCanvasRenderMetricsEnabled(enabled: boolean): void {
   canvasRenderMetricsEnabled = enabled;
   installCanvasMetricWindowHelpers();
 }
 
+/** Identifies canvas render metrics enabled for the topology canvas. */
 export function isCanvasRenderMetricsEnabled(): boolean {
   return canvasRenderMetricsEnabled;
 }
@@ -243,6 +262,7 @@ function finalizeMeasurement(
   });
 }
 
+/** Measures canvas metric for the topology canvas. */
 export function measureCanvasMetric<T>(
   name: CanvasMetricName,
   scenario: CanvasPerfScenarioName,
@@ -271,6 +291,7 @@ export function measureCanvasMetric<T>(
   }
 }
 
+/** Starts canvas render metric for the topology canvas. */
 export function startCanvasRenderMetric(component: string): CanvasRenderMetricMeasurement | null {
   if (!isCanvasRenderMetricsEnabled()) {
     return null;
@@ -283,6 +304,7 @@ export function startCanvasRenderMetric(component: string): CanvasRenderMetricMe
   return { component, startedAt, markPrefix };
 }
 
+/** Finishes canvas render metric for the topology canvas. */
 export function finishCanvasRenderMetric(
   measurement: CanvasRenderMetricMeasurement | null,
   metadata: Record<string, unknown> = {},
@@ -299,6 +321,7 @@ export function finishCanvasRenderMetric(
   recordCanvasComponentRenderMetric(measurement.component, durationMs, metadata);
 }
 
+/** Records canvas component render metric for the topology canvas. */
 export function recordCanvasComponentRenderMetric(
   component: string,
   durationMs: number,
@@ -361,6 +384,7 @@ function aggregateCanvasRuntimeMetricSamples(): Record<string, CanvasMetricAggre
   return aggregates;
 }
 
+/** Records canvas frame time for the topology canvas. */
 export function recordCanvasFrameTime(
   durationMs: number,
   metadata: Record<string, unknown> = {},
@@ -407,6 +431,7 @@ export function recordCanvasFrameTime(
   }
 }
 
+/** Records canvas long task for the topology canvas. */
 export function recordCanvasLongTask(
   durationMs: number,
   metadata: Record<string, unknown> = {},
@@ -420,6 +445,7 @@ export function recordCanvasLongTask(
   });
 }
 
+/** Measures canvas work for the topology canvas. */
 export function measureCanvasWork<T>(
   name: CanvasMeasurementName,
   trigger: CanvasMeasurementTrigger,
@@ -436,6 +462,7 @@ export function measureCanvasWork<T>(
   }
 }
 
+/** Measures canvas async work for the topology canvas. */
 export async function measureCanvasAsyncWork<T>(
   name: CanvasMeasurementName,
   trigger: CanvasMeasurementTrigger,

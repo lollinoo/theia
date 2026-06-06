@@ -1,7 +1,12 @@
+/**
+ * Defines saved maps section behavior for the topology hub.
+ * Keeps saved-map and area workflows separate from the live canvas surface.
+ */
 import type { CanvasMap } from '../../types/api';
 import { MaterialIcon } from '../MaterialIcon';
 import { MapSummaryCard } from './MapSummaryCard';
 
+/** Defines the props contract for SavedMapsSection within the topology hub. */
 export interface SavedMapsSectionProps {
   maps: CanvasMap[];
   selectedMapId: string | null;
@@ -16,6 +21,7 @@ export interface SavedMapsSectionProps {
   onSetPrimaryMap?: (map: CanvasMap) => void;
 }
 
+/** Renders the SavedMapsSection component within the topology hub. */
 export function SavedMapsSection({
   maps,
   selectedMapId,

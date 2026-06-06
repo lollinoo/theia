@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas map state topology hub behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 
 import type { CanvasMap } from '../../types/api';

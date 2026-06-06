@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file exercises add device workflow behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"errors"
@@ -183,7 +185,6 @@ type fakeAddDeviceMapRepo struct {
 	addedAreas    []domain.CanvasMapAreaMembership
 }
 
-// GetMembership returns configured map membership or injected load error.
 func (r *fakeAddDeviceMapRepo) GetMembership(uuid.UUID) (domain.CanvasMapMembership, error) {
 	*r.order = append(*r.order, "membership")
 	if r.membershipErr != nil {
@@ -219,7 +220,6 @@ type fakeAddDeviceService struct {
 	byIDsErr      error
 }
 
-// GetDevice returns the requested device or injected load error.
 func (s *fakeAddDeviceService) GetDevice(context.Context, uuid.UUID) (*domain.Device, error) {
 	*s.order = append(*s.order, "device")
 	if s.getErr != nil {
@@ -228,7 +228,6 @@ func (s *fakeAddDeviceService) GetDevice(context.Context, uuid.UUID) (*domain.De
 	return s.device, nil
 }
 
-// GetDevicesByIDs returns current member devices for duplicate-address checks.
 func (s *fakeAddDeviceService) GetDevicesByIDs(context.Context, []uuid.UUID) ([]domain.Device, error) {
 	*s.order = append(*s.order, "member_devices")
 	if s.byIDsErr != nil {
@@ -244,7 +243,6 @@ type fakeAddDeviceLinkRepo struct {
 	err   error
 }
 
-// GetByDeviceID returns connected links or injected link load error.
 func (r *fakeAddDeviceLinkRepo) GetByDeviceID(uuid.UUID) ([]domain.Link, error) {
 	*r.order = append(*r.order, "links")
 	if r.err != nil {
@@ -260,7 +258,6 @@ type fakeAddDeviceAreaRepo struct {
 	err   error
 }
 
-// GetByID returns an area snapshot or injected area load error.
 func (r *fakeAddDeviceAreaRepo) GetByID(id uuid.UUID) (*domain.Area, error) {
 	*r.order = append(*r.order, "areas")
 	if r.err != nil {

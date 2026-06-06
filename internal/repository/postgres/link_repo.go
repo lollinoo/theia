@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines link repo persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"database/sql"
 	"fmt"

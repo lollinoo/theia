@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file exercises default position copy behavior so refactors preserve the documented contract.
+
 import (
 	"errors"
 	"testing"
@@ -179,7 +181,6 @@ type fakeDefaultPositionCopyMapRepo struct {
 	membershipErr error
 }
 
-// GetDefault returns the configured default map or injected error.
 func (r *fakeDefaultPositionCopyMapRepo) GetDefault() (domain.CanvasMap, error) {
 	*r.order = append(*r.order, "default")
 	if r.defaultErr != nil {
@@ -188,7 +189,6 @@ func (r *fakeDefaultPositionCopyMapRepo) GetDefault() (domain.CanvasMap, error) 
 	return r.defaultMap, nil
 }
 
-// GetMembership returns the configured target membership or injected error.
 func (r *fakeDefaultPositionCopyMapRepo) GetMembership(uuid.UUID) (domain.CanvasMapMembership, error) {
 	*r.order = append(*r.order, "membership")
 	if r.membershipErr != nil {
@@ -206,7 +206,6 @@ type fakeDefaultPositionCopyPositionRepo struct {
 	saveErr        error
 }
 
-// GetAllForMap returns configured default-map positions or injected load error.
 func (r *fakeDefaultPositionCopyPositionRepo) GetAllForMap(mapID uuid.UUID) ([]domain.DevicePosition, error) {
 	*r.order = append(*r.order, "positions")
 	if r.loadErr != nil {
@@ -232,7 +231,6 @@ type fakeDefaultPositionCopyLegacyRepo struct {
 	err       error
 }
 
-// GetAll returns configured legacy positions or injected fallback error.
 func (r *fakeDefaultPositionCopyLegacyRepo) GetAll() ([]domain.DevicePosition, error) {
 	*r.order = append(*r.order, "legacy")
 	if r.err != nil {

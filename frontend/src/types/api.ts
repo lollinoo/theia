@@ -1,3 +1,7 @@
+/**
+ * Defines api type contracts shared across frontend modules.
+ * Keeps backend-facing domain shapes explicit at compile time.
+ */
 import { type SnapshotPayload, parseSnapshotPayload } from './metrics';
 
 /** DeviceType mirrors backend device categories used for visualization and polling defaults. */

@@ -1,5 +1,7 @@
 package api
 
+// This file defines bridge rate limiter HTTP handler behavior and request/response boundaries.
+
 import (
 	"sync"
 	"time"

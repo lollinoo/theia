@@ -1,5 +1,7 @@
 package service
 
+// This file exercises restore archive extraction behavior so refactors preserve the documented contract.
+
 import (
 	"archive/tar"
 	"strings"

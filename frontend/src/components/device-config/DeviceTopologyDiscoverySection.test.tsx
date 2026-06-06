@@ -1,3 +1,6 @@
+/**
+ * Exercises device topology discovery section device configuration behavior so refactors preserve the documented contract.
+ */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerError, ValidationError } from '../../api/errors';

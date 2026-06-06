@@ -1,3 +1,7 @@
+/**
+ * Renders navigation pill UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ActiveView } from '../App';
 import { fetchHealthVersion } from '../api/client';

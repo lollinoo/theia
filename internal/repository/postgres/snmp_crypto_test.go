@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises snmp crypto behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/base64"
 	"strings"

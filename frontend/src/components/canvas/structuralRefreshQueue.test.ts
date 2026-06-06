@@ -1,3 +1,6 @@
+/**
+ * Exercises structural refresh queue topology canvas behavior so refactors preserve the documented contract.
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createStructuralRefreshQueue } from './structuralRefreshQueue';

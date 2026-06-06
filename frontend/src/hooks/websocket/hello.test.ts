@@ -1,3 +1,6 @@
+/**
+ * Exercises hello hook lifecycle behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 import { buildCanvasHelloPayload } from './hello';
 

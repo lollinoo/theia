@@ -1,5 +1,7 @@
 package api
 
+// This file exercises router auth prefix behavior so refactors preserve the documented contract.
+
 import (
 	"net/http"
 	"testing"

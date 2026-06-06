@@ -1,5 +1,7 @@
 package polling
 
+// This file defines policy polling policy and freshness-budget behavior.
+
 import (
 	"math"
 	"strconv"
@@ -9,10 +11,12 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// SettingsGetter defines the settings getter contract for the package.
 type SettingsGetter interface {
 	Get(string) (string, error)
 }
 
+// WarningCode represents warning code data used by the package.
 type WarningCode string
 
 const (
@@ -21,11 +25,13 @@ const (
 	WarningBudgetExceedsGlobal        WarningCode = "budget_exceeds_global"
 )
 
+// CapacityWarning represents capacity warning data used by the package.
 type CapacityWarning struct {
 	Code    WarningCode `json:"code"`
 	Message string      `json:"message"`
 }
 
+// Policy represents policy data used by the package.
 type Policy struct {
 	EssentialWorkers      int
 	MaxWorkersPerSite     int

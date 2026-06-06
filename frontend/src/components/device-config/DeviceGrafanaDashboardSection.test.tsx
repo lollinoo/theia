@@ -1,3 +1,6 @@
+/**
+ * Exercises device Grafana dashboard section device configuration behavior so refactors preserve the documented contract.
+ */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Device, GrafanaDashboardConfig } from '../../types/api';

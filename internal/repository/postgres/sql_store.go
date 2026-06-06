@@ -1,15 +1,19 @@
 package postgres
 
+// This file defines sql store persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"database/sql"
 	"strconv"
 	"strings"
 )
 
+// DB represents db data used by the persistence boundary.
 type DB struct {
 	raw *sql.DB
 }
 
+// Tx represents tx data used by the persistence boundary.
 type Tx struct {
 	raw *sql.Tx
 }

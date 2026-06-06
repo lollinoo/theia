@@ -1,5 +1,7 @@
 package api
 
+// This file defines backup handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"archive/zip"
 	"context"
@@ -39,6 +41,7 @@ type BackupHandler struct {
 	bulkDownloadLeaseRepo domain.BulkOperationLeaseRepository
 }
 
+// BackupHandlerOption represents backup handler option data used by the HTTP boundary and route policy.
 type BackupHandlerOption func(*BackupHandler)
 
 func WithBackupAuditLogs(auditLogs domain.AuditLogRepository) BackupHandlerOption {

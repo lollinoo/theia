@@ -1,3 +1,6 @@
+/**
+ * Exercises use device config editor device configuration behavior so refactors preserve the documented contract.
+ */
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { FormEvent } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

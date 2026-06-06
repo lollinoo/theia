@@ -1,3 +1,7 @@
+/**
+ * Defines canvas panels behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { ReactFlowInstance } from '@xyflow/react';
 
 import { fetchDevices } from '../../api/client';
@@ -46,6 +50,7 @@ interface CanvasPanelsProps {
   onWinBoxAvailabilityChange?: (deviceId: string, hasWinboxProfile: boolean) => void;
 }
 
+/** Renders the CanvasPanels component within the topology canvas. */
 export function CanvasPanels({
   panelContent,
   setPanelContent,

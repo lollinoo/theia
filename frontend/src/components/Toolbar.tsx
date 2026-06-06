@@ -1,3 +1,7 @@
+/**
+ * Renders toolbar UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useState } from 'react';
 import { MaterialIcon } from './MaterialIcon';
 
@@ -11,6 +15,7 @@ interface ToolbarProps {
   alertCount?: number;
 }
 
+/** Renders the Toolbar component within the UI component boundary. */
 export function Toolbar({
   onSearch,
   onAddDevice,

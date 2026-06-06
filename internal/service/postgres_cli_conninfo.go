@@ -1,5 +1,7 @@
 package service
 
+// This file defines postgres cli conninfo service behavior and domain orchestration rules.
+
 import (
 	"fmt"
 	"net"

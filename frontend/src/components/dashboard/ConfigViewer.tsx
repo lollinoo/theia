@@ -1,3 +1,7 @@
+/**
+ * Defines config viewer behavior for the operations dashboard.
+ * Keeps table, backup, and device-management responsibilities isolated by module.
+ */
 import { useEffect, useState } from 'react';
 import {
   backupFileDownloadUrl,
@@ -24,6 +28,7 @@ type LoadedBackupContent = {
   value: BackupFileContent;
 };
 
+/** Renders the ConfigViewer component within the operations dashboard. */
 export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   const [job, setJob] = useState<BackupJob | null>(null);
   const [loading, setLoading] = useState(true);

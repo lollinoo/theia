@@ -1,5 +1,7 @@
 package service
 
+// This file exercises device discovery support behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 

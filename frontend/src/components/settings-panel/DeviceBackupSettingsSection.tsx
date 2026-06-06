@@ -1,6 +1,11 @@
+/**
+ * Defines device backup settings section behavior for settings screens.
+ * Keeps validation, saved-state display, and defaults close to the controls that use them.
+ */
 import { MaterialIcon } from '../MaterialIcon';
 import { compactControlClass, fieldLabelClass } from './settingsPanelStyles';
 
+/** Formats device interval for the settings workflow. */
 export function formatDeviceInterval(hours: number): string {
   if (hours >= 168) return '7 days';
   if (hours >= 48) return '48 hours';
@@ -8,6 +13,7 @@ export function formatDeviceInterval(hours: number): string {
   return hours + ' hours';
 }
 
+/** Device backup next backup text for the settings workflow. */
 export function deviceBackupNextBackupText(intervalValue: string): string {
   const intervalHours = parseInt(intervalValue, 10);
   if (!intervalHours || intervalHours <= 0) return 'Scheduling disabled';
@@ -26,6 +32,7 @@ interface DeviceBackupSettingsSectionProps {
   onDeviceRetentionChange: (value: string) => void;
 }
 
+/** Renders the DeviceBackupSettingsSection component within the settings workflow. */
 export function DeviceBackupSettingsSection({
   open,
   deviceBackupInterval,

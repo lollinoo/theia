@@ -1,7 +1,12 @@
+/**
+ * Provides frontend API helpers for grafana endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import { type GrafanaDashboardConfig, parseGrafanaDashboardConfigResponse } from '../types/api';
 import { parsePrometheusHealthPayload } from './grafanaParsers';
 import { requestJSON, requestJSONWithBody } from './transport';
 
+/** Describes the grafana dashboard profile payload contract used by the frontend API boundary. */
 export interface GrafanaDashboardProfilePayload {
   name: string;
   url_template: string;
@@ -9,11 +14,13 @@ export interface GrafanaDashboardProfilePayload {
   is_default?: boolean;
 }
 
+/** Describes the grafana device override payload contract used by the frontend API boundary. */
 export interface GrafanaDeviceOverridePayload {
   profile_id: string | null;
   custom_url: string;
 }
 
+/** Describes the prometheus health result contract used by the frontend API boundary. */
 export interface PrometheusHealthResult {
   enabled?: boolean;
   available: boolean;

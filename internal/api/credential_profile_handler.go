@@ -1,5 +1,7 @@
 package api
 
+// This file defines credential profile handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"encoding/json"
 	"net/http"

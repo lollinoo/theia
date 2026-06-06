@@ -1,5 +1,7 @@
 package ws
 
+// This file exercises handler behavior so refactors preserve the documented contract.
+
 import (
 	"bytes"
 	"encoding/json"

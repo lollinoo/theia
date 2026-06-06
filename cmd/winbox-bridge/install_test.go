@@ -1,5 +1,7 @@
 package main
 
+// This file exercises install behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"os"

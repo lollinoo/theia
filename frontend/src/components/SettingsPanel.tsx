@@ -1,3 +1,7 @@
+/**
+ * Renders settings panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useRef, useState } from 'react';
 import {
   type HealthVersion,

@@ -1,5 +1,7 @@
 package service
 
+// This file exercises bulk backup limits behavior so refactors preserve the documented contract.
+
 import (
 	"errors"
 	"testing"

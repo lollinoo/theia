@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas helpers topology canvas behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 
 import type { Link } from '../../types/api';

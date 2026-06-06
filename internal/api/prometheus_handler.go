@@ -1,5 +1,7 @@
 package api
 
+// This file defines prometheus handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"context"
 	"encoding/json"

@@ -1,5 +1,7 @@
 package ws
 
+// This file defines handler WebSocket protocol behavior, subscriptions, and runtime update delivery.
+
 import (
 	"fmt"
 	"log"

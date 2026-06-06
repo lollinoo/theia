@@ -1,3 +1,6 @@
+/**
+ * Exercises bulk edit panel component behavior so refactors preserve the documented contract.
+ */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {

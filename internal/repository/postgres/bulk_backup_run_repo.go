@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines bulk backup run repo persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"database/sql"
 	"fmt"
@@ -241,6 +243,7 @@ func (r *BulkBackupRunRepo) UpdateRun(run *domain.BulkBackupRun) error {
 	return nil
 }
 
+// ListRunItems lists run items data from the persistence boundary.
 func (r *BulkBackupRunRepo) ListRunItems(runID uuid.UUID) ([]domain.BulkBackupRunItem, error) {
 	rows, err := r.db.Query(
 		`SELECT id, run_id, device_id, device_name, status, reason, backup_job_id,
@@ -264,6 +267,7 @@ func (r *BulkBackupRunRepo) ListRunItems(runID uuid.UUID) ([]domain.BulkBackupRu
 	return items, rows.Err()
 }
 
+// UpdateRunItem updates run item data through the persistence boundary.
 func (r *BulkBackupRunRepo) UpdateRunItem(item *domain.BulkBackupRunItem) error {
 	if item.UpdatedAt.IsZero() {
 		item.UpdatedAt = time.Now().UTC()

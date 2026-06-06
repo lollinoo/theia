@@ -1,12 +1,18 @@
+/**
+ * Defines rename map dialog behavior for the topology hub.
+ * Keeps saved-map and area workflows separate from the live canvas surface.
+ */
 import { useEffect, useState } from 'react';
 import type { CanvasMap } from '../../types/api';
 import { MaterialIcon } from '../MaterialIcon';
 
+/** Describes the rename map dialog submit contract used by the topology hub. */
 export interface RenameMapDialogSubmit {
   name: string;
   map: CanvasMap;
 }
 
+/** Defines the props contract for RenameMapDialog within the topology hub. */
 export interface RenameMapDialogProps {
   open: boolean;
   map: CanvasMap | null;
@@ -15,6 +21,7 @@ export interface RenameMapDialogProps {
   onClose: () => void;
 }
 
+/** Renders the RenameMapDialog component within the topology hub. */
 export function RenameMapDialog({
   open,
   map,

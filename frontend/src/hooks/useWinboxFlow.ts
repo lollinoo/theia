@@ -1,3 +1,7 @@
+/**
+ * Coordinates winbox flow state and side effects for consuming components.
+ * Owns cleanup-sensitive lifecycle work so callers receive stable state and actions.
+ */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { createBridgeLaunchRequest, fetchUserSettings } from '../api/client';
@@ -5,6 +9,7 @@ import { fetchBridgeWithTimeout, getBridgeLaunchErrorMessage } from '../utils/br
 import { useBridgeHealth } from './useBridgeHealth';
 import { useDeviceWinboxAvailability } from './useDeviceWinboxAvailability';
 
+/** Coordinates winbox flow behavior for the React hook lifecycle. */
 export function useWinboxFlow(): {
   bridgeChecked: boolean;
   bridgeRunning: boolean;

@@ -1,5 +1,7 @@
 package main
 
+// This file defines runtime bootstrap behavior for Theia server startup.
+
 import (
 	"context"
 	"crypto/sha256"

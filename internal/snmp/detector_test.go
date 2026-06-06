@@ -1,5 +1,7 @@
 package snmp
 
+// This file exercises detector behavior so refactors preserve the documented contract.
+
 import (
 	"os"
 	"path/filepath"
@@ -9,7 +11,6 @@ import (
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
-// testRegistry creates a vendor registry with default + selected vendor profiles for testing.
 func testRegistry(t *testing.T) *vendor.Registry {
 	t.Helper()
 	dir := t.TempDir()

@@ -1,3 +1,6 @@
+/**
+ * Exercises use canvas diagnostics toggle topology canvas behavior so refactors preserve the documented contract.
+ */
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 

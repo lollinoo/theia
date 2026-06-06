@@ -1,3 +1,7 @@
+/**
+ * Normalizes backend instance backup payloads into frontend-safe shapes.
+ * Keeps API boundary validation close to the transport helpers that consume it.
+ */
 import {
   type InstanceBackup,
   type InstanceBackupProgress,
@@ -72,6 +76,7 @@ const restoreStatusPhases: RestoreStatusPhase[] = [
   'failed_operator_action_required',
 ];
 
+/** Parses restore status for the frontend API boundary. */
 export function parseRestoreStatus(data: unknown): RestoreStatus | null {
   if (!data || typeof data !== 'object') return null;
   const record = data as Record<string, unknown>;

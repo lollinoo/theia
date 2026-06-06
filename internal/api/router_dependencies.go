@@ -1,5 +1,7 @@
 package api
 
+// This file defines router dependencies API routing, middleware, and permission policy behavior.
+
 import (
 	"database/sql"
 

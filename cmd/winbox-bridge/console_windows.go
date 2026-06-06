@@ -2,6 +2,8 @@
 
 package main
 
+// This file defines console windows behavior for the Winbox bridge command.
+
 import "syscall"
 
 // freeConsole detaches the process from its console window on Windows so that

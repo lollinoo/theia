@@ -1,5 +1,10 @@
+/**
+ * Defines manual edge migration behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Link } from '../../types/api';
 
+/** Describes the legacy manual edge contract used by the topology canvas. */
 export interface LegacyManualEdge {
   id?: string;
   source: string;
@@ -7,9 +12,12 @@ export interface LegacyManualEdge {
   migrationKey: string;
 }
 
+/** Describes the manual edge migration status contract used by the topology canvas. */
 export type ManualEdgeMigrationStatus = 'idle' | 'pending' | 'retried' | 'applied' | 'failed';
+/** Defines manual edge migration max attempts constants and helper contracts for the topology canvas. */
 export const manualEdgeMigrationMaxAttempts = 3;
 
+/** Describes the manual edge migration state contract used by the topology canvas. */
 export interface ManualEdgeMigrationState {
   schema_version: 1;
   status: ManualEdgeMigrationStatus;
@@ -31,6 +39,7 @@ interface StoredManualEdge {
   target: string;
 }
 
+/** Describes the migrate stored manual edges options contract used by the topology canvas. */
 export interface MigrateStoredManualEdgesOptions {
   storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
   pendingStorageKey: string;
@@ -46,6 +55,7 @@ export interface MigrateStoredManualEdgesOptions {
   now?: () => string;
 }
 
+/** Describes the manual edge migration result contract used by the topology canvas. */
 export interface ManualEdgeMigrationResult {
   state: ManualEdgeMigrationState;
   attemptedCount: number;

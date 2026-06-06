@@ -1,5 +1,7 @@
 package service
 
+// This file exercises backup service behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	crand "crypto/rand"

@@ -1,5 +1,10 @@
+/**
+ * Coordinates url WebSocket lifecycle and runtime update semantics.
+ * Keeps reconnect, resync, and subscription behavior isolated from canvas rendering.
+ */
 import type { CanvasHelloPayload } from './hello';
 
+/** Builds web socket url for the React hook lifecycle. */
 export function buildWebSocketURL(url: string): string {
   if (/^wss?:\/\//i.test(url)) {
     return url;
@@ -18,6 +23,7 @@ export function buildWebSocketURL(url: string): string {
   return `${protocol}//${window.location.host}${normalizedPath}`;
 }
 
+/** Append hello query params for the React hook lifecycle. */
 export function appendHelloQueryParams(url: string, payload: CanvasHelloPayload): string {
   const parsed = new URL(url);
   parsed.searchParams.set('canvas_schema_version', String(payload.canvas_schema_version));

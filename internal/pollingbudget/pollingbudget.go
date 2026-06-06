@@ -1,5 +1,7 @@
 package pollingbudget
 
+// This file defines pollingbudget polling policy and freshness-budget behavior.
+
 import (
 	"strconv"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 const defaultWorkerPoolSize = 5
 
+// Getter defines the getter contract for the package.
 type Getter interface {
 	Get(string) (string, error)
 }

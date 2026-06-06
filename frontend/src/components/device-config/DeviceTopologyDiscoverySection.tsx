@@ -1,3 +1,7 @@
+/**
+ * Renders device topology discovery section controls within the device configuration workflow.
+ * Keeps this section focused on one editable device responsibility.
+ */
 import { useEffect, useRef, useState } from 'react';
 import { fetchSettings, runTopologyDiscovery } from '../../api/client';
 import { ServerError, ValidationError } from '../../api/errors';
@@ -23,6 +27,7 @@ interface DeviceTopologyDiscoverySectionProps {
   onTopologyDiscoveryModeChange: (mode: TopologyDiscoveryMode) => void;
 }
 
+/** Renders the DeviceTopologyDiscoverySection component within the device configuration workflow. */
 export function DeviceTopologyDiscoverySection({
   device,
   topologyDiscoveryMode,

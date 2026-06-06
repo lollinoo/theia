@@ -1,5 +1,7 @@
 package vendor
 
+// This file exercises registry behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"os"

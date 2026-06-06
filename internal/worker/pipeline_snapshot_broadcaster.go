@@ -1,5 +1,7 @@
 package worker
 
+// This file defines pipeline snapshot broadcaster worker behavior, background lifecycle, and runtime state updates.
+
 import (
 	"context"
 	"fmt"

@@ -1,5 +1,7 @@
 package api
 
+// This file defines session handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"context"
 	"encoding/json"

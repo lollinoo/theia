@@ -1,5 +1,7 @@
 package worker
 
+// This file exercises settings behavior so refactors preserve the documented contract.
+
 import (
 	"fmt"
 	"testing"

@@ -1,5 +1,7 @@
 package collector
 
+// This file exercises essential behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"encoding/json"
