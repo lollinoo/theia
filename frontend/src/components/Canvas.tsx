@@ -20,7 +20,6 @@ import { useWinboxFlow } from '../hooks/useWinboxFlow';
 import type { Area, CanvasMap, Device, Link } from '../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
 import { resolveGrafanaDashboardUrl } from '../utils/grafanaDashboard';
-import { ContextMenu } from './ContextMenu';
 import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNode } from './DeviceCard';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
@@ -30,18 +29,17 @@ import { ShortcutHelp } from './ShortcutHelp';
 import { SidePanel } from './SidePanel';
 import { Toolbar } from './Toolbar';
 import ZoomControls from './ZoomControls';
+import { CanvasContextMenus } from './canvas/CanvasContextMenus';
 import { CanvasDiagnosticsPanel } from './canvas/CanvasDiagnosticsPanel';
+import { CanvasErrorState } from './canvas/CanvasErrorState';
+import { CanvasLoadingState } from './canvas/CanvasLoadingState';
 import { CanvasOverlays } from './canvas/CanvasOverlays';
 import { CanvasPanels } from './canvas/CanvasPanels';
 import {
   recordCanvasDiagnosticEvent,
   updateCanvasDiagnosticsState,
 } from './canvas/canvasDiagnostics';
-import {
-  buildDeviceContextMenuItems,
-  isGhostDeviceNode,
-  topologyFitViewPadding,
-} from './canvas/canvasHelpers';
+import { isGhostDeviceNode, topologyFitViewPadding } from './canvas/canvasHelpers';
 import {
   clearSelectedGraphItems,
   patchEditMode,
@@ -989,38 +987,17 @@ export default function Canvas({
   ]);
 
   if (loading) {
-    return (
-      <div className="topology-backdrop flex h-full items-center justify-center bg-bg">
-        <div className="rounded-[28px] border border-outline bg-surface/88 px-6 py-5 text-center shadow-canvas backdrop-blur-sm">
-          <div className="mx-auto mb-3 h-10 w-10 animate-spin rounded-full border-2 border-outline-subtle border-t-primary" />
-          <p className="text-sm uppercase tracking-[0.28em] text-on-bg-secondary">
-            Loading topology...
-          </p>
-        </div>
-      </div>
-    );
+    return <CanvasLoadingState />;
   }
 
   if (error) {
     return (
-      <div className="topology-backdrop flex h-full items-center justify-center bg-bg px-6">
-        <div className="max-w-md rounded-[28px] border border-outline bg-surface/88 px-6 py-6 text-center shadow-canvas backdrop-blur-sm">
-          <p className="text-sm uppercase tracking-[0.28em] text-status-down">Topology Error</p>
-          <h2 className="mt-3 text-2xl font-semibold tracking-tight text-on-bg">
-            Canvas data could not load
-          </h2>
-          <p className="mt-3 text-sm text-on-bg-secondary">{error}</p>
-          <button
-            type="button"
-            onClick={() => {
-              void loadTopology();
-            }}
-            className="mt-6 rounded-full border border-primary/40 bg-primary/10 px-5 py-2 text-sm font-medium text-primary transition-colors duration-150 hover:bg-primary/20"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
+      <CanvasErrorState
+        error={error}
+        onRetry={() => {
+          void loadTopology();
+        }}
+      />
     );
   }
 
@@ -1085,99 +1062,20 @@ export default function Canvas({
           alertCount={runtimeSummary.alertCount}
         />
       )}
-      {deviceMenu &&
-        (() => {
-          const d = devices.find((dev) => dev.id === deviceMenu.deviceId);
-          const gUrl = grafanaUrl(d);
-          const isVirtual = d?.device_type === 'virtual';
-          const hasWinboxProfile = deviceWinboxState[deviceMenu.deviceId];
-          const winboxDisabled = hasWinboxProfile === false;
-          const winboxTitle =
-            hasWinboxProfile === false
-              ? 'No WinBox profile designated'
-              : bridgeChecked && !bridgeRunning
-                ? 'WinBox bridge appears unavailable - click to try launch anyway'
-                : undefined;
-          const items = buildDeviceContextMenuItems({
-            isVirtual,
-            grafanaEnabled: Boolean(gUrl),
-            winboxDisabled,
-            winboxTitle,
-            onOpenWinbox: () => {
-              if (d) void launchWinbox(d.id);
-              setDeviceMenu(null);
-            },
-            onOpenGrafana: () => {
-              if (gUrl) window.open(gUrl, '_blank');
-              setDeviceMenu(null);
-            },
-            onConfigure: () => {
-              if (d)
-                setPanelContent({
-                  type: 'deviceConfig',
-                  data: { deviceId: d.id },
-                });
-              setDeviceMenu(null);
-            },
-          });
-          return (
-            <ContextMenu
-              position={{ x: deviceMenu.x, y: deviceMenu.y }}
-              onClose={() => setDeviceMenu(null)}
-              items={items}
-            />
-          );
-        })()}
-
-      {edgeMenu &&
-        (() => {
-          const me = edges.find((e) => e.id === edgeMenu.edgeID);
-          const ml = me?.data?.link;
-          const dMap = new Map(devices.map((d) => [d.id, d]));
-          const sd = ml ? dMap.get(ml.source_device_id) : undefined;
-          const gUrl = grafanaUrl(sd);
-          return (
-            <ContextMenu
-              position={{ x: edgeMenu.x, y: edgeMenu.y }}
-              onClose={() => setEdgeMenu(null)}
-              items={[
-                {
-                  label: 'Per-Interface Stats',
-                  icon: 'devices',
-                  onClick: () => {
-                    if (ml)
-                      setPanelContent({
-                        type: 'interfaceStats',
-                        data: { linkId: ml.id },
-                      });
-                    setEdgeMenu(null);
-                  },
-                },
-                {
-                  label: gUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)',
-                  icon: 'hub',
-                  onClick: () => {
-                    if (gUrl) window.open(gUrl, '_blank');
-                    setEdgeMenu(null);
-                  },
-                },
-                {
-                  label: 'View Details',
-                  icon: 'search',
-                  onClick: () => {
-                    const el = edges.find((e) => e.id === edgeMenu.edgeID)?.data?.link;
-                    if (el)
-                      setPanelContent({
-                        type: 'link-details',
-                        data: { link: el },
-                      });
-                    setEdgeMenu(null);
-                  },
-                },
-              ]}
-            />
-          );
-        })()}
+      <CanvasContextMenus
+        deviceMenu={deviceMenu}
+        edgeMenu={edgeMenu}
+        devices={devices}
+        edges={edges}
+        bridgeChecked={bridgeChecked}
+        bridgeRunning={bridgeRunning}
+        deviceWinboxState={deviceWinboxState}
+        launchWinbox={launchWinbox}
+        grafanaUrl={grafanaUrl}
+        setDeviceMenu={setDeviceMenu}
+        setEdgeMenu={setEdgeMenu}
+        setPanelContent={setPanelContent}
+      />
 
       <SidePanel
         open={!!panelContent}

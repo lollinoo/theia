@@ -6,21 +6,21 @@ import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { topologyFitViewPadding } from './canvasHelpers';
 
+export type CanvasDeviceMenu = { deviceId: string; x: number; y: number };
+export type CanvasEdgeMenu = { edgeID: string; x: number; y: number };
+export type CanvasPanelContent = { type: string; data?: unknown };
+
 interface UseCanvasMenusParams {
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
 }
 
 interface UseCanvasMenusReturn {
-  deviceMenu: { deviceId: string; x: number; y: number } | null;
-  setDeviceMenu: React.Dispatch<
-    React.SetStateAction<{ deviceId: string; x: number; y: number } | null>
-  >;
-  edgeMenu: { edgeID: string; x: number; y: number } | null;
-  setEdgeMenu: React.Dispatch<
-    React.SetStateAction<{ edgeID: string; x: number; y: number } | null>
-  >;
-  panelContent: { type: string; data?: unknown } | null;
-  setPanelContent: React.Dispatch<React.SetStateAction<{ type: string; data?: unknown } | null>>;
+  deviceMenu: CanvasDeviceMenu | null;
+  setDeviceMenu: React.Dispatch<React.SetStateAction<CanvasDeviceMenu | null>>;
+  edgeMenu: CanvasEdgeMenu | null;
+  setEdgeMenu: React.Dispatch<React.SetStateAction<CanvasEdgeMenu | null>>;
+  panelContent: CanvasPanelContent | null;
+  setPanelContent: React.Dispatch<React.SetStateAction<CanvasPanelContent | null>>;
   showShortcuts: boolean;
   setShowShortcuts: React.Dispatch<React.SetStateAction<boolean>>;
   showSearch: boolean;
@@ -35,11 +35,9 @@ interface UseCanvasMenusReturn {
 }
 
 export function useCanvasMenus({ reactFlow }: UseCanvasMenusParams): UseCanvasMenusReturn {
-  const [deviceMenu, setDeviceMenu] = useState<{ deviceId: string; x: number; y: number } | null>(
-    null,
-  );
-  const [edgeMenu, setEdgeMenu] = useState<{ edgeID: string; x: number; y: number } | null>(null);
-  const [panelContent, setPanelContent] = useState<{ type: string; data?: unknown } | null>(null);
+  const [deviceMenu, setDeviceMenu] = useState<CanvasDeviceMenu | null>(null);
+  const [edgeMenu, setEdgeMenu] = useState<CanvasEdgeMenu | null>(null);
+  const [panelContent, setPanelContent] = useState<CanvasPanelContent | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [editMode, setEditMode] = useState(false);
