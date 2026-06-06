@@ -267,7 +267,9 @@ Production pulls the `production` image channel by default:
 IMAGE_TAG=production
 ```
 
-The CI workflow publishes branch and SHA image tags for every branch push. It only publishes the `production` channel from the `production` branch or from a manual workflow dispatch with `target_environment=production`.
+The CI workflow publishes branch, branch-SHA, and plain SHA image tags for every branch push. It only publishes the `production` channel from the `production` branch or from a manual workflow dispatch with `target_environment=production`.
+
+Publishing a stable GitHub Release does not rebuild backend or frontend images. Instead, CI copies the existing `sha-<shortsha>` backend and frontend image tags for the released commit to the release tag, for example `v1.6.0`. This keeps the Docker tag tied to the released source snapshot without creating a new image build. If the released commit never completed a branch image build, the release retag job fails because there is no matching `sha-<shortsha>` image to copy.
 
 Required operator inputs for the standard bundled PostgreSQL stack:
 
