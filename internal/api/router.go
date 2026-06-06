@@ -89,6 +89,27 @@ func NewRouter(
 			opt(&routerOpts)
 		}
 	}
+	deps := routerDependencies{
+		db:                    db,
+		deviceService:         deviceService,
+		linkRepo:              linkRepo,
+		positionRepo:          positionRepo,
+		canvasMapRepo:         canvasMapRepo,
+		canvasMapPositionRepo: canvasMapPositionRepo,
+		settingsRepo:          settingsRepo,
+		snmpProfileRepo:       snmpProfileRepo,
+		credentialProfileRepo: credentialProfileRepo,
+		areaRepo:              areaRepo,
+		backupService:         backupService,
+		vendorRegistry:        vendorRegistry,
+		vendorConfigRepo:      vendorConfigRepo,
+		poller:                poller,
+		instanceBackupService: instanceBackupService,
+		restoreRestarter:      restoreRestarter,
+		bridgeBinariesDir:     bridgeBinariesDir,
+		runtimeSnapshotFunc:   runtimeSnapshotFunc,
+		wsHandler:             wsHandler,
+	}
 
 	mux := http.NewServeMux()
 	authHandler := NewAuthHandler(routerOpts.auth)
@@ -96,56 +117,56 @@ func NewRouter(
 	adminHandler := NewAdminHandler(adminAuth)
 
 	deviceHandler := NewDeviceHandler(
-		deviceService,
-		credentialProfileRepo,
-		vendorRegistry,
-		WithPrimaryCanvasMapMembership(canvasMapRepo, areaRepo, linkRepo),
+		deps.deviceService,
+		deps.credentialProfileRepo,
+		deps.vendorRegistry,
+		WithPrimaryCanvasMapMembership(deps.canvasMapRepo, deps.areaRepo, deps.linkRepo),
 	)
-	linkHandler := NewLinkHandler(linkRepo, deviceService)
-	positionHandler := NewPositionHandler(positionRepo, canvasMapRepo, canvasMapPositionRepo)
+	linkHandler := NewLinkHandler(deps.linkRepo, deps.deviceService)
+	positionHandler := NewPositionHandler(deps.positionRepo, deps.canvasMapRepo, deps.canvasMapPositionRepo)
 	canvasTopologyHandler := NewCanvasTopologyHandler(
-		deviceService,
-		linkRepo,
-		positionRepo,
-		areaRepo,
-		vendorRegistry,
-		runtimeSnapshotFunc,
+		deps.deviceService,
+		deps.linkRepo,
+		deps.positionRepo,
+		deps.areaRepo,
+		deps.vendorRegistry,
+		deps.runtimeSnapshotFunc,
 	)
 	canvasMapHandler := NewCanvasMapHandler(
-		canvasMapRepo,
-		canvasMapPositionRepo,
-		positionRepo,
+		deps.canvasMapRepo,
+		deps.canvasMapPositionRepo,
+		deps.positionRepo,
 		canvasTopologyHandler,
-		deviceService,
-		linkRepo,
-		areaRepo,
-		runtimeSnapshotFunc,
+		deps.deviceService,
+		deps.linkRepo,
+		deps.areaRepo,
+		deps.runtimeSnapshotFunc,
 	)
-	settingsHandler := NewSettingsHandler(settingsRepo)
-	grafanaDashboardHandler := NewGrafanaDashboardHandler(settingsRepo)
-	snmpProfileHandler := NewSNMPProfileHandler(snmpProfileRepo)
-	areaHandler := NewAreaHandler(areaRepo)
+	settingsHandler := NewSettingsHandler(deps.settingsRepo)
+	grafanaDashboardHandler := NewGrafanaDashboardHandler(deps.settingsRepo)
+	snmpProfileHandler := NewSNMPProfileHandler(deps.snmpProfileRepo)
+	areaHandler := NewAreaHandler(deps.areaRepo)
 	backupHandlerOptions := []BackupHandlerOption{WithBackupAuditLogs(routerOpts.auditLogs)}
-	if db != nil {
-		bulkOperationLeaseRepo := postgres.NewBulkOperationLeaseRepo(db)
-		if backupService != nil {
-			backupService.SetBulkOperationLeaseRepository(bulkOperationLeaseRepo)
+	if deps.db != nil {
+		bulkOperationLeaseRepo := postgres.NewBulkOperationLeaseRepo(deps.db)
+		if deps.backupService != nil {
+			deps.backupService.SetBulkOperationLeaseRepository(bulkOperationLeaseRepo)
 		}
 		backupHandlerOptions = append(backupHandlerOptions, WithBulkDownloadLeaseRepository(bulkOperationLeaseRepo))
 	}
-	backupHandler := NewBackupHandler(backupService, settingsRepo, backupHandlerOptions...)
-	credentialProfileHandler := NewCredentialProfileHandler(backupService, credentialProfileRepo)
-	deviceCredHandler := NewDeviceCredentialProfileHandler(backupService, credentialProfileRepo)
-	vendorHandler := NewVendorHandler(vendorRegistry, vendorConfigRepo)
-	healthHandler := NewHealthHandler(db, poller)
-	prometheusHandler := NewPrometheusHandler(settingsRepo)
-	instanceBackupHandler := NewInstanceBackupHandlerWithRestarter(instanceBackupService, restoreRestarter)
-	bridgeHandler := NewBridgeHandlerWithService(bridgeBinariesDir, routerOpts.bridgeService)
-	userSettingsHandler := NewUserSettingsHandler(routerOpts.bridgeService, bridgeBinariesDir)
+	backupHandler := NewBackupHandler(deps.backupService, deps.settingsRepo, backupHandlerOptions...)
+	credentialProfileHandler := NewCredentialProfileHandler(deps.backupService, deps.credentialProfileRepo)
+	deviceCredHandler := NewDeviceCredentialProfileHandler(deps.backupService, deps.credentialProfileRepo)
+	vendorHandler := NewVendorHandler(deps.vendorRegistry, deps.vendorConfigRepo)
+	healthHandler := NewHealthHandler(deps.db, deps.poller)
+	prometheusHandler := NewPrometheusHandler(deps.settingsRepo)
+	instanceBackupHandler := NewInstanceBackupHandlerWithRestarter(deps.instanceBackupService, deps.restoreRestarter)
+	bridgeHandler := NewBridgeHandlerWithService(deps.bridgeBinariesDir, routerOpts.bridgeService)
+	userSettingsHandler := NewUserSettingsHandler(routerOpts.bridgeService, deps.bridgeBinariesDir)
 
 	webSocketHandler := http.NotFoundHandler()
-	if wsHandler != nil {
-		webSocketHandler = wsHandler
+	if deps.wsHandler != nil {
+		webSocketHandler = deps.wsHandler
 	}
 	routeHandlers := map[routeHandlerKey]http.Handler{
 		routeHandlerAdmin: adminHandler,
@@ -714,7 +735,7 @@ func NewRouter(
 		if spec, ok := apiRouteMetadata.match(r.Method, r.URL.Path); ok {
 			switch spec.middlewareProfile {
 			case routeMiddlewareWebSocketUpgrade:
-				if wsHandler == nil {
+				if deps.wsHandler == nil {
 					break
 				}
 				// WebSocket upgrades must bypass the JSON/logger middleware chain because
@@ -730,15 +751,15 @@ func NewRouter(
 				if !requireAnyPermission(w, routerOpts.auth, user, spec.methodPolicies[r.Method]) {
 					return
 				}
-				wsHandler.ServeHTTP(w, authenticatedRequest)
+				deps.wsHandler.ServeHTTP(w, authenticatedRequest)
 				return
 			case routeMiddlewareBinaryDownload:
 				downloadHandler.ServeHTTP(w, r)
 				return
 			case routeMiddlewareRestoreUpload:
 				restoreLimit := service.DefaultRestoreArchiveLimits.MaxCompressedBytes
-				if instanceBackupService != nil {
-					restoreLimit = instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
+				if deps.instanceBackupService != nil {
+					restoreLimit = deps.instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
 				}
 				applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, restoreLimit+restoreMultipartEnvelopeOverheadBytes).ServeHTTP(w, r)
 				return
