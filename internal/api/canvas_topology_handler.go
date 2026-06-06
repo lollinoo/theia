@@ -491,6 +491,17 @@ type linkInterfaceInfo struct {
 	operStatus string
 }
 
+func addLinkInterfaceInfo(ifMap map[string]linkInterfaceInfo, name string, info linkInterfaceInfo) {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if key == "" {
+		return
+	}
+	if _, exists := ifMap[key]; exists {
+		return
+	}
+	ifMap[key] = info
+}
+
 func buildEnrichedLinkResponses(
 	links []domain.Link,
 	devices []domain.Device,
@@ -498,12 +509,14 @@ func buildEnrichedLinkResponses(
 	deviceIfMap := make(map[string]map[string]linkInterfaceInfo, len(devices))
 	for i := range devices {
 		device := &devices[i]
-		ifMap := make(map[string]linkInterfaceInfo, len(device.Interfaces))
+		ifMap := make(map[string]linkInterfaceInfo, len(device.Interfaces)*2)
 		for _, iface := range device.Interfaces {
-			ifMap[iface.IfName] = linkInterfaceInfo{
+			info := linkInterfaceInfo{
 				speed:      iface.Speed,
 				operStatus: iface.OperStatus,
 			}
+			addLinkInterfaceInfo(ifMap, iface.IfName, info)
+			addLinkInterfaceInfo(ifMap, iface.IfDescr, info)
 		}
 		deviceIfMap[device.ID.String()] = ifMap
 	}
@@ -519,13 +532,13 @@ func buildEnrichedLinkResponses(
 			DiscoveryProtocol: string(link.DiscoveryProtocol),
 		}
 		if ifMap, ok := deviceIfMap[response.SourceDeviceID]; ok {
-			if info, ok := ifMap[link.SourceIfName]; ok {
+			if info, ok := ifMap[strings.ToLower(strings.TrimSpace(link.SourceIfName))]; ok {
 				response.SourceIfSpeed = info.speed
 				response.SourceIfOperStatus = info.operStatus
 			}
 		}
 		if ifMap, ok := deviceIfMap[response.TargetDeviceID]; ok {
-			if info, ok := ifMap[link.TargetIfName]; ok {
+			if info, ok := ifMap[strings.ToLower(strings.TrimSpace(link.TargetIfName))]; ok {
 				response.TargetIfSpeed = info.speed
 				response.TargetIfOperStatus = info.operStatus
 			}

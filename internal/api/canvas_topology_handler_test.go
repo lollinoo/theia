@@ -150,6 +150,58 @@ func TestCanvasTopologyHandlerHandleGet_ReturnsVersionedReadModel(t *testing.T) 
 	}
 }
 
+func TestBuildEnrichedLinkResponsesMatchesInterfaceDescriptionAndNormalizedName(t *testing.T) {
+	sourceID := uuid.New()
+	targetID := uuid.New()
+	linkID := uuid.New()
+
+	links := []domain.Link{{
+		ID:             linkID,
+		SourceDeviceID: sourceID,
+		SourceIfName:   " ETHER1 ",
+		TargetDeviceID: targetID,
+		TargetIfName:   "ether1",
+	}}
+	devices := []domain.Device{
+		{
+			ID: sourceID,
+			Interfaces: []domain.Interface{{
+				IfName:     "ether1",
+				IfDescr:    "uplink",
+				Speed:      1_000_000_000,
+				OperStatus: "up",
+			}},
+		},
+		{
+			ID: targetID,
+			Interfaces: []domain.Interface{{
+				IfName:     "sfp-sfpplus1",
+				IfDescr:    "ether1",
+				Speed:      1_000_000_000,
+				OperStatus: "up",
+			}},
+		},
+	}
+
+	enriched := buildEnrichedLinkResponses(links, devices)
+
+	if len(enriched) != 1 {
+		t.Fatalf("enriched length = %d, want 1", len(enriched))
+	}
+	if got := enriched[0].SourceIfSpeed; got != 1_000_000_000 {
+		t.Fatalf("SourceIfSpeed = %d, want normalized if_name match speed", got)
+	}
+	if got := enriched[0].SourceIfOperStatus; got != "up" {
+		t.Fatalf("SourceIfOperStatus = %q, want up from normalized if_name match", got)
+	}
+	if got := enriched[0].TargetIfSpeed; got != 1_000_000_000 {
+		t.Fatalf("TargetIfSpeed = %d, want if_descr match speed", got)
+	}
+	if got := enriched[0].TargetIfOperStatus; got != "up" {
+		t.Fatalf("TargetIfOperStatus = %q, want up from if_descr match", got)
+	}
+}
+
 func TestCanvasTopologyHandlerHandleGet_ReturnsNotModifiedForMatchingETag(t *testing.T) {
 	handler, deviceRepo, _, _, _ := newTestCanvasTopologyHandler(t)
 	if err := deviceRepo.Create(&domain.Device{

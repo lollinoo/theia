@@ -52,7 +52,8 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 		return StaticPersistenceResult{}, fmt.Errorf("re-fetch device: %w", err)
 	}
 
-	interfaceChanged := staticInterfaceSetChanged(fresh.Interfaces, input.Interfaces)
+	mergedInterfaces := mergeStaticInterfaces(fresh.Interfaces, input.Interfaces)
+	interfaceChanged := staticInterfaceSetChanged(fresh.Interfaces, mergedInterfaces)
 
 	fresh.SysName = input.SysName
 	if shouldPromoteDiscoveredHostname(fresh.Hostname, fresh.IP, input.SysName) {
@@ -68,7 +69,7 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 		fresh.Vendor = input.Vendor
 	}
 	fresh.DeviceType = input.DeviceType
-	fresh.Interfaces = append([]domain.Interface(nil), input.Interfaces...)
+	fresh.Interfaces = mergedInterfaces
 	if fresh.PollIntervalOverride == nil {
 		fresh.PollClass = domain.ClassifyPollClass(fresh.DeviceType)
 	}
@@ -651,6 +652,99 @@ type interfaceMaterialSignature struct {
 	IfName  string
 	IfDescr string
 	Speed   int64
+}
+
+func mergeStaticInterfaces(existing, observed []domain.Interface) []domain.Interface {
+	if len(existing) == 0 {
+		return append([]domain.Interface(nil), observed...)
+	}
+	if len(observed) == 0 {
+		return append([]domain.Interface(nil), existing...)
+	}
+
+	merged := append([]domain.Interface(nil), existing...)
+	indexByKey := make(map[string]int, len(existing)*3)
+	for index, iface := range merged {
+		for _, key := range staticInterfaceIdentityKeys(iface) {
+			if _, exists := indexByKey[key]; !exists {
+				indexByKey[key] = index
+			}
+		}
+	}
+
+	for _, iface := range observed {
+		matchIndex := -1
+		for _, key := range staticInterfaceIdentityKeys(iface) {
+			if index, ok := indexByKey[key]; ok {
+				matchIndex = index
+				break
+			}
+		}
+
+		if matchIndex >= 0 {
+			merged[matchIndex] = mergeStaticInterface(merged[matchIndex], iface)
+			for _, key := range staticInterfaceIdentityKeys(merged[matchIndex]) {
+				if _, exists := indexByKey[key]; !exists {
+					indexByKey[key] = matchIndex
+				}
+			}
+			continue
+		}
+
+		merged = append(merged, iface)
+		newIndex := len(merged) - 1
+		for _, key := range staticInterfaceIdentityKeys(iface) {
+			if _, exists := indexByKey[key]; !exists {
+				indexByKey[key] = newIndex
+			}
+		}
+	}
+
+	return merged
+}
+
+func mergeStaticInterface(existing, observed domain.Interface) domain.Interface {
+	merged := existing
+	if observed.IfIndex != 0 {
+		merged.IfIndex = observed.IfIndex
+	}
+	if strings.TrimSpace(observed.IfName) != "" {
+		merged.IfName = observed.IfName
+	}
+	if strings.TrimSpace(observed.IfDescr) != "" {
+		merged.IfDescr = observed.IfDescr
+	}
+	if observed.Speed > 0 {
+		merged.Speed = observed.Speed
+	}
+	if strings.TrimSpace(observed.AdminStatus) != "" {
+		merged.AdminStatus = observed.AdminStatus
+	}
+	if strings.TrimSpace(observed.OperStatus) != "" {
+		merged.OperStatus = observed.OperStatus
+	}
+	if !observed.UpdatedAt.IsZero() {
+		merged.UpdatedAt = observed.UpdatedAt
+	}
+	return merged
+}
+
+func staticInterfaceIdentityKeys(iface domain.Interface) []string {
+	keys := make([]string, 0, 3)
+	if iface.IfIndex > 0 {
+		keys = append(keys, fmt.Sprintf("index:%d", iface.IfIndex))
+	}
+	if key := normalizedStaticInterfaceName(iface.IfName); key != "" {
+		keys = append(keys, "name:"+key)
+	}
+	if key := normalizedStaticInterfaceName(iface.IfDescr); key != "" {
+		keys = append(keys, "name:"+key)
+	}
+	return keys
+}
+
+func normalizedStaticInterfaceName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 func staticInterfaceSetChanged(before, after []domain.Interface) bool {

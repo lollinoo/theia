@@ -1526,6 +1526,91 @@ func TestApplyStaticDiscovery_CompletesBootstrapOnceDuringRegularStaticPersisten
 	}
 }
 
+func TestApplyStaticDiscovery_PreservesLastKnownInterfacesDuringPartialStaticPoll(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	deviceID := uuid.New()
+	device := &domain.Device{
+		ID:            deviceID,
+		Hostname:      "edge-01",
+		IP:            "192.0.2.51",
+		SysName:       "edge-01",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, OperStatus: "up"},
+			{IfIndex: 2, IfName: "ether2", IfDescr: "uplink", Speed: 1_000_000_000, OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+
+	result, err := svc.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:    "edge-01",
+		DeviceType: domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 100_000_000, OperStatus: "down"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+
+	updated, err := deviceRepo.GetByID(deviceID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if len(updated.Interfaces) != 2 {
+		t.Fatalf("interface count = %d, want preserved last-known table with 2 entries: %#v", len(updated.Interfaces), updated.Interfaces)
+	}
+
+	interfacesByName := make(map[string]domain.Interface, len(updated.Interfaces))
+	for _, iface := range updated.Interfaces {
+		interfacesByName[iface.IfName] = iface
+	}
+	if got := interfacesByName["ether1"].Speed; got != 100_000_000 {
+		t.Fatalf("ether1 speed = %d, want updated observed speed", got)
+	}
+	if got := interfacesByName["ether1"].OperStatus; got != "down" {
+		t.Fatalf("ether1 oper status = %q, want updated observed status", got)
+	}
+	if got := interfacesByName["ether2"].Speed; got != 1_000_000_000 {
+		t.Fatalf("ether2 speed = %d, want preserved last-known speed", got)
+	}
+	if got := interfacesByName["ether2"].OperStatus; got != "up" {
+		t.Fatalf("ether2 oper status = %q, want preserved last-known status", got)
+	}
+	if !result.TopologyChanged {
+		t.Fatal("TopologyChanged = false, want true because observed ether1 material speed changed")
+	}
+
+	result, err = svc.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:    "edge-01",
+		DeviceType: domain.DeviceTypeSwitch,
+		Interfaces: nil,
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery with empty interfaces failed: %v", err)
+	}
+	updated, err = deviceRepo.GetByID(deviceID)
+	if err != nil {
+		t.Fatalf("GetByID after empty interface poll failed: %v", err)
+	}
+	if len(updated.Interfaces) != 2 {
+		t.Fatalf("interface count after empty poll = %d, want preserved table with 2 entries: %#v", len(updated.Interfaces), updated.Interfaces)
+	}
+	if result.TopologyChanged {
+		t.Fatal("TopologyChanged = true, want false when empty degraded poll preserves the last-known table")
+	}
+}
+
 func TestProbeDevice_CompletesBootstrapOnceAfterFollowupAttemptLeavesPortsUnresolved(t *testing.T) {
 	deviceRepo := newMockDeviceRepo()
 	linkRepo := newMockLinkRepo()
