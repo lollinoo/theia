@@ -20,25 +20,22 @@ import { GrafanaDashboardProfileManager } from './GrafanaDashboardProfileManager
 import { InstanceBackupManager } from './InstanceBackupManager';
 import { MaterialIcon } from './MaterialIcon';
 import { SNMPProfileManager } from './SNMPProfileManager';
+import { DeviceBackupSettingsSection } from './settings-panel/DeviceBackupSettingsSection';
 import { SavedIndicator } from './settings-panel/SavedIndicator';
 import { SettingsSection } from './settings-panel/SettingsSection';
+import { WorkerSettingsSection } from './settings-panel/WorkerSettingsSection';
 import {
   DEFAULT_WORKER_SETTINGS,
   POLLING_PRESETS,
   PRESET_VALUES,
   TIMEZONES,
   WORKER_SETTINGS,
-  WORKER_SETTING_GROUPS,
   type WorkerSetting,
   type WorkerSettingKey,
   createWorkerSavedFlags,
   createWorkerTimerRefs,
 } from './settings-panel/settingsConstants';
-import {
-  compactControlClass,
-  controlClass,
-  fieldLabelClass,
-} from './settings-panel/settingsPanelStyles';
+import { controlClass, fieldLabelClass } from './settings-panel/settingsPanelStyles';
 
 interface SettingsPanelProps {
   onSettingsChange?: () => void;
@@ -109,10 +106,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
         setBridgePort(settings['bridge_port'] ?? '1337');
         setWorkerSettings((prev) => {
           const next = { ...prev };
-          for (const group of WORKER_SETTING_GROUPS) {
-            for (const setting of group.settings) {
-              next[setting.key] = settings[setting.key] ?? setting.defaultValue;
-            }
+          for (const setting of WORKER_SETTINGS) {
+            next[setting.key] = settings[setting.key] ?? setting.defaultValue;
           }
           return next;
         });
@@ -246,19 +241,6 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
-  function computeDeviceNextBackupText(): string {
-    const intervalHours = parseInt(deviceBackupInterval, 10);
-    if (!intervalHours || intervalHours <= 0) return 'Scheduling disabled';
-    return 'Backups run every ' + formatDeviceInterval(intervalHours);
-  }
-
-  function formatDeviceInterval(hours: number): string {
-    if (hours >= 168) return '7 days';
-    if (hours >= 48) return '48 hours';
-    if (hours >= 24) return '24 hours';
-    return hours + ' hours';
-  }
-
   function handleBridgePortChange(value: string) {
     setBridgePort(value);
     setFieldError('bridgePort', null);
@@ -283,41 +265,10 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }
   }
 
-  function renderWorkerSettingField(setting: WorkerSetting) {
-    const inputId = `worker-setting-${setting.key}`;
-    return (
-      <div key={setting.key} className="space-y-1">
-        <div className="flex items-center justify-between gap-3">
-          <label htmlFor={inputId} className={fieldLabelClass}>
-            {setting.label}
-          </label>
-          {savedWorkerSettings[setting.key] && (
-            <span className="text-xs font-medium text-status-up">Saved</span>
-          )}
-        </div>
-        <input
-          id={inputId}
-          type="number"
-          min={setting.min}
-          max={setting.max}
-          step={1}
-          value={workerSettings[setting.key]}
-          onChange={(e) => handleWorkerSettingChange(setting.key, e.target.value)}
-          onBlur={() =>
-            setFieldError(
-              setting.key,
-              validateIntegerRange(workerSettings[setting.key], setting.min, setting.max),
-            )
-          }
-          className={controlClass(Boolean(fieldErrors[setting.key]))}
-        />
-        <p className="break-all font-mono text-[10px] leading-relaxed text-on-bg-muted">
-          {setting.key}
-        </p>
-        {fieldErrors[setting.key] && (
-          <p className="text-[10px] text-status-down">{fieldErrors[setting.key]}</p>
-        )}
-      </div>
+  function handleWorkerSettingBlur(setting: WorkerSetting) {
+    setFieldError(
+      setting.key,
+      validateIntegerRange(workerSettings[setting.key], setting.min, setting.max),
     );
   }
 
@@ -394,39 +345,15 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
               </div>
             )}
 
-            <div className="rounded-lg bg-surface-container-high p-3">
-              <button
-                type="button"
-                aria-expanded={workerSectionOpen}
-                onClick={() => setWorkerSectionOpen((prev) => !prev)}
-                className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1 text-left transition-colors hover:text-on-bg"
-              >
-                <span>
-                  <span className="block text-sm font-semibold text-on-bg">Polling Workers</span>
-                  <span className="block text-xs text-on-bg-secondary">
-                    Tune pool sizes and isolation limits.
-                  </span>
-                </span>
-                <MaterialIcon
-                  name={workerSectionOpen ? 'expand_less' : 'expand_more'}
-                  className="text-on-bg-secondary"
-                />
-              </button>
-              {workerSectionOpen && (
-                <div className="mt-4 grid gap-4">
-                  {WORKER_SETTING_GROUPS.map((group) => (
-                    <div key={group.title} className="grid gap-3">
-                      <h3 className="text-xs font-semibold uppercase text-on-bg-muted">
-                        {group.title}
-                      </h3>
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        {group.settings.map((setting) => renderWorkerSettingField(setting))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <WorkerSettingsSection
+              open={workerSectionOpen}
+              workerSettings={workerSettings}
+              savedWorkerSettings={savedWorkerSettings}
+              fieldErrors={fieldErrors}
+              onToggle={() => setWorkerSectionOpen((prev) => !prev)}
+              onSettingChange={handleWorkerSettingChange}
+              onSettingBlur={handleWorkerSettingBlur}
+            />
           </div>
         </SettingsSection>
 
@@ -617,84 +544,17 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           accent="secondary"
         >
           <div className="grid gap-3">
-            <div className="rounded-lg bg-surface-container-high p-3">
-              <button
-                type="button"
-                aria-expanded={deviceBackupSectionOpen}
-                onClick={() => setDeviceBackupSectionOpen((prev) => !prev)}
-                className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1 text-left transition-colors hover:text-on-bg"
-              >
-                <span>
-                  <span className="block text-sm font-semibold text-on-bg">Device Backups</span>
-                  <span className="block text-xs text-on-bg-secondary">
-                    Schedule automatic config snapshots.
-                  </span>
-                </span>
-                <MaterialIcon
-                  name={deviceBackupSectionOpen ? 'expand_less' : 'expand_more'}
-                  className="text-on-bg-secondary"
-                />
-              </button>
-              {deviceBackupSectionOpen && (
-                <div className="mt-4 grid items-start gap-4 sm:grid-cols-2">
-                  <label className="grid grid-rows-[2.5rem_auto_1rem] gap-1 text-sm">
-                    <span
-                      data-testid="device-backup-schedule-label-row"
-                      className="flex min-h-10 items-start justify-between gap-3"
-                    >
-                      <span className={fieldLabelClass}>Automatic Backup Schedule</span>
-                      {savedDeviceInterval && (
-                        <span className="text-xs font-medium text-status-up">Saved</span>
-                      )}
-                    </span>
-                    <select
-                      value={deviceBackupInterval}
-                      onChange={(e) => handleDeviceIntervalChange(e.target.value)}
-                      className={compactControlClass()}
-                    >
-                      <option value="0">Disabled</option>
-                      <option value="6">Every 6 hours</option>
-                      <option value="12">Every 12 hours</option>
-                      <option value="24">Every 24 hours</option>
-                      <option value="48">Every 48 hours</option>
-                      <option value="168">Every 7 days</option>
-                    </select>
-                    <span
-                      data-testid="device-backup-schedule-helper-row"
-                      className="min-h-4 text-xs text-on-bg-muted"
-                    >
-                      {computeDeviceNextBackupText()}
-                    </span>
-                  </label>
-
-                  <label className="grid grid-rows-[2.5rem_auto_1rem] gap-1 text-sm">
-                    <span
-                      data-testid="device-backup-retention-label-row"
-                      className="flex min-h-10 items-start justify-between gap-3"
-                    >
-                      <span className={fieldLabelClass}>Keep last N backups per device</span>
-                      {savedDeviceRetention && (
-                        <span className="text-xs font-medium text-status-up">Saved</span>
-                      )}
-                    </span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={365}
-                      value={deviceBackupRetention}
-                      onChange={(e) => handleDeviceRetentionChange(e.target.value)}
-                      className={compactControlClass(Boolean(fieldErrors.deviceBackupRetention))}
-                    />
-                    <span
-                      data-testid="device-backup-retention-helper-row"
-                      className="min-h-4 text-xs text-status-down"
-                    >
-                      {fieldErrors.deviceBackupRetention ?? ''}
-                    </span>
-                  </label>
-                </div>
-              )}
-            </div>
+            <DeviceBackupSettingsSection
+              open={deviceBackupSectionOpen}
+              deviceBackupInterval={deviceBackupInterval}
+              deviceBackupRetention={deviceBackupRetention}
+              savedDeviceInterval={savedDeviceInterval}
+              savedDeviceRetention={savedDeviceRetention}
+              retentionError={fieldErrors.deviceBackupRetention}
+              onToggle={() => setDeviceBackupSectionOpen((prev) => !prev)}
+              onDeviceIntervalChange={handleDeviceIntervalChange}
+              onDeviceRetentionChange={handleDeviceRetentionChange}
+            />
 
             <div className="rounded-lg bg-surface-container-high p-3">
               <button
