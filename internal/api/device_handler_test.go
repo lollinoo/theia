@@ -84,6 +84,29 @@ func (r *mockDeviceRepo) GetAll() ([]domain.Device, error) {
 	return result, nil
 }
 
+func (r *mockDeviceRepo) FindPhysicalVirtualIPConflict(ip string, deviceType domain.DeviceType, excludeID uuid.UUID) (*domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	address := strings.TrimSpace(ip)
+	if address == "" {
+		return nil, nil
+	}
+	candidateVirtual := deviceType == domain.DeviceTypeVirtual
+	for _, d := range r.devices {
+		if excludeID != uuid.Nil && d.ID == excludeID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(d.IP), address) {
+			continue
+		}
+		if (d.DeviceType == domain.DeviceTypeVirtual) != candidateVirtual {
+			cp := *d
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
 func (r *mockDeviceRepo) GetOrphans() ([]domain.Device, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -12,6 +12,8 @@ data/
 .claude/
 .agents/
 .gemini/
+.codex/
+AGENTS.md
 
 # CI/CD
 .github/
@@ -19,7 +21,8 @@ data/
 # Documentation and media
 *.md
 docs/
-frontend_example.jpg
+
+tmp/
 
 # Configuration files not needed in image
 .gitignore

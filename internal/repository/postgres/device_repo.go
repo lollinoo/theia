@@ -279,6 +279,51 @@ func (r *DeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 	return device, nil
 }
 
+// FindPhysicalVirtualIPConflict returns one device with the same normalized
+// address and opposite physical/virtual classification, without loading full
+// device relationships or credentials.
+func (r *DeviceRepo) FindPhysicalVirtualIPConflict(ip string, deviceType domain.DeviceType, excludeID uuid.UUID) (*domain.Device, error) {
+	address := strings.TrimSpace(ip)
+	if address == "" {
+		return nil, nil
+	}
+	candidateVirtual := 0
+	if deviceType == domain.DeviceTypeVirtual {
+		candidateVirtual = 1
+	}
+
+	var idStr, storedIP, storedType string
+	err := r.db.QueryRow(
+		`SELECT id, ip, device_type
+		FROM devices
+		WHERE btrim(ip) <> ''
+			AND lower(btrim(ip)) = lower(btrim(?))
+			AND (CASE WHEN device_type = 'virtual' THEN 1 ELSE 0 END) <> ?
+			AND id <> ?
+		ORDER BY updated_at DESC, created_at DESC
+		LIMIT 1`,
+		address,
+		candidateVirtual,
+		excludeID.String(),
+	).Scan(&idStr, &storedIP, &storedType)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying physical/virtual device IP conflict: %w", err)
+	}
+
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return nil, fmt.Errorf("parsing device id %q: %w", idStr, err)
+	}
+	return &domain.Device{
+		ID:         id,
+		IP:         storedIP,
+		DeviceType: domain.DeviceType(storedType),
+	}, nil
+}
+
 // GetBySysName retrieves a device by SNMP sysName, or returns nil if not found.
 // Matching is normalization-aware for lookup only: it trims whitespace,
 // lowercases, strips a trailing dot, and removes any FQDN suffix.

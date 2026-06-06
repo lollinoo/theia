@@ -20,8 +20,10 @@ bridge_binaries/
 .env.local
 .claude/
 .worktrees/
+.codex/
 CHANGELOG.md
 .planning/
+AGENTS.md
 
 # ── GSD baseline (auto-generated) ──
 .gsd

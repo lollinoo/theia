@@ -263,22 +263,12 @@ func (m *deviceMutationService) ensureNoPhysicalVirtualIPConflict(candidate doma
 		return nil
 	}
 
-	devices, err := m.deviceRepo.GetAll()
+	conflict, err := m.deviceRepo.FindPhysicalVirtualIPConflict(address, candidate.DeviceType, excludeID)
 	if err != nil {
 		return fmt.Errorf("checking device IP conflict: %w", err)
 	}
-
-	candidateVirtual := candidate.DeviceType == domain.DeviceTypeVirtual
-	for _, device := range devices {
-		if excludeID != uuid.Nil && device.ID == excludeID {
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(device.IP), address) {
-			continue
-		}
-		if (device.DeviceType == domain.DeviceTypeVirtual) != candidateVirtual {
-			return fmt.Errorf("device IP conflict: %s is already used by a %s device", address, device.DeviceType)
-		}
+	if conflict != nil {
+		return fmt.Errorf("device IP conflict: %s is already used by a %s device", address, conflict.DeviceType)
 	}
 	return nil
 }
