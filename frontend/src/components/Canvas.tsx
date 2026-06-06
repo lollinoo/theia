@@ -55,8 +55,10 @@ import { buildRuntimeState } from './canvas/runtimeAdapters';
 import { type TopologyZoomBand, resolveTopologyZoomBand } from './canvas/topologyZoom';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { useCanvasData } from './canvas/useCanvasData';
+import { useCanvasDiagnosticsToggle } from './canvas/useCanvasDiagnosticsToggle';
 import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';
 import { useCanvasGraphState } from './canvas/useCanvasGraphState';
+import { useCanvasInteractionState } from './canvas/useCanvasInteractionState';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { minimapColorForDevice } from './deviceVisualState';
 import { resolveLinkBadgeScale } from './linkSemantics';
@@ -71,8 +73,6 @@ const minimapStyle = {
   boxShadow: 'var(--nt-shadow-floating)',
 };
 const minimapMaskColor = 'var(--nt-minimap-mask, rgba(45, 45, 61, 0.55))';
-const canvasDiagnosticsStorageKey = 'theia.canvas.diagnostics';
-const canvasInteractionIdleDelayMs = 140;
 const deviceNodeReadabilityScaleProperty = '--theia-device-node-readability-scale';
 const linkBadgeReadabilityScaleProperty = '--theia-link-badge-readability-scale';
 const topologyZoomBandAttribute = 'data-topology-zoom-band';
@@ -103,20 +103,6 @@ const TopologyMiniMap = memo(function TopologyMiniMap() {
     />
   );
 });
-
-function initialCanvasDiagnosticsVisible(): boolean {
-  const queryEnabled = new URLSearchParams(window.location.search).get('canvasDiagnostics') === '1';
-  const storageEnabled = window.localStorage.getItem(canvasDiagnosticsStorageKey) === 'true';
-  if (queryEnabled) {
-    window.localStorage.setItem(canvasDiagnosticsStorageKey, 'true');
-  }
-  return queryEnabled || storageEnabled;
-}
-
-function isCanvasDiagnosticsShortcut(event: KeyboardEvent): boolean {
-  const isPhysicalD = event.code === 'KeyD' || event.key.toLowerCase() === 'd';
-  return event.altKey && (event.ctrlKey || event.metaKey) && isPhysicalD;
-}
 
 function setEdgeInteractionMode(
   edges: LinkEdgeType[],
@@ -190,8 +176,9 @@ export default function Canvas({
     edgeIndexByIdRef,
   } = useCanvasGraphState();
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
-  const [diagnosticsVisible, setDiagnosticsVisible] = useState(initialCanvasDiagnosticsVisible);
-  const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
+  const { diagnosticsVisible, closeDiagnostics } = useCanvasDiagnosticsToggle();
+  const { canvasInteractionActive, beginCanvasInteraction, endCanvasInteraction } =
+    useCanvasInteractionState({ onInteractionActiveChange });
   const [internalChromeHidden, setInternalChromeHidden] = useState(false);
   const canvasRootRef = useRef<HTMLDivElement | null>(null);
   const deviceNodeReadabilityScaleRef = useRef('1');
@@ -199,7 +186,6 @@ export default function Canvas({
   const topologyZoomBandRef = useRef<TopologyZoomBand>('detail');
   const highlightTimerRef = useRef<number | null>(null);
   const highlightedDeviceIdRef = useRef<string | null>(null);
-  const interactionIdleTimerRef = useRef<number | null>(null);
   const areaColorNodeCacheRef = useRef(new Map<string, CanvasRenderProjectionNodeCacheEntry>());
   const ghostNodeMeasurementCacheRef = useRef(
     new Map<string, NonNullable<DeviceNode['measured']>>(),
@@ -350,30 +336,6 @@ export default function Canvas({
     canvasRootRef.current?.setAttribute(topologyZoomBandAttribute, topologyZoomBandRef.current);
   }, []);
 
-  useEffect(() => {
-    onInteractionActiveChange?.(canvasInteractionActive);
-  }, [canvasInteractionActive, onInteractionActiveChange]);
-
-  useEffect(() => () => onInteractionActiveChange?.(false), [onInteractionActiveChange]);
-
-  const beginCanvasInteraction = useCallback(() => {
-    if (interactionIdleTimerRef.current !== null) {
-      window.clearTimeout(interactionIdleTimerRef.current);
-      interactionIdleTimerRef.current = null;
-    }
-    setCanvasInteractionActive(true);
-  }, []);
-
-  const endCanvasInteraction = useCallback(() => {
-    if (interactionIdleTimerRef.current !== null) {
-      window.clearTimeout(interactionIdleTimerRef.current);
-    }
-    interactionIdleTimerRef.current = window.setTimeout(() => {
-      interactionIdleTimerRef.current = null;
-      setCanvasInteractionActive(false);
-    }, canvasInteractionIdleDelayMs);
-  }, []);
-
   const handleCanvasMove = useCallback<OnMove>(
     (_event, viewport) => {
       setDeviceNodeReadabilityScale(viewport.zoom);
@@ -397,26 +359,6 @@ export default function Canvas({
   );
 
   useKeyboardShortcuts(shortcuts);
-
-  useEffect(() => {
-    const handleDiagnosticsShortcut = (event: KeyboardEvent) => {
-      if (!isCanvasDiagnosticsShortcut(event)) {
-        return;
-      }
-
-      event.preventDefault();
-      setDiagnosticsVisible((current) => {
-        const next = !current;
-        window.localStorage.setItem(canvasDiagnosticsStorageKey, String(next));
-        return next;
-      });
-    };
-
-    window.addEventListener('keydown', handleDiagnosticsShortcut, true);
-    return () => {
-      window.removeEventListener('keydown', handleDiagnosticsShortcut, true);
-    };
-  }, []);
 
   const openEdgeMenu = useCallback(
     (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => {
@@ -821,9 +763,6 @@ export default function Canvas({
   useEffect(
     () => () => {
       if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
-      if (interactionIdleTimerRef.current !== null) {
-        window.clearTimeout(interactionIdleTimerRef.current);
-      }
     },
     [],
   );
@@ -1163,10 +1102,7 @@ export default function Canvas({
       )}
       <CanvasDiagnosticsPanel
         open={diagnosticsVisible}
-        onClose={() => {
-          window.localStorage.setItem(canvasDiagnosticsStorageKey, 'false');
-          setDiagnosticsVisible(false);
-        }}
+        onClose={closeDiagnostics}
         onForceRefresh={() => window.__THEIA_CANVAS_FORCE_REFRESH__?.()}
         onFitView={() => {
           void reactFlow.fitView({
