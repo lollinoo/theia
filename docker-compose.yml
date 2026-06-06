@@ -38,6 +38,7 @@ services:
       - THEIA_DB_DSN=${THEIA_DB_DSN:-postgres://theia:theia@postgres:5432/theia?sslmode=disable}
       - THEIA_DATA_DIR=/app/data
       - THEIA_BRIDGE_BINARIES_DIR=${THEIA_BRIDGE_BINARIES_DIR:-/app/bridge_binaries}
+      - THEIA_DEPLOYMENT_ENV=development
       - THEIA_LISTEN_ADDR=:8080
       - THEIA_ENCRYPTION_KEY_ID=${THEIA_ENCRYPTION_KEY_ID:-}
       - THEIA_ENCRYPTION_KEYS=${THEIA_ENCRYPTION_KEYS:-}
@@ -45,9 +46,6 @@ services:
       - THEIA_SESSION_SECRET=${THEIA_SESSION_SECRET:-dev-session-secret-change-me-32bytes}
       - THEIA_ALLOWED_ORIGINS=${THEIA_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       - THEIA_LOG_LEVEL=debug
-      - THEIA_VERSION=${THEIA_VERSION:-dev}
-      - GIT_COMMIT=${GIT_COMMIT:-dev}
-      - BUILD_DATE=${BUILD_DATE:-dev}
     depends_on:
       postgres:
         condition: service_healthy

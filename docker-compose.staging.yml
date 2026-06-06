@@ -54,7 +54,7 @@ services:
       - THEIA_SESSION_SECRET=${THEIA_SESSION_SECRET:?THEIA_SESSION_SECRET must be set}
       - THEIA_METRICS_TOKEN=${THEIA_METRICS_TOKEN:?THEIA_METRICS_TOKEN must be set}
       - THEIA_ALLOWED_ORIGINS=${THEIA_ALLOWED_ORIGINS:-}
-      - THEIA_BRIDGE_BINARIES_DIR=${THEIA_BRIDGE_BINARIES_DIR:-}
+      - THEIA_BRIDGE_BINARIES_DIR=${THEIA_BRIDGE_BINARIES_DIR:-/data/bridge_binaries}
     depends_on:
       postgres:
         condition: service_healthy

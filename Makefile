@@ -3,36 +3,19 @@
        prod-postgres prod-postgres-metrics staging-postgres \
        wisp-lab wisp-lab-down wisp-seed wisp-radio-seed wisp-seed-all wisp-ospf wisp-bgp \
        phase4-scale-lab phase4-validate \
-       prod prod-metrics prod-down prod-build prod-logs prod-clean \
+       development prod production prod-metrics prod-down prod-build prod-logs prod-clean \
        staging staging-down staging-logs \
        backend-fast frontend-fast govulncheck \
        realtime-stress collector-contract browser-e2e \
-       version release bridge-build-all
+       bridge-build-all
 
-# ---------------------------------------------------------------------------
-# Version management
-# ---------------------------------------------------------------------------
 ifeq ($(OS),Windows_NT)
 NULL := NUL
-CURRENT_VERSION := $(shell git describe --tags --always 2>$(NULL))
-ifeq ($(strip $(CURRENT_VERSION)),)
-CURRENT_VERSION := dev
-endif
-VERSION ?= $(CURRENT_VERSION)
-GIT_COMMIT := $(shell git rev-parse --short HEAD 2>$(NULL))
-ifeq ($(strip $(GIT_COMMIT)),)
-GIT_COMMIT := unknown
-endif
-BUILD_DATE := $(shell powershell -NoProfile -ExecutionPolicy Bypass -Command "[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')")
 SHELL := powershell.exe
 .SHELLFLAGS := -NoProfile -ExecutionPolicy Bypass -Command
 IS_WINDOWS := 1
 else
 NULL := /dev/null
-CURRENT_VERSION := $(shell git describe --tags --always 2>$(NULL) || echo dev)
-VERSION ?= $(CURRENT_VERSION)
-GIT_COMMIT := $(shell git rev-parse --short HEAD 2>$(NULL))
-BUILD_DATE := $(shell date -u +%FT%TZ)
 IS_WINDOWS := 0
 endif
 
@@ -55,7 +38,7 @@ endif
 ifeq ($(IS_WINDOWS),1)
 dev: ## Start full dev stack (backend + frontend + PostgreSQL + Prometheus)
 	@docker compose $(DEV_COMPOSE_PROFILES) down 2>$$null; exit 0
-	@$$env:THEIA_VERSION='$(VERSION)'; $$env:GIT_COMMIT='$(GIT_COMMIT)'; $$env:BUILD_DATE='$(BUILD_DATE)'; docker compose $(DEV_COMPOSE_PROFILES) up --build -d; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }
+	@$$env:THEIA_DEPLOYMENT_ENV='development'; docker compose $(DEV_COMPOSE_PROFILES) up --build -d; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }
 	@Write-Output ""
 	@Write-Output "Theia dev stack is running:"
 	@Write-Output "  Backend:  http://localhost:8080"
@@ -70,8 +53,7 @@ dev: ## Start full dev stack (backend + frontend + PostgreSQL + Prometheus)
 else
 dev: ## Start full dev stack (backend + frontend + PostgreSQL + Prometheus)
 	@docker compose $(DEV_COMPOSE_PROFILES) down 2>/dev/null || true
-	THEIA_VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_DATE=$(BUILD_DATE) \
-		docker compose $(DEV_COMPOSE_PROFILES) up --build -d
+	THEIA_DEPLOYMENT_ENV=development docker compose $(DEV_COMPOSE_PROFILES) up --build -d
 	@echo ""
 	@echo "Theia dev stack is running:"
 	@echo "  Backend:  http://localhost:8080"
@@ -84,6 +66,8 @@ dev: ## Start full dev stack (backend + frontend + PostgreSQL + Prometheus)
 	@echo "Run 'make wisp-lab' and 'make wisp-seed-all' to add lab devices"
 	@echo "Run 'make logs' to follow backend logs"
 endif
+
+development: dev ## Start the development stack
 
 ifeq ($(IS_WINDOWS),1)
 postgres-up: ## Start local PostgreSQL for Theia
@@ -211,6 +195,8 @@ prod: ## Start production stack (pulls from GHCR)
 	@echo ""
 	@echo "Run 'make prod-logs' to follow backend logs."
 endif
+
+production: prod ## Start the production stack
 
 prod-metrics: ## Start production stack with Prometheus + SNMP exporter
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics up -d
@@ -389,36 +375,6 @@ verify: ## Run go vet, go build, and vulnerability scanning inside container
 
 logs: ## Follow backend container logs
 	docker compose logs -f backend
-
-# ---------------------------------------------------------------------------
-# Release workflow
-# ---------------------------------------------------------------------------
-version: ## Show current version
-	@echo "Version:    $(VERSION)"
-	@echo "Git commit: $(GIT_COMMIT)"
-	@echo "Build date: $(BUILD_DATE)"
-
-ifeq ($(IS_WINDOWS),1)
-release: ## Create release tag and push (Usage: make release VERSION=1.5.1)
-	@& ./scripts/release.ps1 "$(VERSION)"
-else
-release: ## Create release tag and push (Usage: make release VERSION=1.5.1)
-	@if [ -z "$(VERSION)" ] || [ "$(VERSION)" = "$$(git describe --tags --always 2>/dev/null || echo dev)" ]; then \
-		echo "Usage: make release VERSION=1.5.1"; exit 1; fi
-	@if [ -n "$$(git status --porcelain)" ]; then \
-		echo "Error: working tree is not clean"; exit 1; fi
-	@if [ "$$(git rev-parse --abbrev-ref HEAD)" != "master" ]; then \
-		echo "Error: must be on master branch"; exit 1; fi
-	@if git rev-parse "v$(VERSION)" >/dev/null 2>&1; then \
-		echo "Error: tag v$(VERSION) already exists"; exit 1; fi
-	@if ! echo "$(VERSION)" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$'; then \
-		echo "Error: VERSION must be valid semver (e.g., 1.5.1)"; exit 1; fi
-	@git tag -a "v$(VERSION)" -m "release: v$(VERSION)"
-	@git push origin "v$(VERSION)"
-	@echo ""
-	@echo "Release v$(VERSION) tagged and pushed."
-	@echo "CI will build and push Docker images to GHCR."
-endif
 
 # ---------------------------------------------------------------------------
 # WinBox Bridge cross-compilation

@@ -29,8 +29,8 @@ data_dir: "./data"
 # Leave empty to disable connector downloads from User Settings.
 bridge_binaries_dir: ""
 
-# Set to production or staging to require secret validation.
-deployment_env: ""
+# Valid values: development, staging, production.
+deployment_env: development
 
 # Credential encryption keyring is configured through environment variables:
 #   THEIA_ENCRYPTION_KEY_ID=kid-2026-06
@@ -62,7 +62,7 @@ metrics_token: ""
 # Optional exact browser origins allowed to reach REST/WebSocket endpoints.
 # Same-host requests are always allowed. Include LAN/IP origins used by browsers.
 # Env form example:
-# THEIA_ALLOWED_ORIGINS=http://localhost:3000,http://192.168.1.30:3000,https://theia.example.com
+# THEIA_ALLOWED_ORIGINS=http://localhost:3000,https://theia.example.com
 allowed_origins: []
 
 # Log verbosity: debug, info, warn, error

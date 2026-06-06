@@ -2,7 +2,6 @@
 # Theia - Production Docker Compose (GHCR Pull)
 # =============================================================================
 # Images pulled from ghcr.io/lollinoo/theia-{backend,frontend}
-# Set THEIA_VERSION in .env.prod to the semver tag (e.g., 1.5.1)
 #
 # Profiles:
 #   (default) -- Backend + PostgreSQL + nginx frontend
@@ -15,7 +14,7 @@
 # First-time setup:
 #   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
 #   2. Copy env file:           cp .env.prod.example .env.prod
-#   3. Set THEIA_VERSION, THEIA_ENCRYPTION_KEY_ID, THEIA_ENCRYPTION_KEYS, THEIA_SESSION_SECRET, THEIA_METRICS_TOKEN, THEIA_DB_DSN, and POSTGRES_PASSWORD in .env.prod
+#   3. Set IMAGE_TAG, THEIA_ENCRYPTION_KEY_ID, THEIA_ENCRYPTION_KEYS, THEIA_SESSION_SECRET, THEIA_METRICS_TOKEN, THEIA_DB_DSN, and POSTGRES_PASSWORD in .env.prod
 #   4. Start the stack:         docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 # =============================================================================
 
@@ -42,7 +41,7 @@ services:
   # Backend -- Go API server (pulled from GHCR)
   # ---------------------------------------------------------------------------
   backend:
-    image: ghcr.io/lollinoo/theia-backend:${THEIA_VERSION:?THEIA_VERSION must be set}
+    image: ghcr.io/lollinoo/theia-backend:${IMAGE_TAG:-production}
     container_name: theia-backend
     restart: unless-stopped
     networks:
@@ -62,7 +61,7 @@ services:
       - THEIA_SESSION_SECRET=${THEIA_SESSION_SECRET:?THEIA_SESSION_SECRET must be set}
       - THEIA_METRICS_TOKEN=${THEIA_METRICS_TOKEN:?THEIA_METRICS_TOKEN must be set}
       - THEIA_ALLOWED_ORIGINS=${THEIA_ALLOWED_ORIGINS:-}
-      - THEIA_BRIDGE_BINARIES_DIR=${THEIA_BRIDGE_BINARIES_DIR:-}
+      - THEIA_BRIDGE_BINARIES_DIR=${THEIA_BRIDGE_BINARIES_DIR:-/data/bridge_binaries}
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,7 +97,7 @@ services:
   # Frontend -- nginx serving compiled React SPA + API proxy (pulled from GHCR)
   # ---------------------------------------------------------------------------
   frontend:
-    image: ghcr.io/lollinoo/theia-frontend:${THEIA_VERSION:?THEIA_VERSION must be set}
+    image: ghcr.io/lollinoo/theia-frontend:${IMAGE_TAG:-production}
     container_name: theia-frontend
     restart: unless-stopped
     ports:

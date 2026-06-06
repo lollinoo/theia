@@ -261,6 +261,14 @@ The production stack uses compiled images — no hot-reload, no source mounts, n
 
 Production startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=production` is set. The backend rejects missing or example secret values before opening the database.
 
+Production pulls the `production` image channel by default:
+
+```text
+IMAGE_TAG=production
+```
+
+The CI workflow publishes branch and SHA image tags for every branch push. It only publishes the `production` channel from the `production` branch or from a manual workflow dispatch with `target_environment=production`.
+
 Required operator inputs for the standard bundled PostgreSQL stack:
 
 - `THEIA_ENCRYPTION_KEY_ID`
@@ -372,6 +380,8 @@ The staging stack pulls pre-built images from GHCR and keeps them updated with W
 
 Staging startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=staging` is set. The backend rejects missing or example secret values before opening the database.
 
+Staging pulls the `staging` image channel by default. To deploy a branch build, set `IMAGE_TAG` in `.env.staging` to the sanitized branch tag published by CI. Branch names are lowercased and `/` is replaced with `-`.
+
 Required operator inputs for the standard bundled PostgreSQL stack:
 
 - `THEIA_ENCRYPTION_KEY_ID`
@@ -416,6 +426,12 @@ make staging
 ```
 
 `make staging` starts the standard staging stack on PostgreSQL using the bundled `postgres` service from `docker-compose.staging.yml`. If you need an external PostgreSQL service, use a custom compose override and provide `THEIA_DB_DSN`.
+
+Example branch deployment:
+
+```bash
+IMAGE_TAG=feature-runtime-channel docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+```
 
 Default staging ports:
 
@@ -577,14 +593,14 @@ Configuration is loaded from local `config.yaml` when present. The tracked `conf
 
 | config.yaml key | Environment variable | Default | Description |
 |-----------------|---------------------|---------|-------------|
-| `deployment_env` | `THEIA_DEPLOYMENT_ENV` | none | Set to `production` or `staging` for deployed environments so startup enforces required secret validation |
+| `deployment_env` | `THEIA_DEPLOYMENT_ENV` | `development` | Must be `development`, `staging`, or `production`; staging and production enforce required secret validation |
 | none | `THEIA_ENCRYPTION_KEY_ID` | none | Active credential encryption key id; required with `THEIA_ENCRYPTION_KEYS` in production and staging |
 | none | `THEIA_ENCRYPTION_KEYS` | none | Comma-separated credential encryption keyring entries in `<key-id>=<secret>` format |
 | none | `THEIA_ENCRYPTION_KEY` | none | Legacy credential encryption fallback; when keyring variables are set, this value is loaded as key id `legacy` |
 | `listen_addr` | `THEIA_LISTEN_ADDR` | `:8080` | HTTP server bind address |
 | `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN; `config.Load()` does not inject one, so operators must provide it explicitly through local config, local env, or a secret manager |
 | `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
-| `bridge_binaries_dir` | `THEIA_BRIDGE_BINARIES_DIR` | `` | Optional directory containing pre-built bridge binaries; leave empty to disable bridge downloads |
+| `bridge_binaries_dir` | `THEIA_BRIDGE_BINARIES_DIR` | `` | Directory containing pre-built bridge binaries; compose defaults to `/data/bridge_binaries` for staging and production |
 | `session_secret` | `THEIA_SESSION_SECRET` | none | Secret used to protect first-party password sessions; Required whenever the backend initializes first-party password auth |
 | `metrics_token` | `THEIA_METRICS_TOKEN` | none | Bearer token for `/metrics`; required for staging and production runtime startup |
 | `allowed_origins` | `THEIA_ALLOWED_ORIGINS` | none | Optional comma-separated exact browser origins for direct backend REST/WebSocket access; same-host proxy requests are allowed |
@@ -632,6 +648,8 @@ Advanced connector config shape:
 ```
 
 The Bridge Secret is shown only once after generation or rotation. If a user loses it, rotate the secret and update the connector through the setup wizard; the previous secret stops working immediately. Connector downloads are served only to authenticated users and require `THEIA_BRIDGE_BINARIES_DIR` to point at a directory containing files named like `winbox-bridge-linux-amd64` or `winbox-bridge-windows-amd64.exe`.
+
+CI builds Bridge Connector executables for Linux, Windows, and macOS on pull requests, branch pushes that touch bridge code or build scripts, and manual promotion runs. Download the workflow artifacts and place the six `winbox-bridge-*` files in the backend container path configured by `THEIA_BRIDGE_BINARIES_DIR`, or mount a host directory there in a compose override.
 
 For browser access through a LAN IP or alternate hostname, add the exact browser origin to `THEIA_ALLOWED_ORIGINS` before logging in. Example:
 
