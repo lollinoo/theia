@@ -99,7 +99,36 @@ function useDiagnosticsPanelState(open: boolean): {
 async function copyDiagnosticsJson(): Promise<void> {
   const payload = JSON.stringify(exportCanvasDiagnostics(), null, 2);
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(payload);
+    try {
+      await navigator.clipboard.writeText(payload);
+      return;
+    } catch {
+      // Fall back below for browsers that expose the API but block it in this context.
+    }
+  }
+
+  if (!copyTextWithTextarea(payload)) {
+    throw new Error('clipboard unavailable');
+  }
+}
+
+function copyTextWithTextarea(value: string): boolean {
+  if (typeof document.execCommand !== 'function') {
+    return false;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    return document.execCommand('copy');
+  } finally {
+    document.body.removeChild(textarea);
   }
 }
 

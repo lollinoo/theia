@@ -24,6 +24,14 @@ describe('CanvasDiagnosticsPanel', () => {
   beforeEach(() => {
     clearCanvasMetrics();
     resetCanvasDiagnostics();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: undefined,
+    });
   });
 
   it('renders graph, websocket, positions and performance diagnostics', () => {
@@ -128,7 +136,10 @@ describe('CanvasDiagnosticsPanel', () => {
     const onForceRefresh = vi.fn();
     const onFitView = vi.fn();
     const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
 
     render(
       <CanvasDiagnosticsPanel
@@ -147,5 +158,59 @@ describe('CanvasDiagnosticsPanel', () => {
     expect(onFitView).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.getByText('Copied')).toBeInTheDocument());
+  });
+
+  it('falls back to textarea copy when clipboard API is unavailable', async () => {
+    const execCommand = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+
+    render(
+      <CanvasDiagnosticsPanel
+        open
+        onClose={vi.fn()}
+        onForceRefresh={vi.fn()}
+        onFitView={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /copy diagnostics json/i }));
+
+    await waitFor(() => {
+      expect(execCommand).toHaveBeenCalledWith('copy');
+      expect(screen.getByText('Copied')).toBeInTheDocument();
+    });
+  });
+
+  it('falls back to textarea copy when clipboard API rejects', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard blocked'));
+    const execCommand = vi.fn().mockReturnValue(true);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+
+    render(
+      <CanvasDiagnosticsPanel
+        open
+        onClose={vi.fn()}
+        onForceRefresh={vi.fn()}
+        onFitView={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /copy diagnostics json/i }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(execCommand).toHaveBeenCalledWith('copy');
+      expect(screen.getByText('Copied')).toBeInTheDocument();
+    });
   });
 });

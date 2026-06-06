@@ -46,7 +46,7 @@ describe('SettingsPanel (COMP-05)', () => {
       'Polling',
       'Topology',
       'Integrations',
-      'Bridge',
+      'Bridge & Time',
       'Profiles',
       'Backups',
       'Runtime',
@@ -99,7 +99,7 @@ describe('SettingsPanel (COMP-05)', () => {
       'Polling',
       'Topology',
       'Integrations',
-      'Bridge',
+      'Bridge & Time',
       'Profiles',
       'Backups',
       'Runtime',
@@ -217,6 +217,27 @@ describe('SettingsPanel (COMP-05)', () => {
         'topology_discovery_default_mode',
         'bootstrap_once',
       );
+    });
+  });
+
+  it('describes timezone as the display timezone and notifies parents when it changes', async () => {
+    const { updateSetting } = await import('../api/client');
+    const onSettingsChange = vi.fn();
+
+    render(<SettingsPanel onSettingsChange={onSettingsChange} />);
+
+    expect(screen.getByText('Display timezone')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Admin audit log times, backup filenames, and zip timestamps/i),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Display timezone'), {
+      target: { value: 'Europe/Rome' },
+    });
+
+    await waitFor(() => {
+      expect(updateSetting).toHaveBeenCalledWith('timezone', 'Europe/Rome');
+      expect(onSettingsChange).toHaveBeenCalledWith({ timezone: 'Europe/Rome' });
     });
   });
 });
