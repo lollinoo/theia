@@ -243,6 +243,35 @@ func TestNormalizeDeviceRuntimeDTOIncludesPollingFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeDeviceRuntimeDTO_SoftDownDoesNotReportDown(t *testing.T) {
+	deviceID := uuid.New()
+	lastPolledAt := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
+
+	dto := normalizeDeviceRuntimeDTO(
+		domain.Device{ID: deviceID, IP: "192.0.2.10", MetricsSource: domain.MetricsSourceSNMP},
+		state.DeviceState{
+			PrimaryHealth:    polling.PrimaryHealthSNMPDegraded,
+			NetworkReachable: polling.TriStateUnknown,
+			SNMPReachable:    polling.TriStateFalse,
+			Reachability:     state.ReachabilitySoftDown,
+			Health:           state.HealthStatusUnknown,
+			LastPolledAt:     lastPolledAt,
+		},
+		nil,
+		ws.PrometheusStatusPayload{},
+	)
+
+	if dto.OperationalStatus != "probing" {
+		t.Fatalf("OperationalStatus = %q, want probing until hard-down confirmation", dto.OperationalStatus)
+	}
+	if dto.PrimaryReason == normalizedReasonDeviceUnreachable {
+		t.Fatalf("PrimaryReason = %q, want non-unreachable reason before hard-down confirmation", dto.PrimaryReason)
+	}
+	if dto.MetricsReason == normalizedReasonDeviceUnreachable {
+		t.Fatalf("MetricsReason = %q, want telemetry reason before hard-down confirmation", dto.MetricsReason)
+	}
+}
+
 func TestNormalizeLinkRuntimeDTO_DeviceDownMakesMetricsUnavailable(t *testing.T) {
 	linkID := uuid.New()
 	sourceID := uuid.New()

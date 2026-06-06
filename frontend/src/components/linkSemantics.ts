@@ -240,7 +240,15 @@ function isEndpointRuntimeCritical(runtime: DeviceEndpointRuntimeState): boolean
   );
 }
 
+function isEndpointNetworkReachable(runtime: DeviceEndpointRuntimeState): boolean {
+  return runtime.networkReachable === 'true' || runtime.reachability === 'up';
+}
+
 function isEndpointRuntimeWarning(runtime: DeviceEndpointRuntimeState): boolean {
+  if (isEndpointNetworkReachable(runtime)) {
+    return runtime.health === 'warning';
+  }
+
   return (
     runtime.health === 'warning' ||
     runtime.primaryHealth === 'snmp_degraded' ||

@@ -89,7 +89,7 @@ describe('deviceVisualState', () => {
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-critical)');
   });
 
-  it('uses primary health when reachable SNMP devices report unknown legacy health', () => {
+  it('keeps reachable SNMP-degraded devices visually up when legacy health is unknown', () => {
     const device = mockDevice({ status: 'up' });
     const metrics = mockMetrics({
       operational_status: 'up',
@@ -107,13 +107,13 @@ describe('deviceVisualState', () => {
     });
 
     expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
-      dotStatus: 'degraded',
-      label: 'Warning',
+      dotStatus: 'up',
+      label: 'Up',
     });
-    expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-probing)');
+    expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-up)');
   });
 
-  it('uses SNMP reachability before cached healthy metrics', () => {
+  it('keeps reachable SNMP-degraded devices visually up when cached metrics are healthy', () => {
     const device = mockDevice({ status: 'up' });
     const metrics = mockMetrics({
       operational_status: 'up',
@@ -131,10 +131,10 @@ describe('deviceVisualState', () => {
     });
 
     expect(resolveDeviceVisualState(device, metrics)).toMatchObject({
-      dotStatus: 'degraded',
-      label: 'Warning',
+      dotStatus: 'up',
+      label: 'Up',
     });
-    expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-probing)');
+    expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-up)');
   });
 
   it('uses primary up health when reachable SNMP devices only have partial telemetry', () => {

@@ -159,14 +159,6 @@ describe('buildTopologyHubModel', () => {
   it.each([
     ['warning health', { health: 'warning' } satisfies Partial<DeviceRuntimeDTO>],
     [
-      'SNMP degraded primary health',
-      {
-        primary_health: 'snmp_degraded',
-        snmp_reachable: 'false',
-        health: 'unknown',
-      } satisfies Partial<DeviceRuntimeDTO>,
-    ],
-    [
       'hard reachability failure',
       {
         primary_health: 'unreachable',
@@ -176,8 +168,11 @@ describe('buildTopologyHubModel', () => {
       } satisfies Partial<DeviceRuntimeDTO>,
     ],
     [
-      'soft reachability failure',
+      'soft reachability probing',
       {
+        operational_status: 'probing',
+        primary_health: 'snmp_degraded',
+        network_reachable: 'unknown',
         reachability: 'soft_down',
         snmp_reachable: 'false',
         health: 'healthy',
@@ -223,6 +218,39 @@ describe('buildTopologyHubModel', () => {
     expect(model.areas[0].degradedDeviceCount).toBe(1);
     expect(model.areas[0].healthLabel).toBe('Needs attention');
     expect(model.attentionDevices).toEqual([device]);
+  });
+
+  it('does not mark network-reachable SNMP telemetry degradation as needing attention', () => {
+    const device = mockDevice({ id: 'device-1', hostname: 'router-1', status: 'up' });
+    const snapshot: SnapshotPayload = {
+      devices: {
+        'device-1': mockDeviceRuntime({
+          device_id: 'device-1',
+          primary_health: 'snmp_degraded',
+          snmp_reachable: 'false',
+          network_reachable: 'true',
+          reachability: 'up',
+          health: 'unknown',
+          metrics_status: 'unavailable',
+          metrics_reason: 'no_data',
+        }),
+      },
+      links: {},
+    };
+
+    const model = buildTopologyHubModel({
+      areas: [mockArea()],
+      devices: [device],
+      links: [],
+      snapshot,
+      maps: [],
+    });
+
+    expect(model.aggregate.degradedDevices).toBe(0);
+    expect(model.aggregate.healthPercentage).toBe(100);
+    expect(model.areas[0].degradedDeviceCount).toBe(0);
+    expect(model.areas[0].healthLabel).toBe('Healthy');
+    expect(model.attentionDevices).toEqual([]);
   });
 
   it('falls back to persisted device status when runtime snapshot has no device status', () => {
