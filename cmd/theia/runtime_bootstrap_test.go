@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,10 +25,25 @@ import (
 type stubRuntimeStopper struct {
 	name  string
 	stops *[]string
+	mu    *sync.Mutex
 }
 
 func (s stubRuntimeStopper) Stop() {
+	if s.mu != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+	}
 	*s.stops = append(*s.stops, s.name)
+}
+
+type blockingRuntimeStopper struct {
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (s blockingRuntimeStopper) Stop() {
+	close(s.started)
+	<-s.release
 }
 
 type stubRuntimeServer struct {
@@ -816,14 +832,61 @@ func TestRuntimeBootstrapStopRuntimeStopsChildrenInReverseOrder(t *testing.T) {
 	bootstrap := &runtimeBootstrap{}
 	var order []string
 	children := runtimeChildren{
-		stubRuntimeStopper{name: "pipeline", stops: &order},
-		stubRuntimeStopper{name: "instance-backups", stops: &order},
-		stubRuntimeStopper{name: "device-backups", stops: &order},
+		{name: "pipeline", stopper: stubRuntimeStopper{name: "pipeline", stops: &order}},
+		{name: "instance-backups", stopper: stubRuntimeStopper{name: "instance-backups", stops: &order}},
+		{name: "device-backups", stopper: stubRuntimeStopper{name: "device-backups", stops: &order}},
 	}
 
 	bootstrap.stopRuntime(children)
 
 	if got, want := fmt.Sprint(order), "[device-backups instance-backups pipeline]"; got != want {
+		t.Fatalf("stop order = %s, want %s", got, want)
+	}
+}
+
+func TestRuntimeBootstrapStopRuntimeContinuesAfterChildStopTimeout(t *testing.T) {
+	originalTimeout := runtimeChildStopTimeout
+	runtimeChildStopTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { runtimeChildStopTimeout = originalTimeout })
+
+	bootstrap := &runtimeBootstrap{}
+	var (
+		mu      sync.Mutex
+		order   []string
+		started = make(chan struct{})
+		release = make(chan struct{})
+	)
+	children := runtimeChildren{
+		{name: "pipeline", stopper: stubRuntimeStopper{name: "pipeline", stops: &order, mu: &mu}},
+		{name: "stuck-instance-backups", stopper: blockingRuntimeStopper{started: started, release: release}},
+		{name: "device-backups", stopper: stubRuntimeStopper{name: "device-backups", stops: &order, mu: &mu}},
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		bootstrap.stopRuntime(children)
+		close(returned)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(250 * time.Millisecond):
+		close(release)
+		t.Fatal("blocking child Stop() was not called")
+	}
+
+	select {
+	case <-returned:
+	case <-time.After(250 * time.Millisecond):
+		close(release)
+		t.Fatal("stopRuntime did not return after child stop timeout")
+	}
+	close(release)
+
+	mu.Lock()
+	got := fmt.Sprint(order)
+	mu.Unlock()
+	if want := "[device-backups pipeline]"; got != want {
 		t.Fatalf("stop order = %s, want %s", got, want)
 	}
 }
