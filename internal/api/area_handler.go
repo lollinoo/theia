@@ -1,5 +1,7 @@
 package api
 
+// This file defines area handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"encoding/json"
 	"net/http"

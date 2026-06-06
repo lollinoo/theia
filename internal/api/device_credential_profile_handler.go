@@ -1,5 +1,7 @@
 package api
 
+// This file defines device credential profile handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"encoding/json"
 	"fmt"

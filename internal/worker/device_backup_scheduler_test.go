@@ -1,5 +1,7 @@
 package worker
 
+// This file exercises device backup scheduler behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"errors"
@@ -40,16 +42,22 @@ func (m *mockBackupJobRepo) DeleteFailedOlderThan(cutoff time.Time) (int, error)
 	return m.deleteFailedCount, nil
 }
 
-func (m *mockBackupJobRepo) Create(job *domain.BackupJob) error              { return nil }
+func (m *mockBackupJobRepo) Create(job *domain.BackupJob) error { return nil }
+
 func (m *mockBackupJobRepo) GetByID(id uuid.UUID) (*domain.BackupJob, error) { return nil, nil }
+
 func (m *mockBackupJobRepo) GetByDeviceID(deviceID uuid.UUID) ([]domain.BackupJob, error) {
 	return nil, nil
 }
+
 func (m *mockBackupJobRepo) GetLatestByDeviceID(deviceID uuid.UUID) (*domain.BackupJob, error) {
 	return nil, nil
 }
-func (m *mockBackupJobRepo) Update(job *domain.BackupJob) error        { return nil }
-func (m *mockBackupJobRepo) Delete(id uuid.UUID) error                 { return nil }
+
+func (m *mockBackupJobRepo) Update(job *domain.BackupJob) error { return nil }
+
+func (m *mockBackupJobRepo) Delete(id uuid.UUID) error { return nil }
+
 func (m *mockBackupJobRepo) DeleteByDeviceID(deviceID uuid.UUID) error { return nil }
 
 type mockRetentionBackupService struct {
@@ -430,14 +438,21 @@ func (r *checkBulkJobRepo) GetLatestByDeviceID(deviceID uuid.UUID) (*domain.Back
 func (r *checkBulkJobRepo) ListSuccessfulByDeviceOldest(deviceID uuid.UUID) ([]domain.BackupJob, error) {
 	return nil, nil
 }
-func (r *checkBulkJobRepo) DeleteFailedOlderThan(_ time.Time) (int, error)  { return 0, nil }
-func (r *checkBulkJobRepo) Create(job *domain.BackupJob) error              { return nil }
+
+func (r *checkBulkJobRepo) DeleteFailedOlderThan(_ time.Time) (int, error) { return 0, nil }
+
+func (r *checkBulkJobRepo) Create(job *domain.BackupJob) error { return nil }
+
 func (r *checkBulkJobRepo) GetByID(id uuid.UUID) (*domain.BackupJob, error) { return nil, nil }
+
 func (r *checkBulkJobRepo) GetByDeviceID(deviceID uuid.UUID) ([]domain.BackupJob, error) {
 	return nil, nil
 }
-func (r *checkBulkJobRepo) Update(job *domain.BackupJob) error        { return nil }
-func (r *checkBulkJobRepo) Delete(id uuid.UUID) error                 { return nil }
+
+func (r *checkBulkJobRepo) Update(job *domain.BackupJob) error { return nil }
+
+func (r *checkBulkJobRepo) Delete(id uuid.UUID) error { return nil }
+
 func (r *checkBulkJobRepo) DeleteByDeviceID(deviceID uuid.UUID) error { return nil }
 
 // TestCheckAndRunBulkBackup_NoBackupJobsExist verifies that the first scheduled backup

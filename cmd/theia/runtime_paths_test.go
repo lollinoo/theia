@@ -1,5 +1,7 @@
 package main
 
+// This file exercises runtime paths behavior so refactors preserve the documented contract.
+
 import (
 	"path/filepath"
 	"testing"

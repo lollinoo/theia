@@ -1,3 +1,6 @@
+/**
+ * Exercises realtime browser workflow behavior so refactors preserve the documented contract.
+ */
 import { expect, test, type Page } from '@playwright/test';
 
 type CanvasMapSummary = {

@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas render projection topology canvas behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Device, Link } from '../../types/api';

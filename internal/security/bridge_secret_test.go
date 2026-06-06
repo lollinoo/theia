@@ -1,5 +1,7 @@
 package security
 
+// This file exercises bridge secret behavior so refactors preserve the documented contract.
+
 import (
 	"strings"
 	"testing"

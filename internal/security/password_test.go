@@ -1,5 +1,7 @@
 package security
 
+// This file exercises password behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/base64"
 	"fmt"

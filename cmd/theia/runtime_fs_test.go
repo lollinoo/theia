@@ -1,5 +1,7 @@
 package main
 
+// This file exercises runtime fs behavior so refactors preserve the documented contract.
+
 import (
 	"os"
 	"path/filepath"

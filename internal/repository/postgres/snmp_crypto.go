@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines snmp crypto persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"encoding/base64"
 	"fmt"

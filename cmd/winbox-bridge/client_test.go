@@ -1,5 +1,7 @@
 package main
 
+// This file exercises client behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"net/http"

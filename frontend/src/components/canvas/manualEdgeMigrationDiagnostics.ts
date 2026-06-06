@@ -1,3 +1,7 @@
+/**
+ * Defines manual edge migration diagnostics behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import { recordCanvasDiagnosticEvent, updateCanvasDiagnosticsState } from './canvasDiagnostics';
 import { manualEdgeMigrationStorageKey } from './canvasHelpers';
 import {

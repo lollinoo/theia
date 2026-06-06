@@ -1,6 +1,11 @@
+/**
+ * Coordinates device winbox availability state and side effects for consuming components.
+ * Owns cleanup-sensitive lifecycle work so callers receive stable state and actions.
+ */
 import { useCallback, useRef, useState } from 'react';
 import { fetchDeviceCredentialProfiles } from '../api/client';
 
+/** Coordinates device winbox availability behavior for the React hook lifecycle. */
 export function useDeviceWinboxAvailability(): {
   deviceWinboxState: Record<string, boolean>;
   refreshDeviceWinboxAvailability: (deviceId: string) => void;

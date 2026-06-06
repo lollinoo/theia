@@ -1,5 +1,7 @@
 package service
 
+// This file defines bridge service service behavior and domain orchestration rules.
+
 import (
 	"context"
 	"errors"
@@ -31,14 +33,17 @@ var (
 	ErrInvalidUserSettings           = errors.New("invalid user settings")
 )
 
+// WinboxCredentialProvider defines the winbox credential provider contract for the service orchestration.
 type WinboxCredentialProvider interface {
 	GetWinboxCredentials(deviceID uuid.UUID, encryptedSecret, username string) (string, string, error)
 }
 
+// WinboxAssignmentProvider defines the winbox assignment provider contract for the service orchestration.
 type WinboxAssignmentProvider interface {
 	GetWinboxAssignment(uuid.UUID) (*postgres.WinboxAssignmentRow, error)
 }
 
+// BridgeServiceConfig represents bridge service config data used by the service orchestration.
 type BridgeServiceConfig struct {
 	BridgeRepo               domain.BridgeRepository
 	SettingsRepo             domain.SettingsRepository
@@ -51,6 +56,7 @@ type BridgeServiceConfig struct {
 	Now                      func() time.Time
 }
 
+// BridgeService represents bridge service data used by the service orchestration.
 type BridgeService struct {
 	bridgeRepo            domain.BridgeRepository
 	settingsRepo          domain.SettingsRepository
@@ -62,12 +68,14 @@ type BridgeService struct {
 	now                   func() time.Time
 }
 
+// UserSettingsResult represents user settings result data used by the service orchestration.
 type UserSettingsResult struct {
 	User        UserSettingsUser        `json:"user"`
 	Preferences UserSettingsPreferences `json:"preferences"`
 	Bridge      UserSettingsBridge      `json:"bridge"`
 }
 
+// UserSettingsUser represents user settings user data used by the service orchestration.
 type UserSettingsUser struct {
 	ID                uuid.UUID  `json:"id"`
 	Username          string     `json:"username"`
@@ -77,6 +85,7 @@ type UserSettingsUser struct {
 	PasswordChangedAt *time.Time `json:"password_changed_at,omitempty"`
 }
 
+// UserSettingsPreferences represents user settings preferences data used by the service orchestration.
 type UserSettingsPreferences struct {
 	Timezone           string `json:"timezone"`
 	Locale             string `json:"locale"`
@@ -85,11 +94,13 @@ type UserSettingsPreferences struct {
 	BridgePortOverride *int   `json:"bridge_port_override"`
 }
 
+// UserSettingsBridge represents user settings bridge data used by the service orchestration.
 type UserSettingsBridge struct {
 	Configured bool                      `json:"configured"`
 	Credential *BridgeCredentialMetadata `json:"credential,omitempty"`
 }
 
+// BridgeCredentialMetadata represents bridge credential metadata data used by the service orchestration.
 type BridgeCredentialMetadata struct {
 	ID           uuid.UUID  `json:"id"`
 	SecretPrefix string     `json:"secret_prefix"`
@@ -101,6 +112,7 @@ type BridgeCredentialMetadata struct {
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 }
 
+// UpdateUserSettingsInput represents update user settings input data used by the service orchestration.
 type UpdateUserSettingsInput struct {
 	DisplayName             *string
 	Username                *string
@@ -111,17 +123,20 @@ type UpdateUserSettingsInput struct {
 	ClearBridgePortOverride bool
 }
 
+// BridgeSecretResult represents bridge secret result data used by the service orchestration.
 type BridgeSecretResult struct {
 	Credential BridgeCredentialMetadata `json:"credential"`
 	Secret     string                   `json:"secret"`
 	ShownOnce  bool                     `json:"shown_once"`
 }
 
+// BridgeLaunchRequestResult represents bridge launch request result data used by the service orchestration.
 type BridgeLaunchRequestResult struct {
 	LaunchToken string    `json:"launch_token"`
 	ExpiresAt   time.Time `json:"expires_at"`
 }
 
+// BridgeLaunchCredentials represents bridge launch credentials data used by the service orchestration.
 type BridgeLaunchCredentials struct {
 	IP        string    `json:"ip"`
 	Username  string    `json:"username"`
@@ -129,6 +144,7 @@ type BridgeLaunchCredentials struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// NewBridgeService constructs bridge service state for the service orchestration.
 func NewBridgeService(config BridgeServiceConfig) (*BridgeService, error) {
 	if config.BridgeRepo == nil {
 		return nil, errors.New("bridge service repository is required")
@@ -171,6 +187,7 @@ func NewBridgeService(config BridgeServiceConfig) (*BridgeService, error) {
 	}, nil
 }
 
+// GetSettings retrieves settings data from the service orchestration.
 func (s *BridgeService) GetSettings(ctx context.Context, user *AuthenticatedUser) (*UserSettingsResult, error) {
 	current, err := s.users.GetUserByID(ctx, user.User.User.ID)
 	if err != nil {
@@ -187,6 +204,7 @@ func (s *BridgeService) GetSettings(ctx context.Context, user *AuthenticatedUser
 	return s.buildUserSettingsResult(current, preferences, credential), nil
 }
 
+// UpdateSettings updates settings data through the service orchestration.
 func (s *BridgeService) UpdateSettings(ctx context.Context, user *AuthenticatedUser, input UpdateUserSettingsInput) (*UserSettingsResult, error) {
 	current, err := s.users.GetUserByID(ctx, user.User.User.ID)
 	if err != nil {
@@ -348,6 +366,7 @@ func (s *BridgeService) VerifyUserBridgeSecret(ctx context.Context, rawSecret st
 	return credential, nil
 }
 
+// CreateLaunchRequest creates launch request data through the service orchestration.
 func (s *BridgeService) CreateLaunchRequest(ctx context.Context, user *AuthenticatedUser, deviceID uuid.UUID) (*BridgeLaunchRequestResult, error) {
 	token, err := security.GenerateToken()
 	if err != nil {

@@ -1,5 +1,7 @@
 package security
 
+// This file defines http security policy helpers and trust-boundary handling.
+
 import (
 	"context"
 	"net/http"

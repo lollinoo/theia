@@ -1,5 +1,7 @@
 package crypto
 
+// This file defines encrypt cryptographic storage and key-handling behavior.
+
 import (
 	"crypto/aes"
 	"crypto/cipher"

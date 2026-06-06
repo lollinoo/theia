@@ -1,5 +1,7 @@
 package scheduler
 
+// This file defines heap scheduling behavior, timing policy, and queue ownership.
+
 import "time"
 
 type heapItem struct {

@@ -2,6 +2,8 @@
 // contracts that later pipeline phases can schedule and consume.
 package collector
 
+// This file defines results metrics collection behavior and normalized collector output.
+
 import (
 	"time"
 

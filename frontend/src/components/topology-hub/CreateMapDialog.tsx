@@ -1,12 +1,18 @@
+/**
+ * Defines create map dialog behavior for the topology hub.
+ * Keeps saved-map and area workflows separate from the live canvas surface.
+ */
 import { useEffect, useState } from 'react';
 import type { Area } from '../../types/api';
 import { MaterialIcon } from '../MaterialIcon';
 
+/** Describes the create map dialog submit contract used by the topology hub. */
 export interface CreateMapDialogSubmit {
   name: string;
   sourceArea: Area | null;
 }
 
+/** Defines the props contract for CreateMapDialog within the topology hub. */
 export interface CreateMapDialogProps {
   open: boolean;
   sourceArea: Area | null;
@@ -14,6 +20,7 @@ export interface CreateMapDialogProps {
   onClose: () => void;
 }
 
+/** Renders the CreateMapDialog component within the topology hub. */
 export function CreateMapDialog({ open, sourceArea, onCreate, onClose }: CreateMapDialogProps) {
   const [name, setName] = useState('');
   const trimmedName = name.trim();

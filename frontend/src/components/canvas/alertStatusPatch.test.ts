@@ -1,3 +1,6 @@
+/**
+ * Exercises alert status patch topology canvas behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SnapshotPayload } from '../../types/metrics';

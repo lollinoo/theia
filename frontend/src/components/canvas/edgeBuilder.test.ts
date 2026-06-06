@@ -1,3 +1,6 @@
+/**
+ * Exercises edge builder topology canvas behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';

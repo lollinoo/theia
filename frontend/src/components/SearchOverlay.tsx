@@ -1,3 +1,7 @@
+/**
+ * Renders search overlay UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useDeferredValue, useEffect, useRef, useState } from 'react';
 import type { Device } from '../types/api';
 import { MaterialIcon } from './MaterialIcon';

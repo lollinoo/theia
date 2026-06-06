@@ -1,3 +1,7 @@
+/**
+ * Provides auth context context state for the React application.
+ * Centralizes shared lifecycle and persistence behavior behind a stable provider contract.
+ */
 import {
   type ReactNode,
   createContext,
@@ -37,6 +41,7 @@ function authErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+/** Renders the AuthProvider component within the shared React context. */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('checking');
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -138,6 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+/** Coordinates auth behavior for the shared React context. */
 export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
   if (!context) {

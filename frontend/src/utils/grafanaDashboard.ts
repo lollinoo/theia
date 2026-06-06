@@ -1,7 +1,12 @@
+/**
+ * Provides grafana dashboard utility behavior shared by frontend workflows.
+ * Keeps non-UI policy and formatting rules reusable across components.
+ */
 import type { Device, GrafanaDashboardConfig, GrafanaVariableSource } from '../types/api';
 
 export type { GrafanaDashboardConfig, GrafanaDashboardProfile } from '../types/api';
 
+/** Describes the grafana map context contract used by the shared frontend utility layer. */
 export interface GrafanaMapContext {
   mapId: string | null;
   mapName: string;
@@ -9,6 +14,7 @@ export interface GrafanaMapContext {
 
 const placeholderPattern = /\{\{\s*(hostname|ip|map_name|map_id)\s*\}\}/g;
 
+/** Resolves grafana dashboard url for the shared frontend utility layer. */
 export function resolveGrafanaDashboardUrl(
   config: GrafanaDashboardConfig | null,
   device: Device | undefined,
@@ -30,6 +36,7 @@ export function resolveGrafanaDashboardUrl(
   return globalGrafanaUrl;
 }
 
+/** Renders grafana dashboard template for the shared frontend utility layer. */
 export function renderGrafanaDashboardTemplate(
   template: string,
   device: Device,
@@ -67,6 +74,7 @@ function resolvedDeviceHostname(device: Device): string {
   return hostname || sysName || ip || device.id;
 }
 
+/** Defines empty grafana dashboard config constants and helper contracts for the shared frontend utility layer. */
 export const EMPTY_GRAFANA_DASHBOARD_CONFIG: GrafanaDashboardConfig = {
   profiles: [],
   default_profile_id: '',

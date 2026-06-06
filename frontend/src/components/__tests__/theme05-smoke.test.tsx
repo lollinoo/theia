@@ -1,3 +1,6 @@
+/**
+ * Exercises theme05 smoke component behavior so refactors preserve the documented contract.
+ */
 import { render } from '@testing-library/react';
 /**
  * THEME-05 Smoke Tests

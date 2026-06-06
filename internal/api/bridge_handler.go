@@ -1,5 +1,7 @@
 package api
 
+// This file defines bridge handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"context"
 	"encoding/json"
@@ -33,6 +35,7 @@ func NewBridgeHandler(binariesDir string) *BridgeHandler {
 	return &BridgeHandler{binariesDir: binariesDir, limiter: newBridgeRateLimiter(20, 0, nil)}
 }
 
+// NewBridgeHandlerWithService constructs bridge handler with service state for the HTTP boundary and route policy.
 func NewBridgeHandlerWithService(binariesDir string, bridgeService bridgeLaunchService) *BridgeHandler {
 	return &BridgeHandler{binariesDir: binariesDir, service: bridgeService, limiter: newBridgeRateLimiter(20, 0, nil)}
 }

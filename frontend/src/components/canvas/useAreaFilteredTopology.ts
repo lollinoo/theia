@@ -1,7 +1,12 @@
+/**
+ * Coordinates area filtered topology state for the topology canvas.
+ * Keeps canvas lifecycle, projected graph state, and cleanup behavior explicit for callers.
+ */
 import { useMemo } from 'react';
 import type { Device, Link } from '../../types/api';
 import { projectAreaTopology } from './areaProjection';
 
+/** Describes the filtered topology contract used by the topology canvas. */
 export interface FilteredTopology {
   filteredDevices: Device[];
   filteredLinks: Link[];

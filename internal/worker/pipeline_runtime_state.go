@@ -1,5 +1,7 @@
 package worker
 
+// This file defines pipeline runtime state worker behavior, background lifecycle, and runtime state updates.
+
 import (
 	"reflect"
 	"sync"

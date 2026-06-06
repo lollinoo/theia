@@ -1,3 +1,6 @@
+/**
+ * Exercises interface stats panel routes topology canvas behavior so refactors preserve the documented contract.
+ */
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 

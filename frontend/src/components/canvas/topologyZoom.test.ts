@@ -1,3 +1,6 @@
+/**
+ * Exercises topology zoom topology canvas behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 import { resolveTopologyZoomBand } from './topologyZoom';
 

@@ -1,6 +1,11 @@
+/**
+ * Provides theme context context state for the React application.
+ * Centralizes shared lifecycle and persistence behavior behind a stable provider contract.
+ */
 import { type ReactNode, createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 type ThemePreference = 'dark' | 'light' | 'system';
+/** Describes the resolved theme contract used by the shared React context. */
 export type ResolvedTheme = 'dark' | 'light';
 
 interface ThemeContextValue {
@@ -23,6 +28,7 @@ function getSystemTheme(): ResolvedTheme {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+/** Renders the ThemeProvider component within the shared React context. */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemePreference>(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -62,6 +68,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   );
 }
 
+/** Coordinates theme behavior for the shared React context. */
 export function useTheme(): ThemeContextValue {
   const ctx = useContext(ThemeContext);
   return requireThemeContext(ctx);
@@ -86,6 +93,7 @@ const LIGHT_COLOR_MAP: Record<string, string> = {
   '#ff1744': '#C62828',
 };
 
+/** Adapts area color for the shared React context. */
 export function adaptAreaColor(hex: string, resolvedTheme: ResolvedTheme): string {
   if (resolvedTheme === 'dark') return hex;
   return LIGHT_COLOR_MAP[hex] ?? hex;

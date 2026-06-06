@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file defines projection canvas-map service behavior and topology ownership rules.
+
 import (
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ type TopologyProjection struct {
 	GhostDevices []domain.Device
 }
 
+// TopologyResponsePlan represents topology response plan data used by the canvas-map orchestration.
 type TopologyResponsePlan struct {
 	Devices       []domain.Device
 	Links         []domain.Link
@@ -28,6 +31,7 @@ type TopologyResponsePlan struct {
 	PositionCount int
 }
 
+// CreatePlan represents create plan data used by the canvas-map orchestration.
 type CreatePlan struct {
 	Filter                domain.CanvasMapFilter
 	PersistedSourceAreaID *uuid.UUID
@@ -35,17 +39,20 @@ type CreatePlan struct {
 	CreateEmptyMembership bool
 }
 
+// DefaultPositionCopyPlan represents default position copy plan data used by the canvas-map orchestration.
 type DefaultPositionCopyPlan struct {
 	ShouldSave bool
 	Positions  []domain.DevicePosition
 }
 
+// SourceMapMaterializationPlan represents source map materialization plan data used by the canvas-map orchestration.
 type SourceMapMaterializationPlan struct {
 	Membership          domain.CanvasMapMembership
 	Positions           []domain.DevicePosition
 	ShouldSavePositions bool
 }
 
+// ErrDefaultMapDelete stores shared err default map delete state for the canvas-map orchestration.
 var ErrDefaultMapDelete = errors.New("cannot delete default canvas map")
 
 // ValidateDelete rejects attempts to delete the default saved map.

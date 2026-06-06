@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises migrations behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/base64"
 	"io/fs"

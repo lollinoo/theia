@@ -1,5 +1,7 @@
 package domain
 
+// This file defines link domain contracts and lifecycle invariants.
+
 import (
 	"time"
 
@@ -27,6 +29,7 @@ type Link struct {
 	UpdatedAt         time.Time         `json:"updated_at"`
 }
 
+// LinkUpsertKind represents link upsert kind data used by the domain model.
 type LinkUpsertKind string
 
 const (

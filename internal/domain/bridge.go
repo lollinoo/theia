@@ -1,5 +1,7 @@
 package domain
 
+// This file defines bridge domain contracts and lifecycle invariants.
+
 import (
 	"context"
 	"errors"
@@ -8,6 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// BridgeCredentialStatus represents bridge credential status data used by the domain model.
 type BridgeCredentialStatus string
 
 const (
@@ -21,6 +24,7 @@ var (
 	ErrBridgeLaunchRequestUsed     = errors.New("bridge launch request already used")
 )
 
+// UserSettings represents user settings data used by the domain model.
 type UserSettings struct {
 	UserID             uuid.UUID
 	Timezone           string
@@ -30,6 +34,7 @@ type UserSettings struct {
 	UpdatedAt          time.Time
 }
 
+// BridgeCredential represents bridge credential data used by the domain model.
 type BridgeCredential struct {
 	ID              uuid.UUID
 	UserID          uuid.UUID
@@ -45,6 +50,7 @@ type BridgeCredential struct {
 	RotationReason  string
 }
 
+// BridgeLaunchRequest represents bridge launch request data used by the domain model.
 type BridgeLaunchRequest struct {
 	ID                     uuid.UUID
 	UserID                 uuid.UUID
@@ -56,6 +62,7 @@ type BridgeLaunchRequest struct {
 	ConsumedByCredentialID *uuid.UUID
 }
 
+// BridgeConnectorDownload represents bridge connector download data used by the domain model.
 type BridgeConnectorDownload struct {
 	ID               uuid.UUID
 	UserID           uuid.UUID
@@ -66,6 +73,7 @@ type BridgeConnectorDownload struct {
 	UserAgent        string
 }
 
+// BridgeRepository defines the bridge repository contract for the domain model.
 type BridgeRepository interface {
 	GetUserSettings(ctx context.Context, userID uuid.UUID) (*UserSettings, error)
 	UpsertUserSettings(ctx context.Context, settings *UserSettings) error

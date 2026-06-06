@@ -1,5 +1,7 @@
 package domain
 
+// This file defines settings domain contracts and lifecycle invariants.
+
 // Setting keys for runtime configuration stored in the primary database.
 const (
 	SettingPrometheusURL                 = "prometheus_url"

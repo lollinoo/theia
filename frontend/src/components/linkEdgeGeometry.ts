@@ -1,3 +1,7 @@
+/**
+ * Renders link edge geometry UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 export interface EdgePathModel {
   edgePath: string;
   labelX: number;
@@ -12,6 +16,7 @@ interface SelfLoopPathOptions {
   parallelIndex?: number;
 }
 
+/** Builds self loop path model for the UI component boundary. */
 export function buildSelfLoopPathModel({
   sourceX,
   sourceY,

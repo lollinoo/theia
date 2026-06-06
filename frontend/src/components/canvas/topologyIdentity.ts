@@ -1,3 +1,7 @@
+/**
+ * Defines topology identity behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Device, Link } from '../../types/api';
 import { normalizeInterfaceName } from './canvasHelpers';
 
@@ -7,6 +11,7 @@ interface PositionLike {
   pinned?: boolean;
 }
 
+/** Describes the topology identity contract used by the topology canvas. */
 export interface TopologyIdentity {
   deviceKeys: string[];
   linkKeys: string[];
@@ -17,10 +22,12 @@ function hasUsablePosition(position: PositionLike | undefined): boolean {
   return position !== undefined && Number.isFinite(position.x) && Number.isFinite(position.y);
 }
 
+/** Builds topology device key for the topology canvas. */
 export function topologyDeviceKey(deviceId: string): string {
   return deviceId.trim().toLowerCase();
 }
 
+/** Builds topology link key for the topology canvas. */
 export function topologyLinkKey(link: Link): string {
   const sourceDeviceId = topologyDeviceKey(link.source_device_id);
   const targetDeviceId = topologyDeviceKey(link.target_device_id);
@@ -40,6 +47,7 @@ export function topologyLinkKey(link: Link): string {
   return `${fallbackPair}|id:${link.id.trim().toLowerCase()}`;
 }
 
+/** Builds topology IDentity for the topology canvas. */
 export function buildTopologyIdentity(devices: Device[], links: Link[]): TopologyIdentity {
   const deviceKeys = [...new Set(devices.map((device) => topologyDeviceKey(device.id)))].sort();
   const linkKeys = [...new Set(links.map((link) => topologyLinkKey(link)))].sort();
@@ -51,6 +59,7 @@ export function buildTopologyIdentity(devices: Device[], links: Link[]): Topolog
   };
 }
 
+/** Collect placement device IDs for the topology canvas. */
 export function collectPlacementDeviceIds(
   devices: Device[],
   currentPositions: Map<string, PositionLike>,

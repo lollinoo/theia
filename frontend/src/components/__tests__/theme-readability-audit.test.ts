@@ -1,3 +1,6 @@
+/**
+ * Exercises theme readability audit component behavior so refactors preserve the documented contract.
+ */
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';

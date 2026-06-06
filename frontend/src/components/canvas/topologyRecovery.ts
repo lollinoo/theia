@@ -1,10 +1,16 @@
+/**
+ * Defines topology recovery behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { CanvasMeasurementTrigger } from './canvasInstrumentation';
 
+/** Describes the structural refresh cause contract used by the topology canvas. */
 export type StructuralRefreshCause =
   | 'backend-reconnected'
   | 'backend-resync-required'
   | 'topology-changed';
 
+/** Describes the topology recovery notice contract used by the topology canvas. */
 export interface TopologyRecoveryNotice {
   tone: 'success' | 'warning';
   message: string;

@@ -1,5 +1,7 @@
 package scheduler
 
+// This file exercises scheduler behavior so refactors preserve the documented contract.
+
 import (
 	"bytes"
 	"container/heap"

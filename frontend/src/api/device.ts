@@ -1,3 +1,7 @@
+/**
+ * Provides frontend API helpers for device endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import {
   type Device,
   type DeviceCredentialProfile,
@@ -13,11 +17,13 @@ import {
 } from '../types/api';
 import { requestJSON, requestJSONWithBody } from './transport';
 
+/** Describes the bridge launch request response contract used by the frontend API boundary. */
 export interface BridgeLaunchRequestResponse {
   launch_token: string;
   expires_at?: string;
 }
 
+/** Describes the snmppayload contract used by the frontend API boundary. */
 export interface SNMPPayload {
   version: string;
   community?: string;
@@ -30,6 +36,7 @@ export interface SNMPPayload {
   security_level?: string;
 }
 
+/** Describes the create device payload contract used by the frontend API boundary. */
 export interface CreateDevicePayload {
   hostname: string;
   ip?: string;

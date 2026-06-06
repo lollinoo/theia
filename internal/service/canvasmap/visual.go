@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file defines visual canvas-map service behavior and topology ownership rules.
+
 import (
 	"errors"
 	"strings"
@@ -8,7 +10,10 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// ErrInvalidVisualColor stores shared err invalid visual color state for the canvas-map orchestration.
 var ErrInvalidVisualColor = errors.New("invalid visual_color format (must be #RRGGBB)")
+
+// ErrVisualColorRequiresVirtualDevice stores shared err visual color requires virtual device state for the canvas-map orchestration.
 var ErrVisualColorRequiresVirtualDevice = errors.New("visual_color is only supported for virtual devices")
 
 // NormalizeVisualColor trims, uppercases, validates, or clears a map-local visual color.

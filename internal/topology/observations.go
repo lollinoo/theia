@@ -1,5 +1,7 @@
 package topology
 
+// This file defines observations topology observation contracts.
+
 import (
 	"sort"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// Observation represents observation data used by the package.
 type Observation struct {
 	ID              uuid.UUID
 	LocalDeviceID   uuid.UUID
@@ -25,6 +28,7 @@ type Observation struct {
 	UpdatedAt       time.Time
 }
 
+// UnresolvedNeighbor represents unresolved neighbor data used by the package.
 type UnresolvedNeighbor struct {
 	ID              uuid.UUID
 	LocalDeviceID   uuid.UUID
@@ -38,6 +42,7 @@ type UnresolvedNeighbor struct {
 	UpdatedAt       time.Time
 }
 
+// ObservationStore defines the observation store contract for the package.
 type ObservationStore interface {
 	UpsertObservation(*Observation) error
 	PruneLocalObservations(localDeviceID uuid.UUID, protocols []domain.DiscoveryProtocol, keep []Observation) (int, error)
@@ -47,21 +52,25 @@ type ObservationStore interface {
 	GetUnresolvedNeighborsByDeviceID(localDeviceID uuid.UUID) ([]UnresolvedNeighbor, error)
 }
 
+// LinkWriter defines the link writer contract for the package.
 type LinkWriter interface {
 	UpsertDetailed(*domain.Link) (domain.LinkUpsertResult, error)
 }
 
+// ApplyEvent represents apply event data used by the package.
 type ApplyEvent struct {
 	Link   domain.Link
 	Result domain.LinkUpsertResult
 }
 
+// ApplyResult represents apply result data used by the package.
 type ApplyResult struct {
 	TopologyChanged bool
 	LinksCreated    int
 	Events          []ApplyEvent
 }
 
+// NormalizeRemoteIdentity returns a normalized remote identity value for the package.
 func NormalizeRemoteIdentity(value string) string {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	normalized = strings.TrimSuffix(normalized, ".")

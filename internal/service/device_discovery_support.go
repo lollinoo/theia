@@ -1,5 +1,7 @@
 package service
 
+// This file defines device discovery support service behavior and domain orchestration rules.
+
 import (
 	"strings"
 

@@ -1,5 +1,7 @@
 package domain
 
+// This file defines poll class domain contracts and lifecycle invariants.
+
 import "time"
 
 // PollClass represents the polling-cadence tier assigned to a device.

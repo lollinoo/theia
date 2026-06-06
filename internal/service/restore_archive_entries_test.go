@@ -1,5 +1,7 @@
 package service
 
+// This file exercises restore archive entries behavior so refactors preserve the documented contract.
+
 import (
 	"strings"
 	"testing"

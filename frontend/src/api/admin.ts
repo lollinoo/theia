@@ -1,3 +1,7 @@
+/**
+ * Provides frontend API helpers for admin endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import {
   parseAdminAuditLogsEnvelope,
   parseAdminDashboard,
@@ -10,6 +14,7 @@ import {
 import type { AuthUser } from './auth';
 import { requestJSON, requestJSONWithBody } from './transport';
 
+/** Describes the admin dashboard stats contract used by the frontend API boundary. */
 export interface AdminDashboardStats {
   total_users: number;
   active_users: number;
@@ -19,6 +24,7 @@ export interface AdminDashboardStats {
   recent_failed_login_attempts: number;
 }
 
+/** Describes the admin audit log contract used by the frontend API boundary. */
 export interface AdminAuditLog {
   id: string;
   actor_user_id?: string;
@@ -32,11 +38,13 @@ export interface AdminAuditLog {
   created_at: string;
 }
 
+/** Describes the admin dashboard response contract used by the frontend API boundary. */
 export interface AdminDashboardResponse {
   stats: AdminDashboardStats;
   recent_audit_logs: AdminAuditLog[];
 }
 
+/** Describes the admin role contract used by the frontend API boundary. */
 export interface AdminRole {
   id: string;
   name: string;
@@ -45,6 +53,7 @@ export interface AdminRole {
   permissions: string[];
 }
 
+/** Describes the create admin user payload contract used by the frontend API boundary. */
 export interface CreateAdminUserPayload {
   username: string;
   password: string;
@@ -54,6 +63,7 @@ export interface CreateAdminUserPayload {
   role_ids?: string[];
 }
 
+/** Describes the update admin user payload contract used by the frontend API boundary. */
 export interface UpdateAdminUserPayload {
   username?: string;
   email?: string;
@@ -61,6 +71,7 @@ export interface UpdateAdminUserPayload {
   must_change_password?: boolean;
 }
 
+/** Describes the admin password reset response contract used by the frontend API boundary. */
 export interface AdminPasswordResetResponse {
   reset_token: string;
 }

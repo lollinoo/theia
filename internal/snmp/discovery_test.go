@@ -1,5 +1,7 @@
 package snmp
 
+// This file exercises discovery behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 
@@ -8,7 +10,6 @@ import (
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
-// testDiscoveryRegistry creates a vendor registry suitable for discovery tests.
 // Reuses the helper from detector_test.go (same package).
 var testDiscoveryRegistry = testRegistry
 

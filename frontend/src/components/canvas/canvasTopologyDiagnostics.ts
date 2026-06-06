@@ -1,6 +1,11 @@
+/**
+ * Defines canvas topology diagnostics behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import { recordCanvasDiagnosticEvent, updateCanvasDiagnosticsState } from './canvasDiagnostics';
 import type { CanvasMeasurementTrigger } from './canvasInstrumentation';
 
+/** Describes the canvas topology load metadata contract used by the topology canvas. */
 export interface CanvasTopologyLoadMetadata {
   reason: CanvasMeasurementTrigger;
   silent: boolean;

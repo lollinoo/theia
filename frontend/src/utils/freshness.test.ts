@@ -1,3 +1,6 @@
+/**
+ * Exercises freshness utility behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 
 import {

@@ -1,3 +1,7 @@
+/**
+ * Renders interface stats panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type {
   DeviceInterfacePanelModel,
   InterfaceSectionModel,
@@ -119,6 +123,7 @@ function negotiationToneClass(tone: LinkInterfacePanelModel['negotiation']['tone
   }
 }
 
+/** Renders the InterfaceStatsPanel component within the UI component boundary. */
 export function InterfaceStatsPanel({ model }: InterfaceStatsPanelProps) {
   return (
     <div className="space-y-3 p-4">
@@ -160,6 +165,7 @@ interface DeviceInterfaceStatsPanelProps {
   model: DeviceInterfacePanelModel;
 }
 
+/** Renders the DeviceInterfaceStatsPanel component within the UI component boundary. */
 export function DeviceInterfaceStatsPanel({ model }: DeviceInterfaceStatsPanelProps) {
   if (model.loadingInterfaces) {
     return <div className="p-4 text-sm text-on-bg-secondary">Loading interface details...</div>;

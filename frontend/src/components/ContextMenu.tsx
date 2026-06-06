@@ -1,6 +1,11 @@
+/**
+ * Renders context menu UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useRef, useState } from 'react';
 import { MaterialIcon } from './MaterialIcon';
 
+/** Describes the context menu item contract used by the UI component boundary. */
 export interface ContextMenuItem {
   label: string;
   onClick: () => void;
@@ -17,6 +22,7 @@ interface ContextMenuProps {
   onClose: () => void;
 }
 
+/** Renders the ContextMenu component within the UI component boundary. */
 export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [adjustedPosition, setAdjustedPosition] = useState<{ x: number; y: number } | null>(null);

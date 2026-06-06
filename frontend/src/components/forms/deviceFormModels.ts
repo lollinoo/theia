@@ -1,7 +1,13 @@
+/**
+ * Renders device form models UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { Device, SNMPProfile } from '../../types/api';
 
+/** Defines default virtual node color constants and helper contracts for the UI component boundary. */
 export const defaultVirtualNodeColor = '#00E676';
 
+/** Normalizes virtual node color for the UI component boundary. */
 export function normalizeVirtualNodeColor(color: string): string {
   const trimmed = color.trim();
   if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) {
@@ -10,6 +16,7 @@ export function normalizeVirtualNodeColor(color: string): string {
   return defaultVirtualNodeColor;
 }
 
+/** Describes the device form model contract used by the UI component boundary. */
 export interface DeviceFormModel {
   mode: 'physical' | 'virtual';
   hostname: string;
@@ -40,6 +47,7 @@ export interface DeviceFormModel {
   };
 }
 
+/** Creates add device form model for the UI component boundary. */
 export function createAddDeviceFormModel(): DeviceFormModel {
   return {
     mode: 'physical',
@@ -72,6 +80,7 @@ export function createAddDeviceFormModel(): DeviceFormModel {
   };
 }
 
+/** Creates device config form model for the UI component boundary. */
 export function createDeviceConfigFormModel(device: Device, isVirtual: boolean): DeviceFormModel {
   return {
     ...createAddDeviceFormModel(),
@@ -103,6 +112,7 @@ export function createDeviceConfigFormModel(device: Device, isVirtual: boolean):
   };
 }
 
+/** Resets device form mode for the UI component boundary. */
 export function resetDeviceFormMode(
   form: DeviceFormModel,
   nextMode: DeviceFormModel['mode'],
@@ -123,6 +133,7 @@ export function resetDeviceFormMode(
   };
 }
 
+/** Applies SNMP profile for the UI component boundary. */
 export function applySNMPProfile(form: DeviceFormModel, profile: SNMPProfile): DeviceFormModel {
   const currentDefaults = createAddDeviceFormModel().snmp;
   return {

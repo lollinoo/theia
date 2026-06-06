@@ -2,6 +2,8 @@
 
 package main
 
+// This file defines launch other behavior for the Winbox bridge command.
+
 import "os/exec"
 
 // defaultStartProcess launches WinBox by starting a detached process.

@@ -1,5 +1,7 @@
 package service
 
+// This file exercises postgres instance backup behavior so refactors preserve the documented contract.
+
 import (
 	"archive/tar"
 	"compress/gzip"

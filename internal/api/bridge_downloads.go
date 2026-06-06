@@ -1,5 +1,7 @@
 package api
 
+// This file defines bridge downloads HTTP handler behavior and request/response boundaries.
+
 import (
 	"fmt"
 	"os"

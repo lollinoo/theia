@@ -1,3 +1,6 @@
+/**
+ * Exercises incremental layout topology canvas behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AutoLayoutEdge, AutoLayoutNode } from '../../hooks/useAutoLayout';

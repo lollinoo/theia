@@ -1,6 +1,11 @@
+/**
+ * Defines delete map dialog behavior for the topology hub.
+ * Keeps saved-map and area workflows separate from the live canvas surface.
+ */
 import type { CanvasMap } from '../../types/api';
 import { MaterialIcon } from '../MaterialIcon';
 
+/** Defines the props contract for DeleteMapDialog within the topology hub. */
 export interface DeleteMapDialogProps {
   open: boolean;
   map: CanvasMap | null;
@@ -9,6 +14,7 @@ export interface DeleteMapDialogProps {
   onClose: () => void;
 }
 
+/** Renders the DeleteMapDialog component within the topology hub. */
 export function DeleteMapDialog({
   open,
   map,

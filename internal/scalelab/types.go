@@ -1,7 +1,10 @@
 package scalelab
 
+// This file defines types behavior for its package.
+
 import "time"
 
+// Profile represents profile data used by the package.
 type Profile struct {
 	Name                 string        `json:"name"`
 	DeviceCount          int           `json:"device_count"`
@@ -13,6 +16,7 @@ type Profile struct {
 	DefaultUnresolvedAdd int           `json:"default_unresolved_add"`
 }
 
+// Scenario represents scenario data used by the package.
 type Scenario struct {
 	Name                     string        `json:"name"`
 	Duration                 time.Duration `json:"duration"`
@@ -23,6 +27,7 @@ type Scenario struct {
 	BurstUnresolvedNeighbors int           `json:"burst_unresolved_neighbors"`
 }
 
+// ReplayObservation represents replay observation data used by the package.
 type ReplayObservation struct {
 	LocalDeviceID  string `json:"local_device_id"`
 	RemoteIdentity string `json:"remote_identity"`
@@ -33,11 +38,13 @@ type ReplayObservation struct {
 	SelfNeighbor   bool   `json:"self_neighbor,omitempty"`
 }
 
+// ReplayFixture represents replay fixture data used by the package.
 type ReplayFixture struct {
 	Name         string              `json:"name"`
 	Observations []ReplayObservation `json:"observations"`
 }
 
+// LatencySummary represents latency summary data used by the package.
 type LatencySummary struct {
 	P50Ms float64 `json:"p50_ms"`
 	P95Ms float64 `json:"p95_ms"`
@@ -45,6 +52,7 @@ type LatencySummary struct {
 	MaxMs float64 `json:"max_ms"`
 }
 
+// ReplayReport represents replay report data used by the package.
 type ReplayReport struct {
 	FixtureName       string         `json:"fixture_name"`
 	ObservationCount  int            `json:"observation_count"`
@@ -55,6 +63,7 @@ type ReplayReport struct {
 	Latency           LatencySummary `json:"latency"`
 }
 
+// WorkloadReport represents workload report data used by the package.
 type WorkloadReport struct {
 	PerformanceTasksPerMinute float64 `json:"performance_tasks_per_minute"`
 	OperationalTasksPerMinute float64 `json:"operational_tasks_per_minute"`
@@ -63,6 +72,7 @@ type WorkloadReport struct {
 	BurstUnresolvedNeighbors  int     `json:"burst_unresolved_neighbors"`
 }
 
+// LabReport represents lab report data used by the package.
 type LabReport struct {
 	Profile  Profile        `json:"profile"`
 	Scenario Scenario       `json:"scenario"`

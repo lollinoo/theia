@@ -1,5 +1,7 @@
 package service
 
+// This file exercises postgres cli invocation behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"fmt"

@@ -1,3 +1,7 @@
+/**
+ * Provides canvas visibility utility behavior shared by frontend workflows.
+ * Keeps non-UI policy and formatting rules reusable across components.
+ */
 import type { Transform } from '@xyflow/react';
 
 const DEFAULT_OFFSCREEN_MARGIN_PX = 160;
@@ -13,6 +17,7 @@ interface IsNodeVisibleInViewportParams {
   marginPx?: number;
 }
 
+/** Identifies node visible in viewport for the shared frontend utility layer. */
 export function isNodeVisibleInViewport({
   nodeX,
   nodeY,

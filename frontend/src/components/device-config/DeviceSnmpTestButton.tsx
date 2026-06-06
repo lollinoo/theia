@@ -1,3 +1,7 @@
+/**
+ * Renders device snmp test button controls within the device configuration workflow.
+ * Keeps this section focused on one editable device responsibility.
+ */
 import { useEffect, useRef, useState } from 'react';
 import { testSNMPConnection } from '../../api/client';
 
@@ -7,6 +11,7 @@ interface DeviceSnmpTestButtonProps {
 
 type DeviceSnmpTestResult = Awaited<ReturnType<typeof testSNMPConnection>>;
 
+/** Renders the DeviceSnmpTestButton component within the device configuration workflow. */
 export function DeviceSnmpTestButton({ deviceId }: DeviceSnmpTestButtonProps) {
   const [testingDeviceId, setTestingDeviceId] = useState<string | null>(null);
   const [resultState, setResultState] = useState<{

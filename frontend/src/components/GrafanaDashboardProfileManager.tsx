@@ -1,3 +1,7 @@
+/**
+ * Renders grafana dashboard profile manager UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useState } from 'react';
 import {
   createGrafanaDashboardProfile,
@@ -192,6 +196,7 @@ function ProfileForm({ initial, saveLabel, onSave, onCancel }: ProfileFormProps)
   );
 }
 
+/** Renders the GrafanaDashboardProfileManager component within the UI component boundary. */
 export function GrafanaDashboardProfileManager() {
   const [config, setConfig] = useState<GrafanaDashboardConfig>({
     profiles: [],

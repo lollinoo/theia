@@ -1,3 +1,7 @@
+/**
+ * Defines node position update behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { PositionState } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';

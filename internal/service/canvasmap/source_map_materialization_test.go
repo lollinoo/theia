@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file exercises source map materialization behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"errors"
@@ -172,7 +174,6 @@ func assertSourceMapMaterializationStageError(t *testing.T, stage SourceMapMater
 	}
 }
 
-// devicePositionIDs returns position device IDs in persisted order.
 func devicePositionIDs(positions []domain.DevicePosition) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(positions))
 	for _, position := range positions {
@@ -191,7 +192,6 @@ type fakeSourceMapMaterializationMapRepo struct {
 	replacedMembership domain.CanvasMapMembership
 }
 
-// GetMembership returns configured source membership or the injected membership error.
 func (r *fakeSourceMapMaterializationMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership, error) {
 	*r.order = append(*r.order, "membership")
 	if r.membershipErr != nil {

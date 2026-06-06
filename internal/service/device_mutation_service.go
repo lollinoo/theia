@@ -1,5 +1,7 @@
 package service
 
+// This file defines device mutation service service behavior and domain orchestration rules.
+
 import (
 	"context"
 	"fmt"
@@ -145,6 +147,7 @@ func (m *deviceMutationService) AddDevice(
 	return device, nil
 }
 
+// UpdateDevice updates device data through the service orchestration.
 func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, update DeviceUpdate) error {
 	device, err := m.deviceRepo.GetByID(id)
 	if err != nil {
@@ -304,6 +307,7 @@ func configuredPollingIntervalSeconds(settingsRepo domain.SettingsRepository) in
 	return seconds
 }
 
+// DeleteDevice deletes device data through the service orchestration.
 func (m *deviceMutationService) DeleteDevice(ctx context.Context, id uuid.UUID) error {
 	_ = ctx
 	links, err := m.linkRepo.GetByDeviceID(id)
@@ -325,6 +329,7 @@ func (m *deviceMutationService) DeleteDevice(ctx context.Context, id uuid.UUID) 
 	return nil
 }
 
+// GetDevice retrieves device data from the service orchestration.
 func (m *deviceMutationService) GetDevice(ctx context.Context, id uuid.UUID) (*domain.Device, error) {
 	_ = ctx
 	device, err := m.deviceRepo.GetByID(id)
@@ -337,6 +342,7 @@ func (m *deviceMutationService) GetDevice(ctx context.Context, id uuid.UUID) (*d
 	return device, nil
 }
 
+// GetAllDevices retrieves all devices data from the service orchestration.
 func (m *deviceMutationService) GetAllDevices(ctx context.Context) ([]domain.Device, error) {
 	_ = ctx
 	devices, err := m.deviceRepo.GetAll()
@@ -355,6 +361,7 @@ type orphanDeviceRepository interface {
 	GetOrphans() ([]domain.Device, error)
 }
 
+// GetOrphanDevices retrieves orphan devices data from the service orchestration.
 func (m *deviceMutationService) GetOrphanDevices(ctx context.Context) ([]domain.Device, error) {
 	_ = ctx
 	orphanRepo, ok := m.deviceRepo.(orphanDeviceRepository)
@@ -373,6 +380,7 @@ func (m *deviceMutationService) GetOrphanDevices(ctx context.Context) ([]domain.
 	return devices, nil
 }
 
+// GetDevicesByIDs retrieves devices by ids data from the service orchestration.
 func (m *deviceMutationService) GetDevicesByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Device, error) {
 	_ = ctx
 	if len(ids) == 0 {
@@ -416,6 +424,7 @@ func (m *deviceMutationService) GetDevicesByIDs(ctx context.Context, ids []uuid.
 	return devices, nil
 }
 
+// GetTopologyDevicesByIDs retrieves topology devices by ids data from the service orchestration.
 func (m *deviceMutationService) GetTopologyDevicesByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Device, error) {
 	_ = ctx
 	if len(ids) == 0 {

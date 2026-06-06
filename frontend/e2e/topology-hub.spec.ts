@@ -1,3 +1,6 @@
+/**
+ * Exercises topology hub browser workflow behavior so refactors preserve the documented contract.
+ */
 import { expect, test } from '@playwright/test';
 
 test('opens Topology Hub and returns to the primary canvas', async ({ page }) => {

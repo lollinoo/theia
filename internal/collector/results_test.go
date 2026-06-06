@@ -1,5 +1,7 @@
 package collector
 
+// This file exercises results behavior so refactors preserve the documented contract.
+
 import (
 	"errors"
 	"testing"

@@ -1,5 +1,7 @@
 package scheduler
 
+// This file defines scheduler scheduling behavior, timing policy, and queue ownership.
+
 import (
 	"container/heap"
 	"context"
@@ -25,12 +27,15 @@ import (
 const defaultInventoryRefreshInterval = 30 * time.Second
 const defaultTaskBuffer = 128
 
+// ErrAlreadyStarted stores shared err already started state for the scheduler.
 var ErrAlreadyStarted = errors.New("scheduler: already started")
 
+// DeviceSource defines the device source contract for the scheduler.
 type DeviceSource interface {
 	GetDevices() ([]domain.Device, error)
 }
 
+// Scheduler represents scheduler data used by the scheduler.
 type Scheduler struct {
 	source          DeviceSource
 	settingsRepo    domain.SettingsRepository
@@ -90,6 +95,7 @@ type reduePerformanceTaskRequest struct {
 	changedAt time.Time
 }
 
+// NewScheduler constructs scheduler state for the scheduler.
 func NewScheduler(source DeviceSource, settingsRepo domain.SettingsRepository) *Scheduler {
 	scheduler := &Scheduler{
 		source:             source,

@@ -1,5 +1,7 @@
 package main
 
+// This file defines main behavior for database connectivity checks.
+
 import (
 	"context"
 	"flag"

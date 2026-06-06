@@ -1,3 +1,7 @@
+/**
+ * Provides freshness utility behavior shared by frontend workflows.
+ * Keeps non-UI policy and formatting rules reusable across components.
+ */
 export type FreshnessTier = 'Fresh' | 'Stale' | 'Dead';
 
 function clampAgeSeconds(ageSeconds: number): number {
@@ -7,6 +11,7 @@ function clampAgeSeconds(ageSeconds: number): number {
   return Math.floor(ageSeconds);
 }
 
+/** Formats relative age for the shared frontend utility layer. */
 export function formatRelativeAge(ageSeconds: number): string {
   const safeAgeSeconds = clampAgeSeconds(ageSeconds);
 
@@ -21,6 +26,7 @@ export function formatRelativeAge(ageSeconds: number): string {
   return `${Math.floor(safeAgeSeconds / 3_600)}h ago`;
 }
 
+/** Next freshness update delay ms for the shared frontend utility layer. */
 export function nextFreshnessUpdateDelayMs(
   lastPolledAt: string | undefined,
   expectedIntervalSeconds: number | null | undefined,
@@ -56,6 +62,7 @@ export function nextFreshnessUpdateDelayMs(
   return Math.max(1, nextUpdateAtMs - elapsedMs);
 }
 
+/** Formats polling every for the shared frontend utility layer. */
 export function formatPollingEvery(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined || seconds <= 0) {
     return 'Polling every --';
@@ -72,6 +79,7 @@ export function formatPollingEvery(seconds: number | null | undefined): string {
   return `Polling every ${seconds}s`;
 }
 
+/** Formats freshness for the shared frontend utility layer. */
 export function formatFreshness(
   lastPolledAt: string | undefined,
   expectedIntervalSeconds: number | null | undefined,
@@ -102,6 +110,7 @@ export function formatFreshness(
   };
 }
 
+/** Formats health label for the shared frontend utility layer. */
 export function formatHealthLabel(
   health: string | undefined,
 ): 'Healthy' | 'Warning' | 'Critical' | 'Unknown' {

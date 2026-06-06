@@ -1,5 +1,7 @@
 package main
 
+// This file defines setup behavior for the Winbox bridge command.
+
 import (
 	"bytes"
 	"crypto/rand"

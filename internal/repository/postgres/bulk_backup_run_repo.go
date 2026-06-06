@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines bulk backup run repo persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"database/sql"
 	"fmt"
@@ -14,10 +16,13 @@ type BulkBackupRunRepo struct {
 	db *DB
 }
 
+// NewBulkBackupRunRepo creates a repository for durable bulk backup run orchestration state.
 func NewBulkBackupRunRepo(db *sql.DB) *BulkBackupRunRepo {
 	return &BulkBackupRunRepo{db: wrapDB(db)}
 }
 
+// CreateRun inserts the run and all initial item rows in one transaction.
+// Defaults are applied before persistence so later resume logic can rely on populated status/timestamps.
 func (r *BulkBackupRunRepo) CreateRun(run *domain.BulkBackupRun, items []domain.BulkBackupRunItem) error {
 	if run.ID == uuid.Nil {
 		run.ID = uuid.New()
@@ -111,6 +116,7 @@ func (r *BulkBackupRunRepo) CreateRun(run *domain.BulkBackupRun, items []domain.
 	return nil
 }
 
+// GetRun returns one run with all items loaded, or nil when the run is not found.
 func (r *BulkBackupRunRepo) GetRun(id uuid.UUID) (*domain.BulkBackupRun, error) {
 	run, err := r.getRunByQuery(
 		`SELECT id, status, batch_size, total_count, queued_count, success_count, failed_count,
@@ -130,6 +136,7 @@ func (r *BulkBackupRunRepo) GetRun(id uuid.UUID) (*domain.BulkBackupRun, error) 
 	return run, nil
 }
 
+// GetLatestRun returns the newest run with its items for status polling.
 func (r *BulkBackupRunRepo) GetLatestRun() (*domain.BulkBackupRun, error) {
 	run, err := r.getRunByQuery(
 		`SELECT id, status, batch_size, total_count, queued_count, success_count, failed_count,
@@ -148,6 +155,7 @@ func (r *BulkBackupRunRepo) GetLatestRun() (*domain.BulkBackupRun, error) {
 	return run, nil
 }
 
+// GetActiveRun returns the oldest non-terminal run so admission control can reject overlapping work.
 func (r *BulkBackupRunRepo) GetActiveRun() (*domain.BulkBackupRun, error) {
 	run, err := r.getRunByQuery(
 		`SELECT id, status, batch_size, total_count, queued_count, success_count, failed_count,
@@ -167,6 +175,7 @@ func (r *BulkBackupRunRepo) GetActiveRun() (*domain.BulkBackupRun, error) {
 	return run, nil
 }
 
+// ListResumableRuns returns interrupted non-terminal runs in creation order for startup reconciliation.
 func (r *BulkBackupRunRepo) ListResumableRuns() ([]domain.BulkBackupRun, error) {
 	rows, err := r.db.Query(
 		`SELECT id, status, batch_size, total_count, queued_count, success_count, failed_count,
@@ -201,6 +210,7 @@ func (r *BulkBackupRunRepo) ListResumableRuns() ([]domain.BulkBackupRun, error) 
 	return runs, nil
 }
 
+// UpdateRun persists aggregate counters and lifecycle fields for an existing run.
 func (r *BulkBackupRunRepo) UpdateRun(run *domain.BulkBackupRun) error {
 	res, err := r.db.Exec(
 		`UPDATE backup_bulk_runs
@@ -233,6 +243,7 @@ func (r *BulkBackupRunRepo) UpdateRun(run *domain.BulkBackupRun) error {
 	return nil
 }
 
+// ListRunItems lists run items data from the persistence boundary.
 func (r *BulkBackupRunRepo) ListRunItems(runID uuid.UUID) ([]domain.BulkBackupRunItem, error) {
 	rows, err := r.db.Query(
 		`SELECT id, run_id, device_id, device_name, status, reason, backup_job_id,
@@ -256,6 +267,7 @@ func (r *BulkBackupRunRepo) ListRunItems(runID uuid.UUID) ([]domain.BulkBackupRu
 	return items, rows.Err()
 }
 
+// UpdateRunItem updates run item data through the persistence boundary.
 func (r *BulkBackupRunRepo) UpdateRunItem(item *domain.BulkBackupRunItem) error {
 	if item.UpdatedAt.IsZero() {
 		item.UpdatedAt = time.Now().UTC()

@@ -1,3 +1,7 @@
+/**
+ * Renders device form submitters UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { CreateDevicePayload, SNMPPayload } from '../../api/client';
 import type { Device } from '../../types/api';
 import type { DeviceFormModel } from './deviceFormModels';
@@ -33,6 +37,7 @@ function buildSnmpPayload(form: DeviceFormModel): SNMPPayload {
   };
 }
 
+/** Builds create device payload for the UI component boundary. */
 export function buildCreateDevicePayload(form: DeviceFormModel): CreateDevicePayload {
   if (form.mode === 'virtual') {
     return {
@@ -69,6 +74,7 @@ export function buildCreateDevicePayload(form: DeviceFormModel): CreateDevicePay
   };
 }
 
+/** Builds update device payload for the UI component boundary. */
 export function buildUpdateDevicePayload(device: Device, form: DeviceFormModel) {
   const usesPrometheus =
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';

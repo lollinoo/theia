@@ -1,5 +1,7 @@
 package worker
 
+// This file defines pipeline worker behavior, background lifecycle, and runtime state updates.
+
 import (
 	"context"
 	"errors"
@@ -48,6 +50,7 @@ type pipelineScheduler interface {
 	PollingHealth() polling.HealthSnapshot
 }
 
+// ErrAlreadyStarted stores shared err already started state for the background worker lifecycle.
 var ErrAlreadyStarted = errors.New("pipeline orchestrator: already started")
 
 type pipelineTaskRunning interface {
@@ -57,6 +60,7 @@ type pipelineTaskRunning interface {
 	publishSubscribedDetailDelta(domain.Device)
 }
 
+// PipelineOrchestrator represents pipeline orchestrator data used by the background worker lifecycle.
 type PipelineOrchestrator struct {
 	scheduler         pipelineScheduler
 	taskRunner        pipelineTaskRunning
@@ -88,6 +92,7 @@ type PipelineOrchestrator struct {
 	runtime                 *pipelineRuntimeState
 }
 
+// NewPipelineOrchestrator constructs pipeline orchestrator state for the background worker lifecycle.
 func NewPipelineOrchestrator(
 	sched pipelineScheduler,
 	stateStore *state.Store,
@@ -230,10 +235,12 @@ func (p *PipelineOrchestrator) Stop() {
 	<-healthDone
 }
 
+// GetOverviewSnapshot retrieves overview snapshot data from the background worker lifecycle.
 func (p *PipelineOrchestrator) GetOverviewSnapshot() (*ws.SnapshotPayload, uint64) {
 	return p.runtime.getOverviewSnapshot()
 }
 
+// GetOrBuildOverviewSnapshot retrieves or build overview snapshot data from the background worker lifecycle.
 func (p *PipelineOrchestrator) GetOrBuildOverviewSnapshot() (*ws.SnapshotPayload, uint64) {
 	p.runtime.mu.RLock()
 	hasRuntimeBase := p.runtime.prevHashes != nil
@@ -262,10 +269,12 @@ func (p *PipelineOrchestrator) IsPromAvailable() bool {
 	return p.runtime.isPromAvailable()
 }
 
+// GetPrometheusStatus retrieves prometheus status data from the background worker lifecycle.
 func (p *PipelineOrchestrator) GetPrometheusStatus() ws.PrometheusStatusPayload {
 	return p.runtime.getPrometheusStatus()
 }
 
+// GetAlerts retrieves alerts data from the background worker lifecycle.
 func (p *PipelineOrchestrator) GetAlerts() ws.AlertMessagePayload {
 	return p.runtime.getAlerts()
 }

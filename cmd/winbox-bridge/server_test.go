@@ -1,5 +1,7 @@
 package main
 
+// This file exercises server behavior so refactors preserve the documented contract.
+
 import (
 	"fmt"
 	"net"
@@ -8,7 +10,6 @@ import (
 	"time"
 )
 
-// freeCfg returns a Config whose ListenPort is a free TCP port.
 // Uses net.Listen("localhost:0") to let the OS pick an available loopback port,
 // then closes that listener so ServerManager can bind it.
 func freeCfg(t *testing.T) Config {

@@ -1,5 +1,7 @@
 package ws
 
+// This file exercises hub stress behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"fmt"

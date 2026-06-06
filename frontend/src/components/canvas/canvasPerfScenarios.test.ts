@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas perf scenarios topology canvas behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 
 import {

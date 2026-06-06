@@ -1,3 +1,7 @@
+/**
+ * Renders device card variant UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { Device } from '../types/api';
 import {
   type DeviceAddressState,
@@ -5,10 +9,12 @@ import {
   resolveDeviceMonitoringState,
 } from './deviceVisualState';
 
+/** Describes the device card variant contract used by the UI component boundary. */
 export type DeviceCardVariant = 'physical' | 'virtual-monitorable' | 'virtual-unmonitored';
 
 type DeviceCardVariantInput = Pick<Device, 'device_type' | 'ip'>;
 
+/** Describes the device card render model contract used by the UI component boundary. */
 export interface DeviceCardRenderModel {
   variant: DeviceCardVariant;
   showFreshnessMeta: boolean;
@@ -17,6 +23,7 @@ export interface DeviceCardRenderModel {
   showVirtualAddressChip: boolean;
 }
 
+/** Resolves device card variant for the UI component boundary. */
 export function resolveDeviceCardVariant(
   device: DeviceCardVariantInput,
   monitoringState?: DeviceMonitoringState,
@@ -29,6 +36,7 @@ export function resolveDeviceCardVariant(
   return effectiveMonitoringState === 'unmonitored' ? 'virtual-unmonitored' : 'virtual-monitorable';
 }
 
+/** Resolves device card render model for the UI component boundary. */
 export function resolveDeviceCardRenderModel({
   device,
   monitoringState,

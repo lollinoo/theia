@@ -1,3 +1,6 @@
+/**
+ * Exercises duplicate map dialog topology hub behavior so refactors preserve the documented contract.
+ */
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { CanvasMap } from '../../types/api';

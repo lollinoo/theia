@@ -1,3 +1,6 @@
+/**
+ * Exercises link edge zoom component behavior so refactors preserve the documented contract.
+ */
 import { act, render, screen } from '@testing-library/react';
 import type { CSSProperties, ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';

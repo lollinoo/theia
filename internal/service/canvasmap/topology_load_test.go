@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file exercises topology load behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"errors"
@@ -153,7 +155,6 @@ type fakeTopologyMapRepo struct {
 	memberships map[uuid.UUID]domain.CanvasMapMembership
 }
 
-// List returns the fake map set used by virtual-device isolation.
 func (r *fakeTopologyMapRepo) List() ([]domain.CanvasMap, error) {
 	maps := make([]domain.CanvasMap, 0, len(r.byID))
 	for _, canvasMap := range r.byID {
@@ -162,12 +163,10 @@ func (r *fakeTopologyMapRepo) List() ([]domain.CanvasMap, error) {
 	return maps, nil
 }
 
-// GetByID returns the post-isolation map snapshot.
 func (r *fakeTopologyMapRepo) GetByID(id uuid.UUID) (domain.CanvasMap, error) {
 	return r.byID[id], nil
 }
 
-// GetMembership returns materialized membership for isolation and topology projection.
 func (r *fakeTopologyMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership, error) {
 	return r.memberships[id], nil
 }
@@ -182,7 +181,6 @@ type fakeTopologyDeviceService struct {
 	devices []domain.Device
 }
 
-// GetDevicesByIDs returns fake devices for both isolation checks and topology projection.
 func (s *fakeTopologyDeviceService) GetDevicesByIDs(context.Context, []uuid.UUID) ([]domain.Device, error) {
 	return append([]domain.Device(nil), s.devices...), nil
 }

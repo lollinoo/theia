@@ -1,9 +1,18 @@
+/**
+ * Defines canvas diagnostics behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import { type CanvasMetricAggregate, exportCanvasMetrics } from './canvasInstrumentation';
 
+/** Describes the canvas topology load status contract used by the topology canvas. */
 export type CanvasTopologyLoadStatus = 'idle' | 'loading' | 'success' | 'error';
+/** Describes the canvas position save status contract used by the topology canvas. */
 export type CanvasPositionSaveStatus = 'idle' | 'pending' | 'success' | 'error';
+/** Describes the canvas manual edge migration status contract used by the topology canvas. */
 export type CanvasManualEdgeMigrationStatus = 'idle' | 'pending' | 'retried' | 'applied' | 'failed';
+/** Describes the canvas diagnostic level contract used by the topology canvas. */
 export type CanvasDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
+/** Describes the canvas diagnostic source contract used by the topology canvas. */
 export type CanvasDiagnosticSource =
   | 'topology'
   | 'runtime'
@@ -14,6 +23,7 @@ export type CanvasDiagnosticSource =
   | 'projection'
   | 'reactflow';
 
+/** Describes the canvas diagnostics snapshot contract used by the topology canvas. */
 export interface CanvasDiagnosticsSnapshot {
   generatedAt: string;
   topology: {
@@ -83,6 +93,7 @@ export interface CanvasDiagnosticsSnapshot {
   };
 }
 
+/** Describes the canvas diagnostic event contract used by the topology canvas. */
 export interface CanvasDiagnosticEvent {
   id: string;
   timestamp: string;
@@ -93,6 +104,7 @@ export interface CanvasDiagnosticEvent {
   metadata?: Record<string, unknown>;
 }
 
+/** Describes the canvas diagnostics export contract used by the topology canvas. */
 export interface CanvasDiagnosticsExport {
   version: 1;
   generatedAt: string;

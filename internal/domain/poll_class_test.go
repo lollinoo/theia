@@ -1,5 +1,7 @@
 package domain
 
+// This file exercises poll class behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"testing"

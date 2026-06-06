@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines bool value persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"fmt"
 	"strconv"

@@ -1,5 +1,7 @@
 package ws
 
+// This file defines messages WebSocket protocol behavior, subscriptions, and runtime update delivery.
+
 import (
 	"crypto/sha256"
 	"encoding/json"
@@ -51,8 +53,10 @@ const (
 )
 
 const (
+	// CanvasTopologyEndpoint is the HTTP resync path advertised when WebSocket deltas cannot be applied.
 	CanvasTopologyEndpoint = "/api/v1/topology/canvas"
 
+	// ResyncScopeOverview names the default canvas overview stream.
 	ResyncScopeOverview                      = "overview"
 	ResyncReasonClientResync                 = "client_resync_scheduled"
 	ResyncReasonClientMissingRuntimeSnapshot = "client_missing_runtime_snapshot"
@@ -87,29 +91,35 @@ type SnapshotDeltaMessagePayload struct {
 	Delta       *SnapshotPayload `json:"delta"`
 }
 
+// RuntimeDeltaMessagePayload carries sparse runtime changes with a required base version.
+// Clients must ignore deltas whose base version does not match their current snapshot version.
 type RuntimeDeltaMessagePayload struct {
 	BaseVersion uint64               `json:"base_version"`
 	Version     uint64               `json:"version"`
 	Delta       *RuntimeDeltaPayload `json:"delta"`
 }
 
+// RuntimeDeltaPayload keeps per-device and per-link fields sparse to avoid rebroadcasting topology data.
 type RuntimeDeltaPayload struct {
 	Devices map[string]map[string]any `json:"devices"`
 	Links   map[string]map[string]any `json:"links"`
 }
 
+// TopologyChangedPayload tells clients that canonical topology changed and HTTP resync is recommended.
 type TopologyChangedPayload struct {
 	TopologyVersion     uint64 `json:"topology_version"`
 	Reason              string `json:"reason,omitempty"`
 	RecommendedEndpoint string `json:"recommended_endpoint,omitempty"`
 }
 
+// ReadyPayload confirms the server accepted a client's hello and skipped redundant snapshot delivery.
 type ReadyPayload struct {
 	RuntimeVersion  uint64 `json:"runtime_version"`
 	RuntimeIdentity string `json:"runtime_identity,omitempty"`
 	AlertVersion    uint64 `json:"alert_version"`
 }
 
+// PollingHealthChangedPayload mirrors the polling subsystem health snapshot for overview diagnostics.
 type PollingHealthChangedPayload = polling.HealthSnapshot
 
 // AlertMessagePayload is the versioned alert-only payload sent to clients.
@@ -124,6 +134,7 @@ type Message struct {
 	Payload any    `json:"payload"`
 }
 
+// NewSnapshotMessage clones a full runtime snapshot before broadcasting it to clients.
 func NewSnapshotMessage(snapshot *SnapshotPayload, version uint64) Message {
 	return Message{
 		Type: MessageTypeSnapshot,
@@ -135,6 +146,7 @@ func NewSnapshotMessage(snapshot *SnapshotPayload, version uint64) Message {
 	}
 }
 
+// NewSnapshotDeltaMessage builds a versioned full-shape delta that older clients can merge.
 func NewSnapshotDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64) Message {
 	return Message{
 		Type: MessageTypeSnapshotDelta,
@@ -146,6 +158,7 @@ func NewSnapshotDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64
 	}
 }
 
+// NewRuntimeDeltaMessage builds the modern sparse runtime delta envelope.
 func NewRuntimeDeltaMessage(delta *RuntimeDeltaPayload, baseVersion, version uint64) Message {
 	return Message{
 		Type: MessageTypeRuntimeDelta,
@@ -157,6 +170,7 @@ func NewRuntimeDeltaMessage(delta *RuntimeDeltaPayload, baseVersion, version uin
 	}
 }
 
+// NewTopologyChangedMessage advertises the topology endpoint clients should use for canonical resync.
 func NewTopologyChangedMessage(topologyVersion uint64, reason string) Message {
 	return Message{
 		Type: MessageTypeTopologyChanged,
@@ -168,6 +182,7 @@ func NewTopologyChangedMessage(topologyVersion uint64, reason string) Message {
 	}
 }
 
+// NewReadyMessage acknowledges a client hello whose cached runtime state is already current.
 func NewReadyMessage(runtimeVersion uint64, alertVersion uint64, runtimeIdentity string) Message {
 	return Message{
 		Type: MessageTypeReady,
@@ -179,6 +194,8 @@ func NewReadyMessage(runtimeVersion uint64, alertVersion uint64, runtimeIdentity
 	}
 }
 
+// RuntimeIdentityForSnapshot returns a deterministic hash over the JSON-visible runtime state.
+// It lets clients reject deltas from a different server-side snapshot lineage.
 func RuntimeIdentityForSnapshot(snapshot *SnapshotPayload) string {
 	raw, err := json.Marshal(CloneSnapshot(snapshot))
 	if err != nil {
@@ -188,6 +205,7 @@ func RuntimeIdentityForSnapshot(snapshot *SnapshotPayload) string {
 	return fmt.Sprintf("rt-sha256:%x", sum[:])
 }
 
+// NewPollingHealthChangedMessage broadcasts queue/worker health without changing runtime snapshot versions.
 func NewPollingHealthChangedMessage(snapshot polling.HealthSnapshot) Message {
 	return Message{
 		Type:    MessageTypePollingHealthChanged,
@@ -195,6 +213,7 @@ func NewPollingHealthChangedMessage(snapshot polling.HealthSnapshot) Message {
 	}
 }
 
+// NewAlertMessage copies alert summaries into a versioned alert-only envelope.
 func NewAlertMessage(alerts []AlertDTO, version uint64) Message {
 	return Message{
 		Type: MessageTypeAlert,
@@ -205,6 +224,7 @@ func NewAlertMessage(alerts []AlertDTO, version uint64) Message {
 	}
 }
 
+// clientControlMessage is the normalized form of client hello/detail subscription messages.
 type clientControlMessage struct {
 	Type                string
 	DeviceID            uuid.UUID
@@ -215,11 +235,13 @@ type clientControlMessage struct {
 	AlertVersion        *uint64
 }
 
+// clientControlEnvelope is the wire format accepted from browser clients.
 type clientControlEnvelope struct {
 	Type    string               `json:"type"`
 	Payload clientControlPayload `json:"payload"`
 }
 
+// clientControlPayload carries the client's known topology/runtime versions and optional detail target.
 type clientControlPayload struct {
 	DeviceID            string  `json:"device_id"`
 	CanvasSchemaVersion int     `json:"canvas_schema_version"`
@@ -229,7 +251,8 @@ type clientControlPayload struct {
 	AlertVersion        *uint64 `json:"alert_version"`
 }
 
-// SnapshotPayload contains the complete live state sent to clients.
+// SnapshotPayload contains the complete live runtime state sent to clients.
+// Legacy non-JSON fields are retained for server-side compatibility but never emitted on the wire.
 type SnapshotPayload struct {
 	Devices        map[string]DeviceRuntimeDTO `json:"devices"`
 	Links          map[string]LinkRuntimeDTO   `json:"links"`
@@ -238,9 +261,14 @@ type SnapshotPayload struct {
 	DeviceStatuses map[string]string           `json:"-"`
 }
 
+// DeviceMetricsDTO is a compatibility alias for older callers that still use metrics naming.
 type DeviceMetricsDTO = DeviceRuntimeDTO
+
+// LinkMetricsDTO is a compatibility alias for older callers that still use metrics naming.
 type LinkMetricsDTO = LinkRuntimeDTO
 
+// DeviceRuntimeDTO is the overview runtime state for one device.
+// It combines reachability, freshness, telemetry availability, and alert summary fields.
 type DeviceRuntimeDTO struct {
 	DeviceID                    string            `json:"device_id"`
 	OperationalStatus           string            `json:"operational_status"`
@@ -268,6 +296,7 @@ type DeviceRuntimeDTO struct {
 	Stale                       *bool             `json:"-"`
 }
 
+// LinkRuntimeDTO represents link runtime dto data used by the WebSocket protocol.
 type LinkRuntimeDTO struct {
 	LinkID          string   `json:"link_id"`
 	SourceDeviceID  string   `json:"source_device_id"`

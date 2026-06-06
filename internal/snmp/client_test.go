@@ -1,11 +1,13 @@
 package snmp
 
+// This file exercises client behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 	"time"
 
-	"github.com/lollinoo/theia/internal/domain"
 	"github.com/gosnmp/gosnmp"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 func TestNewClient_V2c(t *testing.T) {

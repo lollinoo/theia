@@ -1,3 +1,7 @@
+/**
+ * Renders device network settings section controls within the device configuration workflow.
+ * Keeps this section focused on one editable device responsibility.
+ */
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { checkPrometheusHealth, fetchSNMPProfiles } from '../../api/client';
@@ -20,6 +24,7 @@ interface DeviceNetworkSettingsSectionProps {
   onSNMPProfileSelected: (profileId: string) => void;
 }
 
+/** Renders the DeviceNetworkSettingsSection component within the device configuration workflow. */
 export function DeviceNetworkSettingsSection({
   device,
   form,

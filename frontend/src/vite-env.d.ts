@@ -1,3 +1,7 @@
+/**
+ * Declares Vite-provided ambient types for frontend modules.
+ * Keeps bundler-specific globals visible to TypeScript without runtime code.
+ */
 /// <reference types="vite/client" />
 import type {
   CanvasDiagnosticEvent,

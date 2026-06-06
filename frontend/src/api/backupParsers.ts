@@ -1,3 +1,7 @@
+/**
+ * Normalizes backend backup payloads into frontend-safe shapes.
+ * Keeps API boundary validation close to the transport helpers that consume it.
+ */
 import {
   type BackupFile,
   type BackupFileContent,

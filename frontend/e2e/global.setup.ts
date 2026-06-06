@@ -1,3 +1,7 @@
+/**
+ * Prepares browser-test state shared by end-to-end workflows.
+ * Keeps this module's responsibility visible before implementation details.
+ */
 import { request, type APIRequestContext } from '@playwright/test';
 
 const backendBaseURL = 'http://127.0.0.1:38080';

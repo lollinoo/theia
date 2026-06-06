@@ -1,3 +1,6 @@
+/**
+ * Exercises use canvas graph state topology canvas behavior so refactors preserve the documented contract.
+ */
 import { act, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import type { EdgeChange, NodeChange } from '@xyflow/react';
 import { createElement } from 'react';

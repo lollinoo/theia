@@ -1,3 +1,6 @@
+/**
+ * Exercises edge badge anchors component behavior so refactors preserve the documented contract.
+ */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeLinkBadgeAnchor, resolveBadgePathLengths } from './edgeBadgeAnchors';
 

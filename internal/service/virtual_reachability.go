@@ -1,5 +1,7 @@
 package service
 
+// This file defines virtual reachability service behavior and domain orchestration rules.
+
 import (
 	"context"
 	"fmt"

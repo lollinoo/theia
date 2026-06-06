@@ -1,3 +1,7 @@
+/**
+ * Provides frontend API helpers for instance backup endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import { type InstanceBackup, type RestoreReport, type RestoreStatus } from '../types/api';
 import { ServerError, ValidationError } from './errors';
 import {
@@ -42,6 +46,7 @@ export function instanceBackupDownloadUrl(id: string): string {
   return `/api/v1/instance-backups/${encodeURIComponent(id)}/download`;
 }
 
+/** Fetches restore status for the frontend API boundary. */
 export async function fetchRestoreStatus(): Promise<RestoreStatus | null> {
   const payload = await requestJSON('/api/v1/instance-backups/restore-status');
   const data = (payload as Record<string, unknown>)?.data;

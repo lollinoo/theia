@@ -1,5 +1,7 @@
 package collector
 
+// This file exercises performance behavior so refactors preserve the documented contract.
+
 import (
 	"bytes"
 	"context"

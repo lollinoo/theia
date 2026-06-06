@@ -1,5 +1,7 @@
 package api
 
+// This file exercises vendor handler behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"fmt"
@@ -45,7 +47,6 @@ func (r *mockVendorConfigRepo) Upsert(record *domain.VendorConfigRecord) error {
 	return nil
 }
 
-// buildTestVendorRegistryWithVendor creates a registry with default + a named vendor.
 func buildTestVendorRegistryWithVendor(name string) *vendor.Registry {
 	defaultCfg := vendor.DBVendorRecord{
 		Name: "default",

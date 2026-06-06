@@ -1,5 +1,7 @@
 package main
 
+// This file exercises config behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"os"

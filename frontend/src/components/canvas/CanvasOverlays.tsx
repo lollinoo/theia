@@ -1,3 +1,7 @@
+/**
+ * Defines canvas overlays behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import { ReconnectBanner } from '../ReconnectBanner';
 import type { TopologyRecoveryNotice } from './useCanvasData';
 
@@ -12,6 +16,7 @@ interface CanvasOverlaysProps {
   onBulkEditClick?: () => void;
 }
 
+/** Renders the CanvasOverlays component within the topology canvas. */
 export function CanvasOverlays({
   editMode,
   reconnecting,

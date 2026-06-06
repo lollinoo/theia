@@ -1,5 +1,7 @@
 package worker
 
+// This file exercises pipeline behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"encoding/json"
@@ -234,6 +236,7 @@ func (c *fakeSNMPClient) Connect() error {
 	}
 	return nil
 }
+
 func (c *fakeSNMPClient) Close() error { return nil }
 
 func (c *fakeSNMPClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {

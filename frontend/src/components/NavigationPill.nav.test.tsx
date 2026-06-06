@@ -1,3 +1,6 @@
+/**
+ * Exercises navigation pill nav component behavior so refactors preserve the documented contract.
+ */
 import { fireEvent, render, screen } from '@testing-library/react';
 /**
  * COMP-03 NavBar (NavigationPill) behavioral tests.

@@ -1,3 +1,7 @@
+/**
+ * Defines canvas topology source behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import {
   fetchCanvasBootstrap,
   fetchCanvasMapBootstrap,
@@ -10,6 +14,7 @@ import type { PositionState } from '../../hooks/usePositions';
 import type { Area, Device, DevicePosition, Link } from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
 
+/** Describes the canvas topology source contract used by the topology canvas. */
 export type CanvasTopologySource =
   | {
       status: 'ok';

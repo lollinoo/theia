@@ -1,3 +1,7 @@
+/**
+ * Defines backup panel behavior for the operations dashboard.
+ * Keeps table, backup, and device-management responsibilities isolated by module.
+ */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchBackupJob, fetchLatestBackupJob, triggerBackup } from '../../api/client';
 import { type BackupJob, type Device } from '../../types/api';
@@ -6,6 +10,7 @@ interface BackupPanelProps {
   device: Device;
 }
 
+/** Renders the BackupPanel component within the operations dashboard. */
 export function BackupPanel({ device }: BackupPanelProps) {
   const [latest, setLatest] = useState<BackupJob | null>(null);
   const [triggering, setTriggering] = useState(false);

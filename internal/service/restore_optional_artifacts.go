@@ -1,5 +1,7 @@
 package service
 
+// This file defines restore optional artifacts backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"fmt"
 	"os"

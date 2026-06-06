@@ -1,5 +1,7 @@
 package api
 
+// This file defines middleware API routing, middleware, and permission policy behavior.
+
 import (
 	"context"
 	"encoding/json"

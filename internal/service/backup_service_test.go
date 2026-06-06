@@ -1,5 +1,7 @@
 package service
 
+// This file exercises backup service behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	crand "crypto/rand"
@@ -2737,33 +2739,30 @@ func assertFunctionBodyExcludes(t *testing.T, functionName string, forbiddenFrag
 func backupServiceFunctionBody(t *testing.T, functionName string) string {
 	t.Helper()
 
-	src, err := os.ReadFile("backup_service.go")
-	if err != nil {
-		t.Fatalf("ReadFile(backup_service.go): %v", err)
-	}
-
-	fset := token.NewFileSet()
-	parsed, err := parser.ParseFile(fset, "backup_service.go", src, 0)
-	if err != nil {
-		t.Fatalf("ParseFile(backup_service.go): %v", err)
-	}
-
-	var body string
-	for _, decl := range parsed.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != functionName || fn.Body == nil {
-			continue
+	for _, fileName := range []string{"backup_service.go", "backup_executor.go"} {
+		src, err := os.ReadFile(fileName)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", fileName, err)
 		}
-		start := fset.Position(fn.Body.Pos()).Offset
-		end := fset.Position(fn.Body.End()).Offset
-		body = string(src[start:end])
-		break
-	}
-	if body == "" {
-		t.Fatalf("%s body not found", functionName)
-	}
 
-	return body
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, fileName, src, 0)
+		if err != nil {
+			t.Fatalf("ParseFile(%s): %v", fileName, err)
+		}
+
+		for _, decl := range parsed.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Name.Name != functionName || fn.Body == nil {
+				continue
+			}
+			start := fset.Position(fn.Body.Pos()).Offset
+			end := fset.Position(fn.Body.End()).Offset
+			return string(src[start:end])
+		}
+	}
+	t.Fatalf("%s body not found", functionName)
+	return ""
 }
 
 func TestRunBinaryExportRecordsStreamedHashAndSize(t *testing.T) {

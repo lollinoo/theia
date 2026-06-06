@@ -1,5 +1,7 @@
 package main
 
+// This file defines client behavior for the Winbox bridge command.
+
 import (
 	"bytes"
 	"context"
@@ -10,6 +12,7 @@ import (
 	"time"
 )
 
+// TheiaClient represents theia client data used by the command.
 type TheiaClient struct {
 	BaseURL    string
 	Secret     string

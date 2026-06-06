@@ -1,3 +1,6 @@
+/**
+ * Exercises manual edge migration orchestrator topology canvas behavior so refactors preserve the documented contract.
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Link } from '../../types/api';

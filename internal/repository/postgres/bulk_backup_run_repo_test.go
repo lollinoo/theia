@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises bulk backup run repo behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 	"time"

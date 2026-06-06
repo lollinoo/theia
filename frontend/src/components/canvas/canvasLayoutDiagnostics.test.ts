@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas layout diagnostics topology canvas behavior so refactors preserve the documented contract.
+ */
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {

@@ -1,3 +1,7 @@
+/**
+ * Provides frontend API helpers for backup endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import {
   type BackupFileContent,
   type BackupJob,
@@ -14,6 +18,7 @@ import {
 import { ServerError, ValidationError } from './errors';
 import { type ErrorPayload, headersWithCsrf, requestJSON, requestJSONWithBody } from './transport';
 
+/** Describes the bulk backup result contract used by the frontend API boundary. */
 export type BulkBackupResult = {
   device_id: string;
   device_name: string;
@@ -169,8 +174,10 @@ export function bulkDownloadUrl(_deviceIds: string[]): string {
   return '/api/v1/backups/bulk-download';
 }
 
+/** Describes the bulk download result contract used by the frontend API boundary. */
 export type BulkDownloadResult = 'saved' | 'cancelled';
 
+/** Describes the bulk download options contract used by the frontend API boundary. */
 export type BulkDownloadOptions = {
   filename?: string;
 };

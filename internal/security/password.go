@@ -1,5 +1,7 @@
 package security
 
+// This file defines password security policy helpers and trust-boundary handling.
+
 import (
 	"crypto/hmac"
 	"crypto/rand"

@@ -1,5 +1,7 @@
 package state
 
+// This file exercises health behavior so refactors preserve the documented contract.
+
 import (
 	"math"
 	"testing"

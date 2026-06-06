@@ -1,3 +1,6 @@
+/**
+ * Exercises device card component behavior so refactors preserve the documented contract.
+ */
 import { fireEvent, render, screen } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';

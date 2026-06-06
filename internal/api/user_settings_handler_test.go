@@ -1,5 +1,7 @@
 package api
 
+// This file exercises user settings handler behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"encoding/json"

@@ -1,5 +1,7 @@
 package vendor
 
+// This file defines embedded vendor metadata loading and registry contracts.
+
 import (
 	"embed"
 	"fmt"

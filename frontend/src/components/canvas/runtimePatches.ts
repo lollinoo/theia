@@ -1,3 +1,7 @@
+/**
+ * Defines runtime patches behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import type { Device, Link } from '../../types/api';
@@ -8,6 +12,7 @@ import type { LinkEdgeData } from '../linkSemantics';
 import { alertStatusForLink, buildEdgeData } from './edgeBuilder';
 import type { RuntimeState } from './runtimeAdapters';
 
+/** Describes the runtime patch plan contract used by the topology canvas. */
 export interface RuntimePatchPlan {
   deviceIds: Set<string>;
   directLinkIds: Set<string>;

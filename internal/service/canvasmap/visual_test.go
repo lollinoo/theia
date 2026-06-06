@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file exercises visual behavior so refactors preserve the documented contract.
+
 import (
 	"errors"
 	"testing"

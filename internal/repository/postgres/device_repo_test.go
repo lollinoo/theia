@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises device repo behavior so refactors preserve the documented contract.
+
 import (
 	"database/sql"
 	"testing"

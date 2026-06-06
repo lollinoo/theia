@@ -1,5 +1,10 @@
+/**
+ * Provides frontend API helpers for transport endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 import { ServerError, ValidationError } from './errors';
 
+/** Describes the error payload contract used by the frontend API boundary. */
 export type ErrorPayload = {
   error?: string;
 };

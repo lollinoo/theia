@@ -1,11 +1,17 @@
+/**
+ * Renders bulk edit models UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { Device, MetricsSource } from '../../types/api';
 
+/** Describes the bulk field contract used by the UI component boundary. */
 export interface BulkField<T> {
   value: T;
   mixed: boolean;
   dirty: boolean;
 }
 
+/** Describes the bulk edit model contract used by the UI component boundary. */
 export interface BulkEditModel {
   areaIds: BulkField<string[]>;
   metricsSource: BulkField<MetricsSource | ''>;
@@ -25,6 +31,7 @@ function commonValue<T>(
   };
 }
 
+/** Creates bulk edit model for the UI component boundary. */
 export function createBulkEditModel(devices: Device[]): BulkEditModel {
   const areaIds = commonValue(devices, (device) => [...(device.area_ids ?? [])].sort());
   const metricsSource = commonValue(devices, (device) => device.metrics_source || 'snmp');
@@ -45,6 +52,7 @@ export function createBulkEditModel(devices: Device[]): BulkEditModel {
   };
 }
 
+/** Builds bulk update payload for the UI component boundary. */
 export function buildBulkUpdatePayload(device: Device, model: BulkEditModel) {
   return {
     hostname: device.hostname,

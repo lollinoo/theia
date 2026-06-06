@@ -1,5 +1,7 @@
 package domain
 
+// This file exercises auth behavior so refactors preserve the documented contract.
+
 import "testing"
 
 func TestUserWithRolesAndPermissionsHasRoleAndPermission(t *testing.T) {

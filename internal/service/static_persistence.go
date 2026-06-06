@@ -1,5 +1,7 @@
 package service
 
+// This file defines static persistence service behavior and domain orchestration rules.
+
 import (
 	"fmt"
 	"log"
@@ -14,6 +16,7 @@ import (
 	"github.com/lollinoo/theia/internal/topology"
 )
 
+// StaticDiscoveryInput represents static discovery input data used by the service orchestration.
 type StaticDiscoveryInput struct {
 	SysName                    string
 	SysDescr                   string
@@ -28,6 +31,7 @@ type StaticDiscoveryInput struct {
 	NeighborDiscoveryFailures  []snmp.NeighborDiscoveryFailure
 }
 
+// StaticPersistenceResult represents static persistence result data used by the service orchestration.
 type StaticPersistenceResult struct {
 	TopologyChanged bool
 	LinksCreated    int

@@ -1,3 +1,7 @@
+/**
+ * Renders add device panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useState } from 'react';
 import {
   addDeviceToCanvasMap,
@@ -69,6 +73,7 @@ function isDuplicateDeviceValidationError(err: unknown): err is ValidationError 
   return err instanceof ValidationError && /device.*already exists/i.test(err.message);
 }
 
+/** Renders the AddDevicePanel component within the UI component boundary. */
 export function AddDevicePanel({
   onDeviceAdded,
   areas: providedAreas,

@@ -1,15 +1,21 @@
+/**
+ * Defines canvas render projection behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { resolveDeviceMonitoringState } from '../deviceVisualState';
 import type { RuntimeState } from './runtimeAdapters';
 
+/** Describes the canvas render projection node cache entry contract used by the topology canvas. */
 export interface CanvasRenderProjectionNodeCacheEntry {
   source: DeviceNode;
   colorSignature: string;
   node: DeviceNode;
 }
 
+/** Describes the project canvas render graph input contract used by the topology canvas. */
 export interface ProjectCanvasRenderGraphInput {
   nodes: DeviceNode[];
   edges: LinkEdgeType[];
@@ -26,6 +32,7 @@ export interface ProjectCanvasRenderGraphInput {
   onGhostClick: (deviceId: string) => void;
 }
 
+/** Describes the project canvas render graph result contract used by the topology canvas. */
 export interface ProjectCanvasRenderGraphResult {
   nodesWithAreaColor: DeviceNode[];
   edgesWithAreaColor: LinkEdgeType[];
@@ -218,6 +225,7 @@ function projectDisplayEdges(
   return applyEdgeEmphasis(areaEdges, selectedRealNodeIds);
 }
 
+/** Project canvas render graph for the topology canvas. */
 export function projectCanvasRenderGraph(
   input: ProjectCanvasRenderGraphInput,
 ): ProjectCanvasRenderGraphResult {

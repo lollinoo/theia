@@ -1,3 +1,7 @@
+/**
+ * Defines runtime snapshot patch behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import type { Device, Link } from '../../types/api';

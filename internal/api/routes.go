@@ -1,5 +1,7 @@
 package api
 
+// This file defines routes API routing, middleware, and permission policy behavior.
+
 import (
 	"fmt"
 	"net/http"
@@ -8,6 +10,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 )
 
+// routeAuthMode declares whether a route bypasses auth, requires RBAC, or needs WebSocket upgrade handling.
 type routeAuthMode int
 
 const (
@@ -16,6 +19,8 @@ const (
 	routeAuthWebSocket
 )
 
+// routeMiddlewareProfile selects the request wrapper used after route metadata has matched.
+// Binary and restore routes use dedicated profiles because body limits and response writers differ from JSON APIs.
 type routeMiddlewareProfile int
 
 const (
@@ -26,6 +31,7 @@ const (
 	routeMiddlewareWebSocketUpgrade
 )
 
+// routeHandlerKey is the stable join key between route metadata and constructed handler instances.
 type routeHandlerKey string
 
 const (
@@ -82,6 +88,7 @@ const (
 	routeHandlerWebSocket                   routeHandlerKey = "webSocket"
 )
 
+// routeAuthEndpoint identifies public auth routes so middleware can apply endpoint-specific session semantics.
 type routeAuthEndpoint int
 
 const (
@@ -94,6 +101,8 @@ const (
 	routeAuthEndpointLegacySession
 )
 
+// apiRouteSpec is the source of truth for API route registration, auth mode, middleware, and permissions.
+// The metadata registry validates ordering so broad patterns cannot shadow more specific routes.
 type apiRouteSpec struct {
 	name              string
 	pattern           string
@@ -105,15 +114,18 @@ type apiRouteSpec struct {
 	methodPolicies    map[string][]string
 }
 
+// apiRouteMetadataRegistry provides route lookup by method/path without coupling middleware to handler structs.
 type apiRouteMetadataRegistry struct {
 	specs []apiRouteSpec
 }
 
+// routeMuxRegistration collapses route specs that share one net/http ServeMux pattern and handler.
 type routeMuxRegistration struct {
 	pattern string
 	handler http.Handler
 }
 
+// routeMuxRegistrations verifies that every route metadata entry has an assembled handler.
 func routeMuxRegistrations(specs []apiRouteSpec, handlers map[routeHandlerKey]http.Handler) ([]routeMuxRegistration, error) {
 	seen := make(map[string]routeHandlerKey, len(specs))
 	registrations := make([]routeMuxRegistration, 0, len(specs))
@@ -137,6 +149,7 @@ func routeMuxRegistrations(specs []apiRouteSpec, handlers map[routeHandlerKey]ht
 	return registrations, nil
 }
 
+// registerAPIRouteHandlers registers validated route metadata with the standard library mux.
 func registerAPIRouteHandlers(mux *http.ServeMux, specs []apiRouteSpec, handlers map[routeHandlerKey]http.Handler) error {
 	registrations, err := routeMuxRegistrations(specs, handlers)
 	if err != nil {
@@ -148,6 +161,7 @@ func registerAPIRouteHandlers(mux *http.ServeMux, specs []apiRouteSpec, handlers
 	return nil
 }
 
+// newAPIRouteMetadataRegistry snapshots specs so tests and middleware cannot mutate global route metadata.
 func newAPIRouteMetadataRegistry(specs []apiRouteSpec) apiRouteMetadataRegistry {
 	return apiRouteMetadataRegistry{specs: append([]apiRouteSpec(nil), specs...)}
 }
@@ -178,6 +192,8 @@ func (r apiRouteMetadataRegistry) isPublicAuthPath(path string) bool {
 	return ok && spec.authMode == routeAuthPublic && spec.handlerKey == routeHandlerAuth
 }
 
+// validate enforces route metadata invariants before handlers are exposed.
+// It catches missing permission policies and route ordering that would make narrower paths unreachable.
 func (r apiRouteMetadataRegistry) validate() error {
 	seenPatterns := make(map[string]struct{}, len(r.specs))
 	for i, spec := range r.specs {
@@ -239,6 +255,7 @@ func (s apiRouteSpec) supportsMethod(method string) bool {
 	return ok
 }
 
+// protectedRoutePermissionSpecs converts route metadata into middleware permission rules.
 func protectedRoutePermissionSpecs(specs []apiRouteSpec) []routePermissionSpec {
 	out := make([]routePermissionSpec, 0, len(specs))
 	for _, spec := range specs {

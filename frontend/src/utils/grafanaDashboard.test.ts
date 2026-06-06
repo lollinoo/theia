@@ -1,3 +1,6 @@
+/**
+ * Exercises Grafana dashboard utility behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 import type { Device } from '../types/api';
 import { type GrafanaDashboardConfig, resolveGrafanaDashboardUrl } from './grafanaDashboard';

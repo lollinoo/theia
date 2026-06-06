@@ -1,5 +1,7 @@
 package domain
 
+// This file exercises canvas map behavior so refactors preserve the documented contract.
+
 import (
 	"strings"
 	"testing"

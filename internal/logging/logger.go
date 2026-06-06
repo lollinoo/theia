@@ -1,5 +1,7 @@
 package logging
 
+// This file defines logger logging setup behavior.
+
 import (
 	"fmt"
 	"log"
@@ -7,6 +9,7 @@ import (
 	"sync/atomic"
 )
 
+// Level represents level data used by the package.
 type Level int32
 
 const (
@@ -33,6 +36,7 @@ func Configure(raw string) Level {
 	return level
 }
 
+// ParseLevel parses level input for the package.
 func ParseLevel(raw string) Level {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "debug":

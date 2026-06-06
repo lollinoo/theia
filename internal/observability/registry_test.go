@@ -1,5 +1,7 @@
 package observability
 
+// This file exercises registry behavior so refactors preserve the documented contract.
+
 import (
 	"net/http/httptest"
 	"strings"

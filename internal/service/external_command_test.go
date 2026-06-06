@@ -1,5 +1,7 @@
 package service
 
+// This file exercises external command behavior so refactors preserve the documented contract.
+
 import (
 	"errors"
 	"strings"

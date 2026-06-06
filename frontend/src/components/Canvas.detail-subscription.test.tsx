@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas detail subscription component behavior so refactors preserve the documented contract.
+ */
 import { fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

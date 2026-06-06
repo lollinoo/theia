@@ -1,5 +1,7 @@
 package worker
 
+// This file defines device backup scheduler worker behavior, background lifecycle, and runtime state updates.
+
 import (
 	"context"
 	"errors"

@@ -12,6 +12,8 @@
 // two remain architecturally independent.
 package state
 
+// This file defines store in-memory state ownership and snapshot behavior.
+
 import (
 	"context"
 	"errors"
@@ -33,6 +35,7 @@ import (
 // discretion per CONTEXT.md).
 const stalenessTickInterval = 5 * time.Second
 
+// ErrAlreadyStarted stores shared err already started state for the package.
 var ErrAlreadyStarted = errors.New("state store: already started")
 
 // HealthStatus is the overall metric health of a device, computed by the
@@ -114,6 +117,7 @@ type StateUpdate struct {
 	Essential        *EssentialUpdate
 }
 
+// EssentialUpdate represents essential update data used by the package.
 type EssentialUpdate struct {
 	PollStatus       polling.PollStatus
 	NetworkReachable polling.TriState

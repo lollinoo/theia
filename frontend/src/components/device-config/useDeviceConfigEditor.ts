@@ -1,3 +1,7 @@
+/**
+ * Coordinates device config editor editor state for device configuration.
+ * Keeps validation, save preparation, and cleanup behavior outside presentational sections.
+ */
 import {
   type Dispatch,
   type FormEvent,
@@ -136,6 +140,7 @@ function showSaved(
   timerRef.current = window.setTimeout(() => setter(false), 2000);
 }
 
+/** Coordinates device config editor behavior for the device configuration workflow. */
 export function useDeviceConfigEditor({
   device,
   readOnly,

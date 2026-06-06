@@ -1,5 +1,7 @@
 package service
 
+// This file defines restore coordinator backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"context"
 	"database/sql"
@@ -33,6 +35,7 @@ var terminatePostgresConnections = func(ctx context.Context, dsn string) error {
 // restoreCoordinatorAfterDBActivationHook lets tests inject post-database activation failures.
 var restoreCoordinatorAfterDBActivationHook func() error
 
+// RestoreCompletionVerifier represents restore completion verifier data used by the service orchestration.
 type RestoreCompletionVerifier func(context.Context, func(RestoreOperationPhase) error) error
 
 type restoreMarker struct {
@@ -73,6 +76,7 @@ func newRestoreMarker(
 	}
 }
 
+// RestoreCoordinator represents restore coordinator data used by the service orchestration.
 type RestoreCoordinator struct {
 	stateDir        string
 	dbDSN           string

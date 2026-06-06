@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines auth repo persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"context"
 	"database/sql"

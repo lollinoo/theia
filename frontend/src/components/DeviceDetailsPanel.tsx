@@ -1,3 +1,7 @@
+/**
+ * Renders device details panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { type ReactNode, useState } from 'react';
 import type { Device } from '../types/api';
 import { type DeviceMetricsDTO, formatUptime } from '../types/metrics';
@@ -69,6 +73,7 @@ function reachabilityClass(value: DeviceMetricsDTO['network_reachable']): string
   return 'text-on-bg-secondary';
 }
 
+/** Renders the DeviceDetailsPanel component within the UI component boundary. */
 export function DeviceDetailsPanel({
   device,
   detailMetrics,

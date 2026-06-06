@@ -1,5 +1,10 @@
+/**
+ * Renders panel models UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { AlertDTO, RuntimeReason } from '../types/metrics';
 
+/** Describes the alerts panel alert model contract used by the UI component boundary. */
 export interface AlertsPanelAlertModel {
   deviceId: string;
   deviceLabel: string;
@@ -9,6 +14,7 @@ export interface AlertsPanelAlertModel {
   summary: string;
 }
 
+/** Describes the alerts panel model contract used by the UI component boundary. */
 export interface AlertsPanelModel {
   activeAlertCount: number;
   firingAlerts: AlertsPanelAlertModel[];
@@ -19,6 +25,7 @@ export interface AlertsPanelModel {
   } | null;
 }
 
+/** Describes the interface section model contract used by the UI component boundary. */
 export interface InterfaceSectionModel {
   deviceLabel: string;
   ifName: string;
@@ -34,6 +41,7 @@ export interface InterfaceSectionModel {
   utilizationColor: string;
 }
 
+/** Describes the device interface panel model contract used by the UI component boundary. */
 export interface DeviceInterfacePanelModel {
   deviceId: string;
   deviceLabel: string;
@@ -41,6 +49,7 @@ export interface DeviceInterfacePanelModel {
   sections: InterfaceSectionModel[];
 }
 
+/** Describes the link negotiation model contract used by the UI component boundary. */
 export interface LinkNegotiationModel {
   sourceLabel: string;
   targetLabel: string;
@@ -49,6 +58,7 @@ export interface LinkNegotiationModel {
   tone: 'matched' | 'mismatch' | 'partial' | 'unknown' | 'up' | 'warning' | 'critical';
 }
 
+/** Describes the link interface panel model contract used by the UI component boundary. */
 export interface LinkInterfacePanelModel {
   linkId: string;
   source: InterfaceSectionModel;

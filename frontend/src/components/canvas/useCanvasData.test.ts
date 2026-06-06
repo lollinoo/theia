@@ -1,3 +1,6 @@
+/**
+ * Exercises use canvas data topology canvas behavior so refactors preserve the documented contract.
+ */
 import { act, renderHook } from '@testing-library/react';
 import type { ReactFlowInstance } from '@xyflow/react';
 import { useState } from 'react';

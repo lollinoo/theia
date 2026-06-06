@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file exercises projection filter behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 

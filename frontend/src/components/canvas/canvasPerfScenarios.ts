@@ -1,3 +1,7 @@
+/**
+ * Defines canvas perf scenarios behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Device, DeviceInterface, DeviceType, Link } from '../../types/api';
 import type {
   AlertDTO,
@@ -6,6 +10,7 @@ import type {
   SnapshotPayload,
 } from '../../types/metrics';
 
+/** Defines canvas perf scenarios constants and helper contracts for the topology canvas. */
 export const CANVAS_PERF_SCENARIOS = {
   small: { deviceCount: 25, linkCount: 40 },
   medium: { deviceCount: 100, linkCount: 180 },
@@ -13,8 +18,10 @@ export const CANVAS_PERF_SCENARIOS = {
   stress: { deviceCount: 700, linkCount: 1500 },
 } as const;
 
+/** Describes the canvas perf scenario name contract used by the topology canvas. */
 export type CanvasPerfScenarioName = keyof typeof CANVAS_PERF_SCENARIOS;
 
+/** Describes the canvas perf scenario contract used by the topology canvas. */
 export interface CanvasPerfScenario {
   name: CanvasPerfScenarioName;
   devices: Device[];
@@ -228,6 +235,7 @@ function buildRuntimeSnapshot(devices: Device[], links: Link[]): SnapshotPayload
   };
 }
 
+/** Generates canvas perf scenario for the topology canvas. */
 export function generateCanvasPerfScenario(
   name: CanvasPerfScenarioName,
   options: GenerateCanvasPerfScenarioOptions = {},

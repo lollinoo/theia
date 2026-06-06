@@ -1,3 +1,6 @@
+/**
+ * Exercises link edge geometry component behavior so refactors preserve the documented contract.
+ */
 import { describe, expect, it } from 'vitest';
 import { buildSelfLoopPathModel } from './linkEdgeGeometry';
 

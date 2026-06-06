@@ -1,3 +1,7 @@
+/**
+ * Owns top-level application routing and provider composition.
+ * Keeps global layout decisions separate from feature-specific components.
+ */
 import { ReactFlowProvider } from '@xyflow/react';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -29,22 +33,32 @@ import {
   type RenameMapDialogSubmit,
 } from './components/topology-hub/RenameMapDialog';
 import TopologyHub from './components/topology-hub/TopologyHub';
+import {
+  canvasMapErrorMessage,
+  fallbackCanvasMap,
+  mapFilterForArea,
+  setPrimaryCanvasMap,
+  upsertCanvasMap,
+} from './components/topology-hub/canvasMapState';
 import { useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
+import { useRuntimeUpdatePause } from './hooks/useRuntimeUpdatePause';
 import { useWebSocket } from './hooks/useWebSocket';
 import type { Area, CanvasMap, CanvasMapFilter, Device, Link } from './types/api';
 
+/** Top-level route-like application views rendered without unmounting the canvas runtime. */
 export type ActiveView = 'hub' | 'canvas' | 'dashboard' | 'admin' | 'settings';
 
-const runtimeUpdatePauseIdleDelayMs = 1500;
 const enableSavedMaps = true;
 const viewLayerBaseClass = 'absolute inset-0 h-full w-full';
 const canvasChromeHiddenStorageKey = 'theia.canvas.chromeHidden';
 
+/** Reads the persisted canvas chrome preference before first render to avoid visible layout churn. */
 function initialCanvasChromeHidden(): boolean {
   return window.localStorage.getItem(canvasChromeHiddenStorageKey) === 'true';
 }
 
+/** Builds the absolute layer class used to keep inactive views mounted but non-interactive. */
 function viewLayerClass(active: boolean, className = ''): string {
   const activeClass = active
     ? 'opacity-100 pointer-events-auto z-10'
@@ -52,6 +66,7 @@ function viewLayerClass(active: boolean, className = ''): string {
   return `${viewLayerBaseClass} ${activeClass} ${className}`.trim();
 }
 
+/** Mirrors layer visibility into accessibility state and inert handling for hidden views. */
 function viewLayerStateProps(active: boolean): {
   'aria-hidden': boolean;
   inert?: '';
@@ -59,47 +74,10 @@ function viewLayerStateProps(active: boolean): {
   return active ? { 'aria-hidden': false } : { 'aria-hidden': true, inert: '' };
 }
 
-function canvasMapErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
-
-function mapFilterForArea(area: Area): CanvasMapFilter {
-  return {
-    area_id: area.id,
-    include_cross_area_links: true,
-    include_ghost_devices: true,
-  };
-}
-
-function upsertCanvasMap(maps: CanvasMap[], map: CanvasMap): CanvasMap[] {
-  const existingIndex = maps.findIndex((candidate) => candidate.id === map.id);
-  if (existingIndex === -1) {
-    return [...maps, map];
-  }
-
-  return maps.map((candidate, index) => (index === existingIndex ? map : candidate));
-}
-
-function fallbackCanvasMap(maps: CanvasMap[]): CanvasMap | null {
-  return maps.find((map) => map.is_default) ?? maps[0] ?? null;
-}
-
-function setPrimaryCanvasMap(maps: CanvasMap[], primaryMap: CanvasMap): CanvasMap[] {
-  let found = false;
-  const nextMaps = maps.map((map) => {
-    if (map.id === primaryMap.id) {
-      found = true;
-      return { ...primaryMap, is_default: true };
-    }
-    return map.is_default ? { ...map, is_default: false } : map;
-  });
-
-  if (!found) {
-    return [...nextMaps, { ...primaryMap, is_default: true }];
-  }
-  return nextMaps;
-}
-
+/**
+ * Coordinates application-level view state, saved topology map ownership, and runtime update pause state.
+ * The canvas remains mounted across view changes so WebSocket/runtime state and React Flow state are preserved.
+ */
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>('canvas');
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
@@ -126,32 +104,13 @@ function App() {
   const [topologyRefreshRevision, setTopologyRefreshRevision] = useState(0);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [canvasChromeHidden, setCanvasChromeHidden] = useState(initialCanvasChromeHidden);
-  const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
+  const runtimeUpdatesPaused = useRuntimeUpdatePause(canvasInteractionActive);
   const { hasPermission, logout, user } = useAuth();
   const canViewAdmin = hasPermission('admin:dashboard:read');
   const canReadSettings = hasPermission('settings:read');
   const canUpdateSettings = hasPermission('settings:update');
   const canOpenSettings = canViewAdmin && canReadSettings && canUpdateSettings;
   const canOpenUserSettings = hasPermission('account:manage');
-
-  useEffect(() => {
-    if (canvasInteractionActive) {
-      setRuntimeUpdatesPaused(true);
-      return;
-    }
-
-    if (!runtimeUpdatesPaused) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      setRuntimeUpdatesPaused(false);
-    }, runtimeUpdatePauseIdleDelayMs);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [canvasInteractionActive, runtimeUpdatesPaused]);
 
   const { snapshot, alerts, reconnecting, prometheusStatus } = useWebSocket(
     '/api/v1/ws',

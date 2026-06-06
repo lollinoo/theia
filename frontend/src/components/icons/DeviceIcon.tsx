@@ -1,3 +1,7 @@
+/**
+ * Renders device icon UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { DeviceType } from '../../types/api';
 
 interface DeviceIconProps {
@@ -70,6 +74,7 @@ function UnknownIcon({ size }: { size: number }) {
   );
 }
 
+/** Renders the DeviceIcon component within the UI component boundary. */
 export function DeviceIcon({ type, size = 24 }: DeviceIconProps) {
   return (
     <span className="inline-flex items-center justify-center text-tertiary">

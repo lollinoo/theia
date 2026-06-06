@@ -1,5 +1,7 @@
 package service
 
+// This file defines restore marker backup and restore service behavior, including filesystem safety and cleanup expectations.
+
 import (
 	"encoding/json"
 	"errors"

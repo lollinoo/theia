@@ -1,5 +1,7 @@
 package domain
 
+// This file defines backup domain contracts and lifecycle invariants.
+
 import (
 	"time"
 
@@ -46,6 +48,8 @@ type BackupFile struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// BulkBackupRunStatus records the lifecycle of a durable multi-device backup run.
+// Running runs may move through pausing/cancelling before reaching one terminal status.
 type BulkBackupRunStatus string
 
 const (
@@ -59,6 +63,8 @@ const (
 	BulkBackupRunStatusCancelled  BulkBackupRunStatus = "cancelled"
 )
 
+// BulkBackupRunItemStatus records one device's progress inside a durable bulk backup run.
+// Active/queued/running are transient; success, failed, skipped, and cancelled are terminal.
 type BulkBackupRunItemStatus string
 
 const (
@@ -73,6 +79,7 @@ const (
 )
 
 // BulkBackupRun tracks one durable multi-device backup orchestration.
+// Counter fields are denormalized from Items so the API can report progress without loading every item.
 type BulkBackupRun struct {
 	ID              uuid.UUID
 	Status          BulkBackupRunStatus
@@ -134,6 +141,7 @@ type BackupJobRepository interface {
 }
 
 // BulkBackupRunRepository defines durable orchestration operations for bulk backup runs.
+// Implementations should treat GetActiveRun and RecalculateRunCounters as consistency boundaries.
 type BulkBackupRunRepository interface {
 	CreateRun(run *BulkBackupRun, items []BulkBackupRunItem) error
 	GetRun(id uuid.UUID) (*BulkBackupRun, error)

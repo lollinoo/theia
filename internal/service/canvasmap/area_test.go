@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file exercises area behavior so refactors preserve the documented contract.
+
 import "testing"
 
 // TestAreaMembershipFromInputTrimsFieldsAndDefaultsColor preserves map-local area normalization.

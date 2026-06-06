@@ -1,3 +1,7 @@
+/**
+ * Renders settings panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useRef, useState } from 'react';
 import {
   type HealthVersion,
@@ -20,274 +24,32 @@ import { GrafanaDashboardProfileManager } from './GrafanaDashboardProfileManager
 import { InstanceBackupManager } from './InstanceBackupManager';
 import { MaterialIcon } from './MaterialIcon';
 import { SNMPProfileManager } from './SNMPProfileManager';
+import { BridgeSettingsSection } from './settings-panel/BridgeSettingsSection';
+import { DeviceBackupSettingsSection } from './settings-panel/DeviceBackupSettingsSection';
+import { PollingSettingsSection } from './settings-panel/PollingSettingsSection';
+import { PrometheusSettingsSection } from './settings-panel/PrometheusSettingsSection';
+import { SavedIndicator } from './settings-panel/SavedIndicator';
+import { SettingsSection } from './settings-panel/SettingsSection';
+import {
+  DEFAULT_WORKER_SETTINGS,
+  PRESET_VALUES,
+  WORKER_SETTINGS,
+  type WorkerSetting,
+  type WorkerSettingKey,
+  createWorkerSavedFlags,
+  createWorkerTimerRefs,
+} from './settings-panel/settingsConstants';
+import { controlClass, fieldLabelClass } from './settings-panel/settingsPanelStyles';
 
-const TIMEZONES = [
-  { label: 'UTC', value: 'UTC' },
-  { label: 'Europe/London (GMT/BST)', value: 'Europe/London' },
-  { label: 'Europe/Paris (CET/CEST)', value: 'Europe/Paris' },
-  { label: 'Europe/Berlin (CET/CEST)', value: 'Europe/Berlin' },
-  { label: 'Europe/Rome (CET/CEST)', value: 'Europe/Rome' },
-  { label: 'Europe/Madrid (CET/CEST)', value: 'Europe/Madrid' },
-  { label: 'Europe/Amsterdam (CET/CEST)', value: 'Europe/Amsterdam' },
-  { label: 'Europe/Zurich (CET/CEST)', value: 'Europe/Zurich' },
-  { label: 'Europe/Vienna (CET/CEST)', value: 'Europe/Vienna' },
-  { label: 'Europe/Brussels (CET/CEST)', value: 'Europe/Brussels' },
-  { label: 'Europe/Stockholm (CET/CEST)', value: 'Europe/Stockholm' },
-  { label: 'Europe/Warsaw (CET/CEST)', value: 'Europe/Warsaw' },
-  { label: 'Europe/Prague (CET/CEST)', value: 'Europe/Prague' },
-  { label: 'Europe/Helsinki (EET/EEST)', value: 'Europe/Helsinki' },
-  { label: 'Europe/Bucharest (EET/EEST)', value: 'Europe/Bucharest' },
-  { label: 'Europe/Athens (EET/EEST)', value: 'Europe/Athens' },
-  { label: 'Europe/Istanbul (TRT)', value: 'Europe/Istanbul' },
-  { label: 'Europe/Moscow (MSK)', value: 'Europe/Moscow' },
-  { label: 'Asia/Dubai (GST)', value: 'Asia/Dubai' },
-  { label: 'Asia/Kolkata (IST)', value: 'Asia/Kolkata' },
-  { label: 'Asia/Singapore (SGT)', value: 'Asia/Singapore' },
-  { label: 'Asia/Shanghai (CST)', value: 'Asia/Shanghai' },
-  { label: 'Asia/Tokyo (JST)', value: 'Asia/Tokyo' },
-  { label: 'Asia/Seoul (KST)', value: 'Asia/Seoul' },
-  { label: 'Australia/Sydney (AEST/AEDT)', value: 'Australia/Sydney' },
-  { label: 'Pacific/Auckland (NZST/NZDT)', value: 'Pacific/Auckland' },
-  { label: 'America/New_York (EST/EDT)', value: 'America/New_York' },
-  { label: 'America/Chicago (CST/CDT)', value: 'America/Chicago' },
-  { label: 'America/Denver (MST/MDT)', value: 'America/Denver' },
-  { label: 'America/Los_Angeles (PST/PDT)', value: 'America/Los_Angeles' },
-  { label: 'America/Anchorage (AKST/AKDT)', value: 'America/Anchorage' },
-  { label: 'Pacific/Honolulu (HST)', value: 'Pacific/Honolulu' },
-  { label: 'America/Sao_Paulo (BRT)', value: 'America/Sao_Paulo' },
-  { label: 'America/Argentina/Buenos_Aires (ART)', value: 'America/Argentina/Buenos_Aires' },
-  { label: 'America/Toronto (EST/EDT)', value: 'America/Toronto' },
-  { label: 'America/Vancouver (PST/PDT)', value: 'America/Vancouver' },
-  { label: 'America/Mexico_City (CST/CDT)', value: 'America/Mexico_City' },
-  { label: 'Africa/Cairo (EET)', value: 'Africa/Cairo' },
-  { label: 'Africa/Johannesburg (SAST)', value: 'Africa/Johannesburg' },
-  { label: 'Africa/Lagos (WAT)', value: 'Africa/Lagos' },
-];
-
-const POLLING_PRESETS = [
-  { label: '15 seconds', value: '15' },
-  { label: '30 seconds', value: '30' },
-  { label: '60 seconds (default)', value: '60' },
-  { label: '2 minutes', value: '120' },
-  { label: '5 minutes', value: '300' },
-  { label: 'Custom...', value: 'custom' },
-];
-
-const PRESET_VALUES = new Set(POLLING_PRESETS.map((p) => p.value).filter((v) => v !== 'custom'));
-
-type WorkerSettingKey =
-  | 'polling_essential_workers'
-  | 'snmp_worker_pool_performance_size'
-  | 'snmp_worker_pool_operational_size'
-  | 'snmp_worker_pool_static_size'
-  | 'polling_max_workers_per_device'
-  | 'polling_max_workers_per_site'
-  | 'polling_max_workers_per_subnet'
-  | 'polling_max_inflight_per_snmp_profile';
-
-interface WorkerSetting {
-  key: WorkerSettingKey;
-  label: string;
-  defaultValue: string;
-  min: number;
-  max: number;
-}
-
-interface WorkerSettingGroup {
-  title: string;
-  settings: readonly WorkerSetting[];
-}
-
-const WORKER_SETTING_GROUPS: readonly WorkerSettingGroup[] = [
-  {
-    title: 'Worker Pools',
-    settings: [
-      {
-        key: 'polling_essential_workers',
-        label: 'Essential Workers',
-        defaultValue: '64',
-        min: 1,
-        max: 256,
-      },
-      {
-        key: 'snmp_worker_pool_performance_size',
-        label: 'Performance Pool',
-        defaultValue: '3',
-        min: 1,
-        max: 128,
-      },
-      {
-        key: 'snmp_worker_pool_operational_size',
-        label: 'Operational Pool',
-        defaultValue: '1',
-        min: 1,
-        max: 128,
-      },
-      {
-        key: 'snmp_worker_pool_static_size',
-        label: 'Static Pool',
-        defaultValue: '1',
-        min: 1,
-        max: 128,
-      },
-    ],
-  },
-  {
-    title: 'Isolation Limits',
-    settings: [
-      {
-        key: 'polling_max_workers_per_device',
-        label: 'Max Workers Per Device',
-        defaultValue: '1',
-        min: 1,
-        max: 32,
-      },
-      {
-        key: 'polling_max_workers_per_site',
-        label: 'Max Workers Per Site',
-        defaultValue: '16',
-        min: 1,
-        max: 256,
-      },
-      {
-        key: 'polling_max_workers_per_subnet',
-        label: 'Max Workers Per Subnet',
-        defaultValue: '8',
-        min: 1,
-        max: 256,
-      },
-      {
-        key: 'polling_max_inflight_per_snmp_profile',
-        label: 'Max Inflight Per SNMP Profile',
-        defaultValue: '16',
-        min: 1,
-        max: 256,
-      },
-    ],
-  },
-] as const;
-
-const WORKER_SETTINGS = WORKER_SETTING_GROUPS.flatMap((group) => group.settings);
-
-function createDefaultWorkerSettings(): Record<WorkerSettingKey, string> {
-  const values = {} as Record<WorkerSettingKey, string>;
-  for (const setting of WORKER_SETTINGS) {
-    values[setting.key] = setting.defaultValue;
-  }
-  return values;
-}
-
-function createWorkerSavedFlags(): Record<WorkerSettingKey, boolean> {
-  const flags = {} as Record<WorkerSettingKey, boolean>;
-  for (const setting of WORKER_SETTINGS) {
-    flags[setting.key] = false;
-  }
-  return flags;
-}
-
-function createWorkerTimerRefs(): Record<WorkerSettingKey, number | null> {
-  const refs = {} as Record<WorkerSettingKey, number | null>;
-  for (const setting of WORKER_SETTINGS) {
-    refs[setting.key] = null;
-  }
-  return refs;
-}
-
-const DEFAULT_WORKER_SETTINGS = createDefaultWorkerSettings();
-
-interface SavedIndicatorProps {
-  visible: boolean;
-}
-
-function SavedIndicator({ visible }: SavedIndicatorProps) {
-  return (
-    <span
-      className={`text-xs text-status-up transition-opacity duration-500 ${visible ? 'opacity-100' : 'opacity-0'}`}
-    >
-      Saved
-    </span>
-  );
-}
-
-const fieldLabelClass = 'text-sm font-medium text-on-bg-secondary';
-const inputClass =
-  'theia-input focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none';
-const compactInputClass =
-  'w-full rounded-lg border border-outline-subtle bg-surface-container-high px-3 py-2 text-sm text-on-bg outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/30';
-const invalidInputClass = 'border-status-down focus:border-status-down focus:ring-status-down/25';
-
-function controlClass(hasError?: boolean, extra = ''): string {
-  return `${inputClass}${hasError ? ` ${invalidInputClass}` : ''}${extra ? ` ${extra}` : ''}`;
-}
-
-function compactControlClass(hasError?: boolean, extra = ''): string {
-  return `${compactInputClass}${hasError ? ` ${invalidInputClass}` : ''}${extra ? ` ${extra}` : ''}`;
-}
-
-interface SettingsSectionProps {
-  id: string;
-  title: string;
-  description: string;
-  icon: string;
-  accent?: 'primary' | 'secondary' | 'warning' | 'status-up';
-  aside?: React.ReactNode;
-  className?: string;
-  children: React.ReactNode;
-}
-
-function SettingsSection({
-  id,
-  title,
-  description,
-  icon,
-  accent = 'primary',
-  aside,
-  className = '',
-  children,
-}: SettingsSectionProps) {
-  const accentClass = {
-    primary: 'bg-primary/15 text-primary',
-    secondary: 'bg-area-secondary/15 text-area-secondary',
-    warning: 'bg-warning/15 text-warning',
-    'status-up': 'bg-status-up/15 text-status-up',
-  }[accent];
-
-  return (
-    <section
-      aria-labelledby={id}
-      className={`flex h-[22rem] min-w-0 self-start flex-col rounded-lg border border-outline-subtle bg-surface-container/80 p-5 shadow-panel ${className}`}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span
-            aria-hidden="true"
-            className={`flex h-10 w-10 flex-none items-center justify-center rounded-lg ${accentClass}`}
-          >
-            <MaterialIcon name={icon} className="text-[20px]" />
-          </span>
-          <div className="min-w-0">
-            <h2 id={id} className="text-lg font-semibold text-on-bg">
-              {title}
-            </h2>
-            <p className="text-sm text-on-bg-secondary">{description}</p>
-          </div>
-        </div>
-        {aside}
-      </div>
-      <div
-        data-testid="settings-section-body"
-        className="mt-5 min-h-0 min-w-0 flex-1 overflow-y-auto pr-1"
-      >
-        {children}
-      </div>
-    </section>
-  );
-}
-
+/** Props for the admin settings container; changes notify parents that runtime config may need refresh. */
 interface SettingsPanelProps {
   onSettingsChange?: () => void;
 }
 
+/**
+ * Renders admin-level settings and owns fetch, validation, debounced autosave, and saved indicators.
+ * Profile managers and section components handle presentation while this container persists setting keys.
+ */
 export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [pollingValue, setPollingValue] = useState('60');
   const [customPolling, setCustomPolling] = useState('');
@@ -353,10 +115,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
         setBridgePort(settings['bridge_port'] ?? '1337');
         setWorkerSettings((prev) => {
           const next = { ...prev };
-          for (const group of WORKER_SETTING_GROUPS) {
-            for (const setting of group.settings) {
-              next[setting.key] = settings[setting.key] ?? setting.defaultValue;
-            }
+          for (const setting of WORKER_SETTINGS) {
+            next[setting.key] = settings[setting.key] ?? setting.defaultValue;
           }
           return next;
         });
@@ -367,6 +127,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     fetchHealthVersion().then(setVersionInfo);
   }, []);
 
+  /** Stores validation errors by stable field key and removes entries when fields become valid. */
   function setFieldError(field: string, error: string | null) {
     setFieldErrors((prev) => {
       if (error) return { ...prev, [field]: error };
@@ -376,6 +137,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     });
   }
 
+  /** Shows a short-lived saved indicator and resets any previous timer for the same field. */
   function showSaved(
     setter: React.Dispatch<React.SetStateAction<boolean>>,
     timerRef: React.MutableRefObject<number | null>,
@@ -385,6 +147,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     timerRef.current = window.setTimeout(() => setter(false), 2000);
   }
 
+  /** Shows the saved indicator for one worker setting without affecting other worker rows. */
   function showWorkerSaved(key: WorkerSettingKey) {
     setSavedWorkerSettings((prev) => ({ ...prev, [key]: true }));
     if (savedWorkerTimerRefs.current[key] !== null) {
@@ -395,6 +158,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 2000);
   }
 
+  /** Validates worker numeric settings before scheduling an autosave request. */
   function validateIntegerRange(value: string, min: number, max: number): string | null {
     const trimmed = value.trim();
     if (!/^\d+$/.test(trimmed)) return 'Must be a valid integer';
@@ -403,6 +167,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     return null;
   }
 
+  /** Debounces worker setting persistence and keeps invalid values local until corrected. */
   function handleWorkerSettingChange(key: WorkerSettingKey, value: string) {
     const setting = WORKER_SETTINGS.find((candidate) => candidate.key === key);
     if (!setting) return;
@@ -424,6 +189,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Debounces polling interval persistence after enforcing the global allowed range. */
   function schedulePollingUpdate(rawValue: string) {
     if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
     const trimmed = rawValue.trim();
@@ -436,6 +202,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Debounces Prometheus URL persistence while treating an empty URL as a valid disabled state. */
   function schedulePrometheusUpdate(value: string) {
     if (prometheusTimerRef.current !== null) window.clearTimeout(prometheusTimerRef.current);
     // Gate auto-save: if value is non-empty and fails URL validation, set error and skip save
@@ -453,6 +220,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Persists only supported device-backup interval values so the scheduler receives known cadences. */
   function handleDeviceIntervalChange(value: string) {
     const err = validateIntervalAllowlist(value);
     if (err) {
@@ -471,6 +239,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Debounces device-backup retention persistence after normalizing to an integer string. */
   function handleDeviceRetentionChange(value: string) {
     const err = validateRetentionCount(value);
     if (err) {
@@ -490,19 +259,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
-  function computeDeviceNextBackupText(): string {
-    const intervalHours = parseInt(deviceBackupInterval, 10);
-    if (!intervalHours || intervalHours <= 0) return 'Scheduling disabled';
-    return 'Backups run every ' + formatDeviceInterval(intervalHours);
-  }
-
-  function formatDeviceInterval(hours: number): string {
-    if (hours >= 168) return '7 days';
-    if (hours >= 48) return '48 hours';
-    if (hours >= 24) return '24 hours';
-    return hours + ' hours';
-  }
-
+  /** Debounces bridge port persistence and keeps invalid port text visible for correction. */
   function handleBridgePortChange(value: string) {
     setBridgePort(value);
     setFieldError('bridgePort', null);
@@ -520,6 +277,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Applies a preset polling cadence immediately while custom values wait for the custom input. */
   function handlePollingPresetChange(value: string) {
     setPollingValue(value);
     if (value !== 'custom') {
@@ -527,41 +285,55 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }
   }
 
-  function renderWorkerSettingField(setting: WorkerSetting) {
-    const inputId = `worker-setting-${setting.key}`;
-    return (
-      <div key={setting.key} className="space-y-1">
-        <div className="flex items-center justify-between gap-3">
-          <label htmlFor={inputId} className={fieldLabelClass}>
-            {setting.label}
-          </label>
-          {savedWorkerSettings[setting.key] && (
-            <span className="text-xs font-medium text-status-up">Saved</span>
-          )}
-        </div>
-        <input
-          id={inputId}
-          type="number"
-          min={setting.min}
-          max={setting.max}
-          step={1}
-          value={workerSettings[setting.key]}
-          onChange={(e) => handleWorkerSettingChange(setting.key, e.target.value)}
-          onBlur={() =>
-            setFieldError(
-              setting.key,
-              validateIntegerRange(workerSettings[setting.key], setting.min, setting.max),
-            )
-          }
-          className={controlClass(Boolean(fieldErrors[setting.key]))}
-        />
-        <p className="break-all font-mono text-[10px] leading-relaxed text-on-bg-muted">
-          {setting.key}
-        </p>
-        {fieldErrors[setting.key] && (
-          <p className="text-[10px] text-status-down">{fieldErrors[setting.key]}</p>
-        )}
-      </div>
+  function handleCustomPollingChange(value: string) {
+    setCustomPolling(value);
+    setFieldError('customPolling', null);
+    schedulePollingUpdate(value);
+  }
+
+  /** Reports custom polling validation on blur without changing the debounced save contract. */
+  function handleCustomPollingBlur() {
+    const trimmed = customPolling.trim();
+    const num = parseInt(trimmed, 10);
+    if (!/^\d+$/.test(trimmed) || num < 5 || num > 3600) {
+      setFieldError('customPolling', 'Polling interval must be between 5 and 3600 seconds');
+    } else {
+      setFieldError('customPolling', null);
+    }
+  }
+
+  function handlePrometheusChange(value: string) {
+    setPrometheusUrl(value);
+    setFieldError('prometheusUrl', null);
+    schedulePrometheusUpdate(value);
+  }
+
+  function handlePrometheusBlur() {
+    setFieldError('prometheusUrl', validateURL(prometheusUrl, 'Prometheus URL'));
+  }
+
+  /** Persists timezone immediately because the select only exposes valid IANA timezone values. */
+  function handleTimezoneChange(value: string) {
+    setTimezone(value);
+    void updateSetting('timezone', value).then(() =>
+      showSaved(setSavedTimezone, savedTimezoneTimerRef),
+    );
+  }
+
+  function handleBridgePortBlur() {
+    const trimmed = bridgePort.trim();
+    const num = parseInt(trimmed, 10);
+    if (!/^\d+$/.test(trimmed) || num < 1 || num > 65535) {
+      setFieldError('bridgePort', 'Bridge port must be an integer between 1 and 65535');
+    } else {
+      setFieldError('bridgePort', null);
+    }
+  }
+
+  function handleWorkerSettingBlur(setting: WorkerSetting) {
+    setFieldError(
+      setting.key,
+      validateIntegerRange(workerSettings[setting.key], setting.min, setting.max),
     );
   }
 
@@ -578,100 +350,22 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           icon="speed"
           accent="primary"
         >
-          <div className="grid gap-4">
-            <label className="grid gap-1 text-sm">
-              <span className="flex items-center justify-between gap-3">
-                <span className={fieldLabelClass}>Polling Interval</span>
-                <SavedIndicator visible={savedPolling} />
-              </span>
-              <select
-                value={pollingValue}
-                onChange={(e) => handlePollingPresetChange(e.target.value)}
-                className={controlClass()}
-              >
-                {POLLING_PRESETS.map((preset) => (
-                  <option key={preset.value} value={preset.value}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {pollingValue === 'custom' && (
-              <div className="grid gap-1 text-sm">
-                <label htmlFor="custom-polling-seconds" className={fieldLabelClass}>
-                  Custom interval
-                </label>
-                <div className="flex items-center gap-2">
-                  <div className="min-w-0 flex-1">
-                    <input
-                      id="custom-polling-seconds"
-                      type="number"
-                      min={5}
-                      max={3600}
-                      value={customPolling}
-                      placeholder="Seconds (5-3600)"
-                      onChange={(e) => {
-                        setCustomPolling(e.target.value);
-                        setFieldError('customPolling', null);
-                        schedulePollingUpdate(e.target.value);
-                      }}
-                      onBlur={() => {
-                        const trimmed = customPolling.trim();
-                        const num = parseInt(trimmed, 10);
-                        if (!/^\d+$/.test(trimmed) || num < 5 || num > 3600) {
-                          setFieldError(
-                            'customPolling',
-                            'Polling interval must be between 5 and 3600 seconds',
-                          );
-                        } else {
-                          setFieldError('customPolling', null);
-                        }
-                      }}
-                      className={controlClass(Boolean(fieldErrors.customPolling))}
-                    />
-                    {fieldErrors.customPolling && (
-                      <p className="mt-1 text-xs text-status-down">{fieldErrors.customPolling}</p>
-                    )}
-                  </div>
-                  <span className="text-xs text-on-bg-secondary">sec</span>
-                </div>
-              </div>
-            )}
-
-            <div className="rounded-lg bg-surface-container-high p-3">
-              <button
-                type="button"
-                aria-expanded={workerSectionOpen}
-                onClick={() => setWorkerSectionOpen((prev) => !prev)}
-                className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1 text-left transition-colors hover:text-on-bg"
-              >
-                <span>
-                  <span className="block text-sm font-semibold text-on-bg">Polling Workers</span>
-                  <span className="block text-xs text-on-bg-secondary">
-                    Tune pool sizes and isolation limits.
-                  </span>
-                </span>
-                <MaterialIcon
-                  name={workerSectionOpen ? 'expand_less' : 'expand_more'}
-                  className="text-on-bg-secondary"
-                />
-              </button>
-              {workerSectionOpen && (
-                <div className="mt-4 grid gap-4">
-                  {WORKER_SETTING_GROUPS.map((group) => (
-                    <div key={group.title} className="grid gap-3">
-                      <h3 className="text-xs font-semibold uppercase text-on-bg-muted">
-                        {group.title}
-                      </h3>
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        {group.settings.map((setting) => renderWorkerSettingField(setting))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          <PollingSettingsSection
+            pollingValue={pollingValue}
+            customPolling={customPolling}
+            savedPolling={savedPolling}
+            customPollingError={fieldErrors.customPolling}
+            workerSectionOpen={workerSectionOpen}
+            workerSettings={workerSettings}
+            savedWorkerSettings={savedWorkerSettings}
+            fieldErrors={fieldErrors}
+            onPollingPresetChange={handlePollingPresetChange}
+            onCustomPollingChange={handleCustomPollingChange}
+            onCustomPollingBlur={handleCustomPollingBlur}
+            onWorkerSectionToggle={() => setWorkerSectionOpen((prev) => !prev)}
+            onWorkerSettingChange={handleWorkerSettingChange}
+            onWorkerSettingBlur={handleWorkerSettingBlur}
+          />
         </SettingsSection>
 
         <SettingsSection
@@ -724,31 +418,13 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           icon="hub"
           accent="primary"
         >
-          <div className="grid gap-4">
-            <label className="grid gap-1 text-sm">
-              <span className="flex items-center justify-between gap-3">
-                <span className={fieldLabelClass}>Prometheus URL</span>
-                <SavedIndicator visible={savedPrometheus} />
-              </span>
-              <input
-                type="url"
-                value={prometheusUrl}
-                placeholder="http://localhost:9090"
-                onChange={(e) => {
-                  setPrometheusUrl(e.target.value);
-                  setFieldError('prometheusUrl', null);
-                  schedulePrometheusUpdate(e.target.value);
-                }}
-                onBlur={() =>
-                  setFieldError('prometheusUrl', validateURL(prometheusUrl, 'Prometheus URL'))
-                }
-                className={controlClass(Boolean(fieldErrors.prometheusUrl))}
-              />
-              {fieldErrors.prometheusUrl && (
-                <span className="text-xs text-status-down">{fieldErrors.prometheusUrl}</span>
-              )}
-            </label>
-          </div>
+          <PrometheusSettingsSection
+            prometheusUrl={prometheusUrl}
+            savedPrometheus={savedPrometheus}
+            prometheusError={fieldErrors.prometheusUrl}
+            onPrometheusChange={handlePrometheusChange}
+            onPrometheusBlur={handlePrometheusBlur}
+          />
         </SettingsSection>
       </div>
 
@@ -760,68 +436,16 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           icon="settings_ethernet"
           accent="warning"
         >
-          <div className="grid gap-4">
-            <label className="grid gap-1 text-sm">
-              <span className="flex items-center justify-between gap-3">
-                <span className={fieldLabelClass}>Timezone</span>
-                <SavedIndicator visible={savedTimezone} />
-              </span>
-              <select
-                value={timezone}
-                onChange={(e) => {
-                  setTimezone(e.target.value);
-                  void updateSetting('timezone', e.target.value).then(() =>
-                    showSaved(setSavedTimezone, savedTimezoneTimerRef),
-                  );
-                }}
-                className={controlClass()}
-              >
-                {TIMEZONES.map((tz) => (
-                  <option key={tz.value} value={tz.value}>
-                    {tz.label}
-                  </option>
-                ))}
-              </select>
-              <span className="text-xs text-on-bg-secondary">
-                Affects backup filenames and zip timestamps.
-              </span>
-            </label>
-
-            <label className="grid gap-1 text-sm">
-              <span className="flex items-center justify-between gap-3">
-                <span className={fieldLabelClass}>WinBox Bridge Port</span>
-                <SavedIndicator visible={savedBridgePort} />
-              </span>
-              <input
-                type="number"
-                min={1}
-                max={65535}
-                value={bridgePort}
-                placeholder="1337"
-                onChange={(e) => handleBridgePortChange(e.target.value)}
-                onBlur={() => {
-                  const trimmed = bridgePort.trim();
-                  const num = parseInt(trimmed, 10);
-                  if (!/^\d+$/.test(trimmed) || num < 1 || num > 65535) {
-                    setFieldError(
-                      'bridgePort',
-                      'Bridge port must be an integer between 1 and 65535',
-                    );
-                  } else {
-                    setFieldError('bridgePort', null);
-                  }
-                }}
-                className={controlClass(Boolean(fieldErrors.bridgePort), 'font-mono')}
-              />
-              {fieldErrors.bridgePort && (
-                <span className="text-xs text-status-down">{fieldErrors.bridgePort}</span>
-              )}
-              <span className="text-xs text-on-bg-secondary">
-                Default is <span className="font-mono">1337</span>. Must match{' '}
-                <span className="font-mono">ListenPort</span> in the bridge config.
-              </span>
-            </label>
-          </div>
+          <BridgeSettingsSection
+            timezone={timezone}
+            bridgePort={bridgePort}
+            savedTimezone={savedTimezone}
+            savedBridgePort={savedBridgePort}
+            bridgePortError={fieldErrors.bridgePort}
+            onTimezoneChange={handleTimezoneChange}
+            onBridgePortChange={handleBridgePortChange}
+            onBridgePortBlur={handleBridgePortBlur}
+          />
         </SettingsSection>
 
         <SettingsSection
@@ -861,84 +485,17 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           accent="secondary"
         >
           <div className="grid gap-3">
-            <div className="rounded-lg bg-surface-container-high p-3">
-              <button
-                type="button"
-                aria-expanded={deviceBackupSectionOpen}
-                onClick={() => setDeviceBackupSectionOpen((prev) => !prev)}
-                className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1 text-left transition-colors hover:text-on-bg"
-              >
-                <span>
-                  <span className="block text-sm font-semibold text-on-bg">Device Backups</span>
-                  <span className="block text-xs text-on-bg-secondary">
-                    Schedule automatic config snapshots.
-                  </span>
-                </span>
-                <MaterialIcon
-                  name={deviceBackupSectionOpen ? 'expand_less' : 'expand_more'}
-                  className="text-on-bg-secondary"
-                />
-              </button>
-              {deviceBackupSectionOpen && (
-                <div className="mt-4 grid items-start gap-4 sm:grid-cols-2">
-                  <label className="grid grid-rows-[2.5rem_auto_1rem] gap-1 text-sm">
-                    <span
-                      data-testid="device-backup-schedule-label-row"
-                      className="flex min-h-10 items-start justify-between gap-3"
-                    >
-                      <span className={fieldLabelClass}>Automatic Backup Schedule</span>
-                      {savedDeviceInterval && (
-                        <span className="text-xs font-medium text-status-up">Saved</span>
-                      )}
-                    </span>
-                    <select
-                      value={deviceBackupInterval}
-                      onChange={(e) => handleDeviceIntervalChange(e.target.value)}
-                      className={compactControlClass()}
-                    >
-                      <option value="0">Disabled</option>
-                      <option value="6">Every 6 hours</option>
-                      <option value="12">Every 12 hours</option>
-                      <option value="24">Every 24 hours</option>
-                      <option value="48">Every 48 hours</option>
-                      <option value="168">Every 7 days</option>
-                    </select>
-                    <span
-                      data-testid="device-backup-schedule-helper-row"
-                      className="min-h-4 text-xs text-on-bg-muted"
-                    >
-                      {computeDeviceNextBackupText()}
-                    </span>
-                  </label>
-
-                  <label className="grid grid-rows-[2.5rem_auto_1rem] gap-1 text-sm">
-                    <span
-                      data-testid="device-backup-retention-label-row"
-                      className="flex min-h-10 items-start justify-between gap-3"
-                    >
-                      <span className={fieldLabelClass}>Keep last N backups per device</span>
-                      {savedDeviceRetention && (
-                        <span className="text-xs font-medium text-status-up">Saved</span>
-                      )}
-                    </span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={365}
-                      value={deviceBackupRetention}
-                      onChange={(e) => handleDeviceRetentionChange(e.target.value)}
-                      className={compactControlClass(Boolean(fieldErrors.deviceBackupRetention))}
-                    />
-                    <span
-                      data-testid="device-backup-retention-helper-row"
-                      className="min-h-4 text-xs text-status-down"
-                    >
-                      {fieldErrors.deviceBackupRetention ?? ''}
-                    </span>
-                  </label>
-                </div>
-              )}
-            </div>
+            <DeviceBackupSettingsSection
+              open={deviceBackupSectionOpen}
+              deviceBackupInterval={deviceBackupInterval}
+              deviceBackupRetention={deviceBackupRetention}
+              savedDeviceInterval={savedDeviceInterval}
+              savedDeviceRetention={savedDeviceRetention}
+              retentionError={fieldErrors.deviceBackupRetention}
+              onToggle={() => setDeviceBackupSectionOpen((prev) => !prev)}
+              onDeviceIntervalChange={handleDeviceIntervalChange}
+              onDeviceRetentionChange={handleDeviceRetentionChange}
+            />
 
             <div className="rounded-lg bg-surface-container-high p-3">
               <button

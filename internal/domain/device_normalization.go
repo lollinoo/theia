@@ -1,5 +1,7 @@
 package domain
 
+// This file defines device normalization domain contracts and lifecycle invariants.
+
 import "strings"
 
 // IsVirtualWithIPDevice reports whether the device is virtual and has an IP

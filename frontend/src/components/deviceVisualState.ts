@@ -1,8 +1,14 @@
+/**
+ * Renders device visual state UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { CSSProperties } from 'react';
 import type { Device, DeviceStatus } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
 
+/** Describes the device monitoring state contract used by the UI component boundary. */
 export type DeviceMonitoringState = 'monitorable' | 'unmonitored';
+/** Describes the device visual status contract used by the UI component boundary. */
 export type DeviceVisualStatus =
   | DeviceStatus
   | 'degraded'
@@ -25,14 +31,17 @@ type DeviceMonitoringInput = Pick<Device, 'device_type' | 'ip'> &
 type DeviceVisualInput = Pick<Device, 'device_type' | 'ip' | 'status'> &
   Partial<Pick<Device, 'polling_enabled'>>;
 type DeviceVisualMetrics = DeviceMetricsDTO | null | undefined;
+/** Describes the device address state contract used by the UI component boundary. */
 export type DeviceAddressState = 'address' | 'missing' | 'unmonitored';
 
+/** Describes the device visual state contract used by the UI component boundary. */
 export interface DeviceVisualState {
   dotStatus: DeviceVisualStatus;
   label: DeviceVisualLabel;
   labelClass: string;
 }
 
+/** Describes the device operational readouts contract used by the UI component boundary. */
 export interface DeviceOperationalReadouts {
   cpuPercent: number | null;
   memPercent: number | null;
@@ -40,6 +49,7 @@ export interface DeviceOperationalReadouts {
   isDeviceDown: boolean;
 }
 
+/** Describes the device node status styles contract used by the UI component boundary. */
 export interface DeviceNodeStatusStyles {
   badgeClass: string;
   badgeStyle?: CSSProperties;
@@ -49,6 +59,7 @@ export interface DeviceNodeStatusStyles {
   frameStyle: CSSProperties;
 }
 
+/** Describes the device status dot styles contract used by the UI component boundary. */
 export interface DeviceStatusDotStyles {
   className: string;
   style: CSSProperties;
@@ -60,11 +71,13 @@ interface DeviceFrameTone {
   focusRingSize: number;
 }
 
+/** Resolves device monitoring state for the UI component boundary. */
 export function resolveDeviceMonitoringState(device: DeviceMonitoringInput): DeviceMonitoringState {
   const hasIp = device.ip.trim().length > 0;
   return device.device_type === 'virtual' && !hasIp ? 'unmonitored' : 'monitorable';
 }
 
+/** Identifies device monitorable for the UI component boundary. */
 export function isDeviceMonitorable(
   device: DeviceMonitoringInput,
   monitoringStateOverride?: DeviceMonitoringState,
@@ -76,6 +89,7 @@ function isDevicePollingEnabled(device: Partial<Pick<Device, 'polling_enabled'>>
   return device.polling_enabled !== false;
 }
 
+/** Sanitize device metrics for display for the UI component boundary. */
 export function sanitizeDeviceMetricsForDisplay(
   device: DeviceMonitoringInput,
   metrics?: DeviceVisualMetrics,
@@ -92,6 +106,7 @@ export function sanitizeDeviceMetricsForDisplay(
   return metrics;
 }
 
+/** Resolves device address state for the UI component boundary. */
 export function resolveDeviceAddressState(device: DeviceMonitoringInput): DeviceAddressState {
   if (device.ip.trim().length > 0) {
     return 'address';
@@ -143,6 +158,7 @@ function unmonitoredLabelClass(): string {
   return 'text-[12px] font-semibold text-on-bg-secondary';
 }
 
+/** Resolves device operational status state for the UI component boundary. */
 export function resolveDeviceOperationalStatusState(
   device: DeviceVisualInput,
   monitoringStateOverride?: DeviceMonitoringState,
@@ -287,6 +303,7 @@ function frameToneForStatus(status: DeviceVisualStatus): DeviceFrameTone {
   }
 }
 
+/** Resolves device node status styles for the UI component boundary. */
 export function resolveDeviceNodeStatusStyles({
   status,
   selected = false,
@@ -367,6 +384,7 @@ function dotStyleForStatus(status: DeviceVisualStatus): CSSProperties {
   }
 }
 
+/** Resolves device status dot styles for the UI component boundary. */
 export function resolveDeviceStatusDotStyles(status: DeviceVisualStatus): DeviceStatusDotStyles {
   return {
     className: dotClassForStatus(status),
@@ -391,6 +409,7 @@ function hasSnmpReachabilityWarning(metrics?: DeviceVisualMetrics): boolean {
   );
 }
 
+/** Resolves device visual state for the UI component boundary. */
 export function resolveDeviceVisualState(
   device: DeviceVisualInput,
   metrics?: DeviceVisualMetrics,
@@ -473,6 +492,7 @@ export function resolveDeviceVisualState(
   }
 }
 
+/** Resolves device operational readouts for the UI component boundary. */
 export function resolveDeviceOperationalReadouts(
   device: DeviceVisualInput,
   metrics?: DeviceVisualMetrics,
@@ -494,6 +514,7 @@ export function resolveDeviceOperationalReadouts(
   };
 }
 
+/** Minimap color for device for the UI component boundary. */
 export function minimapColorForDevice({
   device,
   metrics,

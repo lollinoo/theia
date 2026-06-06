@@ -1,3 +1,7 @@
+/**
+ * Renders zoom controls UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { MaterialIcon } from './MaterialIcon';
 
 interface ZoomControlsProps {

@@ -1,3 +1,7 @@
+/**
+ * Renders device card UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { Handle, type Node, type NodeProps, Position } from '@xyflow/react';
 import { type CSSProperties, memo, useLayoutEffect } from 'react';
 import type { Device, Link } from '../types/api';
@@ -29,6 +33,7 @@ import {
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
 
+/** Describes the device node data contract used by the UI component boundary. */
 export interface DeviceNodeData {
   kind?: 'device' | 'ghost-device';
   device: Device;
@@ -48,8 +53,10 @@ export interface DeviceNodeData {
   [key: string]: unknown;
 }
 
+/** Describes the device node contract used by the UI component boundary. */
 export type DeviceNode = Node<DeviceNodeData>;
 
+/** Describes the device node runtime data contract used by the UI component boundary. */
 export interface DeviceNodeRuntimeData {
   status: Device['status'];
   metrics: DeviceMetricsDTO | null;
@@ -201,6 +208,7 @@ const DEVICE_NODE_MAX_READABILITY_SCALE = 1.12;
 const DEVICE_NODE_READABILITY_SCALE_CSS_VAR = 'var(--theia-device-node-readability-scale, 1)';
 const DEVICE_NODE_IDENTITY_SCALE_CSS_VAR = 'var(--theia-device-node-identity-scale, 1)';
 
+/** Resolves device node readability scale for the UI component boundary. */
 export function resolveDeviceNodeReadabilityScale(zoom: number): number {
   const safeZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
 
@@ -971,6 +979,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   );
 }
 
+/** Returns device render signature for the UI component boundary. */
 export function getDeviceRenderSignature(props: NodeProps<DeviceNode>) {
   const data = props.data;
   const runtime = data.runtime;

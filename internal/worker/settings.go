@@ -1,5 +1,7 @@
 package worker
 
+// This file defines settings worker behavior, background lifecycle, and runtime state updates.
+
 import (
 	"strconv"
 	"strings"

@@ -1,3 +1,7 @@
+/**
+ * Defines topology hub model behavior for the topology hub.
+ * Keeps saved-map and area workflows separate from the live canvas surface.
+ */
 import type { Area, CanvasMap, Device, Link } from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
 import {
@@ -7,6 +11,7 @@ import {
   resolveDeviceVisualState,
 } from '../deviceVisualState';
 
+/** Describes the topology hub aggregate contract used by the topology hub. */
 export interface TopologyHubAggregate {
   totalDevices: number;
   activeLinks: number;
@@ -14,6 +19,7 @@ export interface TopologyHubAggregate {
   healthPercentage: number;
 }
 
+/** Describes the topology hub area model contract used by the topology hub. */
 export interface TopologyHubAreaModel {
   area: Area;
   deviceCount: number;
@@ -23,6 +29,7 @@ export interface TopologyHubAreaModel {
   healthLabel: 'Healthy' | 'Needs attention';
 }
 
+/** Describes the topology hub model contract used by the topology hub. */
 export interface TopologyHubModel {
   aggregate: TopologyHubAggregate;
   areas: TopologyHubAreaModel[];
@@ -31,6 +38,7 @@ export interface TopologyHubModel {
   maps: CanvasMap[];
 }
 
+/** Describes the build topology hub model input contract used by the topology hub. */
 export interface BuildTopologyHubModelInput {
   devices: Device[];
   areas: Area[];
@@ -71,6 +79,7 @@ function countAreaLinks(links: Link[], areaDeviceIds: Set<string>): number {
   ).length;
 }
 
+/** Builds topology hub model for the topology hub. */
 export function buildTopologyHubModel({
   devices,
   areas,
@@ -82,6 +91,7 @@ export function buildTopologyHubModel({
 
   const areaModels = areas.map((area) => {
     const areaDevices = devices.filter((device) => device.area_ids?.includes(area.id));
+    const deviceCount = area.device_count;
     const areaDeviceIds = new Set(areaDevices.map((device) => device.id));
     const degradedDeviceCount = areaDevices.filter((device) =>
       isDeviceDegraded(device, snapshot),
@@ -91,10 +101,10 @@ export function buildTopologyHubModel({
 
     return {
       area,
-      deviceCount: areaDevices.length,
+      deviceCount,
       activeLinkCount: countAreaLinks(links, areaDeviceIds),
       degradedDeviceCount,
-      healthPercentage: healthPercentage(areaDevices.length, degradedDeviceCount),
+      healthPercentage: healthPercentage(deviceCount, degradedDeviceCount),
       healthLabel,
     };
   });

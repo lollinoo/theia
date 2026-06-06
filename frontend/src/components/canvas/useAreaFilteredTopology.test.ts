@@ -1,3 +1,6 @@
+/**
+ * Exercises use area filtered topology topology canvas behavior so refactors preserve the documented contract.
+ */
 import { renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { Device, Link } from '../../types/api';

@@ -1,5 +1,7 @@
 package scheduler
 
+// This file exercises types behavior so refactors preserve the documented contract.
+
 import (
 	"testing"
 	"time"

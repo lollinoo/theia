@@ -1,5 +1,7 @@
 package ssh
 
+// This file exercises client behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"testing"

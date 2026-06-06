@@ -1,5 +1,7 @@
 package observability
 
+// This file defines registry observability registry behavior.
+
 import (
 	"fmt"
 	"net/http"
@@ -117,6 +119,7 @@ type histogramSnapshot struct {
 	sum     float64
 }
 
+// Registry represents registry data used by the package.
 type Registry struct {
 	mu sync.RWMutex
 
@@ -161,6 +164,7 @@ type Registry struct {
 	stateChangesDroppedTotal   uint64
 }
 
+// NewRegistry constructs registry state for the package.
 func NewRegistry() *Registry {
 	return &Registry{
 		schedulerReadyDepth: map[domain.VolatilityClass]float64{

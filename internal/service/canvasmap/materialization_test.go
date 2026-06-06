@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file exercises materialization behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"errors"

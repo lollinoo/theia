@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines canvas map area repo persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"fmt"
 	"time"

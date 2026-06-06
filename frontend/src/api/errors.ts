@@ -1,4 +1,8 @@
 /**
+ * Provides frontend API helpers for errors endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
+/**
  * Thrown by the API client when the backend returns a 400 Bad Request response.
  * The message contains the user-facing validation error from the backend.
  */

@@ -1,3 +1,7 @@
+/**
+ * Defines canvas diagnostics panel behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import { type ReactNode, useEffect, useState } from 'react';
 
 import {
@@ -99,6 +103,7 @@ async function copyDiagnosticsJson(): Promise<void> {
   }
 }
 
+/** Renders the CanvasDiagnosticsPanel component within the topology canvas. */
 export function CanvasDiagnosticsPanel({
   open,
   onClose,

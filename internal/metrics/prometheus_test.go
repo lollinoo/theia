@@ -1,5 +1,7 @@
 package metrics
 
+// This file exercises prometheus behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"encoding/json"

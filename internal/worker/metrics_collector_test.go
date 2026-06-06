@@ -1,5 +1,7 @@
 package worker
 
+// This file exercises metrics collector behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"encoding/json"
@@ -55,6 +57,7 @@ type mockWorkerDeviceRepo struct {
 }
 
 func (r *mockWorkerDeviceRepo) Create(_ *domain.Device) error { return nil }
+
 func (r *mockWorkerDeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 	for _, d := range r.devices {
 		if d.ID == id {
@@ -64,17 +67,22 @@ func (r *mockWorkerDeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 	}
 	return nil, fmt.Errorf("device not found: %s", id)
 }
-func (r *mockWorkerDeviceRepo) GetByIP(_ string) (*domain.Device, error)      { return nil, nil }
+
+func (r *mockWorkerDeviceRepo) GetByIP(_ string) (*domain.Device, error) { return nil, nil }
+
 func (r *mockWorkerDeviceRepo) GetBySysName(_ string) (*domain.Device, error) { return nil, nil }
+
 func (r *mockWorkerDeviceRepo) GetAll() ([]domain.Device, error) {
 	result := make([]domain.Device, len(r.devices))
 	copy(result, r.devices)
 	return result, nil
 }
+
 func (r *mockWorkerDeviceRepo) Update(_ *domain.Device) error {
 	atomic.AddInt32(&r.updateCalls, 1)
 	return nil
 }
+
 func (r *mockWorkerDeviceRepo) Delete(_ uuid.UUID) error { return nil }
 
 type mockWorkerLinkRepo struct {
@@ -82,18 +90,25 @@ type mockWorkerLinkRepo struct {
 }
 
 func (r *mockWorkerLinkRepo) Create(_ *domain.Link) error { return nil }
+
 func (r *mockWorkerLinkRepo) CreateManualIdempotent(link *domain.Link, _ bool) (*domain.Link, bool, error) {
 	return link, true, nil
 }
-func (r *mockWorkerLinkRepo) GetByID(_ uuid.UUID) (*domain.Link, error)        { return nil, nil }
+
+func (r *mockWorkerLinkRepo) GetByID(_ uuid.UUID) (*domain.Link, error) { return nil, nil }
+
 func (r *mockWorkerLinkRepo) GetByDeviceID(_ uuid.UUID) ([]domain.Link, error) { return nil, nil }
+
 func (r *mockWorkerLinkRepo) GetAll() ([]domain.Link, error) {
 	result := make([]domain.Link, len(r.links))
 	copy(result, r.links)
 	return result, nil
 }
-func (r *mockWorkerLinkRepo) Update(_ *domain.Link) error         { return nil }
-func (r *mockWorkerLinkRepo) Delete(_ uuid.UUID) error            { return nil }
+
+func (r *mockWorkerLinkRepo) Update(_ *domain.Link) error { return nil }
+
+func (r *mockWorkerLinkRepo) Delete(_ uuid.UUID) error { return nil }
+
 func (r *mockWorkerLinkRepo) Upsert(_ *domain.Link) (bool, error) { return false, nil }
 
 // ---------------------------------------------------------------------------

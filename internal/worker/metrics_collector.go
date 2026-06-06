@@ -1,5 +1,7 @@
 package worker
 
+// This file defines metrics collector worker behavior, background lifecycle, and runtime state updates.
+
 import (
 	"context"
 	"log"

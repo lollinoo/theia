@@ -1,5 +1,7 @@
 package collector
 
+// This file defines static metrics collection behavior and normalized collector output.
+
 import (
 	"context"
 	"errors"

@@ -1,5 +1,7 @@
 package cache
 
+// This file defines cache cache behavior and expiry assumptions.
+
 import (
 	"sort"
 	"strings"
@@ -140,6 +142,7 @@ func (c *DeviceLinkCache) GetLinks() ([]domain.Link, error) {
 	return c.links, nil
 }
 
+// GetDeviceByID retrieves device by id data from the package.
 func (c *DeviceLinkCache) GetDeviceByID(id uuid.UUID) (domain.Device, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -152,6 +155,7 @@ func (c *DeviceLinkCache) GetDeviceByID(id uuid.UUID) (domain.Device, bool, erro
 	return device, ok, nil
 }
 
+// GetDeviceBySysName retrieves device by sys name data from the package.
 func (c *DeviceLinkCache) GetDeviceBySysName(sysName string) (domain.Device, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -168,6 +172,7 @@ func (c *DeviceLinkCache) GetDeviceBySysName(sysName string) (domain.Device, boo
 	return device, ok, nil
 }
 
+// GetLinkByID retrieves link by id data from the package.
 func (c *DeviceLinkCache) GetLinkByID(id uuid.UUID) (domain.Link, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -180,6 +185,7 @@ func (c *DeviceLinkCache) GetLinkByID(id uuid.UUID) (domain.Link, bool, error) {
 	return link, ok, nil
 }
 
+// GetLinkByEndpointPair retrieves link by endpoint pair data from the package.
 func (c *DeviceLinkCache) GetLinkByEndpointPair(sourceDeviceID uuid.UUID, sourceIfName string, targetDeviceID uuid.UUID, targetIfName string) (domain.Link, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

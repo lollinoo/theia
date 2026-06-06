@@ -1,3 +1,7 @@
+/**
+ * Coordinates positions state and side effects for consuming components.
+ * Owns cleanup-sensitive lifecycle work so callers receive stable state and actions.
+ */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { headersWithCsrf } from '../api/client';
 import {
@@ -6,12 +10,14 @@ import {
 } from '../components/canvas/canvasDiagnostics';
 import { type DevicePosition, parsePositionsResponse } from '../types/api';
 
+/** Describes the position state contract used by the React hook lifecycle. */
 export interface PositionState {
   x: number;
   y: number;
   pinned: boolean;
 }
 
+/** Describes the position payload contract used by the React hook lifecycle. */
 export interface PositionPayload {
   device_id: string;
   x: number;
@@ -46,6 +52,7 @@ function toPositionMap(
   );
 }
 
+/** Coordinates positions behavior for the React hook lifecycle. */
 export function usePositions(mapId: string | null) {
   const [positions, setPositions] = useState<Map<string, PositionState>>(new Map());
   const [loading, setLoading] = useState(false);

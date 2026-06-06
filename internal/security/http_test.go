@@ -1,5 +1,7 @@
 package security
 
+// This file exercises http behavior so refactors preserve the documented contract.
+
 import (
 	"net/http"
 	"net/http/httptest"

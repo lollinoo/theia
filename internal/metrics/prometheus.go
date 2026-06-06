@@ -1,5 +1,7 @@
 package metrics
 
+// This file defines prometheus Prometheus metrics registration and reporting behavior.
+
 import (
 	"context"
 	"encoding/json"

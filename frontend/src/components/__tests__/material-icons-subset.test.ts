@@ -1,3 +1,6 @@
+/**
+ * Exercises material icons subset component behavior so refactors preserve the documented contract.
+ */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';

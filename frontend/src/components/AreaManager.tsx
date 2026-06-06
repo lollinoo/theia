@@ -1,3 +1,7 @@
+/**
+ * Renders area manager UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useState } from 'react';
 import {
   createArea,
@@ -163,6 +167,7 @@ interface AreaManagerProps {
   onCreateMapFromArea?: (area: Area) => void;
 }
 
+/** Renders the AreaManager component within the UI component boundary. */
 export function AreaManager({
   onAreasChange,
   mapContext,

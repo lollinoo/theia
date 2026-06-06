@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines topology observation repo persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"database/sql"
 	"fmt"
@@ -13,10 +15,12 @@ import (
 	"github.com/lollinoo/theia/internal/topology"
 )
 
+// TopologyObservationRepo represents topology observation repo data used by the persistence boundary.
 type TopologyObservationRepo struct {
 	db *DB
 }
 
+// NewTopologyObservationRepo constructs topology observation repo state for the persistence boundary.
 func NewTopologyObservationRepo(db *sql.DB) *TopologyObservationRepo {
 	return &TopologyObservationRepo{db: wrapDB(db)}
 }
@@ -178,6 +182,7 @@ func (r *TopologyObservationRepo) pruneLocalObservationsOnce(localDeviceID uuid.
 	return int(rowsAffected), nil
 }
 
+// ListObservationsForDevices lists observations for devices data from the persistence boundary.
 func (r *TopologyObservationRepo) ListObservationsForDevices(deviceIDs []uuid.UUID) ([]topology.Observation, error) {
 	if len(deviceIDs) == 0 {
 		return nil, nil
@@ -351,6 +356,7 @@ func (r *TopologyObservationRepo) ResolveUnresolvedNeighbor(localDeviceID uuid.U
 	return nil
 }
 
+// GetUnresolvedNeighborsByDeviceID retrieves unresolved neighbors by device id data from the persistence boundary.
 func (r *TopologyObservationRepo) GetUnresolvedNeighborsByDeviceID(localDeviceID uuid.UUID) ([]topology.UnresolvedNeighbor, error) {
 	rows, err := r.db.Query(
 		`SELECT id, local_device_id, remote_identity, protocol, occurrences, first_observed_at, last_observed_at, resolved_at, created_at, updated_at

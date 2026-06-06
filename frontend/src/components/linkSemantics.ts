@@ -1,3 +1,7 @@
+/**
+ * Renders link semantics UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { Link } from '../types/api';
 import { type AlertStatus, type DeviceMetricsDTO, type LinkMetricsDTO } from '../types/metrics';
@@ -7,16 +11,22 @@ import {
   measureEdgePathLength,
 } from './edgeBadgeAnchors';
 
+/** Describes the edge emphasis contract used by the UI component boundary. */
 export type EdgeEmphasis = 'default' | 'muted' | 'connected';
+/** Describes the edge semantic state contract used by the UI component boundary. */
 export type EdgeSemanticState = 'neutral' | 'up' | 'warning' | 'critical';
+/** Describes the link negotiation state contract used by the UI component boundary. */
 export type LinkNegotiationState =
   | 'matched'
   | 'mismatch'
   | 'partial'
   | 'unknown'
   | 'not_applicable';
+/** Describes the link badge kind contract used by the UI component boundary. */
 export type LinkBadgeKind = 'rate' | 'throughput';
+/** Describes the link badge zoom band contract used by the UI component boundary. */
 export type LinkBadgeZoomBand = 'low' | 'medium' | 'high';
+/** Describes the link badge semantic priority contract used by the UI component boundary. */
 export type LinkBadgeSemanticPriority = 'normal' | 'active' | 'alert';
 type DeviceEndpointHealth = DeviceMetricsDTO['health'];
 type DeviceEndpointPrimaryHealth = DeviceMetricsDTO['primary_health'];
@@ -31,6 +41,7 @@ interface DeviceEndpointRuntimeState {
   snmpReachable?: DeviceEndpointReachabilityEvidence;
 }
 
+/** Describes the link edge data contract used by the UI component boundary. */
 export interface LinkEdgeData {
   link?: Link;
   interactionMode?: 'idle' | 'interactive';
@@ -71,6 +82,7 @@ export interface LinkEdgeData {
   [key: string]: unknown;
 }
 
+/** Describes the link badge view model contract used by the UI component boundary. */
 export interface LinkBadgeViewModel {
   key: string;
   text: string;
@@ -84,12 +96,14 @@ export interface LinkBadgeViewModel {
   };
 }
 
+/** Describes the link badge visibility contract used by the UI component boundary. */
 export interface LinkBadgeVisibility {
   zoomBand: LinkBadgeZoomBand;
   showRate: boolean;
   showThroughput: boolean;
 }
 
+/** Describes the link badge presentation contract used by the UI component boundary. */
 export interface LinkBadgePresentation {
   anchor: EdgeBadgeAnchor;
   items: LinkBadgeViewModel[];
@@ -165,6 +179,7 @@ function isNegotiationWarning(state: LinkNegotiationState | undefined): boolean 
   return state === 'mismatch' || state === 'partial' || state === 'unknown';
 }
 
+/** Formats bandwidth for the UI component boundary. */
 export function formatBandwidth(speed: number): string {
   if (!speed || speed <= 0) {
     return 'Unknown';
@@ -185,6 +200,7 @@ export function formatBandwidth(speed: number): string {
   return `${speed} bps`;
 }
 
+/** Normalizes interface status for link state in the UI component boundary. */
 export function normalizeInterfaceStatusForLink(status: string | undefined): string | undefined {
   const normalized = status?.trim().toLowerCase();
   if (!normalized || normalized === 'unknown') {
@@ -233,6 +249,7 @@ function isEndpointRuntimeWarning(runtime: DeviceEndpointRuntimeState): boolean 
   );
 }
 
+/** Builds link telemetry badges for the UI component boundary. */
 export function buildLinkTelemetryBadges({
   sourceSpeed,
   targetSpeed,
@@ -316,6 +333,7 @@ export function buildLinkTelemetryBadges({
   };
 }
 
+/** Normalizes link state for color for the UI component boundary. */
 export function normalizeLinkStateForColor(data: LinkEdgeData | undefined): NormalizedLinkState {
   const inertVirtualLink = data?.inertVirtualLink === true;
   const suppressSourceVirtualEndpoint = inertVirtualLink && data?.sourceIsVirtual === true;
@@ -355,6 +373,7 @@ export function normalizeLinkStateForColor(data: LinkEdgeData | undefined): Norm
   };
 }
 
+/** Resolves edge tone for the UI component boundary. */
 export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   color: string;
   width: number;
@@ -501,6 +520,7 @@ export function resolveEdgeTone(data: LinkEdgeData | undefined): {
   };
 }
 
+/** Resolves inline badge tone for the UI component boundary. */
 export function resolveInlineBadgeTone(
   edgeState: EdgeSemanticState,
   badgeKind: LinkBadgeKind,
@@ -532,6 +552,7 @@ export function resolveInlineBadgeTone(
   }
 }
 
+/** Resolves badge class name for the UI component boundary. */
 export function resolveBadgeClassName(tone: EdgeSemanticState): string {
   switch (tone) {
     case 'up':
@@ -545,10 +566,12 @@ export function resolveBadgeClassName(tone: EdgeSemanticState): string {
   }
 }
 
+/** Resolves negotiation indicator class name for the UI component boundary. */
 export function resolveNegotiationIndicatorClassName(): string {
   return 'border-warning/45 bg-warning/12 text-warning';
 }
 
+/** Resolves link badge visibility for the UI component boundary. */
 export function resolveLinkBadgeVisibility({
   zoom,
   bandwidthLabel,
@@ -571,6 +594,7 @@ export function resolveLinkBadgeVisibility({
   };
 }
 
+/** Resolves link badge scale for the UI component boundary. */
 export function resolveLinkBadgeScale(zoom: number): number {
   const safeZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
 
@@ -647,6 +671,7 @@ function resolveLinkBadgeSemanticPriority({
   return 'normal';
 }
 
+/** Resolves link badge presentation for the UI component boundary. */
 export function resolveLinkBadgePresentation({
   data,
   zoom,

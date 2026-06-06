@@ -1,7 +1,12 @@
+/**
+ * Defines canvas settings refresh behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { MutableRefObject } from 'react';
 
 import type { GrafanaDashboardConfig } from '../../types/api';
 
+/** Describes the canvas settings refresh dependencies contract used by the topology canvas. */
 export interface CanvasSettingsRefreshDependencies {
   fetchSettings: () => Promise<Record<string, string>>;
   fetchGrafanaDashboardConfig: () => Promise<GrafanaDashboardConfig>;

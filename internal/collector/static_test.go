@@ -1,5 +1,7 @@
 package collector
 
+// This file exercises static behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"errors"

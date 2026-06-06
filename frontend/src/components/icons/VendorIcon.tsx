@@ -1,3 +1,7 @@
+/**
+ * Renders vendor icon UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 interface VendorIconProps {
   vendor: string;
   size?: number;
@@ -81,6 +85,7 @@ const vendorMap: Record<string, React.FC<{ size: number }>> = {
   ubiquiti: UbiquitiIcon,
 };
 
+/** Renders the VendorIcon component within the UI component boundary. */
 export function VendorIcon({ vendor, size = 16 }: VendorIconProps) {
   const Icon = vendorMap[vendor.toLowerCase()] ?? GenericIcon;
   return (

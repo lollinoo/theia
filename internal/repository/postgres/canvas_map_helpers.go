@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines canvas map helpers persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"database/sql"
 	"fmt"

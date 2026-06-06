@@ -1,7 +1,12 @@
+/**
+ * Renders reconnect banner UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 interface ReconnectBannerProps {
   visible: boolean;
 }
 
+/** Renders the ReconnectBanner component within the UI component boundary. */
 export function ReconnectBanner({ visible }: ReconnectBannerProps) {
   return (
     <div

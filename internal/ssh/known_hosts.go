@@ -1,5 +1,7 @@
 package ssh
 
+// This file defines known hosts SSH connectivity and host-key trust behavior.
+
 import (
 	"errors"
 	"fmt"

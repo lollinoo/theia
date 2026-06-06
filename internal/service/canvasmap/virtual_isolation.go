@@ -1,5 +1,7 @@
 package canvasmap
 
+// This file defines virtual isolation canvas-map service behavior and topology ownership rules.
+
 import (
 	"context"
 	"fmt"

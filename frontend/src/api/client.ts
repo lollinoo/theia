@@ -1,3 +1,7 @@
+/**
+ * Provides frontend API helpers for client endpoints.
+ * Keeps request construction and backend response handling out of UI components.
+ */
 export { ServerError, ValidationError } from './errors';
 export * from './admin';
 export * from './areas';

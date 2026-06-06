@@ -1,5 +1,7 @@
 package service
 
+// This file defines device discovery coordinator service behavior and domain orchestration rules.
+
 import (
 	"context"
 	"fmt"

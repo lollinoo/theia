@@ -1,3 +1,7 @@
+/**
+ * Coordinates document visibility state and side effects for consuming components.
+ * Owns cleanup-sensitive lifecycle work so callers receive stable state and actions.
+ */
 import { useEffect, useState } from 'react';
 
 const subscribers = new Set<(visible: boolean) => void>();
@@ -34,6 +38,7 @@ function stopListenerIfIdle() {
   isListening = false;
 }
 
+/** Coordinates document visibility behavior for the React hook lifecycle. */
 export function useDocumentVisibility(): boolean {
   const [visible, setVisible] = useState(currentVisibility);
 

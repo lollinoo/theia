@@ -1,3 +1,7 @@
+/**
+ * Renders device polling section controls within the device configuration workflow.
+ * Keeps this section focused on one editable device responsibility.
+ */
 import { useEffect, useRef, useState } from 'react';
 import { updateDevice } from '../../api/client';
 import { ServerError, ValidationError } from '../../api/errors';
@@ -47,6 +51,7 @@ function pollingStateFromOverride(pollIntervalOverride: number | null | undefine
   return { pollingValue: 'custom', customPolling: overrideValue };
 }
 
+/** Renders the DevicePollingSection component within the device configuration workflow. */
 export function DevicePollingSection({
   device,
   readOnly = false,

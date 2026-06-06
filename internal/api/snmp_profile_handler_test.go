@@ -1,5 +1,7 @@
 package api
 
+// This file exercises snmp profile handler behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"fmt"

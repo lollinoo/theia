@@ -1,3 +1,7 @@
+/**
+ * Renders bulk edit panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   deleteDevice,
@@ -24,6 +28,7 @@ interface BulkEditPanelProps {
 
 type BulkDeleteAction = 'remove-from-map' | 'delete-everywhere';
 
+/** Renders the BulkEditPanel component within the UI component boundary. */
 export function BulkEditPanel({
   devices,
   areas: providedAreas,

@@ -1,3 +1,7 @@
+/**
+ * Renders device credentials section controls within the device configuration workflow.
+ * Keeps this section focused on one editable device responsibility.
+ */
 import { useEffect, useRef, useState } from 'react';
 import {
   assignCredentialProfile,
@@ -17,6 +21,7 @@ interface DeviceCredentialsSectionProps {
   onWinBoxAvailabilityChange?: (hasWinboxProfile: boolean) => void;
 }
 
+/** Renders the DeviceCredentialsSection component within the device configuration workflow. */
 export function DeviceCredentialsSection({
   device,
   readOnly = false,

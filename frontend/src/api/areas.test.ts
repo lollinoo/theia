@@ -1,3 +1,6 @@
+/**
+ * Exercises areas API boundary behavior so refactors preserve the documented contract.
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createArea, deleteArea, fetchAreas, updateArea } from './areas';
 

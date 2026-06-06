@@ -1,5 +1,7 @@
 package collector
 
+// This file exercises prometheus contract behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"encoding/json"

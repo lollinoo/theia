@@ -1,3 +1,7 @@
+/**
+ * Defines device row behavior for the operations dashboard.
+ * Keeps table, backup, and device-management responsibilities isolated by module.
+ */
 import type { ResolvedTheme } from '../../contexts/ThemeContext';
 import { adaptAreaColor } from '../../contexts/ThemeContext';
 import type { Area } from '../../types/api';
@@ -16,6 +20,7 @@ interface DeviceRowProps {
   onDeletePermanently?: () => void;
 }
 
+/** Renders the DeviceRow component within the operations dashboard. */
 export function DeviceRow({
   row,
   areaMap,

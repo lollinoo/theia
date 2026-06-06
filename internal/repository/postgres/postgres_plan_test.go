@@ -1,5 +1,7 @@
 package postgres
 
+// This file exercises postgres plan behavior so refactors preserve the documented contract.
+
 import (
 	"fmt"
 	"reflect"

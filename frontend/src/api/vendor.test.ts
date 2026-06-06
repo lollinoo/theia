@@ -1,3 +1,6 @@
+/**
+ * Exercises vendor API boundary behavior so refactors preserve the documented contract.
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchVendorConfig, fetchVendorConfigs, updateVendorConfig } from './vendor';
 

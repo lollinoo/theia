@@ -1,5 +1,10 @@
+/**
+ * Renders link label registry UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { LinkBadgePresentation } from './linkSemantics';
 
+/** Describes the registered link label contract used by the UI component boundary. */
 export interface RegisteredLinkLabel {
   edgeId: string;
   interactive: boolean;
@@ -40,6 +45,7 @@ function notifyLinkLabelListeners(): void {
   }
 }
 
+/** Subscribes to link labels for the UI component boundary. */
 export function subscribeLinkLabels(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
@@ -47,10 +53,12 @@ export function subscribeLinkLabels(listener: () => void): () => void {
   };
 }
 
+/** Returns link label snapshot for the UI component boundary. */
 export function getLinkLabelSnapshot(): RegisteredLinkLabel[] {
   return snapshot;
 }
 
+/** Registers link label for the UI component boundary. */
 export function registerLinkLabel(label: RegisteredLinkLabel): void {
   const signature = serializeLabel(label);
   const existing = labelsByEdgeId.get(label.edgeId);
@@ -63,6 +71,7 @@ export function registerLinkLabel(label: RegisteredLinkLabel): void {
   notifyLinkLabelListeners();
 }
 
+/** Unregisters link label for the UI component boundary. */
 export function unregisterLinkLabel(edgeId: string): void {
   if (!labelsByEdgeId.delete(edgeId)) {
     return;
@@ -72,6 +81,7 @@ export function unregisterLinkLabel(edgeId: string): void {
   notifyLinkLabelListeners();
 }
 
+/** Clears link label registry for the UI component boundary. */
 export function clearLinkLabelRegistry(): void {
   if (labelsByEdgeId.size === 0) {
     return;

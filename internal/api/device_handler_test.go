@@ -1,5 +1,7 @@
 package api
 
+// This file exercises device handler behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"encoding/json"

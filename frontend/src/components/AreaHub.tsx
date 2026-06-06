@@ -1,3 +1,7 @@
+/**
+ * Renders area hub UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { Area, Device, Link } from '../types/api';
 import AreaCard from './AreaCard';
 import { buildRuntimeDeviceRows, computeAreaHealthSummary } from './dashboard/runtimeDeviceRows';

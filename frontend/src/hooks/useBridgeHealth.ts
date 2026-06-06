@@ -1,6 +1,11 @@
+/**
+ * Coordinates bridge health state and side effects for consuming components.
+ * Owns cleanup-sensitive lifecycle work so callers receive stable state and actions.
+ */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchBridgeWithTimeout, getBridgeHealthErrorMessage } from '../utils/bridgeRequests';
 
+/** Coordinates bridge health behavior for the React hook lifecycle. */
 export function useBridgeHealth(bridgePort: string): {
   bridgeRunning: boolean;
   bridgeChecked: boolean;

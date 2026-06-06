@@ -1,5 +1,7 @@
 package postgres
 
+// This file defines snmp profile repo persistence behavior, ordering guarantees, and not-found conventions.
+
 import (
 	"database/sql"
 	"encoding/json"

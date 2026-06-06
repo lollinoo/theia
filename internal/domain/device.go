@@ -1,5 +1,7 @@
 package domain
 
+// This file defines device domain contracts and lifecycle invariants.
+
 import (
 	"time"
 
@@ -58,6 +60,7 @@ const (
 	TopologyBootstrapStateCompleted         TopologyBootstrapState = "completed"
 )
 
+// NormalizeTopologyDiscoveryMode returns a normalized topology discovery mode value for the domain model.
 func NormalizeTopologyDiscoveryMode(mode TopologyDiscoveryMode, fallback TopologyDiscoveryMode) TopologyDiscoveryMode {
 	switch mode {
 	case TopologyDiscoveryModeInherit,
@@ -79,6 +82,7 @@ func NormalizeTopologyDiscoveryMode(mode TopologyDiscoveryMode, fallback Topolog
 	}
 }
 
+// NormalizeTopologyBootstrapState returns a normalized topology bootstrap state value for the domain model.
 func NormalizeTopologyBootstrapState(state TopologyBootstrapState) TopologyBootstrapState {
 	switch state {
 	case TopologyBootstrapStateIdle,
@@ -194,6 +198,7 @@ func DevicePollingEnabled(device Device) bool {
 	return device.PollingEnabled == nil || *device.PollingEnabled
 }
 
+// NormalizeDevicePollingEnabled returns a normalized device polling enabled value for the domain model.
 func NormalizeDevicePollingEnabled(device *Device) {
 	if device == nil || device.PollingEnabled != nil {
 		return

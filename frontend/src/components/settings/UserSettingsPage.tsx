@@ -1,3 +1,7 @@
+/**
+ * Defines user settings page behavior for settings screens.
+ * Keeps validation, saved-state display, and defaults close to the controls that use them.
+ */
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type BridgeConnectorDownload,
@@ -96,6 +100,7 @@ function withCurrentOption(
   return [{ value: current, label: current }, ...options];
 }
 
+/** Renders the UserSettingsPage component within the settings workflow. */
 export function UserSettingsPage() {
   const [settings, setSettings] = useState<UserSettingsResponse | null>(null);
   const [loading, setLoading] = useState(true);

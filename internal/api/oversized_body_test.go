@@ -1,5 +1,7 @@
 package api
 
+// This file exercises oversized body behavior so refactors preserve the documented contract.
+
 import (
 	"net/http"
 	"net/http/httptest"

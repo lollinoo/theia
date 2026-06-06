@@ -1,3 +1,6 @@
+/**
+ * Exercises canvas panels topology canvas behavior so refactors preserve the documented contract.
+ */
 import { fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -40,6 +43,17 @@ vi.mock('../DeviceConfigPanel', () => ({
         }
       >
         Save IP change
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          props.onDeviceUpdated?.({
+            ...props.device,
+            area_ids: ['map-area-1'],
+          })
+        }
+      >
+        Save area change
       </button>
     </div>
   ),
@@ -346,6 +360,39 @@ describe('CanvasPanels', () => {
     );
 
     expect(screen.getByText('Device config areas:Map Local Area')).toBeInTheDocument();
+  });
+
+  it('refreshes saved-map topology after device area assignment changes', () => {
+    const device = mockDevice();
+    const loadTopology = vi.fn().mockResolvedValue(undefined);
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'deviceConfig', data: { deviceId: device.id } }}
+        setPanelContent={vi.fn()}
+        devices={[device]}
+        topologyLinks={[]}
+        loadTopology={loadTopology}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        reactFlow={{} as never}
+        runtimeState={runtimeState}
+        mapId="map-1"
+        mapName="Backbone"
+        onRemoveDeviceFromMap={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save area change' }));
+
+    expect(loadTopology).toHaveBeenCalledWith(true);
   });
 
   it('does not host the global settings panel inside canvas side panels', () => {

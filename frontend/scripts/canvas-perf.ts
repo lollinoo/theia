@@ -1,3 +1,7 @@
+/**
+ * Defines canvas perf script behavior for frontend tooling.
+ * Keeps this module's responsibility visible before implementation details.
+ */
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { runCanvasPerfBenchmark } from '../src/components/canvas/canvasPerfBenchmark';

@@ -1,3 +1,7 @@
+/**
+ * Renders device config panel UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import type { Area, Device } from '../types/api';
 import { DeviceAreasSection } from './device-config/DeviceAreasSection';
 import { DeviceCredentialsSection } from './device-config/DeviceCredentialsSection';
@@ -25,6 +29,7 @@ interface DeviceConfigPanelProps {
   isVirtual?: boolean;
 }
 
+/** Renders the DeviceConfigPanel component within the UI component boundary. */
 export function DeviceConfigPanel({
   device,
   readOnly = false,

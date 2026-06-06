@@ -1,5 +1,7 @@
 package main
 
+// This file defines vendor registry bootstrap behavior for Theia server startup.
+
 import (
 	"encoding/json"
 	"fmt"

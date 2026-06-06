@@ -1,5 +1,7 @@
 package scalelab
 
+// This file exercises scalelab behavior so refactors preserve the documented contract.
+
 import (
 	"encoding/json"
 	"os"

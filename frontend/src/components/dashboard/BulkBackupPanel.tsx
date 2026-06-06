@@ -1,3 +1,7 @@
+/**
+ * Defines bulk backup panel behavior for the operations dashboard.
+ * Keeps table, backup, and device-management responsibilities isolated by module.
+ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelBulkBackupRun,
@@ -126,6 +130,7 @@ function subscribeBulkBackupSession(listener: () => void): () => void {
   };
 }
 
+/** Resets bulk backup session for tests for the operations dashboard. */
 export function __resetBulkBackupSessionForTests(): void {
   bulkBackupSession = initialBulkBackupSession;
   bulkBackupSessionListeners.clear();
@@ -444,6 +449,7 @@ function bulkDownloadBatchFilename(batchIndex: number, batchCount: number): stri
   return `THEIA_BACKUPS_batch-${batchIndex + 1}-of-${batchCount}_${timestamp}.zip`;
 }
 
+/** Renders the BulkBackupPanel component within the operations dashboard. */
 export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const devices = useMemo(
     () => allDevices.filter((d) => d.device_type !== 'virtual'),

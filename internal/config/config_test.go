@@ -1,5 +1,7 @@
 package config
 
+// This file exercises config behavior so refactors preserve the documented contract.
+
 import (
 	"os"
 	"path/filepath"

@@ -1,3 +1,7 @@
+/**
+ * Defines incremental layout behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import {
   type AutoLayoutEdge,
   type AutoLayoutNode,
@@ -86,6 +90,7 @@ function collectPlacementComponent(
   return component;
 }
 
+/** Builds incremental layout inputs for the topology canvas. */
 export function buildIncrementalLayoutInputs({
   devices,
   links,
@@ -167,6 +172,7 @@ export function buildIncrementalLayoutInputs({
   };
 }
 
+/** Computes incremental layout positions for the topology canvas. */
 export function computeIncrementalLayoutPositions({
   layoutNodes,
   layoutEdges,

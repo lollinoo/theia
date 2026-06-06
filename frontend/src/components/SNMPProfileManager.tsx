@@ -1,3 +1,7 @@
+/**
+ * Renders snmpprofile manager UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useEffect, useState } from 'react';
 import {
   createSNMPProfile,
@@ -364,6 +368,7 @@ function ProfileForm({ initial, onSave, onCancel, saveLabel }: ProfileFormProps)
   );
 }
 
+/** Renders the SNMPProfileManager component within the UI component boundary. */
 export function SNMPProfileManager() {
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
   const [loading, setLoading] = useState(true);

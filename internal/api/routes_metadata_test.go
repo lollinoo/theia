@@ -1,5 +1,7 @@
 package api
 
+// This file exercises routes metadata behavior so refactors preserve the documented contract.
+
 import (
 	"net/http"
 	"testing"

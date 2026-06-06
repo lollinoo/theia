@@ -1,5 +1,7 @@
 package domain
 
+// This file defines vendor domain contracts and lifecycle invariants.
+
 import "time"
 
 // VendorConfigRecord represents a vendor configuration stored in the database.

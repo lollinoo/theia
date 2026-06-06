@@ -1,5 +1,7 @@
 package service
 
+// This file exercises instance backup archive limits behavior so refactors preserve the documented contract.
+
 import (
 	"archive/tar"
 	"compress/gzip"

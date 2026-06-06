@@ -1,3 +1,7 @@
+/**
+ * Renders device areas section controls within the device configuration workflow.
+ * Keeps this section focused on one editable device responsibility.
+ */
 import { useEffect, useState } from 'react';
 import { fetchAreas } from '../../api/client';
 import type { Area } from '../../types/api';
@@ -21,6 +25,7 @@ interface DeviceAreasSectionProps {
   onVirtualChange: (update: Partial<DeviceFormModel['virtual']>) => void;
 }
 
+/** Renders the DeviceAreasSection component within the device configuration workflow. */
 export function DeviceAreasSection({
   form,
   areas: providedAreas,

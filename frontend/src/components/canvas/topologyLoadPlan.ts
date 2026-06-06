@@ -1,10 +1,16 @@
+/**
+ * Defines topology load plan behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { CanvasMeasurementTrigger } from './canvasInstrumentation';
 import type { ManualEdgeMigrationTopologyLoadPlan } from './manualEdgeMigrationOrchestrator';
 
+/** Describes the topology source request options contract used by the topology canvas. */
 export interface TopologySourceRequestOptions {
   includeRuntimeBootstrap?: boolean;
 }
 
+/** Describes the build topology source request plan input contract used by the topology canvas. */
 export interface BuildTopologySourceRequestPlanInput {
   trigger: CanvasMeasurementTrigger;
   options: TopologySourceRequestOptions;
@@ -14,6 +20,7 @@ export interface BuildTopologySourceRequestPlanInput {
   manualEdgeMigrationPlan: ManualEdgeMigrationTopologyLoadPlan;
 }
 
+/** Describes the topology source request plan contract used by the topology canvas. */
 export interface TopologySourceRequestPlan {
   includeRuntimeBootstrap: boolean;
   forceRuntimeBootstrap: boolean;

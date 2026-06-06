@@ -1,5 +1,7 @@
 package worker
 
+// This file exercises backup scheduler behavior so refactors preserve the documented contract.
+
 import (
 	"context"
 	"sync/atomic"
@@ -30,6 +32,7 @@ func (m *mockInstanceBackupRepo) DeleteFailedOlderThan(cutoff time.Time) (int, e
 }
 
 func (m *mockInstanceBackupRepo) Create(backup *domain.InstanceBackup) error { return nil }
+
 func (m *mockInstanceBackupRepo) GetByID(id uuid.UUID) (*domain.InstanceBackup, error) {
 	for i := range m.backups {
 		if m.backups[i].ID == id {
@@ -38,8 +41,11 @@ func (m *mockInstanceBackupRepo) GetByID(id uuid.UUID) (*domain.InstanceBackup, 
 	}
 	return nil, nil
 }
-func (m *mockInstanceBackupRepo) List() ([]domain.InstanceBackup, error)     { return nil, nil }
+
+func (m *mockInstanceBackupRepo) List() ([]domain.InstanceBackup, error) { return nil, nil }
+
 func (m *mockInstanceBackupRepo) Update(backup *domain.InstanceBackup) error { return nil }
+
 func (m *mockInstanceBackupRepo) Delete(id uuid.UUID) error {
 	m.deleteRepoCalls.Add(1)
 	return nil
@@ -54,7 +60,6 @@ func (m *mockInstanceBackupService) Delete(ctx context.Context, id uuid.UUID) er
 	return nil
 }
 
-// newTestBackupService creates a real InstanceBackupService wired to the given repo.
 // Passing nil for db is safe because Delete only calls repo.GetByID and repo.Delete,
 // neither of which touches the database connection.
 func newTestBackupService(repo domain.InstanceBackupRepository) *service.InstanceBackupService {

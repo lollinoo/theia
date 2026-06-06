@@ -1,5 +1,7 @@
 package scheduler
 
+// This file defines jitter scheduling behavior, timing policy, and queue ownership.
+
 import (
 	"hash/fnv"
 	"math/rand"

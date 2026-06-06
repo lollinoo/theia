@@ -1,3 +1,7 @@
+/**
+ * Defines canvas helpers behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { FitViewOptions } from '@xyflow/react';
 import type { PositionPayload } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
@@ -7,13 +11,19 @@ import type { ContextMenuItem } from '../ContextMenu';
 import type { DeviceNode } from '../DeviceCard';
 import { formatBandwidth } from '../linkSemantics';
 
+/** Describes the handle side contract used by the topology canvas. */
 export type HandleSide = 'top' | 'right' | 'bottom' | 'left';
 
+/** Defines manual edge storage key constants and helper contracts for the topology canvas. */
 export const manualEdgeStorageKey = 'theia-manual-edges';
+/** Defines manual edge migration storage key constants and helper contracts for the topology canvas. */
 export const manualEdgeMigrationStorageKey = 'theia-manual-edge-migration-v1';
 
+/** Defines default polling interval ms constants and helper contracts for the topology canvas. */
 export const defaultPollingIntervalMs = 60_000;
+/** Defines stale threshold ms constants and helper contracts for the topology canvas. */
 export const staleThresholdMs = defaultPollingIntervalMs * 2;
+/** Defines topology fit view padding constants and helper contracts for the topology canvas. */
 export const topologyFitViewPadding: NonNullable<FitViewOptions['padding']> = {
   top: '96px',
   right: 0.08,
@@ -21,6 +31,7 @@ export const topologyFitViewPadding: NonNullable<FitViewOptions['padding']> = {
   left: 0.08,
 };
 
+/** Builds position payload for the topology canvas. */
 export function buildPositionPayload(nodes: DeviceNode[]): PositionPayload[] {
   return nodes
     .filter((node) => !isGhostDeviceNode(node))
@@ -32,10 +43,12 @@ export function buildPositionPayload(nodes: DeviceNode[]): PositionPayload[] {
     }));
 }
 
+/** Identifies ghost device node for the topology canvas. */
 export function isGhostDeviceNode(node: DeviceNode): boolean {
   return node.data.kind === 'ghost-device' || node.data.isGhost === true;
 }
 
+/** Infers speed label for the topology canvas. */
 export function inferSpeedLabel(
   sourceDevice: Device | undefined,
   targetDevice?: Device,
@@ -52,6 +65,7 @@ export function inferSpeedLabel(
   return formatBandwidth(Math.max(...speeds));
 }
 
+/** Compacts throughput for the topology canvas. */
 export function compactThroughput(bps: number): string {
   return formatThroughput(bps)
     .replace(' Gbps', 'G')
@@ -60,10 +74,12 @@ export function compactThroughput(bps: number): string {
     .replace(' bps', 'b');
 }
 
+/** Normalizes interface name for the topology canvas. */
 export function normalizeInterfaceName(name: string | undefined): string {
   return (name ?? '').trim().toLowerCase();
 }
 
+/** Builds throughput label for the topology canvas. */
 export function buildThroughputLabel(metrics: LinkMetricsDTO): string | undefined {
   if (metrics.tx_bps === null && metrics.rx_bps === null) {
     return undefined;
@@ -74,6 +90,7 @@ export function buildThroughputLabel(metrics: LinkMetricsDTO): string | undefine
   return `TX: ${txLabel} / RX: ${rxLabel}`;
 }
 
+/** Finds link metrics for the topology canvas. */
 export function findLinkMetrics(
   snapshotMetrics: Record<string, LinkMetricsDTO[]>,
   link: Link,
@@ -101,6 +118,7 @@ export function findLinkMetrics(
   return null;
 }
 
+/** Status color for the topology canvas. */
 export function statusColor(status: Device['status']): string {
   switch (status) {
     case 'up':
@@ -114,6 +132,7 @@ export function statusColor(status: Device['status']): string {
   }
 }
 
+/** Viewport size for the topology canvas. */
 export function viewportSize(): { width: number; height: number } {
   return {
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
@@ -123,6 +142,7 @@ export function viewportSize(): { width: number; height: number } {
 
 type DeviceContextMenuItemId = 'winbox' | 'grafana' | 'configure';
 
+/** Describes the device context menu item contract used by the topology canvas. */
 export type DeviceContextMenuItem = ContextMenuItem & { id: DeviceContextMenuItemId };
 
 interface BuildDeviceContextMenuItemsOptions {
@@ -135,6 +155,7 @@ interface BuildDeviceContextMenuItemsOptions {
   onConfigure: () => void;
 }
 
+/** Builds device context menu items for the topology canvas. */
 export function buildDeviceContextMenuItems({
   isVirtual,
   grafanaEnabled,

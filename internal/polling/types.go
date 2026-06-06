@@ -1,7 +1,10 @@
 package polling
 
+// This file defines types polling policy and freshness-budget behavior.
+
 import "time"
 
+// Lane represents lane data used by the package.
 type Lane string
 
 const (
@@ -11,6 +14,7 @@ const (
 	LaneQuarantine Lane = "quarantine"
 )
 
+// TaskKind represents task kind data used by the package.
 type TaskKind string
 
 const (
@@ -19,6 +23,7 @@ const (
 	TaskKindBootstrap  TaskKind = "bootstrap"
 )
 
+// TriState represents tri state data used by the package.
 type TriState string
 
 const (
@@ -27,6 +32,7 @@ const (
 	TriStateUnknown TriState = "unknown"
 )
 
+// FieldState represents field state data used by the package.
 type FieldState string
 
 const (
@@ -36,6 +42,7 @@ const (
 	FieldStateStale   FieldState = "stale"
 )
 
+// PollStatus represents poll status data used by the package.
 type PollStatus string
 
 const (
@@ -44,6 +51,7 @@ const (
 	PollStatusFailed   PollStatus = "failed"
 )
 
+// PrimaryHealth represents primary health data used by the package.
 type PrimaryHealth string
 
 const (
@@ -55,6 +63,7 @@ const (
 	PrimaryHealthQuarantined  PrimaryHealth = "quarantined"
 )
 
+// RuntimeFlag represents runtime flag data used by the package.
 type RuntimeFlag string
 
 const (
@@ -66,6 +75,7 @@ const (
 	FlagPersistenceLagging RuntimeFlag = "persistence_lagging"
 )
 
+// TimeoutProfile represents timeout profile data used by the package.
 type TimeoutProfile struct {
 	Timeout time.Duration
 	Retries int

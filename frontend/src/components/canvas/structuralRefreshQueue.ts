@@ -1,5 +1,10 @@
+/**
+ * Defines structural refresh queue behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { StructuralRefreshCause } from './topologyRecovery';
 
+/** Describes the structural refresh queue contract used by the topology canvas. */
 export interface StructuralRefreshQueue {
   queue: (cause: StructuralRefreshCause) => void;
   cancel: () => void;

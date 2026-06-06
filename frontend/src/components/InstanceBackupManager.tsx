@@ -1,3 +1,7 @@
+/**
+ * Renders instance backup manager UI behavior for the Theia frontend.
+ * Keeps this component's state and interaction boundary explicit for maintainers.
+ */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   cancelInstanceBackup,
@@ -28,6 +32,7 @@ const statusIcons: Record<string, string> = {
   cancelled: '\u25CB', // hollow circle
 };
 
+/** Renders the InstanceBackupManager component within the UI component boundary. */
 export function InstanceBackupManager() {
   const [backups, setBackups] = useState<InstanceBackup[]>([]);
   const [loading, setLoading] = useState(true);

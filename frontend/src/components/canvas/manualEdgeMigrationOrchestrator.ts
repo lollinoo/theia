@@ -1,3 +1,7 @@
+/**
+ * Defines manual edge migration orchestrator behavior for the topology canvas.
+ * Documents how canonical topology data is projected into the interactive view layer.
+ */
 import type { Link } from '../../types/api';
 import { recordCanvasDiagnosticEvent } from './canvasDiagnostics';
 import { manualEdgeMigrationStorageKey, manualEdgeStorageKey } from './canvasHelpers';
@@ -10,6 +14,7 @@ import {
   recordPersistedManualEdgeMigrationDiagnostics,
 } from './manualEdgeMigrationDiagnostics';
 
+/** Describes the manual edge migration topology load plan contract used by the topology canvas. */
 export interface ManualEdgeMigrationTopologyLoadPlan {
   pendingStorageValue: string | null;
   hadPendingManualEdgeMigration: boolean;
@@ -31,6 +36,7 @@ interface RecordSavedMapManualEdgeMigrationSkipOptions {
   topologyLoadMetadata: Record<string, unknown>;
 }
 
+/** Describes the manual edge migration topology load run result contract used by the topology canvas. */
 export type ManualEdgeMigrationTopologyLoadRunResult =
   | { status: 'not-run'; appliedCount: 0 }
   | { status: 'ran'; appliedCount: number }

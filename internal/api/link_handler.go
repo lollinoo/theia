@@ -1,5 +1,7 @@
 package api
 
+// This file defines link handler HTTP handler behavior and request/response boundaries.
+
 import (
 	"encoding/json"
 	"net/http"
