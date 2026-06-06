@@ -25,6 +25,12 @@ import {
   getCanvasRuntimeBootstrap,
   subscribeCanvasRuntimeBootstrap,
 } from './canvasRuntimeBootstrap';
+import {
+  dispatchBackendResyncRequired,
+  getRawWebSocketMessageType,
+  recordIgnoredStaleRuntimeDelta,
+  recordIgnoredStaleRuntimeSnapshot,
+} from './websocket/diagnostics';
 import { type CanvasHelloPayload, buildCanvasHelloPayload } from './websocket/hello';
 import { classifyRuntimeDelta, shouldIgnoreStaleRuntimeSnapshot } from './websocket/runtimeState';
 import { appendHelloQueryParams, buildWebSocketURL } from './websocket/url';
@@ -267,14 +273,6 @@ export function useWebSocket(
       const ws = new WebSocket(appendHelloQueryParams(buildWebSocketURL(url), initialHelloPayload));
       socketRef.current = ws;
 
-      function dispatchResyncRequired(payload: ResyncRequiredPayload): void {
-        window.dispatchEvent(
-          new CustomEvent<ResyncRequiredPayload>('backend-resync-required', {
-            detail: payload,
-          }),
-        );
-      }
-
       function requestClientResync(
         payloadReason: ResyncRequiredPayload['reason'] = 'client_resync_scheduled',
         diagnosticReason = 'base_version_mismatch',
@@ -300,61 +298,13 @@ export function useWebSocket(
           },
         });
         resetAlertState();
-        dispatchResyncRequired({
+        dispatchBackendResyncRequired({
           scope: 'overview',
           reason: payloadReason,
         });
         if (!requireRuntimeBootstrap) {
           ws.close();
         }
-      }
-
-      function ignoreStaleRuntimeDelta(
-        messageType: 'snapshot_delta' | 'runtime_delta',
-        baseVersion: number,
-        version: number,
-        currentVersion: number,
-      ): void {
-        recordCanvasDiagnosticEvent({
-          level: 'debug',
-          source: 'runtime',
-          event: 'runtime.delta.ignored',
-          message: 'Runtime delta ignored because it is older than the current client base',
-          metadata: {
-            type: messageType,
-            reason: 'stale_delta',
-            baseVersion,
-            version,
-            currentVersion,
-          },
-        });
-      }
-
-      function ignoreStaleRuntimeSnapshot(
-        version: number,
-        currentVersion: number,
-        runtimeIdentity?: string,
-      ): void {
-        recordCanvasDiagnosticEvent({
-          level: 'debug',
-          source: 'runtime',
-          event: 'runtime.snapshot.ignored',
-          message: 'Runtime snapshot ignored because it is older than the current client base',
-          metadata: {
-            reason: 'stale_snapshot',
-            version,
-            currentVersion,
-            runtimeIdentity,
-          },
-        });
-      }
-
-      function getRawMessageType(raw: unknown): string | null {
-        if (raw === null || typeof raw !== 'object') {
-          return null;
-        }
-        const type = (raw as { type?: unknown }).type;
-        return typeof type === 'string' ? type : null;
       }
 
       ws.onopen = () => {
@@ -449,11 +399,11 @@ export function useWebSocket(
                 hasRuntimeSnapshotRef.current,
               )
             ) {
-              ignoreStaleRuntimeSnapshot(
-                payload.version!,
-                currentVersion!,
-                payload.runtime_identity,
-              );
+              recordIgnoredStaleRuntimeSnapshot({
+                version: payload.version!,
+                currentVersion: currentVersion!,
+                runtimeIdentity: payload.runtime_identity,
+              });
               return;
             }
             hasRuntimeSnapshotRef.current = true;
@@ -501,12 +451,12 @@ export function useWebSocket(
               return;
             }
             if (deltaDecision.kind === 'ignore_stale') {
-              ignoreStaleRuntimeDelta(
-                deltaDecision.messageType,
-                deltaDecision.baseVersion,
-                deltaDecision.version,
-                deltaDecision.currentVersion,
-              );
+              recordIgnoredStaleRuntimeDelta({
+                messageType: deltaDecision.messageType,
+                baseVersion: deltaDecision.baseVersion,
+                version: deltaDecision.version,
+                currentVersion: deltaDecision.currentVersion,
+              });
               return;
             }
             if (deltaDecision.kind === 'reject_missing_unversioned_base') {
@@ -610,7 +560,7 @@ export function useWebSocket(
               metadata: { ...(message as ResyncRequiredWSMessage).payload },
             });
             resetAlertState();
-            dispatchResyncRequired((message as ResyncRequiredWSMessage).payload);
+            dispatchBackendResyncRequired((message as ResyncRequiredWSMessage).payload);
           } else if (message.type === 'topology_changed' || message.type === 'topology_delta') {
             const topologyPayload =
               message.type === 'topology_changed'
@@ -640,7 +590,7 @@ export function useWebSocket(
           }
         } catch (error) {
           console.error('Failed to parse WebSocket message', error);
-          const messageType = getRawMessageType(raw);
+          const messageType = getRawWebSocketMessageType(raw);
           if (messageType === 'runtime_delta' || messageType === 'snapshot_delta') {
             requestClientResync('client_resync_scheduled', 'invalid_runtime_delta_payload');
           }
