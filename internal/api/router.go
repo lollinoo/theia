@@ -116,58 +116,22 @@ func NewRouter(
 	if err := registerAPIRouteHandlers(mux, apiRouteSpecs, routeHandlers); err != nil {
 		panic(err)
 	}
-
-	handler := applyMiddleware(mux, routerOpts.security, routerOpts.auth, true, 1<<20)
-	downloadHandler := applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, 0)
-	publicAuthHandler := applyPublicMiddleware(routeHandlers[routeHandlerAuth], routerOpts.security, true, 16<<10)
-	publicRouteHandlers := map[routeHandlerKey]http.Handler{
-		routeHandlerAuth:                  publicAuthHandler,
-		routeHandlerBridgeConnectorLaunch: applyPublicMiddleware(routeHandlers[routeHandlerBridgeConnectorLaunch], routerOpts.security, true, 16<<10),
-	}
+	middleware := buildRouterMiddlewareSet(mux, deps, routeHandlers, routerOpts)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if spec, ok := apiRouteMetadata.matchPath(r.URL.Path); ok && spec.authMode == routeAuthPublic {
-			if publicHandler := publicRouteHandlers[spec.handlerKey]; publicHandler != nil {
-				publicHandler.ServeHTTP(w, r)
+			if middleware.servePublicRoute(w, r, spec) {
 				return
 			}
 		}
 
 		if spec, ok := apiRouteMetadata.match(r.Method, r.URL.Path); ok {
-			switch spec.middlewareProfile {
-			case routeMiddlewareWebSocketUpgrade:
-				if deps.wsHandler == nil {
-					break
-				}
-				// WebSocket upgrades must bypass the JSON/logger middleware chain because
-				// the wrapped ResponseWriter does not expose the hijacker interface.
-				authenticatedRequest, user, _, ok := AuthenticateUserRequest(w, r, routerOpts.auth)
-				if !ok {
-					return
-				}
-				if user.User.User.MustChangePassword {
-					writeAuthCodeError(w, http.StatusForbidden, "password_change_required", "password change required")
-					return
-				}
-				if !requireAnyPermission(w, routerOpts.auth, user, spec.methodPolicies[r.Method]) {
-					return
-				}
-				deps.wsHandler.ServeHTTP(w, authenticatedRequest)
-				return
-			case routeMiddlewareBinaryDownload:
-				downloadHandler.ServeHTTP(w, r)
-				return
-			case routeMiddlewareRestoreUpload:
-				restoreLimit := service.DefaultRestoreArchiveLimits.MaxCompressedBytes
-				if deps.instanceBackupService != nil {
-					restoreLimit = deps.instanceBackupService.RestoreArchiveLimits().MaxCompressedBytes
-				}
-				applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, restoreLimit+restoreMultipartEnvelopeOverheadBytes).ServeHTTP(w, r)
+			if middleware.serveRouteProfile(w, r, spec, deps, routerOpts) {
 				return
 			}
 		}
 
-		handler.ServeHTTP(w, r)
+		middleware.normal.ServeHTTP(w, r)
 	})
 }
 
