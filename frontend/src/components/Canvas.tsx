@@ -56,6 +56,7 @@ import { type TopologyZoomBand, resolveTopologyZoomBand } from './canvas/topolog
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
 import { useCanvasData } from './canvas/useCanvasData';
 import { useCanvasDiagnosticsToggle } from './canvas/useCanvasDiagnosticsToggle';
+import { useCanvasFitView } from './canvas/useCanvasFitView';
 import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';
 import { useCanvasGraphState } from './canvas/useCanvasGraphState';
 import { useCanvasInteractionState } from './canvas/useCanvasInteractionState';
@@ -225,10 +226,7 @@ export default function Canvas({
   const currentTopologyFitViewPadding = effectiveChromeHidden
     ? topologyCleanViewFitPadding
     : topologyFitViewPadding;
-  const shouldApplyInitialChromeHiddenFitRef = useRef(effectiveChromeHidden);
-  const initialChromeHiddenFitAppliedRef = useRef(false);
   const previousMapKeyRef = useRef<string | null>(null);
-  const previousFitViewRevisionRef = useRef(fitViewRevision);
   const previousTopologyRefreshRevisionRef = useRef(topologyRefreshRevision);
 
   useEffect(() => {
@@ -627,134 +625,21 @@ export default function Canvas({
     selectedNodeCount,
   ]);
 
-  // fitView when effective area changes to re-center on filtered subset
-  const prevAreaRef = useRef<string | null>(null);
-  const canFitVisibleTopology =
-    visible &&
-    flowViewportReady &&
-    nodesInitialized &&
-    displayNodes.length > 0 &&
-    renderedMapKey === selectedTopologyMapKey;
-  useEffect(() => {
-    if (canFitVisibleTopology && prevAreaRef.current !== effectiveAreaId) {
-      let canceled = false;
-      const frameId = window.requestAnimationFrame(() => {
-        if (canceled) {
-          return;
-        }
-        prevAreaRef.current = effectiveAreaId;
-        reactFlow.fitView({ padding: currentTopologyFitViewPadding, duration: 280 });
-        recordCanvasDiagnosticEvent({
-          level: 'debug',
-          source: 'reactflow',
-          event: 'reactflow.fit_view',
-          message: 'React Flow fitView requested after area change',
-          metadata: {
-            selectedAreaId: effectiveAreaId,
-            displayedNodeCount: displayNodes.length,
-          },
-        });
-      });
-      return () => {
-        canceled = true;
-        window.cancelAnimationFrame(frameId);
-      };
-    }
-    return undefined;
-  }, [
-    canFitVisibleTopology,
-    currentTopologyFitViewPadding,
+  useCanvasFitView({
+    visible,
+    flowViewportReady,
+    nodesInitialized,
+    displayNodeCount: displayNodes.length,
+    renderedMapKey,
+    selectedTopologyMapKey,
     effectiveAreaId,
-    displayNodes.length,
-    reactFlow,
-  ]);
-
-  useEffect(() => {
-    if (fitViewRevision === undefined) {
-      return;
-    }
-    if (previousFitViewRevisionRef.current === fitViewRevision) {
-      return;
-    }
-    if (!canFitVisibleTopology) {
-      return;
-    }
-
-    let canceled = false;
-    const frameId = window.requestAnimationFrame(() => {
-      if (canceled) {
-        return;
-      }
-      previousFitViewRevisionRef.current = fitViewRevision;
-      reactFlow.fitView({ padding: currentTopologyFitViewPadding, duration: 280 });
-      recordCanvasDiagnosticEvent({
-        level: 'debug',
-        source: 'reactflow',
-        event: 'reactflow.fit_view',
-        message: 'React Flow fitView requested after canvas context activation',
-        metadata: {
-          selectedAreaId: effectiveAreaId,
-          mapId: mapId ?? 'default',
-          displayedNodeCount: displayNodes.length,
-        },
-      });
-    });
-    return () => {
-      canceled = true;
-      window.cancelAnimationFrame(frameId);
-    };
-  }, [
-    canFitVisibleTopology,
-    displayNodes.length,
-    effectiveAreaId,
-    currentTopologyFitViewPadding,
     fitViewRevision,
+    fitViewPadding: currentTopologyFitViewPadding,
+    initialHiddenChromePadding: topologyCleanViewFitPadding,
+    effectiveChromeHidden,
     mapId,
     reactFlow,
-  ]);
-
-  useEffect(() => {
-    if (
-      !shouldApplyInitialChromeHiddenFitRef.current ||
-      initialChromeHiddenFitAppliedRef.current ||
-      !effectiveChromeHidden ||
-      !canFitVisibleTopology
-    ) {
-      return undefined;
-    }
-
-    let canceled = false;
-    const applyFitView = () => {
-      if (canceled) {
-        return;
-      }
-      initialChromeHiddenFitAppliedRef.current = true;
-      reactFlow.fitView({ padding: topologyCleanViewFitPadding, duration: 280 });
-      recordCanvasDiagnosticEvent({
-        level: 'debug',
-        source: 'reactflow',
-        event: 'reactflow.fit_view',
-        message: 'React Flow fitView requested after initial hidden canvas chrome restore',
-        metadata: {
-          mapId: mapId ?? 'default',
-          displayedNodeCount: displayNodes.length,
-        },
-      });
-    };
-
-    if (typeof window.requestAnimationFrame === 'function') {
-      const frameId = window.requestAnimationFrame(applyFitView);
-      return () => {
-        canceled = true;
-        window.cancelAnimationFrame(frameId);
-      };
-    }
-
-    applyFitView();
-    return () => {
-      canceled = true;
-    };
-  }, [canFitVisibleTopology, displayNodes.length, effectiveChromeHidden, mapId, reactFlow]);
+  });
 
   useEffect(() => {
     setNodes((prev) => patchEditMode(prev, editMode));
