@@ -27,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
@@ -170,6 +171,7 @@ func (r *mockBackupJobRepo) DeleteFailedOlderThan(cutoff time.Time) (int, error)
 type mockBackupFileRepo struct {
 	mu             sync.Mutex
 	files          map[uuid.UUID]*domain.BackupFile
+	createErr      error
 	deleteByJobErr error // when set, DeleteByJobID returns this error
 }
 
@@ -180,6 +182,9 @@ func newMockBackupFileRepo() *mockBackupFileRepo {
 func (r *mockBackupFileRepo) Create(file *domain.BackupFile) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.createErr != nil {
+		return r.createErr
+	}
 	if file.ID == uuid.Nil {
 		file.ID = uuid.New()
 	}
@@ -226,15 +231,18 @@ func (r *mockBackupFileRepo) DeleteByJobID(jobID uuid.UUID) error {
 }
 
 type mockBulkBackupRunRepo struct {
-	mu    sync.Mutex
-	runs  map[uuid.UUID]*domain.BulkBackupRun
-	items map[uuid.UUID][]domain.BulkBackupRunItem
+	mu              sync.Mutex
+	runs            map[uuid.UUID]*domain.BulkBackupRun
+	items           map[uuid.UUID][]domain.BulkBackupRunItem
+	processorOwners map[uuid.UUID]string
+	acquireCount    int
 }
 
 func newMockBulkBackupRunRepo() *mockBulkBackupRunRepo {
 	return &mockBulkBackupRunRepo{
-		runs:  make(map[uuid.UUID]*domain.BulkBackupRun),
-		items: make(map[uuid.UUID][]domain.BulkBackupRunItem),
+		runs:            make(map[uuid.UUID]*domain.BulkBackupRun),
+		items:           make(map[uuid.UUID][]domain.BulkBackupRunItem),
+		processorOwners: make(map[uuid.UUID]string),
 	}
 }
 
@@ -343,9 +351,127 @@ func bulkRunActiveForTest(status domain.BulkBackupRunStatus) bool {
 func (r *mockBulkBackupRunRepo) UpdateRun(run *domain.BulkBackupRun) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	existing := r.runs[run.ID]
+	if existing != nil && bulkRunTerminal(existing.Status) && !bulkRunTerminal(run.Status) {
+		return nil
+	}
+	if existing != nil && bulkRunTerminal(existing.Status) && existing.Status != run.Status {
+		return nil
+	}
 	cp := *run
+	if existing != nil && existing.CancelRequested {
+		cp.CancelRequested = true
+	}
 	r.runs[run.ID] = &cp
 	return nil
+}
+
+func (r *mockBulkBackupRunRepo) RequestBulkRunPause(runID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run := r.runs[runID]
+	if run != nil && run.Status == domain.BulkBackupRunStatusRunning && !run.CancelRequested {
+		run.Status = domain.BulkBackupRunStatusPausing
+	}
+	return nil
+}
+
+func (r *mockBulkBackupRunRepo) RequestBulkRunResume(runID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run := r.runs[runID]
+	if run == nil || run.CancelRequested {
+		return false, nil
+	}
+	if run.Status == domain.BulkBackupRunStatusPaused {
+		run.Status = domain.BulkBackupRunStatusRunning
+		return true, nil
+	}
+	if run.Status == domain.BulkBackupRunStatusPausing {
+		run.Status = domain.BulkBackupRunStatusRunning
+	}
+	return false, nil
+}
+
+func (r *mockBulkBackupRunRepo) RequestBulkRunCancel(runID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run := r.runs[runID]
+	if run == nil || bulkRunTerminal(run.Status) {
+		return false, nil
+	}
+	wasPaused := run.Status == domain.BulkBackupRunStatusPaused
+	if run.Status == domain.BulkBackupRunStatusRunning ||
+		run.Status == domain.BulkBackupRunStatusPausing ||
+		run.Status == domain.BulkBackupRunStatusPaused {
+		run.Status = domain.BulkBackupRunStatusCancelling
+	}
+	run.CancelRequested = true
+	return wasPaused, nil
+}
+
+func (r *mockBulkBackupRunRepo) TryAcquireBulkRunProcessor(runID uuid.UUID, owner string, leaseUntil time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run := r.runs[runID]
+	if run == nil || bulkRunTerminal(run.Status) || run.Status == domain.BulkBackupRunStatusPaused {
+		return false, nil
+	}
+	if existing := r.processorOwners[runID]; existing != "" {
+		return false, nil
+	}
+	r.processorOwners[runID] = owner
+	r.acquireCount++
+	return true, nil
+}
+
+func (r *mockBulkBackupRunRepo) RefreshBulkRunProcessor(runID uuid.UUID, owner string, leaseUntil time.Time) error {
+	return nil
+}
+
+func (r *mockBulkBackupRunRepo) ReleaseBulkRunProcessor(runID uuid.UUID, owner string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.processorOwners[runID] == owner {
+		delete(r.processorOwners, runID)
+	}
+	return nil
+}
+
+func (r *mockBulkBackupRunRepo) ClaimBulkRunItem(runID uuid.UUID, itemID uuid.UUID) (*domain.BulkBackupRunItem, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := r.items[runID]
+	for i := range items {
+		if items[i].ID != itemID {
+			continue
+		}
+		if items[i].Status != domain.BulkBackupRunItemStatusChecking {
+			return nil, false, nil
+		}
+		now := time.Now().UTC()
+		items[i].Status = domain.BulkBackupRunItemStatusActive
+		items[i].Reason = ""
+		items[i].BackupJobID = nil
+		items[i].UpdatedAt = now
+		items[i].CompletedAt = nil
+		r.items[runID] = items
+		cp := items[i]
+		return &cp, true, nil
+	}
+	return nil, false, nil
+}
+
+func (r *mockBulkBackupRunRepo) FinishBulkRun(runID uuid.UUID, status domain.BulkBackupRunStatus, completedAt time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run := r.runs[runID]
+	if run == nil || bulkRunTerminal(run.Status) {
+		return false, nil
+	}
+	run.Status = status
+	run.CompletedAt = &completedAt
+	return true, nil
 }
 
 func (r *mockBulkBackupRunRepo) ListRunItems(runID uuid.UUID) ([]domain.BulkBackupRunItem, error) {
@@ -815,6 +941,179 @@ func TestDeleteBackupJobFileError(t *testing.T) {
 	if err == nil {
 		t.Fatal("BUG-01: DeleteBackupJob silently swallowed fileRepo.DeleteByJobID error -- " +
 			"expected error to be returned or file cleanup failure to be reported")
+	}
+}
+
+func TestDeleteBackupJobRejectsActiveJobAndKeepsFile(t *testing.T) {
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	backupDir := t.TempDir()
+	svc := NewBackupService(
+		jobRepo, fileRepo, newMockCredentialProfileRepo(), newMockDeviceRepo(), newMockBackupSettingsRepo(),
+		buildTestVendorRegistry("", false), &mockSSHDialer{}, []byte("0123456789abcdef"), backupDir,
+		ssh.InsecureIgnoreHostKey(),
+	)
+	jobID := uuid.New()
+	deviceID := uuid.New()
+	filePath := filepath.Join(backupDir, "active.rsc")
+	if err := os.WriteFile(filePath, []byte("active"), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := jobRepo.Create(&domain.BackupJob{ID: jobID, DeviceID: deviceID, Status: domain.BackupStatusRunning}); err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+	if err := fileRepo.Create(&domain.BackupFile{ID: uuid.New(), JobID: jobID, FileName: "active.rsc", FilePath: filePath}); err != nil {
+		t.Fatalf("Create file: %v", err)
+	}
+
+	err := svc.DeleteBackupJob(context.Background(), jobID)
+
+	if !errors.Is(err, ErrBackupJobActive) {
+		t.Fatalf("DeleteBackupJob error = %v, want ErrBackupJobActive", err)
+	}
+	if _, statErr := os.Stat(filePath); statErr != nil {
+		t.Fatalf("active file was removed: %v", statErr)
+	}
+}
+
+func TestDeleteBackupJobRejectsInProgressBulkRunReference(t *testing.T) {
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	runRepo := newMockBulkBackupRunRepo()
+	backupDir := t.TempDir()
+	svc := NewBackupService(
+		jobRepo, fileRepo, newMockCredentialProfileRepo(), newMockDeviceRepo(), newMockBackupSettingsRepo(),
+		buildTestVendorRegistry("", false), &mockSSHDialer{}, []byte("0123456789abcdef"), backupDir,
+		ssh.InsecureIgnoreHostKey(),
+		WithBulkBackupRunRepo(runRepo),
+	)
+	jobID := uuid.New()
+	deviceID := uuid.New()
+	runID := uuid.New()
+	filePath := filepath.Join(backupDir, "referenced.rsc")
+	if err := os.WriteFile(filePath, []byte("referenced"), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := jobRepo.Create(&domain.BackupJob{ID: jobID, DeviceID: deviceID, Status: domain.BackupStatusSuccess}); err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+	if err := fileRepo.Create(&domain.BackupFile{ID: uuid.New(), JobID: jobID, FileName: "referenced.rsc", FilePath: filePath}); err != nil {
+		t.Fatalf("Create file: %v", err)
+	}
+	if err := runRepo.CreateRun(
+		&domain.BulkBackupRun{ID: runID, Status: domain.BulkBackupRunStatusRunning, BatchSize: 10},
+		[]domain.BulkBackupRunItem{{
+			ID: uuid.New(), RunID: runID, DeviceID: deviceID,
+			Status: domain.BulkBackupRunItemStatusRunning, BackupJobID: &jobID,
+		}},
+	); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	err := svc.DeleteBackupJob(context.Background(), jobID)
+
+	if !errors.Is(err, ErrBackupJobReferencedByActiveBulkRun) {
+		t.Fatalf("DeleteBackupJob error = %v, want ErrBackupJobReferencedByActiveBulkRun", err)
+	}
+	if _, statErr := os.Stat(filePath); statErr != nil {
+		t.Fatalf("referenced file was removed: %v", statErr)
+	}
+}
+
+func TestDeleteBackupJobValidatesBackupFilePaths(t *testing.T) {
+	tests := []struct {
+		name      string
+		filePath  func(root string) string
+		wantError bool
+	}{
+		{
+			name: "absolute outside root",
+			filePath: func(root string) string {
+				outside := filepath.Join(t.TempDir(), "outside.rsc")
+				if err := os.WriteFile(outside, []byte("outside"), 0600); err != nil {
+					t.Fatalf("WriteFile outside: %v", err)
+				}
+				return outside
+			},
+			wantError: true,
+		},
+		{
+			name: "traversal outside root",
+			filePath: func(root string) string {
+				outside := filepath.Join(filepath.Dir(root), "traversal.rsc")
+				if err := os.WriteFile(outside, []byte("traversal"), 0600); err != nil {
+					t.Fatalf("WriteFile traversal: %v", err)
+				}
+				return filepath.Join(root, "..", filepath.Base(outside))
+			},
+			wantError: true,
+		},
+		{
+			name: "symlink",
+			filePath: func(root string) string {
+				outside := filepath.Join(t.TempDir(), "symlink-target.rsc")
+				if err := os.WriteFile(outside, []byte("target"), 0600); err != nil {
+					t.Fatalf("WriteFile symlink target: %v", err)
+				}
+				link := filepath.Join(root, "link.rsc")
+				if err := os.Symlink(outside, link); err != nil {
+					t.Fatalf("Symlink: %v", err)
+				}
+				return link
+			},
+			wantError: true,
+		},
+		{
+			name: "normal valid file",
+			filePath: func(root string) string {
+				valid := filepath.Join(root, "valid.rsc")
+				if err := os.WriteFile(valid, []byte("valid"), 0600); err != nil {
+					t.Fatalf("WriteFile valid: %v", err)
+				}
+				return valid
+			},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			jobRepo := newMockBackupJobRepo()
+			fileRepo := newMockBackupFileRepo()
+			backupDir := t.TempDir()
+			svc := NewBackupService(
+				jobRepo, fileRepo, newMockCredentialProfileRepo(), newMockDeviceRepo(), newMockBackupSettingsRepo(),
+				buildTestVendorRegistry("", false), &mockSSHDialer{}, []byte("0123456789abcdef"), backupDir,
+				ssh.InsecureIgnoreHostKey(),
+			)
+			jobID := uuid.New()
+			deviceID := uuid.New()
+			filePath := tt.filePath(backupDir)
+			if err := jobRepo.Create(&domain.BackupJob{ID: jobID, DeviceID: deviceID, Status: domain.BackupStatusSuccess}); err != nil {
+				t.Fatalf("Create job: %v", err)
+			}
+			if err := fileRepo.Create(&domain.BackupFile{ID: uuid.New(), JobID: jobID, FileName: "backup.rsc", FilePath: filePath}); err != nil {
+				t.Fatalf("Create file: %v", err)
+			}
+
+			err := svc.DeleteBackupJob(context.Background(), jobID)
+
+			if tt.wantError {
+				if err == nil || !IsBulkPathError(err) {
+					t.Fatalf("DeleteBackupJob error = %v, want bulk path error", err)
+				}
+				if _, statErr := os.Lstat(filePath); statErr != nil {
+					t.Fatalf("unsafe path was removed: %v", statErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DeleteBackupJob: %v", err)
+			}
+			if _, statErr := os.Stat(filePath); !os.IsNotExist(statErr) {
+				t.Fatalf("valid file still exists, stat err = %v", statErr)
+			}
+		})
 	}
 }
 
@@ -1326,6 +1625,161 @@ func TestStartBulkBackupRunRejectsActiveRun(t *testing.T) {
 	}
 }
 
+type activeCreateRaceBulkRunRepo struct {
+	*mockBulkBackupRunRepo
+}
+
+func (r *activeCreateRaceBulkRunRepo) CreateRun(run *domain.BulkBackupRun, items []domain.BulkBackupRunItem) error {
+	return &pgconn.PgError{
+		Code:           "23505",
+		ConstraintName: "backup_bulk_runs_one_active",
+		Message:        "duplicate key value violates unique constraint",
+	}
+}
+
+func TestStartBulkBackupRunMapsActiveRunCreateRaceToConflict(t *testing.T) {
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	runRepo := &activeCreateRaceBulkRunRepo{mockBulkBackupRunRepo: newMockBulkBackupRunRepo()}
+	registry := buildTestVendorRegistry("testvendor", true)
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+		WithBulkBackupRunRepo(runRepo),
+	)
+
+	run, err := svc.StartBulkBackupRun(context.Background(), nil, "admin")
+
+	if !errors.Is(err, ErrBulkBackupRunAlreadyActive) {
+		t.Fatalf("StartBulkBackupRun error = %v, want ErrBulkBackupRunAlreadyActive", err)
+	}
+	if run != nil {
+		t.Fatalf("run = %+v, want nil when loser cannot hydrate active run", run)
+	}
+}
+
+type concurrentCreateRaceBulkRunRepo struct {
+	*mockBulkBackupRunRepo
+	gateMu       sync.Mutex
+	getActive    int
+	bothChecked  chan struct{}
+	closeChecked sync.Once
+	createMu     sync.Mutex
+	created      bool
+}
+
+func newConcurrentCreateRaceBulkRunRepo() *concurrentCreateRaceBulkRunRepo {
+	return &concurrentCreateRaceBulkRunRepo{
+		mockBulkBackupRunRepo: newMockBulkBackupRunRepo(),
+		bothChecked:           make(chan struct{}),
+	}
+}
+
+func (r *concurrentCreateRaceBulkRunRepo) GetActiveRun() (*domain.BulkBackupRun, error) {
+	r.gateMu.Lock()
+	r.getActive++
+	if r.getActive == 2 {
+		r.closeChecked.Do(func() { close(r.bothChecked) })
+	}
+	r.gateMu.Unlock()
+	select {
+	case <-r.bothChecked:
+	case <-time.After(time.Second):
+	}
+	return nil, nil
+}
+
+func (r *concurrentCreateRaceBulkRunRepo) CreateRun(run *domain.BulkBackupRun, items []domain.BulkBackupRunItem) error {
+	r.createMu.Lock()
+	defer r.createMu.Unlock()
+	if r.created {
+		return &pgconn.PgError{
+			Code:           "23505",
+			ConstraintName: "backup_bulk_runs_one_active",
+			Message:        "duplicate key value violates unique constraint",
+		}
+	}
+	r.created = true
+	return r.mockBulkBackupRunRepo.CreateRun(run, items)
+}
+
+func TestConcurrentStartBulkBackupRunMapsCreateRaceToConflict(t *testing.T) {
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	runRepo := newConcurrentCreateRaceBulkRunRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+		WithBulkBackupRunRepo(runRepo),
+	)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := svc.StartBulkBackupRun(context.Background(), nil, "admin")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	conflicts := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrBulkBackupRunAlreadyActive):
+			conflicts++
+		default:
+			t.Fatalf("StartBulkBackupRun error = %v, want nil or ErrBulkBackupRunAlreadyActive", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("results: successes=%d conflicts=%d, want 1/1", successes, conflicts)
+	}
+}
+
+func TestBulkBackupRunTerminalStateIgnoresControlRequests(t *testing.T) {
+	for _, control := range []struct {
+		name string
+		call func(*BackupService, context.Context, uuid.UUID) (*domain.BulkBackupRun, error)
+	}{
+		{name: "pause", call: (*BackupService).PauseBulkBackupRun},
+		{name: "resume", call: (*BackupService).ResumeBulkBackupRun},
+		{name: "cancel", call: (*BackupService).CancelBulkBackupRun},
+	} {
+		t.Run(control.name, func(t *testing.T) {
+			svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusSuccess)
+
+			run, err := control.call(svc, context.Background(), runID)
+
+			if err != nil {
+				t.Fatalf("%s terminal run: %v", control.name, err)
+			}
+			if run == nil || run.Status != domain.BulkBackupRunStatusSuccess || run.CancelRequested {
+				t.Fatalf("run = %+v, want terminal success without cancel_requested", run)
+			}
+			stored, _ := runRepo.GetRun(runID)
+			if stored.Status != domain.BulkBackupRunStatusSuccess || stored.CancelRequested {
+				t.Fatalf("stored = %+v, want terminal success without cancel_requested", stored)
+			}
+		})
+	}
+}
+
 func TestPauseBulkBackupRunMarksRunPausing(t *testing.T) {
 	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusRunning)
 
@@ -1393,6 +1847,68 @@ func TestPrepareBulkRunBatchMarksClaimedItemsActive(t *testing.T) {
 	items, _ := runRepo.ListRunItems(runID)
 	if items[0].Status != domain.BulkBackupRunItemStatusActive || items[0].BackupJobID == nil {
 		t.Fatalf("item = %+v, want active with backup job", items[0])
+	}
+}
+
+func TestPrepareBulkRunBatchDoesNotCreateDuplicateJobForStaleClaim(t *testing.T) {
+	port := listenOnRandomPort(t)
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	runRepo := newMockBulkBackupRunRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	deviceID := uuid.New()
+	runID := uuid.New()
+	itemID := uuid.New()
+	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
+		ID: uuid.New(), Name: "test-profile", Username: "admin", Port: port,
+		AuthMethod: domain.SSHAuthPassword, Role: "Admin",
+	}); err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID, IP: "127.0.0.1", Vendor: "testvendor",
+		Status: domain.DeviceStatusUp, Tags: map[string]string{},
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	if err := runRepo.CreateRun(
+		&domain.BulkBackupRun{ID: runID, Status: domain.BulkBackupRunStatusRunning, BatchSize: 10},
+		[]domain.BulkBackupRunItem{{
+			ID: itemID, RunID: runID, DeviceID: deviceID,
+			Status: domain.BulkBackupRunItemStatusChecking,
+		}},
+	); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, &mockSSHDialer{}, []byte("0123456789abcdef"), t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+		WithBulkBackupRunRepo(runRepo),
+	)
+	stale := domain.BulkBackupRunItem{
+		ID: itemID, RunID: runID, DeviceID: deviceID,
+		Status: domain.BulkBackupRunItemStatusChecking,
+	}
+
+	first := svc.prepareBulkRunBatch([]domain.BulkBackupRunItem{stale})
+	second := svc.prepareBulkRunBatch([]domain.BulkBackupRunItem{stale})
+
+	if len(first) != 1 {
+		t.Fatalf("first queued len = %d, want 1", len(first))
+	}
+	if len(second) != 0 {
+		t.Fatalf("second queued len = %d, want 0", len(second))
+	}
+	if got := mockBackupJobCount(jobRepo); got != 1 {
+		t.Fatalf("backup job count = %d, want 1", got)
+	}
+	items, _ := runRepo.ListRunItems(runID)
+	if len(items) != 1 || items[0].BackupJobID == nil {
+		t.Fatalf("item = %+v, want one backup job association", items)
 	}
 }
 
@@ -1576,6 +2092,41 @@ func TestCancelPausedBulkBackupRunCancelsAllPendingItems(t *testing.T) {
 		}
 		return len(got) == len(items)
 	})
+}
+
+func TestConcurrentResumeAndCancelPausedBulkBackupRunStartsOneProcessor(t *testing.T) {
+	svc, runRepo, runID := setupBulkRunControlTest(t, domain.BulkBackupRunStatusPaused)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for _, fn := range []func(context.Context, uuid.UUID) (*domain.BulkBackupRun, error){
+		svc.ResumeBulkBackupRun,
+		svc.CancelBulkBackupRun,
+		svc.ResumeBulkBackupRun,
+		svc.CancelBulkBackupRun,
+	} {
+		fn := fn
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = fn(context.Background(), runID)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	waitForCondition(t, time.Second, func() bool {
+		runRepo.mu.Lock()
+		defer runRepo.mu.Unlock()
+		run := runRepo.runs[runID]
+		return runRepo.acquireCount > 0 || (run != nil && bulkRunTerminal(run.Status))
+	})
+	time.Sleep(100 * time.Millisecond)
+	runRepo.mu.Lock()
+	defer runRepo.mu.Unlock()
+	if runRepo.acquireCount > 1 {
+		t.Fatalf("processor acquisitions = %d, want at most 1", runRepo.acquireCount)
+	}
 }
 
 func TestCancelPendingBulkRunItemsKeepsActiveItemsCompleting(t *testing.T) {

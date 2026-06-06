@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -114,12 +115,39 @@ func (s *BackupService) GetLatestBackupJob(ctx context.Context, deviceID uuid.UU
 
 // DeleteBackupJob removes a backup job, its files from disk and DB.
 func (s *BackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error {
-	// Get files to delete from disk
-	files, _ := s.fileRepo.GetByJobID(id)
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	job, err := s.jobRepo.GetByID(id)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		return fmt.Errorf("backup job %s not found", id)
+	}
+	if job.Status == domain.BackupStatusPending || job.Status == domain.BackupStatusRunning {
+		return ErrBackupJobActive
+	}
+	if s.backupJobReferencedByActiveBulkRun(id) {
+		return ErrBackupJobReferencedByActiveBulkRun
+	}
+
+	files, err := s.fileRepo.GetByJobID(id)
+	if err != nil {
+		return fmt.Errorf("loading file records: %w", err)
+	}
+	backupRoot, err := validatedBackupRoot(s.backupDir)
+	if err != nil && len(files) > 0 {
+		return err
+	}
 	var fileWarnings []string
 	for _, f := range files {
 		if f.FilePath != "" {
-			if err := os.Remove(f.FilePath); err != nil && !os.IsNotExist(err) {
+			removePath, err := validateBackupDeletionPath(backupRoot, f.FilePath)
+			if err != nil {
+				return err
+			}
+			if err := os.Remove(removePath); err != nil && !os.IsNotExist(err) {
 				fileWarnings = append(fileWarnings, fmt.Sprintf("removing %s: %v", f.FilePath, err))
 			}
 		}
@@ -136,6 +164,58 @@ func (s *BackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error
 		log.Printf("Warning: some backup files could not be removed for job %s: %s", id, strings.Join(fileWarnings, "; "))
 	}
 	return nil
+}
+
+func (s *BackupService) backupJobReferencedByActiveBulkRun(id uuid.UUID) bool {
+	if s.bulkRunRepo == nil {
+		return false
+	}
+	run, err := s.bulkRunRepo.GetActiveRun()
+	if err != nil || run == nil {
+		return false
+	}
+	for _, item := range run.Items {
+		if item.BackupJobID == nil || *item.BackupJobID != id || bulkRunItemTerminal(item.Status) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func validateBackupDeletionPath(backupRoot, filePath string) (string, error) {
+	if strings.TrimSpace(filePath) == "" {
+		return "", &BulkPathError{Reason: "backup file path is empty"}
+	}
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", fmt.Errorf("resolving backup file path: %w", err)
+	}
+	cleanPath := filepath.Clean(absPath)
+	if !pathIsUnderDir(backupRoot, cleanPath) {
+		return "", &BulkPathError{Path: filePath, Reason: "backup file path is outside backup directory"}
+	}
+	info, err := os.Lstat(cleanPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cleanPath, nil
+		}
+		return "", fmt.Errorf("lstat backup file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", &BulkPathError{Path: filePath, Reason: "backup file path is a symlink"}
+	}
+	if !info.Mode().IsRegular() {
+		return "", &BulkPathError{Path: filePath, Reason: "backup file path is not a regular file"}
+	}
+	resolvedPath, err := filepath.EvalSymlinks(cleanPath)
+	if err != nil {
+		return "", fmt.Errorf("resolving backup file symlinks: %w", err)
+	}
+	if !pathIsUnderDir(backupRoot, resolvedPath) {
+		return "", &BulkPathError{Path: filePath, Reason: "backup file path is outside backup directory"}
+	}
+	return cleanPath, nil
 }
 
 // GetBackupFile returns a single backup file by ID.

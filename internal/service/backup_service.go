@@ -33,6 +33,12 @@ var ErrBulkBackupRunAlreadyActive = errors.New("bulk backup run already active")
 // ErrBulkBackupAlreadyActive prevents the legacy bulk endpoint from overlapping with another legacy request.
 var ErrBulkBackupAlreadyActive = errors.New("bulk backup already active")
 
+// ErrBackupJobActive prevents deletion while a backup executor can still write artifacts.
+var ErrBackupJobActive = errors.New("backup job is active")
+
+// ErrBackupJobReferencedByActiveBulkRun prevents deletion while a bulk-run item still owns the job.
+var ErrBackupJobReferencedByActiveBulkRun = errors.New("backup job is referenced by an active bulk backup run")
+
 // ErrBulkOperationLimiterUnavailable reports that a distributed lease backend is required but missing.
 var ErrBulkOperationLimiterUnavailable = errors.New("bulk operation limiter unavailable")
 

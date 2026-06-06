@@ -276,10 +276,11 @@ func (s *BackupService) runTextExport(ctx context.Context, client *ssh.Client, j
 		return fmt.Errorf("renaming temp export file: %w", err)
 	}
 	if err := os.Chmod(filePath, 0600); err != nil {
+		os.Remove(filePath)
 		return fmt.Errorf("restricting file permissions: %w", err)
 	}
 
-	return s.fileRepo.Create(&domain.BackupFile{
+	return s.createBackupFileOrRemoveLocal(&domain.BackupFile{
 		ID:        uuid.New(),
 		JobID:     jobID,
 		FileType:  fileType,
@@ -321,6 +322,7 @@ func (s *BackupService) runBinaryExport(ctx context.Context, client *ssh.Client,
 		return fmt.Errorf("SFTP download failed: %w", err)
 	}
 	if err := os.Chmod(filePath, 0600); err != nil {
+		os.Remove(filePath)
 		return fmt.Errorf("restricting downloaded file permissions: %w", err)
 	}
 
@@ -332,7 +334,7 @@ func (s *BackupService) runBinaryExport(ctx context.Context, client *ssh.Client,
 		}
 	}
 
-	return s.fileRepo.Create(&domain.BackupFile{
+	return s.createBackupFileOrRemoveLocal(&domain.BackupFile{
 		ID:        uuid.New(),
 		JobID:     jobID,
 		FileType:  "binary",
@@ -341,4 +343,16 @@ func (s *BackupService) runBinaryExport(ctx context.Context, client *ssh.Client,
 		FileHash:  fileHash,
 		SizeBytes: sizeBytes,
 	})
+}
+
+func (s *BackupService) createBackupFileOrRemoveLocal(file *domain.BackupFile) error {
+	if err := s.fileRepo.Create(file); err != nil {
+		if file != nil && strings.TrimSpace(file.FilePath) != "" {
+			if removeErr := os.Remove(file.FilePath); removeErr != nil && !os.IsNotExist(removeErr) {
+				return fmt.Errorf("recording backup file metadata: %w; removing untracked file: %v", err, removeErr)
+			}
+		}
+		return fmt.Errorf("recording backup file metadata: %w", err)
+	}
+	return nil
 }

@@ -220,6 +220,25 @@ func TestPostgresMigrationsDeclareBulkBackupRunItemActiveSchema(t *testing.T) {
 	}
 }
 
+func TestPostgresMigrationsDeclareBulkBackupRunProcessorLeaseSchema(t *testing.T) {
+	content, err := migrationsFS.ReadFile("migrations/000022_bulk_backup_run_processor_lease.up.sql")
+	if err != nil {
+		t.Fatalf("reading bulk backup run processor lease migration: %v", err)
+	}
+	migration := string(content)
+
+	for _, expected := range []string{
+		"processing_owner TEXT NOT NULL DEFAULT ''",
+		"processing_lease_expires_at TIMESTAMPTZ",
+		"backup_bulk_runs_processing_lease_idx",
+		"WHERE processing_owner <> ''",
+	} {
+		if !strings.Contains(migration, expected) {
+			t.Fatalf("bulk backup run processor lease migration missing %q", expected)
+		}
+	}
+}
+
 func TestPostgresMigrationsDeclareLeastPrivilegeSystemRolePermissions(t *testing.T) {
 	managerPermissions := domain.SystemRolePermissionKeys(domain.RoleManager)
 	for _, disallowed := range []string{

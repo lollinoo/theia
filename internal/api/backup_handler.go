@@ -208,6 +208,14 @@ func (h *BackupHandler) HandleDeleteBackupJob(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		if errors.Is(err, service.ErrBackupJobActive) || errors.Is(err, service.ErrBackupJobReferencedByActiveBulkRun) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if service.IsBulkPathError(err) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "internal error", err)
 		return
 	}

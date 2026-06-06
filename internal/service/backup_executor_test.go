@@ -5,7 +5,12 @@ package service
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 type shortWriterForTest struct {
@@ -41,5 +46,33 @@ func TestCountingWriterCountsPartialWrites(t *testing.T) {
 	}
 	if n != 2 || counter.n != 2 {
 		t.Fatalf("Write result n=%d counter=%d, want 2/2", n, counter.n)
+	}
+}
+
+func TestCreateBackupFileOrRemoveLocalCleansUpMetadataFailure(t *testing.T) {
+	fileRepo := newMockBackupFileRepo()
+	fileRepo.createErr = errors.New("metadata insert failed")
+	backupDir := t.TempDir()
+	filePath := filepath.Join(backupDir, "untracked.rsc")
+	if err := os.WriteFile(filePath, []byte("backup"), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	svc := &BackupService{fileRepo: fileRepo}
+
+	err := svc.createBackupFileOrRemoveLocal(&domain.BackupFile{
+		ID:        uuid.New(),
+		JobID:     uuid.New(),
+		FileType:  "running",
+		FileName:  "untracked.rsc",
+		FilePath:  filePath,
+		FileHash:  "hash",
+		SizeBytes: 6,
+	})
+
+	if err == nil {
+		t.Fatal("createBackupFileOrRemoveLocal error = nil, want metadata failure")
+	}
+	if _, statErr := os.Stat(filePath); !os.IsNotExist(statErr) {
+		t.Fatalf("untracked file still exists, stat err = %v", statErr)
 	}
 }
