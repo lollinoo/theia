@@ -13,7 +13,7 @@ import {
   useReactFlow,
   useStore,
 } from '@xyflow/react';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { removeDeviceFromCanvasMap } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
@@ -63,6 +63,7 @@ import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';
 import { useCanvasGraphState } from './canvas/useCanvasGraphState';
 import { useCanvasInteractionState } from './canvas/useCanvasInteractionState';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
+import { useCanvasSelection } from './canvas/useCanvasSelection';
 import { minimapColorForDevice } from './deviceVisualState';
 import { resolveLinkBadgeScale } from './linkSemantics';
 
@@ -180,7 +181,6 @@ export default function Canvas({
     nodeIndexByIdRef,
     edgeIndexByIdRef,
   } = useCanvasGraphState();
-  const [selectedNodeCount, setSelectedNodeCount] = useState(0);
   const { diagnosticsVisible, closeDiagnostics } = useCanvasDiagnosticsToggle();
   const { canvasInteractionActive, beginCanvasInteraction, endCanvasInteraction } =
     useCanvasInteractionState({ onInteractionActiveChange });
@@ -224,6 +224,18 @@ export default function Canvas({
     shortcuts,
     getPanelTitle,
   } = useCanvasMenus({ reactFlow });
+  const {
+    selectedNodeCount,
+    selectedRealNodeIds,
+    setSelectedNodeCount,
+    handleSelectionChange,
+    openBulkEditPanel,
+  } = useCanvasSelection({
+    nodes,
+    editMode,
+    reactFlow,
+    setPanelContent,
+  });
   const fitTopologyView = useCallback(
     (padding: FitViewPadding) => {
       void reactFlow.fitView({
@@ -368,19 +380,6 @@ export default function Canvas({
     [setDeviceNodeReadabilityScale, setLinkBadgeReadabilityScale, setTopologyZoomBand],
   );
 
-  const handleSelectionChange = useCallback(
-    ({ nodes: selectedNodes }: { nodes: DeviceNode[] }) => {
-      setSelectedNodeCount(selectedNodes.length);
-      if (selectedNodes.length > 1 && editMode) {
-        setPanelContent({
-          type: 'bulkEdit',
-          data: { deviceIds: selectedNodes.map((n) => n.id) },
-        });
-      }
-    },
-    [editMode, setPanelContent],
-  );
-
   useKeyboardShortcuts(shortcuts);
 
   const openEdgeMenu = useCallback(
@@ -506,13 +505,6 @@ export default function Canvas({
     return map;
   }, [topologyAreas, resolvedTheme]);
 
-  const selectedRealNodeIds = useMemo(
-    () =>
-      new Set(
-        nodes.filter((node) => node.selected && !isGhostDeviceNode(node)).map((node) => node.id),
-      ),
-    [nodes],
-  );
   const ghostDeviceIds = useMemo(
     () => new Set(ghostDevices.map((device) => device.id)),
     [ghostDevices],
@@ -883,16 +875,7 @@ export default function Canvas({
         retryTopologyRefresh={retryTopologyRefresh}
         selectedNodeCount={selectedNodeCount}
         prometheusDiagnosticsVisible={runtimeSummary.prometheusDiagnosticsVisible}
-        onBulkEditClick={() => {
-          if (!editMode) return;
-          const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
-          if (selectedNodes.length > 1) {
-            setPanelContent({
-              type: 'bulkEdit',
-              data: { deviceIds: selectedNodes.map((n) => n.id) },
-            });
-          }
-        }}
+        onBulkEditClick={openBulkEditPanel}
       />
       {/* WinBox launch error toast */}
       {winboxError && (
