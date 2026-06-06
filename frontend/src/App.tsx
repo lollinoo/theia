@@ -31,12 +31,12 @@ import {
 import TopologyHub from './components/topology-hub/TopologyHub';
 import { useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
+import { useRuntimeUpdatePause } from './hooks/useRuntimeUpdatePause';
 import { useWebSocket } from './hooks/useWebSocket';
 import type { Area, CanvasMap, CanvasMapFilter, Device, Link } from './types/api';
 
 export type ActiveView = 'hub' | 'canvas' | 'dashboard' | 'admin' | 'settings';
 
-const runtimeUpdatePauseIdleDelayMs = 1500;
 const enableSavedMaps = true;
 const viewLayerBaseClass = 'absolute inset-0 h-full w-full';
 const canvasChromeHiddenStorageKey = 'theia.canvas.chromeHidden';
@@ -126,32 +126,13 @@ function App() {
   const [topologyRefreshRevision, setTopologyRefreshRevision] = useState(0);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [canvasChromeHidden, setCanvasChromeHidden] = useState(initialCanvasChromeHidden);
-  const [runtimeUpdatesPaused, setRuntimeUpdatesPaused] = useState(false);
+  const runtimeUpdatesPaused = useRuntimeUpdatePause(canvasInteractionActive);
   const { hasPermission, logout, user } = useAuth();
   const canViewAdmin = hasPermission('admin:dashboard:read');
   const canReadSettings = hasPermission('settings:read');
   const canUpdateSettings = hasPermission('settings:update');
   const canOpenSettings = canViewAdmin && canReadSettings && canUpdateSettings;
   const canOpenUserSettings = hasPermission('account:manage');
-
-  useEffect(() => {
-    if (canvasInteractionActive) {
-      setRuntimeUpdatesPaused(true);
-      return;
-    }
-
-    if (!runtimeUpdatesPaused) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      setRuntimeUpdatesPaused(false);
-    }, runtimeUpdatePauseIdleDelayMs);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [canvasInteractionActive, runtimeUpdatesPaused]);
 
   const { snapshot, alerts, reconnecting, prometheusStatus } = useWebSocket(
     '/api/v1/ws',
