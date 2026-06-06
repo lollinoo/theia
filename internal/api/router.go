@@ -60,7 +60,8 @@ func withAuthProvider(auth authProvider) RouterOption {
 }
 
 // NewRouter creates the HTTP handler with all /api/v1/ routes registered.
-// Uses standard net/http (no framework needed at this scale).
+// Route metadata remains the source of truth for auth, middleware, and permissions;
+// the returned handler only selects public, special-profile, or normal middleware.
 func NewRouter(
 	db *sql.DB,
 	deviceService *service.DeviceService,

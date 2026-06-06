@@ -20,6 +20,9 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
+// runFullBackup executes all configured SSH/SFTP backup commands for one device.
+// The per-device lock serializes access to remote backup filenames and the job row transitions
+// from running to success or failed before the background worker releases its bulk lease.
 func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.CredentialProfile, backupCfg vendor.BackupConfig, jobID uuid.UUID) {
 	lock := s.getDeviceLock(device.ID)
 	lock.Lock()
@@ -160,6 +163,8 @@ func (s *BackupService) waitForRemoteFile(sshClient *gossh.Client, remotePath st
 	return fmt.Errorf("timed out waiting for remote file %q after %v", remotePath, timeout)
 }
 
+// downloadSFTPFileToDiskAndHash streams a remote SFTP file into a temp file, hashes it, then renames atomically.
+// Cancellation stops waiting for the transfer result; the worker goroutine still cleans up partial temp files.
 func downloadSFTPFileToDiskAndHash(ctx context.Context, sshClient *gossh.Client, remotePath, localPath string) (string, int, error) {
 	if sshClient == nil {
 		return "", 0, fmt.Errorf("creating SFTP client: nil SSH client")
@@ -233,6 +238,8 @@ func downloadSFTPFileToDiskAndHash(ctx context.Context, sshClient *gossh.Client,
 	}
 }
 
+// runTextExport captures a command response as a local backup file and records its SHA-256 metadata.
+// The final file is written through a temp path so repository rows never point at partial content.
 func (s *BackupService) runTextExport(ctx context.Context, client *ssh.Client, jobID uuid.UUID, dir, fileName, fileType, command string) error {
 	filePath := filepath.Join(dir, fileName)
 	tmpFile, err := os.CreateTemp(dir, ".theia-export-*")

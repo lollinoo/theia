@@ -6,6 +6,8 @@ import (
 	"github.com/lollinoo/theia/internal/service"
 )
 
+// routerMiddlewareSet keeps the normal JSON chain separate from routes that cannot use it.
+// WebSocket upgrades, binary downloads, and restore uploads each need different body/response handling.
 type routerMiddlewareSet struct {
 	normal          http.Handler
 	binaryDownload  http.Handler
@@ -13,6 +15,8 @@ type routerMiddlewareSet struct {
 	publicByHandler map[routeHandlerKey]http.Handler
 }
 
+// buildRouterMiddlewareSet assembles reusable middleware chains after handlers have been constructed.
+// Restore upload limits follow the service archive quota so route handling and validation share one ceiling.
 func buildRouterMiddlewareSet(
 	mux http.Handler,
 	deps routerDependencies,
@@ -35,6 +39,7 @@ func buildRouterMiddlewareSet(
 	}
 }
 
+// servePublicRoute dispatches explicitly public route specs through small-body public middleware.
 func (middleware routerMiddlewareSet) servePublicRoute(w http.ResponseWriter, r *http.Request, spec apiRouteSpec) bool {
 	if spec.authMode != routeAuthPublic {
 		return false
@@ -47,6 +52,7 @@ func (middleware routerMiddlewareSet) servePublicRoute(w http.ResponseWriter, r 
 	return true
 }
 
+// serveRouteProfile handles special middleware profiles and leaves ordinary JSON routes to the normal chain.
 func (middleware routerMiddlewareSet) serveRouteProfile(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -68,6 +74,8 @@ func (middleware routerMiddlewareSet) serveRouteProfile(
 	}
 }
 
+// serveWebSocketUpgradeRoute authenticates and authorizes a WebSocket request without wrapping the ResponseWriter.
+// The upgrade path must preserve http.Hijacker support, so it bypasses the standard logger/JSON middleware.
 func serveWebSocketUpgradeRoute(
 	w http.ResponseWriter,
 	r *http.Request,

@@ -5,6 +5,7 @@ import { recordCanvasDiagnosticEvent } from './canvasDiagnostics';
 
 type FitViewPadding = NonNullable<FitViewOptions['padding']>;
 
+/** Inputs for controlled/uncontrolled canvas chrome visibility and related fit-view padding. */
 interface UseCanvasChromeParams {
   chromeHidden?: boolean;
   onChromeHiddenChange?: (hidden: boolean) => void;
@@ -15,6 +16,10 @@ interface UseCanvasChromeParams {
   closeCanvasOverlays: () => void;
 }
 
+/**
+ * Coordinates canvas chrome visibility, overlay cleanup, and post-layout fit-view updates.
+ * The hook supports a controlled App-owned preference while preserving an internal fallback for tests.
+ */
 export function useCanvasChrome({
   chromeHidden,
   onChromeHiddenChange,

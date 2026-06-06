@@ -7,12 +7,14 @@ import type { LinkEdgeType } from '../LinkEdge';
 import { isGhostDeviceNode } from './canvasHelpers';
 import type { CanvasPanelContent } from './useCanvasMenus';
 
+/** Returns selected canonical device IDs while excluding projected ghost context nodes. */
 export function resolveSelectedRealNodeIds(nodes: DeviceNode[]): Set<string> {
   return new Set(
     nodes.filter((node) => node.selected && !isGhostDeviceNode(node)).map((node) => node.id),
   );
 }
 
+/** Inputs needed to bridge React Flow selection state into canvas side panels. */
 interface UseCanvasSelectionParams {
   nodes: DeviceNode[];
   editMode: boolean;
@@ -20,6 +22,10 @@ interface UseCanvasSelectionParams {
   setPanelContent: Dispatch<SetStateAction<CanvasPanelContent | null>>;
 }
 
+/**
+ * Owns canvas selection counts and bulk-edit panel activation.
+ * Ghost nodes remain selectable visually but are excluded from real-device bulk operations.
+ */
 export function useCanvasSelection({
   nodes,
   editMode,

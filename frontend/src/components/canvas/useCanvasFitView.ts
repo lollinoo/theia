@@ -5,6 +5,7 @@ import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { recordCanvasDiagnosticEvent } from './canvasDiagnostics';
 
+/** Parameters that decide when React Flow can safely fit the currently rendered topology. */
 interface UseCanvasFitViewParams {
   visible: boolean;
   flowViewportReady: boolean;
@@ -21,6 +22,10 @@ interface UseCanvasFitViewParams {
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
 }
 
+/**
+ * Coordinates fit-view requests for area changes, explicit canvas activation, and hidden-chrome restoration.
+ * Requests wait for viewport/node readiness so React Flow is not asked to fit stale or unmounted graph state.
+ */
 export function useCanvasFitView({
   visible,
   flowViewportReady,

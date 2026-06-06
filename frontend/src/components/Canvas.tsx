@@ -82,6 +82,7 @@ const linkBadgeReadabilityScaleProperty = '--theia-link-badge-readability-scale'
 const topologyZoomBandAttribute = 'data-topology-zoom-band';
 const topologyCleanViewFitPadding = 0.02;
 
+/** Resolves minimap color from runtime status while preserving ghost-device visual treatment. */
 function topologyMinimapNodeColor(node: DeviceNode): string {
   const data = node.data;
   const device =
@@ -95,6 +96,7 @@ function topologyMinimapNodeColor(node: DeviceNode): string {
   });
 }
 
+/** React Flow minimap styled as part of canvas chrome and memoized to avoid graph-render churn. */
 const TopologyMiniMap = memo(function TopologyMiniMap() {
   return (
     <MiniMap<DeviceNode>
@@ -108,6 +110,7 @@ const TopologyMiniMap = memo(function TopologyMiniMap() {
   );
 });
 
+/** Applies edge interaction mode only when data changes so React Flow can retain stable edge references. */
 function setEdgeInteractionMode(
   edges: LinkEdgeType[],
   interactionMode: 'idle' | 'interactive',
@@ -122,6 +125,10 @@ function setEdgeInteractionMode(
   return changed ? nextEdges : edges;
 }
 
+/**
+ * Describes the canonical topology inputs and host callbacks owned by App.
+ * Canvas projects these inputs into React Flow nodes/edges while reporting selected detail state upward.
+ */
 interface CanvasProps {
   snapshot: SnapshotPayload | null;
   alerts?: AlertDTO[];
@@ -150,6 +157,10 @@ interface CanvasProps {
 
 type FitViewPadding = NonNullable<FitViewOptions['padding']>;
 
+/**
+ * Renders the topology canvas and owns the projection from canonical graph data to interactive display graph.
+ * It coordinates runtime deltas, area/map filtering, ghost devices, fit-view lifecycle, and canvas diagnostics.
+ */
 export default function Canvas({
   snapshot,
   alerts = emptyAlerts,

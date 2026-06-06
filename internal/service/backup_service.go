@@ -25,8 +25,13 @@ const defaultBulkBackupRunBatchSize = 10
 const legacyBulkBackupLeaseKey = "backup.bulk_backup:legacy"
 const legacyBulkBackupMetricOperation = "bulk_backup_legacy"
 
+// ErrBulkBackupRunAlreadyActive prevents more than one durable bulk run from mutating backup state.
 var ErrBulkBackupRunAlreadyActive = errors.New("bulk backup run already active")
+
+// ErrBulkBackupAlreadyActive prevents the legacy bulk endpoint from overlapping with another legacy request.
 var ErrBulkBackupAlreadyActive = errors.New("bulk backup already active")
+
+// ErrBulkOperationLimiterUnavailable reports that a distributed lease backend is required but missing.
 var ErrBulkOperationLimiterUnavailable = errors.New("bulk operation limiter unavailable")
 
 // BackupService orchestrates credential profile management and config backups.
@@ -49,14 +54,17 @@ type BackupService struct {
 	legacyBulkBackupGate   bulkOperationGate
 }
 
+// BackupServiceOption wires optional collaborators without changing the public constructor signature.
 type BackupServiceOption func(*BackupService)
 
+// WithBulkBackupRunRepo enables durable pause/resume/cancel state for multi-device backup runs.
 func WithBulkBackupRunRepo(repo domain.BulkBackupRunRepository) BackupServiceOption {
 	return func(s *BackupService) {
 		s.bulkRunRepo = repo
 	}
 }
 
+// WithBulkOperationLeaseRepository enables distributed concurrency limits for bulk operations.
 func WithBulkOperationLeaseRepository(repo domain.BulkOperationLeaseRepository) BackupServiceOption {
 	return func(s *BackupService) {
 		s.bulkOperationLeaseRepo = repo
@@ -66,7 +74,8 @@ func WithBulkOperationLeaseRepository(repo domain.BulkOperationLeaseRepository) 
 	}
 }
 
-// NewBackupService creates a new BackupService.
+// NewBackupService creates a backup service for device credential profiles and config archives.
+// The service keeps per-device locks in memory, so callers should share one instance per process.
 func NewBackupService(
 	jobRepo domain.BackupJobRepository,
 	fileRepo domain.BackupFileRepository,
@@ -119,7 +128,7 @@ func normalizeBackupEncryptionKey(key any) (*crypto.Keyring, []byte) {
 	}
 }
 
-// SetBulkOperationLimits overrides bulk request quotas.
+// SetBulkOperationLimits overrides bulk request quotas for tests or deployments with stricter ceilings.
 func (s *BackupService) SetBulkOperationLimits(limits BulkOperationLimits) {
 	s.bulkLimits = normalizeBulkOperationLimits(limits)
 }
@@ -133,14 +142,17 @@ func (s *BackupService) BulkOperationLeaseRepositoryConfigured() bool {
 	return s != nil && s.bulkOperationLeaseRepo != nil
 }
 
+// BulkBackupRunRepositoryConfigured reports whether durable run orchestration is available.
 func (s *BackupService) BulkBackupRunRepositoryConfigured() bool {
 	return s != nil && s.bulkRunRepo != nil
 }
 
+// BulkBackupRunBatchSize returns the fixed device batch size used by durable bulk backup runs.
 func (s *BackupService) BulkBackupRunBatchSize() int {
 	return defaultBulkBackupRunBatchSize
 }
 
+// SetBulkOperationLeaseRepository swaps the distributed lease backend used by bulk operations.
 func (s *BackupService) SetBulkOperationLeaseRepository(repo domain.BulkOperationLeaseRepository) {
 	s.bulkOperationLeaseRepo = repo
 	if repo != nil {
@@ -191,7 +203,8 @@ type preparedDeviceBackup struct {
 	resultIndex int
 }
 
-// TriggerBulkBackup validates all devices and queues backups for eligible ones.
+// TriggerBulkBackup validates requested devices and queues legacy per-device backup jobs.
+// It acquires a bulk lease before reading devices and transfers that lease to background workers.
 func (s *BackupService) TriggerBulkBackup(ctx context.Context, requestedDeviceIDs ...uuid.UUID) ([]BulkBackupResult, error) {
 	lease, err := s.acquireLegacyBulkBackupLease(ctx)
 	if err != nil {

@@ -24,6 +24,7 @@ type BulkDownloadEntry struct {
 }
 
 // GetBulkDownloadFiles returns file entries from the latest successful backup of each given device.
+// It enforces device/file/byte quotas before any streaming and precomputes safe zip paths.
 func (s *BackupService) GetBulkDownloadFiles(ctx context.Context, deviceIDs []uuid.UUID) ([]BulkDownloadEntry, error) {
 	limits := s.BulkOperationLimits()
 	deviceIDs = dedupeUUIDs(deviceIDs)
@@ -112,6 +113,8 @@ func (s *BackupService) GetBulkDownloadFiles(ctx context.Context, deviceIDs []uu
 	return entries, nil
 }
 
+// validatedBackupRoot resolves the configured backup directory once for path-containment checks.
+// Symlink resolution is intentional: stored file paths must live under the real backup root.
 func validatedBackupRoot(backupDir string) (string, error) {
 	backupDir = strings.TrimSpace(backupDir)
 	if backupDir == "" {
@@ -128,6 +131,8 @@ func validatedBackupRoot(backupDir string) (string, error) {
 	return root, nil
 }
 
+// validateBulkDownloadFile resolves symlinks and rejects entries outside the configured backup root.
+// It returns the canonical disk path and size used for quota accounting before streaming begins.
 func validateBulkDownloadFile(backupRoot, filePath string) (string, int64, error) {
 	if strings.TrimSpace(filePath) == "" {
 		return "", 0, &BulkPathError{Reason: "backup file path is empty"}
@@ -174,6 +179,8 @@ func (s *BackupService) OpenBulkDownloadEntry(entry BulkDownloadEntry) (*os.File
 	return f, nil
 }
 
+// openValidatedBulkDownloadFile opens the selected file with O_NOFOLLOW and rechecks containment.
+// This closes the time-of-check/time-of-use gap between selection and response streaming.
 func openValidatedBulkDownloadFile(backupRoot, filePath string) (*os.File, int64, error) {
 	if strings.TrimSpace(filePath) == "" {
 		return nil, 0, &BulkPathError{Reason: "backup file path is empty"}
@@ -218,6 +225,7 @@ func openValidatedBulkDownloadFile(backupRoot, filePath string) (*os.File, int64
 	return f, info.Size(), nil
 }
 
+// resolveOpenedBackupPath verifies that the resolved path still names the file descriptor just opened.
 func resolveOpenedBackupPath(absPath string, openedInfo os.FileInfo) (string, error) {
 	resolved, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
@@ -233,6 +241,7 @@ func resolveOpenedBackupPath(absPath string, openedInfo os.FileInfo) (string, er
 	return filepath.Clean(resolved), nil
 }
 
+// pathIsUnderDir accepts only candidates that remain within root after filepath.Rel normalization.
 func pathIsUnderDir(root, candidate string) bool {
 	rel, err := filepath.Rel(root, candidate)
 	if err != nil {
@@ -241,6 +250,7 @@ func pathIsUnderDir(root, candidate string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
+// safeBulkDownloadZipPath builds a slash-separated archive member name without absolute paths or traversal.
 func safeBulkDownloadZipPath(deviceDir, fileName string) (string, error) {
 	deviceDir = sanitizeHostname(deviceDir)
 	if deviceDir == "" {

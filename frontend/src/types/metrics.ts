@@ -1,3 +1,4 @@
+/** WSMessageType enumerates server-pushed canvas runtime protocol messages understood by the client. */
 export type WSMessageType =
   | 'ready'
   | 'snapshot'
@@ -13,6 +14,7 @@ export type WSMessageType =
   | 'topology_changed';
 type APIRecord = Record<string, unknown>;
 
+/** RuntimeReason explains why a runtime field is healthy, stale, missing, or unsupported. */
 export type RuntimeReason =
   | 'ok'
   | 'awaiting_poll'
@@ -23,12 +25,19 @@ export type RuntimeReason =
   | 'unmonitored'
   | 'unsupported';
 
+/** OperationalStatus is the high-level runtime state displayed on device nodes. */
 export type OperationalStatus = 'up' | 'down' | 'probing' | 'unknown' | 'unmonitored';
+/** ReachabilityStatus captures ping/SNMP reachability nuance used by health badges. */
 export type ReachabilityStatus = 'up' | 'soft_down' | 'hard_down' | 'unknown' | 'unmonitored';
+/** HealthStatus summarizes telemetry and reachability into a dashboard health band. */
 export type HealthStatus = 'healthy' | 'warning' | 'critical' | 'unknown';
+/** FreshnessStatus reports whether the last collected sample is current enough to trust. */
 export type FreshnessStatus = 'fresh' | 'stale' | 'awaiting_poll' | 'unmonitored';
+/** MetricsStatus reports whether metric fields are complete, partial, unavailable, or disabled. */
 export type MetricsStatus = 'available' | 'partial' | 'unavailable' | 'unmonitored';
+/** LinkMetricsStatus reports the availability of link throughput and utilization telemetry. */
 export type LinkMetricsStatus = 'available' | 'partial' | 'unavailable';
+/** PrimaryHealth is the compact device health state used for node severity styling. */
 export type PrimaryHealth =
   | 'probing'
   | 'up_fresh'
@@ -36,6 +45,7 @@ export type PrimaryHealth =
   | 'snmp_degraded'
   | 'unreachable'
   | 'quarantined';
+/** RuntimeFlag adds operational context that should not replace the primary health state. */
 export type RuntimeFlag =
   | 'deadline_missed'
   | 'overloaded'
@@ -43,7 +53,9 @@ export type RuntimeFlag =
   | 'partial_telemetry'
   | 'degraded_risk'
   | 'persistence_lagging';
+/** FieldState tracks per-metric completeness for mixed healthy/degraded telemetry rows. */
 export type FieldState = 'ok' | 'missing' | 'error' | 'stale';
+/** ReachabilityEvidence preserves tri-state collector evidence instead of coercing to boolean. */
 export type ReachabilityEvidence = 'true' | 'false' | 'unknown';
 
 const runtimeReasons = [
@@ -83,6 +95,7 @@ const runtimeFlags = [
 const fieldStates = ['ok', 'missing', 'error', 'stale'] as const;
 const reachabilityEvidenceStates = ['true', 'false', 'unknown'] as const;
 
+/** DeviceRuntimeDTO is the runtime overlay for one canonical device. */
 export interface DeviceRuntimeDTO {
   device_id: string;
   operational_status: OperationalStatus;
@@ -108,6 +121,7 @@ export interface DeviceRuntimeDTO {
   uptime_secs: number | null;
 }
 
+/** LinkRuntimeDTO is the runtime overlay for one canonical link. */
 export interface LinkRuntimeDTO {
   link_id: string;
   source_device_id: string;
@@ -122,9 +136,12 @@ export interface LinkRuntimeDTO {
   utilization: number | null;
 }
 
+/** DeviceMetricsDTO is a compatibility alias for older component names. */
 export type DeviceMetricsDTO = DeviceRuntimeDTO;
+/** LinkMetricsDTO is a compatibility alias for older component names. */
 export type LinkMetricsDTO = LinkRuntimeDTO;
 
+/** AlertDTO is a compact alert summary pushed over WebSocket and used for node/edge severity. */
 export interface AlertDTO {
   device_id: string;
   severity: string;
@@ -133,27 +150,34 @@ export interface AlertDTO {
   summary: string;
 }
 
+/** AlertStatus is the derived visual severity used by topology nodes and links. */
 export type AlertStatus = 'normal' | 'degraded' | 'down';
 
+/** SnapshotPayload is the complete runtime state indexed by canonical device/link IDs. */
 export interface SnapshotPayload {
   devices: Record<string, DeviceRuntimeDTO>;
   links: Record<string, LinkRuntimeDTO>;
 }
 
+/** DeviceRuntimePatch is a sparse device update that must include the device ID it applies to. */
 export type DeviceRuntimePatch = Partial<DeviceRuntimeDTO> & Pick<DeviceRuntimeDTO, 'device_id'>;
+/** LinkRuntimePatch is a sparse link update that must include the link ID it applies to. */
 export type LinkRuntimePatch = Partial<LinkRuntimeDTO> & Pick<LinkRuntimeDTO, 'link_id'>;
 
+/** RuntimePatchPayload groups sparse runtime deltas by canonical device and link IDs. */
 export interface RuntimePatchPayload {
   devices: Record<string, DeviceRuntimePatch>;
   links: Record<string, LinkRuntimePatch>;
 }
 
+/** PrometheusStatusPayload reports backend Prometheus integration availability. */
 export interface PrometheusStatusPayload {
   enabled?: boolean;
   available: boolean;
   error?: string;
 }
 
+/** ResyncRequiredPayload tells the client why it must refresh overview state over HTTP. */
 export interface ResyncRequiredPayload {
   scope: 'overview';
   reason:
@@ -163,24 +187,28 @@ export interface ResyncRequiredPayload {
     | 'hub_buffer_full';
 }
 
+/** TopologyChangedPayload advertises canonical topology changes and the recommended resync endpoint. */
 export interface TopologyChangedPayload {
   topology_version?: number | string;
   reason?: string;
   recommended_endpoint?: string;
 }
 
+/** ReadyPayload acknowledges that the client's hello already matches server runtime state. */
 export interface ReadyPayload {
   runtime_version?: number;
   runtime_identity?: string;
   alert_version?: number;
 }
 
+/** SnapshotEnvelopePayload wraps a full runtime snapshot with version and identity metadata. */
 export interface SnapshotEnvelopePayload {
   version: number | null;
   runtime_identity?: string;
   snapshot: SnapshotPayload;
 }
 
+/** SnapshotDeltaEnvelopePayload wraps legacy full-shape deltas with a base version. */
 export interface SnapshotDeltaEnvelopePayload {
   base_version?: number;
   version?: number;
@@ -188,6 +216,7 @@ export interface SnapshotDeltaEnvelopePayload {
   delta: SnapshotPayload;
 }
 
+/** RuntimeDeltaEnvelopePayload wraps sparse runtime deltas with base-version validation data. */
 export interface RuntimeDeltaEnvelopePayload {
   base_version?: number;
   version?: number;
@@ -207,6 +236,7 @@ export interface PollingHealthWarningPayload {
   message: string;
 }
 
+/** PollingHealthPayload summarizes scheduler pressure and worker health. */
 export interface PollingHealthPayload {
   essential_overloaded: boolean;
   degraded_risk: boolean;
@@ -218,6 +248,7 @@ export interface PollingHealthPayload {
   warnings?: PollingHealthWarningPayload[];
 }
 
+/** WSMessage is the untyped envelope shape before payload-specific parsing. */
 export interface WSMessage {
   type: WSMessageType;
   payload: unknown;
@@ -447,6 +478,7 @@ function readRequiredCount(record: APIRecord, key: string): number {
 }
 
 // parseDeviceRuntime strictly parses a complete device runtime snapshot.
+/** Parses and normalizes one device runtime payload from snapshots, deltas, or tests. */
 export function parseDeviceRuntime(value: unknown): DeviceRuntimeDTO {
   if (!isRecord(value)) {
     throw new Error('invalid device runtime payload');
@@ -485,9 +517,10 @@ export function parseDeviceRuntime(value: unknown): DeviceRuntimeDTO {
   }
 }
 
+/** parseDeviceMetrics is a compatibility alias for components that still use metrics naming. */
 export const parseDeviceMetrics = parseDeviceRuntime;
 
-// parseLinkRuntime strictly parses a complete link runtime snapshot.
+/** Parses one link runtime payload and applies safe defaults for missing telemetry. */
 export function parseLinkRuntime(value: unknown): LinkRuntimeDTO {
   if (!isRecord(value)) {
     throw new Error('invalid link runtime payload');
@@ -512,9 +545,10 @@ export function parseLinkRuntime(value: unknown): LinkRuntimeDTO {
   }
 }
 
+/** parseLinkMetrics is a compatibility alias for components that still use metrics naming. */
 export const parseLinkMetrics = parseLinkRuntime;
 
-// parseAlert strictly parses one alert DTO used by alert envelopes and websocket messages.
+/** Parses a compact alert summary, preserving empty strings for optional display fields. */
 export function parseAlert(value: unknown): AlertDTO {
   if (!isRecord(value)) {
     throw new Error('invalid alert payload');
@@ -534,6 +568,7 @@ export function parseAlert(value: unknown): AlertDTO {
 }
 
 // parseSnapshotPayload parses full device and link runtime maps and verifies key identity.
+/** Parses a full runtime snapshot and indexes devices/links by their canonical IDs. */
 export function parseSnapshotPayload(value: unknown): SnapshotPayload {
   if (!isRecord(value)) {
     throw new Error('invalid snapshot payload');
@@ -712,6 +747,7 @@ function parseLinkRuntimePatch(value: unknown): LinkRuntimePatch {
 }
 
 // parseRuntimePatchPayload parses runtime delta maps and verifies patch key identity.
+/** Parses sparse runtime deltas while rejecting patches that lack their required IDs. */
 export function parseRuntimePatchPayload(value: unknown): RuntimePatchPayload {
   if (!isRecord(value)) {
     throw new Error('invalid runtime patch payload');
@@ -756,6 +792,7 @@ export function parseRuntimePatchPayload(value: unknown): RuntimePatchPayload {
 /**
  * Replaces atomic device/link records only for keys present in the delta.
  */
+/** Merges legacy full-shape snapshot deltas into a cloned snapshot without mutating the previous state. */
 export function mergeSnapshotDelta(
   existing: SnapshotPayload,
   delta: SnapshotPayload,
@@ -767,6 +804,7 @@ export function mergeSnapshotDelta(
 }
 
 // mergeRuntimeDeltaPatch applies partial runtime updates without changing untouched records.
+/** Merges sparse runtime patches into a cloned snapshot without mutating the previous state. */
 export function mergeRuntimeDeltaPatch(
   existing: SnapshotPayload,
   delta: RuntimePatchPayload,
@@ -849,6 +887,7 @@ export function mergeRuntimeDeltaPatch(
 }
 
 // parseWSMessage validates known websocket message shapes and preserves legacy passthrough payloads.
+/** Parses WebSocket envelopes and narrows payloads by message type for the runtime hook. */
 export function parseWSMessage(
   value: unknown,
 ):

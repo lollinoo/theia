@@ -1,11 +1,15 @@
 import { type SnapshotPayload, parseSnapshotPayload } from './metrics';
 
+/** DeviceType mirrors backend device categories used for visualization and polling defaults. */
 export type DeviceType = 'router' | 'switch' | 'ap' | 'firewall' | 'virtual' | 'unknown';
+/** DevicePollClass controls scheduler cadence classes assigned by backend device classification. */
 export type DevicePollClass = 'core' | 'standard' | 'low';
+/** TopologyDiscoveryMode controls whether LLDP/CDP discovery is inherited, disabled, or forced per device. */
 export type TopologyDiscoveryMode = 'inherit' | 'off' | 'lldp' | 'lldp_cdp' | 'bootstrap_once';
+/** TopologyBootstrapState tracks the one-time discovery lifecycle for newly added devices. */
 export type TopologyBootstrapState = 'idle' | 'pending' | 'followup_scheduled' | 'completed';
 
-// SNMPProfile represents a reusable set of SNMP credentials.
+/** SNMPProfile represents a reusable set of SNMP credentials. */
 export interface SNMPProfile {
   id: string;
   name: string;
@@ -26,8 +30,10 @@ export interface SNMPProfile {
   created_at: string;
   updated_at: string;
 }
+/** DeviceStatus is the persisted reachability state stored with the canonical device record. */
 export type DeviceStatus = 'up' | 'down' | 'probing' | 'unknown';
 
+/** DeviceInterface is the last known interface inventory for one device. */
 export interface DeviceInterface {
   id: string;
   if_index: number;
@@ -38,8 +44,10 @@ export interface DeviceInterface {
   oper_status: string;
 }
 
+/** MetricsSource identifies which collector path currently owns runtime telemetry for a device. */
 export type MetricsSource = 'prometheus' | 'snmp' | 'prometheus_snmp_fallback' | 'none';
 
+/** Device is the canonical API representation used by topology, inventory, and settings flows. */
 export interface Device {
   id: string;
   hostname: string;
@@ -71,6 +79,7 @@ export interface Device {
   map_visual_color?: string | null;
 }
 
+/** Link is a canonical topology edge enriched with endpoint interface metadata for display. */
 export interface Link {
   id: string;
   source_device_id: string;
@@ -88,6 +97,7 @@ export interface Link {
   target_if_oper_status: string;
 }
 
+/** DevicePosition stores user-owned canvas coordinates for one device in a map context. */
 export interface DevicePosition {
   device_id: string;
   x: number;
@@ -96,6 +106,7 @@ export interface DevicePosition {
   updated_at?: string;
 }
 
+/** CanvasMapFilter describes a saved projection over the canonical topology graph. */
 export interface CanvasMapFilter {
   area_id?: string | null;
   device_ids?: string[];
@@ -104,6 +115,7 @@ export interface CanvasMapFilter {
   tags?: Record<string, string>;
 }
 
+/** CanvasMap is saved topology map metadata plus aggregate counts for hub/list views. */
 export interface CanvasMap {
   id: string;
   name: string;
@@ -118,12 +130,14 @@ export interface CanvasMap {
   updated_at: string;
 }
 
+/** CanvasTopologyCapabilities advertises optional server features for topology clients. */
 export interface CanvasTopologyCapabilities {
   supports_topology_delta: boolean;
   supports_position_revision: boolean;
   supports_area_filtering: boolean;
 }
 
+/** CanvasTopologyResponse is the canonical HTTP bootstrap payload for the canvas. */
 export interface CanvasTopologyResponse {
   schema_version: 1;
   topology_version: string;
@@ -144,6 +158,7 @@ export interface CanvasTopologyResponse {
   };
 }
 
+/** InterfaceInfo describes selectable interfaces when creating or editing manual links. */
 export interface InterfaceInfo {
   if_name: string;
   if_descr: string;
@@ -154,8 +169,10 @@ export interface InterfaceInfo {
   in_use_by?: string;
 }
 
+/** GrafanaVariableSource selects which Theia value fills dashboard URL templates. */
 export type GrafanaVariableSource = 'hostname' | 'ip' | 'map_name' | 'map_id';
 
+/** GrafanaDashboardProfile is a reusable dashboard URL template. */
 export interface GrafanaDashboardProfile {
   id: string;
   name: string;
@@ -165,12 +182,14 @@ export interface GrafanaDashboardProfile {
   updated_at?: string;
 }
 
+/** GrafanaDeviceDashboardOverride stores per-device dashboard customization. */
 export interface GrafanaDeviceDashboardOverride {
   profile_id: string | null;
   custom_url: string;
   updated_at?: string;
 }
 
+/** GrafanaDashboardConfig groups profiles, the default profile, and device overrides. */
 export interface GrafanaDashboardConfig {
   profiles: GrafanaDashboardProfile[];
   default_profile_id: string;
@@ -301,6 +320,10 @@ function parseDeviceInterface(value: unknown): DeviceInterface {
 }
 
 // parseDevicesResponse converts JSON:API device resources while preserving legacy defaults.
+/**
+ * Parses the devices collection response and normalizes legacy/partial fields into frontend defaults.
+ * Invalid non-object entries are skipped so one malformed row does not break the entire inventory view.
+ */
 export function parseDevicesResponse(payload: unknown): Device[] {
   if (!isRecord(payload)) {
     throw new Error('invalid devices response');
@@ -373,6 +396,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
 }
 
 // parseLinksResponse converts link resources while preserving empty-string and zero defaults.
+/** Parses canonical topology links and preserves optional endpoint enrichment when present. */
 export function parseLinksResponse(payload: unknown): Link[] {
   if (!isRecord(payload)) {
     throw new Error('invalid links response');
@@ -492,6 +516,7 @@ function parseCanvasMapFilter(value: unknown): CanvasMapFilter {
 }
 
 // parseCanvasMapResponse parses a single saved-map DTO from wrapped or direct payloads.
+/** Parses one saved map and normalizes absent filters/counts to stable empty defaults. */
 export function parseCanvasMapResponse(payload: unknown): CanvasMap {
   const resource = isRecord(payload) && isRecord(payload.data) ? payload.data : payload;
 
@@ -522,6 +547,7 @@ export function parseCanvasMapResponse(payload: unknown): CanvasMap {
 }
 
 // parseCanvasMapsResponse parses saved-map list responses and rejects malformed envelopes.
+/** Parses the saved-map list endpoint and rejects non-array payloads. */
 export function parseCanvasMapsResponse(payload: unknown): CanvasMap[] {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error('invalid canvas maps response');
@@ -531,6 +557,10 @@ export function parseCanvasMapsResponse(payload: unknown): CanvasMap[] {
 }
 
 // parseCanvasTopologyResponse parses topology payloads including runtime, positions, and map metadata.
+/**
+ * Parses the canvas bootstrap payload that seeds canonical graph, map metadata, positions, and runtime state.
+ * Positions and runtime snapshot are optional so clients can tolerate older or degraded backend responses.
+ */
 export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyResponse {
   if (!isRecord(payload)) {
     throw new Error('invalid canvas topology response');
@@ -579,6 +609,7 @@ export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyRes
 }
 
 // parseInterfacesResponse converts interface list responses for device detail screens.
+/** Parses interface selection responses for manual link and device-detail UI. */
 export function parseInterfacesResponse(payload: unknown): InterfaceInfo[] {
   if (!isRecord(payload)) {
     throw new Error('invalid interfaces response');
@@ -720,7 +751,7 @@ export function parseSNMPProfileResponse(payload: unknown): SNMPProfile {
   };
 }
 
-// CredentialProfile for reusable SSH credentials shared across devices
+/** CredentialProfile describes reusable SSH credentials shared across devices. */
 export interface CredentialProfile {
   id: string;
   name: string;
@@ -733,7 +764,7 @@ export interface CredentialProfile {
   updated_at: string;
 }
 
-// DeviceCredentialProfile represents a credential profile assigned to a device
+/** DeviceCredentialProfile represents one credential assignment for a device, including WinBox role. */
 export interface DeviceCredentialProfile {
   profile_id: string;
   name: string;
@@ -741,14 +772,14 @@ export interface DeviceCredentialProfile {
   is_winbox: boolean;
 }
 
-// WinBoxCredentials holds the resolved credentials needed to launch WinBox
+/** WinBoxCredentials holds the resolved credentials needed to launch WinBox. */
 export interface WinBoxCredentials {
   ip: string;
   username: string;
   password: string;
 }
 
-// Area represents a grouping of devices.
+/** Area represents a named device grouping used for filtering and map projections. */
 export interface Area {
   id: string;
   name: string;
@@ -759,9 +790,10 @@ export interface Area {
   updated_at: string;
 }
 
-// Backup system types
+/** BackupStatus is the lifecycle state for a single-device configuration backup job. */
 export type BackupStatus = 'pending' | 'running' | 'success' | 'failed';
 
+/** BackupFile is metadata for a generated backup artifact; file paths are intentionally not exposed. */
 export interface BackupFile {
   id: string;
   job_id: string;
@@ -772,6 +804,7 @@ export interface BackupFile {
   created_at: string;
 }
 
+/** BackupFileContent is the API response for inline preview or delegated download of a backup artifact. */
 export interface BackupFileContent {
   content: string;
   inline: boolean;
@@ -781,6 +814,7 @@ export interface BackupFileContent {
   max_inline_size_bytes: number;
 }
 
+/** BackupJob is one device backup operation and the files it produced. */
 export interface BackupJob {
   id: string;
   device_id: string;
@@ -790,6 +824,7 @@ export interface BackupJob {
   files: BackupFile[];
 }
 
+/** BulkBackupRunStatus is the durable lifecycle state of a multi-device backup run. */
 export type BulkBackupRunStatus =
   | 'running'
   | 'pausing'
@@ -800,6 +835,7 @@ export type BulkBackupRunStatus =
   | 'failed'
   | 'cancelled';
 
+/** BulkBackupRunItemStatus is one device's lifecycle state inside a bulk backup run. */
 export type BulkBackupRunItemStatus =
   | 'checking'
   | 'skipped'
@@ -810,6 +846,7 @@ export type BulkBackupRunItemStatus =
   | 'failed'
   | 'cancelled';
 
+/** BulkBackupRunItem is one device row in the durable bulk backup run timeline. */
 export interface BulkBackupRunItem {
   id: string;
   run_id: string;
@@ -825,6 +862,7 @@ export interface BulkBackupRunItem {
   completed_at?: string;
 }
 
+/** BulkBackupRun summarizes durable multi-device backup progress and embeds item state. */
 export interface BulkBackupRun {
   id: string;
   status: BulkBackupRunStatus;
@@ -851,6 +889,7 @@ export interface BulkBackupRun {
   items: BulkBackupRunItem[];
 }
 
+/** BulkOperationStatus advertises backend quota and concurrency limits for bulk actions. */
 export interface BulkOperationStatus {
   bulk_backup: {
     max_devices: number;
@@ -890,9 +929,10 @@ export interface BulkOperationStatus {
   };
 }
 
-// Instance backup types
+/** InstanceBackupStatus is the lifecycle state for full application backup archives. */
 export type InstanceBackupStatus = 'running' | 'success' | 'failed' | 'cancelled';
 
+/** InstanceBackupProgress reports best-effort phase progress for a running archive job. */
 export interface InstanceBackupProgress {
   phase: string;
   message: string;
@@ -900,6 +940,7 @@ export interface InstanceBackupProgress {
   total: number;
 }
 
+/** InstanceBackup is metadata for a full Theia instance archive. */
 export interface InstanceBackup {
   id: string;
   file_name: string;
@@ -914,7 +955,7 @@ export interface InstanceBackup {
   created_at: string;
 }
 
-// Restore report from dry-run validation
+/** RestoreReport is returned after dry-run validation or staging of an instance backup archive. */
 export interface RestoreReport {
   valid: boolean;
   app_version: string;
@@ -929,6 +970,7 @@ export interface RestoreReport {
   message: string;
 }
 
+/** RestoreStatusPhase is the restart-handoff lifecycle for staged restores. */
 export type RestoreStatusPhase =
   | 'validation_passed'
   | 'staged_restart_pending'
@@ -941,6 +983,7 @@ export type RestoreStatusPhase =
   | 'failed_retryable'
   | 'failed_operator_action_required';
 
+/** RestoreStatus describes a persisted restore operation across process restarts. */
 export interface RestoreStatus {
   operation_id: string;
   phase: RestoreStatusPhase;
@@ -951,7 +994,7 @@ export interface RestoreStatus {
   updated_at: string;
 }
 
-// Vendor configuration
+/** VendorConfig is a parsed vendor capability profile used for metrics and backup behavior. */
 export interface VendorConfig {
   name: string;
   display_name: string;

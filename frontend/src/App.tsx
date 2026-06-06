@@ -42,16 +42,19 @@ import { useRuntimeUpdatePause } from './hooks/useRuntimeUpdatePause';
 import { useWebSocket } from './hooks/useWebSocket';
 import type { Area, CanvasMap, CanvasMapFilter, Device, Link } from './types/api';
 
+/** Top-level route-like application views rendered without unmounting the canvas runtime. */
 export type ActiveView = 'hub' | 'canvas' | 'dashboard' | 'admin' | 'settings';
 
 const enableSavedMaps = true;
 const viewLayerBaseClass = 'absolute inset-0 h-full w-full';
 const canvasChromeHiddenStorageKey = 'theia.canvas.chromeHidden';
 
+/** Reads the persisted canvas chrome preference before first render to avoid visible layout churn. */
 function initialCanvasChromeHidden(): boolean {
   return window.localStorage.getItem(canvasChromeHiddenStorageKey) === 'true';
 }
 
+/** Builds the absolute layer class used to keep inactive views mounted but non-interactive. */
 function viewLayerClass(active: boolean, className = ''): string {
   const activeClass = active
     ? 'opacity-100 pointer-events-auto z-10'
@@ -59,6 +62,7 @@ function viewLayerClass(active: boolean, className = ''): string {
   return `${viewLayerBaseClass} ${activeClass} ${className}`.trim();
 }
 
+/** Mirrors layer visibility into accessibility state and inert handling for hidden views. */
 function viewLayerStateProps(active: boolean): {
   'aria-hidden': boolean;
   inert?: '';
@@ -66,6 +70,10 @@ function viewLayerStateProps(active: boolean): {
   return active ? { 'aria-hidden': false } : { 'aria-hidden': true, inert: '' };
 }
 
+/**
+ * Coordinates application-level view state, saved topology map ownership, and runtime update pause state.
+ * The canvas remains mounted across view changes so WebSocket/runtime state and React Flow state are preserved.
+ */
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>('canvas');
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);

@@ -16,7 +16,7 @@ import (
 	"github.com/lollinoo/theia/internal/version"
 )
 
-// Create produces a full instance backup archive with trigger set to "manual".
+// Create produces a full instance backup archive synchronously with trigger set to "manual".
 func (s *InstanceBackupService) Create(ctx context.Context) (*domain.InstanceBackup, error) {
 	return s.CreateWithTrigger(ctx, domain.InstanceBackupTriggerManual)
 }
@@ -33,6 +33,7 @@ func (s *InstanceBackupService) CreateWithTrigger(ctx context.Context, trigger d
 }
 
 // StartCreateWithTrigger creates a running instance backup record and starts archive work in the background.
+// Cancellation from the caller is bridged into an internal run context so Cancel can stop long archive steps.
 func (s *InstanceBackupService) StartCreateWithTrigger(ctx context.Context, trigger domain.InstanceBackupTrigger) (*domain.InstanceBackup, error) {
 	backup, backupSubDir, err := s.prepareInstanceBackup(trigger)
 	if err != nil {
@@ -54,6 +55,7 @@ func (s *InstanceBackupService) StartCreateWithTrigger(ctx context.Context, trig
 }
 
 // prepareInstanceBackup creates the filesystem and repository state for a new run.
+// The create mutex serializes run admission and protects the invariant that only one backup is running.
 func (s *InstanceBackupService) prepareInstanceBackup(trigger domain.InstanceBackupTrigger) (*domain.InstanceBackup, string, error) {
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
@@ -110,6 +112,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackup(ctx context.Context, b
 }
 
 // runPreparedInstanceBackupWithContext performs database dump, manifest, archive, hash, and persistence steps.
+// On any failure or cancellation it updates the repository row to failed/cancelled and removes partial files.
 func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context.Context, backup *domain.InstanceBackup, backupSubDir string, ownOperation bool) (*domain.InstanceBackup, error) {
 	if err := ctx.Err(); err != nil {
 		s.cleanupFailedInstanceBackup(backup, backupSubDir, "backup cancelled", err)

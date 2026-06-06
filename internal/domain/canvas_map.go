@@ -16,6 +16,8 @@ const (
 	CanvasMapDescriptionMaxLength = 500
 )
 
+// CanvasMapFilter describes a saved topology projection over the canonical device/link graph.
+// DeviceIDs take precedence over area filters, while ghost and cross-area settings control edge context.
 type CanvasMapFilter struct {
 	AreaID                *uuid.UUID        `json:"area_id,omitempty"`
 	DeviceIDs             []uuid.UUID       `json:"device_ids,omitempty"`
@@ -24,6 +26,7 @@ type CanvasMapFilter struct {
 	Tags                  map[string]string `json:"tags,omitempty"`
 }
 
+// CanvasMapDeviceRole distinguishes persisted map members from projected context devices.
 type CanvasMapDeviceRole string
 
 const (
@@ -31,10 +34,12 @@ const (
 	CanvasMapDeviceRoleGhost CanvasMapDeviceRole = "ghost"
 )
 
+// IsValid reports whether the role can be persisted in map membership.
 func (role CanvasMapDeviceRole) IsValid() bool {
 	return role == CanvasMapDeviceRoleBase || role == CanvasMapDeviceRoleGhost
 }
 
+// CanvasMapDeviceMembership records one device's role and visual metadata inside a saved map.
 type CanvasMapDeviceMembership struct {
 	DeviceID    uuid.UUID
 	Role        CanvasMapDeviceRole
@@ -42,6 +47,7 @@ type CanvasMapDeviceMembership struct {
 	VisualColor *string
 }
 
+// CanvasMapAreaMembership snapshots area metadata so materialized maps survive later area edits.
 type CanvasMapAreaMembership struct {
 	AreaID      uuid.UUID
 	Name        string
@@ -49,12 +55,15 @@ type CanvasMapAreaMembership struct {
 	Color       string
 }
 
+// CanvasMapMembership is the materialized graph owned by one saved map.
+// Devices and links reference canonical domain records; Areas hold map-local snapshots.
 type CanvasMapMembership struct {
 	Devices []CanvasMapDeviceMembership
 	LinkIDs []uuid.UUID
 	Areas   []CanvasMapAreaMembership
 }
 
+// CanvasMap stores saved topology map metadata and aggregate counts for list views.
 type CanvasMap struct {
 	ID                     uuid.UUID
 	Name                   string
@@ -70,6 +79,7 @@ type CanvasMap struct {
 	UpdatedAt              time.Time
 }
 
+// CanvasMapCreate describes the caller-controlled fields used when creating a saved map.
 type CanvasMapCreate struct {
 	Name         string
 	Description  string
@@ -78,6 +88,7 @@ type CanvasMapCreate struct {
 	IsDefault    bool
 }
 
+// CanvasMapUpdate uses pointer fields to distinguish omitted values from explicit empty values.
 type CanvasMapUpdate struct {
 	Name            *string
 	Description     *string
@@ -86,6 +97,8 @@ type CanvasMapUpdate struct {
 	Filter          *CanvasMapFilter
 }
 
+// CanvasMapRepository persists saved-map metadata and materialized memberships.
+// Not-found behavior is implementation-specific but should be stable for API handlers.
 type CanvasMapRepository interface {
 	Create(input CanvasMapCreate) (CanvasMap, error)
 	GetByID(id uuid.UUID) (CanvasMap, error)
@@ -102,12 +115,14 @@ type CanvasMapRepository interface {
 	RemoveLink(id uuid.UUID, linkID uuid.UUID) error
 }
 
+// CanvasMapPositionRepository stores per-map node positions independent of canonical device state.
 type CanvasMapPositionRepository interface {
 	GetAllForMap(mapID uuid.UUID) ([]DevicePosition, error)
 	SaveAllForMap(mapID uuid.UUID, positions []DevicePosition) error
 	DeleteByDeviceID(deviceID uuid.UUID) error
 }
 
+// ValidateCanvasMapName trims for requiredness but enforces max length on the original user-facing string.
 func ValidateCanvasMapName(name string) error {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
@@ -119,6 +134,7 @@ func ValidateCanvasMapName(name string) error {
 	return nil
 }
 
+// ValidateCanvasMapDescription enforces the saved-map description length limit using rune count.
 func ValidateCanvasMapDescription(description string) error {
 	if utf8.RuneCountInString(description) > CanvasMapDescriptionMaxLength {
 		return fmt.Errorf("map description must be %d characters or fewer", CanvasMapDescriptionMaxLength)
@@ -126,6 +142,7 @@ func ValidateCanvasMapDescription(description string) error {
 	return nil
 }
 
+// CanonicalCanvasMapFilterJSON normalizes list/map fields before persistence so equivalent filters compare equal.
 func CanonicalCanvasMapFilterJSON(filter CanvasMapFilter) (string, error) {
 	filter.DeviceIDs = canonicalCanvasMapDeviceIDs(filter.DeviceIDs)
 	if filter.Tags == nil {

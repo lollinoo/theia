@@ -35,6 +35,7 @@ import { type CanvasHelloPayload, buildCanvasHelloPayload } from './websocket/he
 import { classifyRuntimeDelta, shouldIgnoreStaleRuntimeSnapshot } from './websocket/runtimeState';
 import { appendHelloQueryParams, buildWebSocketURL } from './websocket/url';
 
+/** Public runtime stream state consumed by App and canvas/dashboard views. */
 interface UseWebSocketResult {
   snapshot: SnapshotPayload | null;
   alerts: AlertDTO[];
@@ -44,13 +45,20 @@ interface UseWebSocketResult {
   pollingHealth: PollingHealthPayload | null;
 }
 
+/** Options that coordinate HTTP runtime bootstrap and canvas interaction-paused rendering. */
 interface UseWebSocketOptions {
   requireRuntimeBootstrap?: boolean;
   runtimeUpdatesPaused?: boolean;
 }
 
+/** Client control messages for per-device detail subscriptions on the shared socket. */
 type DetailControlType = 'subscribe_detail' | 'unsubscribe_detail';
 
+/**
+ * Maintains the canvas WebSocket connection, runtime snapshot versioning, and alert/polling health state.
+ * The hook rejects stale runtime deltas, requests resync when versions diverge, and buffers UI updates while
+ * canvas interaction is paused so background updates do not fight drag/selection gestures.
+ */
 export function useWebSocket(
   url: string,
   detailDeviceId: string | null = null,
@@ -95,6 +103,7 @@ export function useWebSocket(
   const topologyChangedCountRef = useRef(0);
   const disposed = useRef(false);
 
+  /** Builds the hello payload from diagnostics and the last applied runtime/alert versions. */
   function buildHelloPayload(): CanvasHelloPayload {
     const diagnostics = getCanvasDiagnosticsSnapshot();
     return buildCanvasHelloPayload({
@@ -107,6 +116,7 @@ export function useWebSocket(
     });
   }
 
+  /** Sends hello only on open sockets; reconnects and bootstrap changes call this to avoid stale deltas. */
   function sendHello(socket: WebSocket | null = socketRef.current): void {
     if (socket?.readyState !== WebSocket.OPEN) {
       return;
@@ -120,6 +130,7 @@ export function useWebSocket(
     );
   }
 
+  /** Publishes runtime state immediately or defers it until canvas interaction pause ends. */
   function publishRuntimeSnapshot(nextSnapshot: SnapshotPayload | null): void {
     snapshotStateRef.current = nextSnapshot;
     if (runtimeUpdatesPausedRef.current) {
@@ -131,6 +142,7 @@ export function useWebSocket(
     setSnapshot(nextSnapshot);
   }
 
+  /** Publishes polling health immediately or defers it alongside runtime snapshots during canvas interaction. */
   function publishPollingHealth(nextPollingHealth: PollingHealthPayload | null): void {
     pollingHealthStateRef.current = nextPollingHealth;
     if (runtimeUpdatesPausedRef.current) {
@@ -142,11 +154,13 @@ export function useWebSocket(
     setPollingHealth(nextPollingHealth);
   }
 
+  /** Clears alert version state when reconnecting so the server can send a fresh alert baseline. */
   function resetAlertState() {
     alertVersionRef.current = null;
     setAlerts([]);
   }
 
+  /** Sends detail subscription changes for the current device without opening a second socket. */
   function sendDetailControl(type: DetailControlType, deviceId: string | null): void {
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
       return;
@@ -239,6 +253,7 @@ export function useWebSocket(
       }
     }
 
+    /** Schedules exponential reconnect and clears alert baselines so the next connection can resync them. */
     function scheduleReconnect() {
       if (disposed.current || reconnectTimer !== null) return;
 
@@ -253,6 +268,7 @@ export function useWebSocket(
       }, delay);
     }
 
+    /** Opens one socket for overview runtime state and optional detail-device subscriptions. */
     function connect() {
       if (disposed.current) return;
 
@@ -273,6 +289,7 @@ export function useWebSocket(
       const ws = new WebSocket(appendHelloQueryParams(buildWebSocketURL(url), initialHelloPayload));
       socketRef.current = ws;
 
+      /** Records a rejected runtime base and triggers the HTTP bootstrap/resync path. */
       function requestClientResync(
         payloadReason: ResyncRequiredPayload['reason'] = 'client_resync_scheduled',
         diagnosticReason = 'base_version_mismatch',

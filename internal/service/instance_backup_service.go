@@ -19,7 +19,9 @@ import (
 	"github.com/lollinoo/theia/internal/version"
 )
 
-// InstanceBackupService orchestrates full Theia instance backups (database + config files).
+// InstanceBackupService orchestrates full Theia instance backups, restores, and retention cleanup.
+// It owns archive limits, operation tracking, and restore staging paths; RestoreCoordinator owns
+// live process handoff after a staged restore marker has been written.
 type InstanceBackupService struct {
 	db              *sql.DB
 	repo            domain.InstanceBackupRepository
@@ -80,6 +82,7 @@ func NewInstanceBackupService(
 	}
 }
 
+// normalizeInstanceBackupEncryptionKey accepts legacy raw keys and current keyrings for manifest checks.
 func normalizeInstanceBackupEncryptionKey(key any) (*crypto.Keyring, []byte) {
 	switch k := key.(type) {
 	case *crypto.Keyring:
@@ -93,6 +96,7 @@ func normalizeInstanceBackupEncryptionKey(key any) (*crypto.Keyring, []byte) {
 	}
 }
 
+// RestoreOperationStatus returns the persisted restore marker status when a restart handoff is active.
 func (s *InstanceBackupService) RestoreOperationStatus() (*RestoreOperationStatus, bool, error) {
 	if s == nil {
 		return nil, false, nil
@@ -126,6 +130,7 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 }
 
 // ValidateAndStageRestoreContext validates and stages a restore archive while observing caller cancellation.
+// Non-dry-run calls extract into a private staging directory and write a pending marker for restart activation.
 func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Context, archivePath string, dryRun bool) (*RestoreReport, error) {
 	if ctx == nil {
 		ctx = context.Background()

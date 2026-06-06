@@ -37,10 +37,15 @@ import {
 } from './settings-panel/settingsConstants';
 import { controlClass, fieldLabelClass } from './settings-panel/settingsPanelStyles';
 
+/** Props for the admin settings container; changes notify parents that runtime config may need refresh. */
 interface SettingsPanelProps {
   onSettingsChange?: () => void;
 }
 
+/**
+ * Renders admin-level settings and owns fetch, validation, debounced autosave, and saved indicators.
+ * Profile managers and section components handle presentation while this container persists setting keys.
+ */
 export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [pollingValue, setPollingValue] = useState('60');
   const [customPolling, setCustomPolling] = useState('');
@@ -118,6 +123,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     fetchHealthVersion().then(setVersionInfo);
   }, []);
 
+  /** Stores validation errors by stable field key and removes entries when fields become valid. */
   function setFieldError(field: string, error: string | null) {
     setFieldErrors((prev) => {
       if (error) return { ...prev, [field]: error };
@@ -127,6 +133,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     });
   }
 
+  /** Shows a short-lived saved indicator and resets any previous timer for the same field. */
   function showSaved(
     setter: React.Dispatch<React.SetStateAction<boolean>>,
     timerRef: React.MutableRefObject<number | null>,
@@ -136,6 +143,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     timerRef.current = window.setTimeout(() => setter(false), 2000);
   }
 
+  /** Shows the saved indicator for one worker setting without affecting other worker rows. */
   function showWorkerSaved(key: WorkerSettingKey) {
     setSavedWorkerSettings((prev) => ({ ...prev, [key]: true }));
     if (savedWorkerTimerRefs.current[key] !== null) {
@@ -146,6 +154,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 2000);
   }
 
+  /** Validates worker numeric settings before scheduling an autosave request. */
   function validateIntegerRange(value: string, min: number, max: number): string | null {
     const trimmed = value.trim();
     if (!/^\d+$/.test(trimmed)) return 'Must be a valid integer';
@@ -154,6 +163,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     return null;
   }
 
+  /** Debounces worker setting persistence and keeps invalid values local until corrected. */
   function handleWorkerSettingChange(key: WorkerSettingKey, value: string) {
     const setting = WORKER_SETTINGS.find((candidate) => candidate.key === key);
     if (!setting) return;
@@ -175,6 +185,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Debounces polling interval persistence after enforcing the global allowed range. */
   function schedulePollingUpdate(rawValue: string) {
     if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
     const trimmed = rawValue.trim();
@@ -187,6 +198,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Debounces Prometheus URL persistence while treating an empty URL as a valid disabled state. */
   function schedulePrometheusUpdate(value: string) {
     if (prometheusTimerRef.current !== null) window.clearTimeout(prometheusTimerRef.current);
     // Gate auto-save: if value is non-empty and fails URL validation, set error and skip save
@@ -204,6 +216,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Persists only supported device-backup interval values so the scheduler receives known cadences. */
   function handleDeviceIntervalChange(value: string) {
     const err = validateIntervalAllowlist(value);
     if (err) {
@@ -222,6 +235,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Debounces device-backup retention persistence after normalizing to an integer string. */
   function handleDeviceRetentionChange(value: string) {
     const err = validateRetentionCount(value);
     if (err) {
@@ -241,6 +255,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Debounces bridge port persistence and keeps invalid port text visible for correction. */
   function handleBridgePortChange(value: string) {
     setBridgePort(value);
     setFieldError('bridgePort', null);
@@ -258,6 +273,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 500);
   }
 
+  /** Applies a preset polling cadence immediately while custom values wait for the custom input. */
   function handlePollingPresetChange(value: string) {
     setPollingValue(value);
     if (value !== 'custom') {
@@ -271,6 +287,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     schedulePollingUpdate(value);
   }
 
+  /** Reports custom polling validation on blur without changing the debounced save contract. */
   function handleCustomPollingBlur() {
     const trimmed = customPolling.trim();
     const num = parseInt(trimmed, 10);
@@ -291,6 +308,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     setFieldError('prometheusUrl', validateURL(prometheusUrl, 'Prometheus URL'));
   }
 
+  /** Persists timezone immediately because the select only exposes valid IANA timezone values. */
   function handleTimezoneChange(value: string) {
     setTimezone(value);
     void updateSetting('timezone', value).then(() =>
