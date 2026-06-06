@@ -6,7 +6,7 @@ import { recordField, stringField } from './parsers';
 import type {
   BridgeConnectorConfigResponse,
   BridgeConnectorDownload,
-  HealthVersion,
+  HealthRuntime,
   SettingsWithMetadata,
 } from './settings';
 
@@ -45,14 +45,15 @@ export function parseBridgeConnectorConfig(payload: unknown): BridgeConnectorCon
   return { config, downloads };
 }
 
-// parseHealthVersionPayload preserves unknown defaults when health version metadata is incomplete.
-export function parseHealthVersionPayload(payload: unknown): HealthVersion {
+// parseHealthRuntimePayload normalizes deployment environment metadata from health.
+export function parseHealthRuntimePayload(payload: unknown): HealthRuntime {
   const record = recordField(payload) ?? {};
-  const version = recordField(record.version) ?? {};
+  const environment = stringField(record, 'environment');
+  if (environment === 'staging' || environment === 'production') {
+    return { environment };
+  }
   return {
-    version: stringField(version, 'version') || 'unknown',
-    git_commit: stringField(version, 'git_commit') || 'unknown',
-    build_date: stringField(version, 'build_date') || 'unknown',
+    environment: 'development',
   };
 }
 

@@ -18,7 +18,6 @@ import (
 
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
-	"github.com/lollinoo/theia/internal/version"
 )
 
 // InstanceBackupService orchestrates full Theia instance backups, restores, and retention cleanup.
@@ -109,8 +108,6 @@ func (s *InstanceBackupService) RestoreOperationStatus() (*RestoreOperationStatu
 // RestoreReport contains the results of archive validation and staging.
 type RestoreReport struct {
 	Valid            bool   `json:"valid"`
-	AppVersion       string `json:"app_version"`
-	GitCommit        string `json:"git_commit"`
 	MigrationVersion int    `json:"migration_version"`
 	CreatedAt        string `json:"created_at"`
 	DBSizeBytes      int64  `json:"db_size_bytes"`
@@ -209,8 +206,6 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	// Step 12: Build report
 	report := &RestoreReport{
 		Valid:            true,
-		AppVersion:       manifest.AppVersion,
-		GitCommit:        manifest.GitCommit,
 		MigrationVersion: manifest.MigrationVersion,
 		CreatedAt:        manifest.CreatedAt,
 		DBSizeBytes:      dbInfo.Size(),
@@ -336,7 +331,6 @@ func (s *InstanceBackupService) FailStaleRunning() {
 					backups[i].FilePath = archivePath
 					backups[i].SizeBytes = info.Size()
 					backups[i].Status = domain.InstanceBackupStatusSuccess
-					backups[i].AppVersion = version.Version
 					if err := s.repo.Update(&backups[i]); err != nil {
 						log.Printf("Warning: failed to reconcile backup %s: %v", backups[i].ID, err)
 					} else {

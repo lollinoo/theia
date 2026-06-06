@@ -36,9 +36,6 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), tailwindcss()],
-    define: {
-      __APP_VERSION__: JSON.stringify(process.env.VERSION || 'dev'),
-    },
     server: {
       host: '0.0.0.0',
       port: 3000,

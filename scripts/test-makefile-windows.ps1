@@ -27,6 +27,5 @@ function Invoke-Checked {
 }
 
 Invoke-Checked -Name "make help" -Command @("make", "help") -ExpectedSubstrings @("dev", "test", "bridge-build-all")
-Invoke-Checked -Name "make version" -Command @("make", "version") -ExpectedSubstrings @("Version:", "Git commit:", "Build date:")
 Invoke-Checked -Name "make dry-run test" -Command @("make", "-n", "test") -ExpectedSubstrings @("run-compose-tests.ps1")
 Invoke-Checked -Name "make dry-run bridge-build-all" -Command @("make", "-n", "bridge-build-all") -ExpectedSubstrings @("build-winbox-bridge.ps1", "-Targets", "linux/arm64")

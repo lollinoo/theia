@@ -21,7 +21,6 @@ export function parseInstanceBackup(data: Record<string, unknown>): InstanceBack
     file_name: typeof data.file_name === 'string' ? data.file_name : '',
     size_bytes: typeof data.size_bytes === 'number' ? data.size_bytes : 0,
     sha256: typeof data.sha256 === 'string' ? data.sha256 : '',
-    app_version: typeof data.app_version === 'string' ? data.app_version : '',
     migration_version: typeof data.migration_version === 'number' ? data.migration_version : 0,
     status: (['running', 'success', 'failed', 'cancelled'].includes(status)
       ? status
@@ -49,8 +48,6 @@ export function parseInstanceBackupProgress(value: unknown): InstanceBackupProgr
 export function parseRestoreReport(data: Record<string, unknown>): RestoreReport {
   return {
     valid: typeof data.valid === 'boolean' ? data.valid : false,
-    app_version: typeof data.app_version === 'string' ? data.app_version : '',
-    git_commit: typeof data.git_commit === 'string' ? data.git_commit : '',
     migration_version: typeof data.migration_version === 'number' ? data.migration_version : 0,
     created_at: typeof data.created_at === 'string' ? data.created_at : '',
     db_size_bytes: typeof data.db_size_bytes === 'number' ? data.db_size_bytes : 0,

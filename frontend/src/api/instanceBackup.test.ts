@@ -42,7 +42,6 @@ describe('instance backup client', () => {
               file_name: 'theia-backup.zip',
               size_bytes: 1024,
               sha256: 'abc',
-              app_version: '1.8.0',
               migration_version: 42,
               status: 'success',
               progress: { phase: 'archive', message: 'done' },
@@ -60,7 +59,6 @@ describe('instance backup client', () => {
         file_name: 'theia-backup.zip',
         size_bytes: 1024,
         sha256: 'abc',
-        app_version: '1.8.0',
         migration_version: 42,
         status: 'success',
         error_message: '',
@@ -138,8 +136,6 @@ describe('instance backup client', () => {
       mockResponse({
         data: {
           valid: true,
-          app_version: '1.8.0',
-          git_commit: 'abc',
           migration_version: 42,
           created_at: '2026-01-01T00:00:00Z',
           db_size_bytes: 2048,

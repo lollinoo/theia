@@ -950,7 +950,6 @@ export interface InstanceBackup {
   file_name: string;
   size_bytes: number;
   sha256: string;
-  app_version: string;
   migration_version: number;
   status: InstanceBackupStatus;
   error_message: string;
@@ -962,8 +961,6 @@ export interface InstanceBackup {
 /** RestoreReport is returned after dry-run validation or staging of an instance backup archive. */
 export interface RestoreReport {
   valid: boolean;
-  app_version: string;
-  git_commit: string;
   migration_version: number;
   created_at: string;
   db_size_bytes: number;

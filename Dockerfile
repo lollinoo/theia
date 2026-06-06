@@ -62,14 +62,7 @@ RUN go mod download 2>/dev/null || true
 
 COPY . .
 
-ARG VERSION=dev
-ARG GIT_COMMIT=unknown
-ARG BUILD_DATE=unknown
-RUN go build -ldflags "\
-    -X github.com/lollinoo/theia/internal/version.Version=${VERSION} \
-    -X github.com/lollinoo/theia/internal/version.GitCommit=${GIT_COMMIT} \
-    -X github.com/lollinoo/theia/internal/version.BuildDate=${BUILD_DATE}" \
-    -o /app/theia ./cmd/theia/
+RUN go build -o /app/theia ./cmd/theia/
 
 # ---------------------------------------------------------------------------
 # Stage: production — Minimal runtime image

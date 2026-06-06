@@ -27,9 +27,6 @@ export default defineConfig(function (_a) {
     var wsTarget = apiTarget.replace(/^http/i, 'ws');
     return {
         plugins: [react(), tailwindcss()],
-        define: {
-            __APP_VERSION__: JSON.stringify(process.env.VERSION || 'dev'),
-        },
         server: {
             host: '0.0.0.0',
             port: 3000,

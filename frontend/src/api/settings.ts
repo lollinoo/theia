@@ -4,7 +4,7 @@
  */
 import {
   parseBridgeConnectorConfig,
-  parseHealthVersionPayload,
+  parseHealthRuntimePayload,
   parseSettingsPayload,
 } from './settingsParsers';
 import { requestJSON, requestJSONWithBody } from './transport';
@@ -80,11 +80,9 @@ export interface BridgeConnectorConfigResponse {
   downloads: BridgeConnectorDownload[];
 }
 
-/** Describes the health version contract used by the frontend API boundary. */
-export interface HealthVersion {
-  version: string;
-  git_commit: string;
-  build_date: string;
+/** Describes runtime metadata exposed by the health endpoint. */
+export interface HealthRuntime {
+  environment: 'development' | 'staging' | 'production';
 }
 
 /** Describes the setting secret state contract used by the frontend API boundary. */
@@ -144,13 +142,13 @@ export async function fetchBridgeConnectorConfig(): Promise<BridgeConnectorConfi
   return parseBridgeConnectorConfig(await requestJSON('/api/v1/settings/bridge/connector/config'));
 }
 
-// fetchHealthVersion returns build metadata and falls back to unknown values on request failure.
-export async function fetchHealthVersion(): Promise<HealthVersion> {
+// fetchHealthRuntime returns deployment environment metadata with a development fallback.
+export async function fetchHealthRuntime(): Promise<HealthRuntime> {
   try {
     const payload = await requestJSON('/api/v1/health');
-    return parseHealthVersionPayload(payload);
+    return parseHealthRuntimePayload(payload);
   } catch {
-    return { version: 'unknown', git_commit: 'unknown', build_date: 'unknown' };
+    return { environment: 'development' };
   }
 }
 

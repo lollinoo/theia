@@ -32,7 +32,6 @@ import (
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/state"
-	"github.com/lollinoo/theia/internal/version"
 	"github.com/lollinoo/theia/internal/worker"
 	"github.com/lollinoo/theia/internal/ws"
 )
@@ -567,7 +566,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		})
 	}
 
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService), api.WithAuditLogRepository(authRepo))
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService), api.WithAuditLogRepository(authRepo), api.WithRuntimeEnvironment(cfg.DeploymentEnv))
 	metricsHandler := observability.Handler()
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{
@@ -586,7 +585,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 
 	b.handleShutdown(cancel, server, children)
 
-	log.Printf("Theia %s (commit=%s built=%s) starting on %s", version.Version, version.GitCommit, version.BuildDate, cfg.ListenAddr)
+	log.Printf("Theia starting on %s (environment=%s)", cfg.ListenAddr, cfg.DeploymentEnv)
 	if err := b.serve(server); err != nil {
 		return fmt.Errorf("server error: %w", err)
 	}

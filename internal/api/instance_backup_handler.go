@@ -397,7 +397,6 @@ func instanceBackupToMap(b domain.InstanceBackup, progress ...*domain.InstanceBa
 		"file_name":         b.FileName,
 		"size_bytes":        b.SizeBytes,
 		"sha256":            b.SHA256,
-		"app_version":       b.AppVersion,
 		"migration_version": b.MigrationVersion,
 		"status":            string(b.Status),
 		"error_message":     b.ErrorMessage,

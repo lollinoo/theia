@@ -620,13 +620,12 @@ export function InstanceBackupManager() {
                 </span>
               </div>
 
-              {/* Row 2: Size + Version + Actions */}
+              {/* Row 2: Size + Actions */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3 text-[10px] text-on-bg-secondary">
                   <span className="font-mono">
                     {backup.status === 'failed' ? '\u2014' : formatSize(backup.size_bytes)}
                   </span>
-                  {backup.app_version && <span>v{backup.app_version}</span>}
                 </div>
                 <div className="flex items-center gap-1">
                   {/* Download button -- only for successful backups */}
@@ -698,10 +697,6 @@ export function InstanceBackupManager() {
 
             {/* Manifest details */}
             <div className="space-y-1.5 rounded-lg bg-bg/50 p-3 text-xs">
-              <div className="flex justify-between">
-                <span className="text-on-bg-secondary">App Version</span>
-                <span className="font-mono text-on-bg">v{restoreReport.app_version}</span>
-              </div>
               <div className="flex justify-between">
                 <span className="text-on-bg-secondary">Migration Version</span>
                 <span className="font-mono text-on-bg">{restoreReport.migration_version}</span>

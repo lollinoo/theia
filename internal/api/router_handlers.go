@@ -57,7 +57,7 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 	credentialProfileHandler := NewCredentialProfileHandler(deps.backupService, deps.credentialProfileRepo)
 	deviceCredHandler := NewDeviceCredentialProfileHandler(deps.backupService, deps.credentialProfileRepo)
 	vendorHandler := NewVendorHandler(deps.vendorRegistry, deps.vendorConfigRepo)
-	healthHandler := NewHealthHandler(deps.db, deps.poller)
+	healthHandler := NewHealthHandler(deps.db, deps.poller, routerOpts.runtimeEnvironment)
 	prometheusHandler := NewPrometheusHandler(deps.settingsRepo)
 	instanceBackupHandler := NewInstanceBackupHandlerWithRestarter(deps.instanceBackupService, deps.restoreRestarter)
 	bridgeHandler := NewBridgeHandlerWithService(deps.bridgeBinariesDir, routerOpts.bridgeService)

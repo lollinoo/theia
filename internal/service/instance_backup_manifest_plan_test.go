@@ -15,8 +15,6 @@ func TestBuildInstanceBackupArchiveManifestPlanSetsStableMetadataAndFinalSize(t 
 	createdAt := time.Date(2026, 6, 4, 12, 30, 0, 0, time.FixedZone("CEST", 2*60*60))
 
 	plan, err := buildInstanceBackupArchiveManifestPlan(instanceBackupArchiveManifestInput{
-		appVersion:         "v-test",
-		gitCommit:          "abc123",
 		dbArtifact:         databaseBackupArtifact{archiveEntryName: postgresArchiveDBEntry, migrationVersion: 42},
 		backupCreatedAt:    createdAt,
 		dbSHA256:           "db-hash",
@@ -46,8 +44,8 @@ func TestBuildInstanceBackupArchiveManifestPlanSetsStableMetadataAndFinalSize(t 
 	if err := json.Unmarshal(plan.manifestJSON, &manifest); err != nil {
 		t.Fatalf("unmarshal manifestJSON: %v", err)
 	}
-	if manifest.AppVersion != "v-test" || manifest.GitCommit != "abc123" {
-		t.Fatalf("manifest version metadata = %q/%q, want v-test/abc123", manifest.AppVersion, manifest.GitCommit)
+	if manifest.AppVersion != "" || manifest.GitCommit != "" {
+		t.Fatalf("manifest included app build metadata = %q/%q, want empty", manifest.AppVersion, manifest.GitCommit)
 	}
 	if manifest.DBEntryName != postgresArchiveDBEntry || manifest.MigrationVersion != 42 {
 		t.Fatalf("manifest db metadata = %q/%d, want %q/42", manifest.DBEntryName, manifest.MigrationVersion, postgresArchiveDBEntry)

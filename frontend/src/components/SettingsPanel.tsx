@@ -4,8 +4,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import {
-  type HealthVersion,
-  fetchHealthVersion,
+  type HealthRuntime,
+  fetchHealthRuntime,
   fetchSettingsWithMetadata,
   updateSetting,
 } from '../api/client';
@@ -61,7 +61,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [savedPrometheus, setSavedPrometheus] = useState(false);
   const [savedTimezone, setSavedTimezone] = useState(false);
   const [savedTopologyDiscovery, setSavedTopologyDiscovery] = useState(false);
-  const [versionInfo, setVersionInfo] = useState<HealthVersion | null>(null);
+  const [runtimeInfo, setRuntimeInfo] = useState<HealthRuntime | null>(null);
   const [backupSectionOpen, setBackupSectionOpen] = useState(false);
   const [deviceBackupSectionOpen, setDeviceBackupSectionOpen] = useState(false);
   const [deviceBackupInterval, setDeviceBackupInterval] = useState('0');
@@ -124,7 +124,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
       .catch(() => {
         /* non-fatal */
       });
-    fetchHealthVersion().then(setVersionInfo);
+    fetchHealthRuntime().then(setRuntimeInfo);
   }, []);
 
   /** Stores validation errors by stable field key and removes entries when fields become valid. */
@@ -525,38 +525,28 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
         </SettingsSection>
 
         <SettingsSection
-          id="settings-about-heading"
-          title="About"
-          description="Installed application version and build metadata."
+          id="settings-runtime-heading"
+          title="Runtime"
+          description="Deployment environment for this Theia instance."
           icon="info"
           accent={import.meta.env.DEV ? 'warning' : 'status-up'}
         >
-          {versionInfo ? (
+          {runtimeInfo ? (
             <div className="grid gap-3 text-sm">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold text-on-bg">Theia v{versionInfo.version}</span>
                 <span
                   className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                    import.meta.env.DEV
+                    runtimeInfo.environment === 'development'
                       ? 'bg-warning/15 text-warning'
                       : 'bg-status-up/15 text-status-up'
                   }`}
                 >
-                  {import.meta.env.DEV ? 'dev' : 'production'}
+                  {runtimeInfo.environment}
                 </span>
-              </div>
-              <div className="grid gap-1 text-xs text-on-bg-secondary">
-                <p className="break-all">Commit: {versionInfo.git_commit}</p>
-                <p>
-                  Built:{' '}
-                  {versionInfo.build_date === 'unknown'
-                    ? 'unknown'
-                    : new Date(versionInfo.build_date).toLocaleString()}
-                </p>
               </div>
             </div>
           ) : (
-            <p className="text-sm text-on-bg-secondary">Loading version information</p>
+            <p className="text-sm text-on-bg-secondary">Loading runtime information</p>
           )}
         </SettingsSection>
       </div>
