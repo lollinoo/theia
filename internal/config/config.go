@@ -70,9 +70,10 @@ type BulkDownloadLimits struct {
 // defaults returns a Config with sensible default values.
 func defaults() *Config {
 	return &Config{
-		ListenAddr: ":8080",
-		DataDir:    "./data",
-		LogLevel:   "info",
+		ListenAddr:    ":8080",
+		DataDir:       "./data",
+		LogLevel:      "info",
+		DeploymentEnv: "development",
 		RestoreArchiveLimits: RestoreArchiveLimits{
 			MaxCompressedBytes: 256 << 20,
 			MaxTotalBytes:      1 << 30,
@@ -198,8 +199,25 @@ func Load(path string) (*Config, error) {
 	if err := validateBulkLimits(cfg); err != nil {
 		return nil, err
 	}
+	if err := normalizeDeploymentEnv(cfg); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
+}
+
+func normalizeDeploymentEnv(cfg *Config) error {
+	normalized := strings.ToLower(strings.TrimSpace(cfg.DeploymentEnv))
+	if normalized == "" {
+		normalized = "development"
+	}
+	switch normalized {
+	case "development", "staging", "production":
+		cfg.DeploymentEnv = normalized
+		return nil
+	default:
+		return fmt.Errorf("deployment_env must be one of development, staging, production")
+	}
 }
 
 func parseEnvMinutes(key, value string) (int, error) {

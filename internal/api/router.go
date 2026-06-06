@@ -17,10 +17,11 @@ import (
 
 // routerOptions collects optional services that alter middleware or route behavior.
 type routerOptions struct {
-	security      SecurityConfig
-	auth          authProvider
-	bridgeService *service.BridgeService
-	auditLogs     domain.AuditLogRepository
+	security           SecurityConfig
+	auth               authProvider
+	bridgeService      *service.BridgeService
+	auditLogs          domain.AuditLogRepository
+	runtimeEnvironment string
 }
 
 // RouterOption customizes router middleware behavior.
@@ -51,6 +52,13 @@ func WithBridgeService(bridgeService *service.BridgeService) RouterOption {
 func WithAuditLogRepository(auditLogs domain.AuditLogRepository) RouterOption {
 	return func(options *routerOptions) {
 		options.auditLogs = auditLogs
+	}
+}
+
+// WithRuntimeEnvironment exposes the configured deployment environment to runtime endpoints.
+func WithRuntimeEnvironment(environment string) RouterOption {
+	return func(options *routerOptions) {
+		options.runtimeEnvironment = environment
 	}
 }
 

@@ -6,10 +6,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/repository/postgres"
-	"github.com/lollinoo/theia/internal/version"
 )
 
 type statusProvider interface {
@@ -19,19 +19,26 @@ type statusProvider interface {
 
 // HealthHandler provides the health check endpoint.
 type HealthHandler struct {
-	db     *sql.DB
-	poller statusProvider
+	db          *sql.DB
+	poller      statusProvider
+	environment string
 }
 
 // NewHealthHandler creates a new HealthHandler.
-func NewHealthHandler(db *sql.DB, poller statusProvider) *HealthHandler {
-	return &HealthHandler{db: db, poller: poller}
+func NewHealthHandler(db *sql.DB, poller statusProvider, environment string) *HealthHandler {
+	environment = strings.ToLower(strings.TrimSpace(environment))
+	if environment == "" {
+		environment = "development"
+	}
+	return &HealthHandler{db: db, poller: poller, environment: environment}
 }
 
 // HandleHealth handles GET /api/v1/health
 func (h *HealthHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	dbStatus := "ok"
-	if err := h.db.Ping(); err != nil {
+	if h.db == nil {
+		dbStatus = "error"
+	} else if err := h.db.Ping(); err != nil {
 		dbStatus = "error"
 	}
 
@@ -50,12 +57,8 @@ func (h *HealthHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": overallStatus,
-		"version": map[string]string{
-			"version":    version.Version,
-			"git_commit": version.GitCommit,
-			"build_date": version.BuildDate,
-		},
+		"status":      overallStatus,
+		"environment": h.environment,
 		"components": map[string]string{
 			"db":          dbStatus,
 			"db_dialect":  postgres.DialectPostgres,
