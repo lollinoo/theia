@@ -10,6 +10,33 @@ import (
 	"github.com/lollinoo/theia/internal/crypto"
 )
 
+// backupManifest describes the contents and metadata of an instance backup archive.
+type backupManifest struct {
+	Version           int                       `json:"version"`
+	AppVersion        string                    `json:"app_version"`
+	GitCommit         string                    `json:"git_commit"`
+	DBEntryName       string                    `json:"db_entry_name,omitempty"`
+	MigrationVersion  int                       `json:"migration_version"`
+	CreatedAt         string                    `json:"created_at"`
+	DBSHA256          string                    `json:"db_sha256"`
+	BackupFileCount   int                       `json:"backup_file_count"`
+	TotalSizeBytes    int64                     `json:"total_size_bytes"`
+	EncryptionKeyHash string                    `json:"encryption_key_hash"`
+	Encryption        *backupManifestEncryption `json:"encryption,omitempty"`
+}
+
+type backupManifestEncryption struct {
+	Version         int      `json:"version"`
+	ActiveKeyID     string   `json:"active_key_id"`
+	RequiredKeyIDs  []string `json:"required_key_ids"`
+	LegacyKeyHashes []string `json:"legacy_key_hashes,omitempty"`
+}
+
+const (
+	legacySQLiteArchiveDBEntry = "theia.db"
+	postgresArchiveDBEntry     = "database.dump"
+)
+
 type instanceBackupArchiveManifestInput struct {
 	appVersion         string
 	gitCommit          string
