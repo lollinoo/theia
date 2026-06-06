@@ -42,7 +42,12 @@ type runtimeStopper interface {
 	Stop()
 }
 
-type runtimeChildren []runtimeStopper
+type runtimeChild struct {
+	name    string
+	stopper runtimeStopper
+}
+
+type runtimeChildren []runtimeChild
 
 type runtimeServer interface {
 	ListenAndServe() error
@@ -50,6 +55,8 @@ type runtimeServer interface {
 }
 
 type runtimeBootstrap struct{}
+
+var runtimeChildStopTimeout = 10 * time.Second
 
 var loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
 	return config.Load(path)
@@ -543,11 +550,14 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		pipeline.GetPrometheusStatus,
 		ws.WithAllowedOrigins(cfg.AllowedOrigins),
 	)
-	children := runtimeChildren{deviceService, pipeline}
-	if backupScheduler != nil {
-		children = append(children, backupScheduler)
+	children := runtimeChildren{
+		{name: "device-service", stopper: deviceService},
+		{name: "pipeline", stopper: pipeline},
 	}
-	children = append(children, deviceBackupScheduler)
+	if backupScheduler != nil {
+		children = append(children, runtimeChild{name: "instance-backup-scheduler", stopper: backupScheduler})
+	}
+	children = append(children, runtimeChild{name: "device-backup-scheduler", stopper: deviceBackupScheduler})
 
 	var server *http.Server
 	var restoreShutdownOnce sync.Once
@@ -741,9 +751,39 @@ func (b *runtimeBootstrap) handleShutdown(cancel context.CancelFunc, server runt
 
 func (b *runtimeBootstrap) stopRuntime(children runtimeChildren) {
 	for i := len(children) - 1; i >= 0; i-- {
-		if children[i] != nil {
-			children[i].Stop()
+		if children[i].stopper != nil {
+			b.stopRuntimeChild(children[i], runtimeChildStopTimeout)
 		}
+	}
+}
+
+func (b *runtimeBootstrap) stopRuntimeChild(child runtimeChild, timeout time.Duration) {
+	name := strings.TrimSpace(child.name)
+	if name == "" {
+		name = fmt.Sprintf("%T", child.stopper)
+	}
+
+	startedAt := time.Now()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		child.stopper.Stop()
+	}()
+
+	if timeout <= 0 {
+		<-done
+		log.Printf("Runtime child stopped name=%s duration=%s", name, time.Since(startedAt))
+		return
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		log.Printf("Runtime child stopped name=%s duration=%s", name, time.Since(startedAt))
+	case <-timer.C:
+		log.Printf("Runtime child stop timed out name=%s timeout=%s", name, timeout)
 	}
 }
 
