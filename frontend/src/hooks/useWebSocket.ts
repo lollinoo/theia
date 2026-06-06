@@ -26,6 +26,7 @@ import {
   subscribeCanvasRuntimeBootstrap,
 } from './canvasRuntimeBootstrap';
 import { type CanvasHelloPayload, buildCanvasHelloPayload } from './websocket/hello';
+import { classifyRuntimeDelta, shouldIgnoreStaleRuntimeSnapshot } from './websocket/runtimeState';
 import { appendHelloQueryParams, buildWebSocketURL } from './websocket/url';
 
 interface UseWebSocketResult {
@@ -442,12 +443,17 @@ export function useWebSocket(
             const payload = (message as SnapshotWSMessage).payload;
             const currentVersion = snapshotVersionRef.current;
             if (
-              payload.version !== null &&
-              currentVersion !== null &&
-              hasRuntimeSnapshotRef.current &&
-              payload.version < currentVersion
+              shouldIgnoreStaleRuntimeSnapshot(
+                payload.version,
+                currentVersion,
+                hasRuntimeSnapshotRef.current,
+              )
             ) {
-              ignoreStaleRuntimeSnapshot(payload.version, currentVersion, payload.runtime_identity);
+              ignoreStaleRuntimeSnapshot(
+                payload.version!,
+                currentVersion!,
+                payload.runtime_identity,
+              );
               return;
             }
             hasRuntimeSnapshotRef.current = true;
@@ -486,49 +492,24 @@ export function useWebSocket(
               return;
             }
 
-            const hasVersionEnvelope =
-              payload.version !== undefined || payload.base_version !== undefined;
-            if (hasVersionEnvelope) {
-              if (payload.version === undefined || payload.base_version === undefined) {
-                requestClientResync('client_resync_scheduled', 'invalid_delta_version');
-                return;
-              }
-
-              const currentVersion = snapshotVersionRef.current;
-              if (currentVersion === null || !hasRuntimeSnapshotRef.current) {
-                requestClientResync('client_missing_runtime_snapshot', 'missing_base_snapshot');
-                return;
-              }
-
-              if (payload.base_version < currentVersion) {
-                ignoreStaleRuntimeDelta(
-                  message.type,
-                  payload.base_version,
-                  payload.version,
-                  currentVersion,
-                );
-                return;
-              }
-
-              if (payload.base_version > currentVersion) {
-                requestClientResync();
-                return;
-              }
-
-              snapshotVersionRef.current = payload.version;
-              if (payload.runtime_identity !== undefined) {
-                runtimeIdentityRef.current = payload.runtime_identity;
-              }
-              updateCanvasDiagnosticsState({
-                websocket: {
-                  lastAppliedDeltaVersion: String(payload.version),
-                  ...(payload.runtime_identity !== undefined
-                    ? { lastAppliedRuntimeIdentity: payload.runtime_identity }
-                    : {}),
-                  lastRejectedDeltaReason: undefined,
-                },
-              });
-            } else if (!hasRuntimeSnapshotRef.current) {
+            const deltaDecision = classifyRuntimeDelta(message.type, payload, {
+              currentVersion: snapshotVersionRef.current,
+              hasRuntimeSnapshot: hasRuntimeSnapshotRef.current,
+            });
+            if (deltaDecision.kind === 'request_resync') {
+              requestClientResync(deltaDecision.payloadReason, deltaDecision.diagnosticReason);
+              return;
+            }
+            if (deltaDecision.kind === 'ignore_stale') {
+              ignoreStaleRuntimeDelta(
+                deltaDecision.messageType,
+                deltaDecision.baseVersion,
+                deltaDecision.version,
+                deltaDecision.currentVersion,
+              );
+              return;
+            }
+            if (deltaDecision.kind === 'reject_missing_unversioned_base') {
               recordCanvasDiagnosticEvent({
                 level: 'warn',
                 source: 'runtime',
@@ -539,6 +520,21 @@ export function useWebSocket(
                 },
               });
               return;
+            }
+            if (deltaDecision.kind === 'apply_versioned') {
+              snapshotVersionRef.current = deltaDecision.nextVersion;
+              if (deltaDecision.runtimeIdentity !== undefined) {
+                runtimeIdentityRef.current = deltaDecision.runtimeIdentity;
+              }
+              updateCanvasDiagnosticsState({
+                websocket: {
+                  lastAppliedDeltaVersion: String(deltaDecision.nextVersion),
+                  ...(deltaDecision.runtimeIdentity !== undefined
+                    ? { lastAppliedRuntimeIdentity: deltaDecision.runtimeIdentity }
+                    : {}),
+                  lastRejectedDeltaReason: undefined,
+                },
+              });
             }
             recordCanvasDiagnosticEvent({
               level: 'debug',
