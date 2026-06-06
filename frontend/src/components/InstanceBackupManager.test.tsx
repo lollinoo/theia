@@ -186,8 +186,6 @@ describe('InstanceBackupManager — typed errors in handleCreate', () => {
 // A valid RestoreReport fixture that matches the backend dry-run response shape.
 const mockRestoreReport = {
   valid: true,
-  app_version: '1.4.0',
-  git_commit: 'abc123',
   migration_version: 10,
   created_at: '2026-04-05T20:00:00Z',
   db_size_bytes: 1234567,
@@ -300,8 +298,8 @@ describe('InstanceBackupManager — SC-5: restore UI', () => {
       expect(screen.getByText('Confirm Restore')).toBeInTheDocument();
     });
 
-    // Modal should display manifest details
-    expect(screen.getByText('v1.4.0')).toBeInTheDocument();
+    // Modal should display manifest details without application version metadata.
+    expect(screen.queryByText(/^v\d/)).not.toBeInTheDocument();
     expect(screen.getByText('10')).toBeInTheDocument(); // migration_version
   });
 
@@ -431,10 +429,9 @@ describe('InstanceBackupManager — computeNextBackupText helper text', () => {
     (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
       {
         id: 'b1',
-        file_name: 'theia-backup-20260407-120000-v1.4.0.tar.gz',
+        file_name: 'theia-backup-20260407-120000.tar.gz',
         size_bytes: 1024,
         sha256: 'abc',
-        app_version: '1.4.0',
         migration_version: 11,
         status: 'success',
         error_message: '',
@@ -465,10 +462,9 @@ describe('InstanceBackupManager — computeNextBackupText helper text', () => {
     (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
       {
         id: 'b1',
-        file_name: 'theia-backup-20260407-000000-v1.4.0.tar.gz',
+        file_name: 'theia-backup-20260407-000000.tar.gz',
         size_bytes: 1024,
         sha256: 'abc',
-        app_version: '1.4.0',
         migration_version: 11,
         status: 'success',
         error_message: '',
@@ -494,10 +490,9 @@ describe('InstanceBackupManager — trigger badge on backup rows', () => {
     (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
       {
         id: 'b-sched',
-        file_name: 'theia-backup-20260407-120000-v1.4.0.tar.gz',
+        file_name: 'theia-backup-20260407-120000.tar.gz',
         size_bytes: 2048,
         sha256: 'def',
-        app_version: '1.4.0',
         migration_version: 11,
         status: 'success',
         error_message: '',
@@ -516,10 +511,9 @@ describe('InstanceBackupManager — trigger badge on backup rows', () => {
     (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
       {
         id: 'b-manual',
-        file_name: 'theia-backup-20260407-120000-v1.4.0.tar.gz',
+        file_name: 'theia-backup-20260407-120000.tar.gz',
         size_bytes: 2048,
         sha256: 'def',
-        app_version: '1.4.0',
         migration_version: 11,
         status: 'success',
         error_message: '',
@@ -541,7 +535,6 @@ describe('InstanceBackupManager — trigger badge on backup rows', () => {
         file_name: 'theia-backup-manual.tar.gz',
         size_bytes: 1024,
         sha256: 'aaa',
-        app_version: '1.4.0',
         migration_version: 11,
         status: 'success',
         error_message: '',
@@ -553,7 +546,6 @@ describe('InstanceBackupManager — trigger badge on backup rows', () => {
         file_name: 'theia-backup-scheduled.tar.gz',
         size_bytes: 2048,
         sha256: 'bbb',
-        app_version: '1.4.0',
         migration_version: 11,
         status: 'success',
         error_message: '',
@@ -576,10 +568,9 @@ describe('InstanceBackupManager — trigger badge on backup rows', () => {
 function mockBackup(overrides: Record<string, unknown> = {}) {
   return {
     id: 'backup-abc',
-    file_name: 'theia-backup-20260407-120000-v1.4.0.tar.gz',
+    file_name: 'theia-backup-20260407-120000.tar.gz',
     size_bytes: 1024 * 1024 * 12,
     sha256: 'abc123',
-    app_version: '1.4.0',
     migration_version: 11,
     status: 'success',
     error_message: '',
@@ -589,7 +580,7 @@ function mockBackup(overrides: Record<string, unknown> = {}) {
   };
 }
 
-// Gap 8: Table renders backup rows with status, filename, size, version, date
+// Gap 8: Table renders backup rows with status, filename, size, and date
 describe('InstanceBackupManager — SC-5: table renders backup row fields', () => {
   it('renders the backup filename in the row', async () => {
     const { fetchInstanceBackups } = await import('../api/client');
@@ -597,16 +588,16 @@ describe('InstanceBackupManager — SC-5: table renders backup row fields', () =
 
     await renderAndWait();
 
-    expect(screen.getByText('theia-backup-20260407-120000-v1.4.0.tar.gz')).toBeInTheDocument();
+    expect(screen.getByText('theia-backup-20260407-120000.tar.gz')).toBeInTheDocument();
   });
 
-  it('renders the app version prefixed with v', async () => {
+  it('does not render application version metadata in backup rows', async () => {
     const { fetchInstanceBackups } = await import('../api/client');
     (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([mockBackup()]);
 
     await renderAndWait();
 
-    expect(screen.getByText('v1.4.0')).toBeInTheDocument();
+    expect(screen.queryByText(/^v\d/)).not.toBeInTheDocument();
   });
 
   it('renders the status icon for a successful backup', async () => {
@@ -768,9 +759,7 @@ describe('InstanceBackupManager — SC-5: inline delete confirm behavior', () =>
     fireEvent.click(screen.getByRole('button', { name: 'Confirm?' }));
 
     await waitFor(() => {
-      expect(
-        screen.queryByText('theia-backup-20260407-120000-v1.4.0.tar.gz'),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByText('theia-backup-20260407-120000.tar.gz')).not.toBeInTheDocument();
     });
   });
 });

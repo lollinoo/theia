@@ -17,11 +17,10 @@ func TestInstanceBackupRepo(t *testing.T) {
 	t.Run("Create and GetByID roundtrip", func(t *testing.T) {
 		backup := &domain.InstanceBackup{
 			ID:               uuid.New(),
-			FileName:         "theia-backup-20260405-120000-v1.4.0.tar.gz",
-			FilePath:         "/data/instance-backups/abc/theia-backup-20260405-120000-v1.4.0.tar.gz",
+			FileName:         "theia-backup-20260405-120000.tar.gz",
+			FilePath:         "/data/instance-backups/abc/theia-backup-20260405-120000.tar.gz",
 			SizeBytes:        1048576,
 			SHA256:           "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-			AppVersion:       "v1.4.0",
 			MigrationVersion: 10,
 			Status:           domain.InstanceBackupStatusSuccess,
 			ErrorMessage:     "",
@@ -54,9 +53,6 @@ func TestInstanceBackupRepo(t *testing.T) {
 		}
 		if got.SHA256 != backup.SHA256 {
 			t.Errorf("SHA256 = %q, want %q", got.SHA256, backup.SHA256)
-		}
-		if got.AppVersion != backup.AppVersion {
-			t.Errorf("AppVersion = %q, want %q", got.AppVersion, backup.AppVersion)
 		}
 		if got.MigrationVersion != backup.MigrationVersion {
 			t.Errorf("MigrationVersion = %d, want %d", got.MigrationVersion, backup.MigrationVersion)

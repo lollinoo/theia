@@ -46,7 +46,7 @@ func (r *InstanceBackupRepo) Create(backup *domain.InstanceBackup) error {
 		backup.FilePath,
 		backup.SizeBytes,
 		backup.SHA256,
-		backup.AppVersion,
+		"",
 		backup.MigrationVersion,
 		string(backup.Status),
 		backup.ErrorMessage,
@@ -90,13 +90,12 @@ func (r *InstanceBackupRepo) Update(backup *domain.InstanceBackup) error {
 
 	res, err := r.db.Exec(
 		`UPDATE instance_backups
-		 SET file_name = ?, file_path = ?, size_bytes = ?, sha256 = ?, app_version = ?, migration_version = ?, status = ?, error_message = ?, trigger_type = ?
+		 SET file_name = ?, file_path = ?, size_bytes = ?, sha256 = ?, migration_version = ?, status = ?, error_message = ?, trigger_type = ?
 		 WHERE id = ?`,
 		backup.FileName,
 		backup.FilePath,
 		backup.SizeBytes,
 		backup.SHA256,
-		backup.AppVersion,
 		backup.MigrationVersion,
 		string(backup.Status),
 		backup.ErrorMessage,
@@ -160,11 +159,11 @@ func (r *InstanceBackupRepo) DeleteFailedOlderThan(cutoff time.Time) (int, error
 // --- Helpers ---
 
 func scanInstanceBackupRow(row *sql.Row) (*domain.InstanceBackup, error) {
-	var idStr, status, triggerType string
+	var idStr, status, triggerType, legacyAppVersion string
 	var b domain.InstanceBackup
 	if err := row.Scan(
 		&idStr, &b.FileName, &b.FilePath, &b.SizeBytes, &b.SHA256,
-		&b.AppVersion, &b.MigrationVersion, &status, &b.ErrorMessage, &triggerType, &b.CreatedAt,
+		&legacyAppVersion, &b.MigrationVersion, &status, &b.ErrorMessage, &triggerType, &b.CreatedAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -184,11 +183,11 @@ func scanInstanceBackupRow(row *sql.Row) (*domain.InstanceBackup, error) {
 func scanInstanceBackupRows(rows *sql.Rows) ([]domain.InstanceBackup, error) {
 	var backups []domain.InstanceBackup
 	for rows.Next() {
-		var idStr, status, triggerType string
+		var idStr, status, triggerType, legacyAppVersion string
 		var b domain.InstanceBackup
 		if err := rows.Scan(
 			&idStr, &b.FileName, &b.FilePath, &b.SizeBytes, &b.SHA256,
-			&b.AppVersion, &b.MigrationVersion, &status, &b.ErrorMessage, &triggerType, &b.CreatedAt,
+			&legacyAppVersion, &b.MigrationVersion, &status, &b.ErrorMessage, &triggerType, &b.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

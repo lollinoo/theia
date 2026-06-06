@@ -39,7 +39,6 @@ type InstanceBackup struct {
 	FilePath         string                `json:"-"` // disk path, not exposed to API
 	SizeBytes        int64                 `json:"size_bytes"`
 	SHA256           string                `json:"sha256"`
-	AppVersion       string                `json:"app_version"`
 	MigrationVersion int                   `json:"migration_version"`
 	Status           InstanceBackupStatus  `json:"status"`
 	ErrorMessage     string                `json:"error_message,omitempty"`

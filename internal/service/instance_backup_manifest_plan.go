@@ -15,8 +15,8 @@ import (
 // backupManifest describes the contents and metadata of an instance backup archive.
 type backupManifest struct {
 	Version           int                       `json:"version"`
-	AppVersion        string                    `json:"app_version"`
-	GitCommit         string                    `json:"git_commit"`
+	AppVersion        string                    `json:"app_version,omitempty"`
+	GitCommit         string                    `json:"git_commit,omitempty"`
 	DBEntryName       string                    `json:"db_entry_name,omitempty"`
 	MigrationVersion  int                       `json:"migration_version"`
 	CreatedAt         string                    `json:"created_at"`
@@ -40,8 +40,6 @@ const (
 )
 
 type instanceBackupArchiveManifestInput struct {
-	appVersion         string
-	gitCommit          string
 	dbArtifact         databaseBackupArtifact
 	backupCreatedAt    time.Time
 	dbSHA256           string
@@ -65,8 +63,6 @@ func buildInstanceBackupArchiveManifestPlan(input instanceBackupArchiveManifestI
 	var plan instanceBackupArchiveManifestPlan
 	manifest := backupManifest{
 		Version:          1,
-		AppVersion:       input.appVersion,
-		GitCommit:        input.gitCommit,
 		DBEntryName:      input.dbArtifact.archiveEntryName,
 		MigrationVersion: input.dbArtifact.migrationVersion,
 		CreatedAt:        input.backupCreatedAt.UTC().Format(time.RFC3339),

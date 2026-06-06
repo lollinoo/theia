@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
-	"github.com/lollinoo/theia/internal/version"
 )
 
 // Create produces a full instance backup archive synchronously with trigger set to "manual".
@@ -74,11 +73,7 @@ func (s *InstanceBackupService) prepareInstanceBackup(trigger domain.InstanceBac
 	backupID := uuid.New()
 	now := time.Now().UTC()
 
-	// Build filename: theia-backup-{YYYYMMDD}-{HHMMSS}-v{version}.tar.gz
-	fileName := fmt.Sprintf("theia-backup-%s-v%s.tar.gz",
-		now.Format("20060102-150405"),
-		version.Version,
-	)
+	fileName := fmt.Sprintf("theia-backup-%s.tar.gz", now.Format("20060102-150405"))
 
 	// Create backup subdirectory: {backupDir}/{backupID}/
 	backupSubDir := filepath.Join(s.backupDir, backupID.String())
@@ -182,8 +177,6 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 
 	// Step 5: Build manifest
 	manifestPlan, err := buildInstanceBackupArchiveManifestPlan(instanceBackupArchiveManifestInput{
-		appVersion:         version.Version,
-		gitCommit:          version.GitCommit,
 		dbArtifact:         dbArtifact,
 		backupCreatedAt:    backup.CreatedAt,
 		dbSHA256:           dbHash,
@@ -275,7 +268,6 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 	backup.FilePath = finalPath
 	backup.SizeBytes = archiveInfo.Size()
 	backup.SHA256 = archiveHash
-	backup.AppVersion = version.Version
 	backup.MigrationVersion = dbArtifact.migrationVersion
 	backup.Status = domain.InstanceBackupStatusSuccess
 	backup.ErrorMessage = ""

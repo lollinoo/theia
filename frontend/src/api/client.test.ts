@@ -2347,7 +2347,6 @@ describe('fetchInstanceBackups', () => {
               file_name: '',
               size_bytes: 0,
               sha256: '',
-              app_version: '',
               migration_version: 0,
               status: 'cancelled',
               error_message: 'cancelled by user',
@@ -2401,8 +2400,6 @@ describe('restoreInstanceBackup', () => {
   const mockRestoreReportPayload = {
     data: {
       valid: true,
-      app_version: '1.4.0',
-      git_commit: 'abc1234',
       migration_version: 5,
       created_at: '2026-01-01T00:00:00Z',
       db_size_bytes: 102400,
@@ -2516,7 +2513,6 @@ describe('restoreInstanceBackup', () => {
     const file = new File(['test'], 'backup.tar.gz');
     const result = await restoreInstanceBackup(file, true);
     expect(result.valid).toBe(true);
-    expect(result.app_version).toBe('1.4.0');
     expect(result.migration_version).toBe(5);
     expect(result.backup_file_count).toBe(3);
     expect(fetchMock).toHaveBeenCalledWith(
