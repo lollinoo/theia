@@ -69,6 +69,11 @@ export async function requestJSON(path: string): Promise<unknown> {
 
   if (!response.ok) {
     const errorMessage = errorMessageFromPayload(payload, response.statusText);
+
+    if (response.status === 500) {
+      throw serverErrorFromMessage(errorMessage);
+    }
+
     throw new Error(`${path} failed: ${response.status} ${errorMessage}`);
   }
 

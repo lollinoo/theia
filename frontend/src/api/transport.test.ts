@@ -126,4 +126,22 @@ describe('API transport', () => {
       new ServerError('Something went wrong (ref: abc12345)', 'abc12345'),
     );
   });
+
+  it('redacts internal errors from JSON reads behind ServerError correlation messages', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'internal error, ref: abc12345' },
+            { ok: false, status: 500, statusText: 'Internal Server Error' },
+          ),
+        ),
+    );
+
+    await expect(requestJSON('/api/v1/devices')).rejects.toEqual(
+      new ServerError('Something went wrong (ref: abc12345)', 'abc12345'),
+    );
+  });
 });
