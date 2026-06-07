@@ -73,6 +73,19 @@ function reachabilityClass(value: DeviceMetricsDTO['network_reachable']): string
   return 'text-on-bg-secondary';
 }
 
+function metricHealthClass(value: DeviceMetricsDTO['health']): string {
+  switch (value) {
+    case 'healthy':
+      return 'text-status-up';
+    case 'warning':
+      return 'text-warning';
+    case 'critical':
+      return 'text-status-down';
+    default:
+      return 'text-on-bg-secondary';
+  }
+}
+
 /** Renders the DeviceDetailsPanel component within the UI component boundary. */
 export function DeviceDetailsPanel({
   device,
@@ -137,6 +150,11 @@ export function DeviceDetailsPanel({
               valueClassName={reachabilityClass(detailMetrics.snmp_reachable)}
             />
             <DetailRow label="Metrics status" value={detailMetrics.metrics_status} />
+            <DetailRow
+              label="Metric health"
+              value={detailMetrics.health}
+              valueClassName={metricHealthClass(detailMetrics.health)}
+            />
             <DetailRow
               label="Expected interval"
               value={

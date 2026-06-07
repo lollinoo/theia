@@ -104,6 +104,26 @@ describe('DeviceDetailsPanel', () => {
     expect(screen.queryByText('2026-04-25T20:05:57Z')).not.toBeInTheDocument();
   });
 
+  it('shows metric health when threshold warnings exist without active alerts', () => {
+    render(
+      <DeviceDetailsPanel
+        device={mockDevice()}
+        detailMetrics={mockDeviceMetrics({
+          primary_health: 'up_fresh',
+          health: 'warning',
+          temp_celsius: 70,
+          firing_alert_count: 0,
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Metric health')).toBeInTheDocument();
+    expect(screen.getByText('warning')).toBeInTheDocument();
+    expect(screen.getByText('70 C')).toBeInTheDocument();
+    expect(screen.getByText('Active alerts')).toBeInTheDocument();
+    expect(screen.getByText('0')).toBeInTheDocument();
+  });
+
   it('groups interface statistics in a collapsible disclosure', () => {
     render(
       <DeviceDetailsPanel
