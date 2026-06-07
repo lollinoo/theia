@@ -83,8 +83,11 @@ describe('Watermark', () => {
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.className).toContain('absolute');
     expect(wrapper.className).not.toContain('fixed');
-    expect(wrapper.className).toContain('bottom-[calc(15.5rem+env(safe-area-inset-bottom))]');
+    expect(wrapper.className).toContain('bottom-[calc(11.5rem+env(safe-area-inset-bottom))]');
     expect(wrapper.className).toContain('sm:bottom-[184px]');
+    expect(wrapper.className).not.toContain('bottom-[calc(8rem+env(safe-area-inset-bottom))]');
+    expect(wrapper.className).not.toContain('bottom-[calc(15.5rem+env(safe-area-inset-bottom))]');
+    expect(wrapper.className).not.toContain('sm:bottom-[136px]');
     expect(wrapper.className).toContain('right-4');
   });
 
@@ -96,7 +99,10 @@ describe('Watermark', () => {
     expect(wrapper.className).toContain('absolute');
     expect(wrapper.className).not.toContain('fixed');
     expect(wrapper.className).toContain('bottom-[calc(1rem+env(safe-area-inset-bottom))]');
+    expect(wrapper.className).not.toContain('bottom-[calc(8rem+env(safe-area-inset-bottom))]');
+    expect(wrapper.className).not.toContain('bottom-[calc(11.5rem+env(safe-area-inset-bottom))]');
     expect(wrapper.className).not.toContain('bottom-[calc(15.5rem+env(safe-area-inset-bottom))]');
+    expect(wrapper.className).not.toContain('sm:bottom-[136px]');
     expect(wrapper.className).not.toContain('sm:bottom-[184px]');
     expect(wrapper.className).toContain('right-4');
   });

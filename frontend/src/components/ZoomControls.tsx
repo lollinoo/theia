@@ -15,7 +15,7 @@ export default function ZoomControls({ onZoomIn, onZoomOut, onFitView }: ZoomCon
     'flex h-11 w-11 items-center justify-center rounded-2xl border border-transparent text-on-bg-secondary transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container hover:text-on-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg';
 
   return (
-    <div className="pointer-events-none absolute left-4 bottom-[calc(6rem+env(safe-area-inset-bottom))] z-20 sm:bottom-4">
+    <div className="pointer-events-none absolute left-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-20 sm:bottom-4">
       <div className="topology-glass topology-floating-shadow pointer-events-auto flex flex-col gap-1 rounded-[20px] p-1.5 transition-colors duration-200">
         <button
           type="button"

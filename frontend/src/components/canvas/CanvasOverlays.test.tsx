@@ -6,12 +6,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { CanvasOverlays } from './CanvasOverlays';
 
-vi.mock('../ReconnectBanner', () => ({
-  ReconnectBanner: ({ visible }: { visible: boolean }) => (
-    <div data-testid="reconnect-banner">{String(visible)}</div>
-  ),
-}));
-
 describe('CanvasOverlays', () => {
   it('positions the status stack near the top on mobile and bottom-center on wider screens', () => {
     const { getByTestId } = render(
@@ -103,5 +97,25 @@ describe('CanvasOverlays', () => {
     expect(screen.getByText('nodes selected')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /nodes selected/i })).not.toBeInTheDocument();
     expect(onBulkEditClick).not.toHaveBeenCalled();
+  });
+
+  it('places the reconnect banner below the fixed navigation pill', () => {
+    render(
+      <CanvasOverlays
+        editMode={false}
+        reconnecting
+        topologyRecoveryNotice={null}
+        dismissTopologyRecoveryNotice={vi.fn()}
+        retryTopologyRefresh={vi.fn()}
+        selectedNodeCount={0}
+        prometheusDiagnosticsVisible={false}
+      />,
+    );
+
+    const banner = screen.getByTestId('reconnect-banner');
+
+    expect(banner.className).toContain('top-32');
+    expect(banner.className).toContain('sm:top-[86px]');
+    expect(banner.className).not.toContain('lg:top-4');
   });
 });

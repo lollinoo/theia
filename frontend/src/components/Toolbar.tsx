@@ -73,7 +73,7 @@ export function Toolbar({
   ];
 
   return (
-    <div className="topology-glass topology-floating-shadow absolute right-4 top-32 z-10 flex flex-col gap-1 rounded-[16px] p-1.5 transition-colors duration-200 sm:top-20">
+    <div className="topology-glass topology-floating-shadow absolute right-4 top-32 z-10 flex flex-col gap-1 rounded-[16px] p-1.5 transition-colors duration-200 sm:top-20 xl:top-4">
       <button
         type="button"
         aria-label={expanded ? 'Hide canvas tools' : 'Show canvas tools'}

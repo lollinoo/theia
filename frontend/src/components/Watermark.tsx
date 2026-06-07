@@ -34,7 +34,7 @@ export function Watermark({
       className={`absolute right-4 z-10 pointer-events-none select-none ${
         compact
           ? 'bottom-[calc(1rem+env(safe-area-inset-bottom))]'
-          : 'bottom-[calc(15.5rem+env(safe-area-inset-bottom))] sm:bottom-[184px]'
+          : 'bottom-[calc(11.5rem+env(safe-area-inset-bottom))] sm:bottom-[184px]'
       }`}
       aria-hidden="true"
     >
