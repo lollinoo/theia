@@ -13,7 +13,7 @@ describe('ZoomControls', () => {
     const wrapper = zoomInButton.parentElement?.parentElement as HTMLElement;
 
     expect(wrapper.className).toContain('absolute');
-    expect(wrapper.className).toContain('bottom-[calc(6rem+env(safe-area-inset-bottom))]');
+    expect(wrapper.className).toContain('bottom-[calc(1rem+env(safe-area-inset-bottom))]');
     expect(wrapper.className).toContain('sm:bottom-4');
     expect(wrapper.className).toContain('left-4');
     expect(wrapper.className).not.toContain('fixed');

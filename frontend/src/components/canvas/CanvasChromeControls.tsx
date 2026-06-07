@@ -21,8 +21,13 @@ export function CanvasChromeControls({
   onSearch,
   onFitView,
 }: CanvasChromeControlsProps) {
+  const positionClassName = chromeHidden ? 'right-4 top-4' : 'right-20 top-32 sm:top-20 xl:top-4';
+
   return (
-    <div className="absolute right-4 top-4 z-[70] flex items-center gap-2">
+    <div
+      data-testid="canvas-chrome-controls"
+      className={`absolute ${positionClassName} z-[70] flex items-center gap-2`}
+    >
       {chromeHidden && (
         <>
           <button

@@ -943,12 +943,14 @@ function AuditTable({
   timezone: string;
   compact?: boolean;
 }) {
+  const tableMinWidth = compact ? 'min-w-[42rem]' : 'min-w-[48rem]';
+
   return (
-    <div className="overflow-hidden rounded-lg border border-outline-subtle bg-surface">
+    <div className="overflow-x-auto rounded-lg border border-outline-subtle bg-surface">
       {logs.length === 0 ? (
         <div className="p-6 text-sm text-on-bg-secondary">No audit logs returned.</div>
       ) : (
-        <table className="min-w-full text-sm">
+        <table className={`w-full ${tableMinWidth} text-sm`}>
           <thead className="bg-surface-container text-left text-xs uppercase text-on-bg-secondary">
             <tr>
               <th className="px-3 py-2 font-semibold">Time</th>

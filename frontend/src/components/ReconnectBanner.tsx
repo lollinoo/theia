@@ -12,7 +12,7 @@ export function ReconnectBanner({ visible }: ReconnectBannerProps) {
     <div
       data-testid="reconnect-banner"
       aria-hidden={!visible}
-      className={`pointer-events-none fixed top-4 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-warning/15 px-4 py-2 text-sm text-warning backdrop-blur-sm shadow-[0_0_12px_rgba(255,234,0,0.15)] transition-colors duration-200 transition-opacity duration-300 ${
+      className={`pointer-events-none fixed top-32 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-warning/15 px-4 py-2 text-sm text-warning backdrop-blur-sm shadow-[0_0_12px_rgba(255,234,0,0.15)] transition-colors duration-200 transition-opacity duration-300 sm:top-[86px] ${
         visible ? 'opacity-100' : 'opacity-0'
       }`}
     >

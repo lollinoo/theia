@@ -204,6 +204,24 @@ describe('AdminDashboard', () => {
     expect(screen.queryByText('user:user-1')).not.toBeInTheDocument();
   });
 
+  it('keeps overview and audit tables horizontally scrollable on narrow screens', async () => {
+    render(<AdminDashboard />);
+
+    expect(await screen.findByText('auth.login')).toBeInTheDocument();
+    const overviewTable = screen.getByText('auth.login').closest('table');
+    expect(overviewTable?.className).toContain('min-w-[42rem]');
+    expect(overviewTable?.parentElement?.className).toContain('overflow-x-auto');
+    expect(overviewTable?.parentElement?.className).not.toContain('overflow-hidden');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Audit Logs' }));
+
+    expect(await screen.findByText('user.update')).toBeInTheDocument();
+    const auditTable = screen.getByText('user.update').closest('table');
+    expect(auditTable?.className).toContain('min-w-[48rem]');
+    expect(auditTable?.parentElement?.className).toContain('overflow-x-auto');
+    expect(auditTable?.parentElement?.className).not.toContain('overflow-hidden');
+  });
+
   it('loads overview without requesting admin sections the user cannot read', async () => {
     grantPermissions('admin:dashboard:read');
 
