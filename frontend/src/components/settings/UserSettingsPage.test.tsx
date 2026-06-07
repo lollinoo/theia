@@ -1,11 +1,12 @@
 /**
  * Exercises user settings page settings behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchBridgeConnectorConfig,
   fetchUserSettings,
+  generateBridgeSecret,
   type UserSettingsResponse,
   updateUserSettings,
 } from '../../api/client';
@@ -46,10 +47,26 @@ const activeSettings: UserSettingsResponse = {
   },
 };
 
+function restoreOwnProperty(
+  object: object,
+  property: PropertyKey,
+  descriptor?: PropertyDescriptor,
+) {
+  if (descriptor) {
+    Object.defineProperty(object, property, descriptor);
+    return;
+  }
+  Reflect.deleteProperty(object, property);
+}
+
 describe('UserSettingsPage', () => {
   let openSpy: ReturnType<typeof vi.spyOn>;
+  let clipboardDescriptor: PropertyDescriptor | undefined;
+  let execCommandDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
+    clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    execCommandDescriptor = Object.getOwnPropertyDescriptor(document, 'execCommand');
     openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     vi.mocked(fetchUserSettings).mockResolvedValue(activeSettings);
     vi.mocked(updateUserSettings).mockResolvedValue(activeSettings);
@@ -85,7 +102,10 @@ describe('UserSettingsPage', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     openSpy.mockRestore();
+    restoreOwnProperty(navigator, 'clipboard', clipboardDescriptor);
+    restoreOwnProperty(document, 'execCommand', execCommandDescriptor);
   });
 
   it('renders unavailable connector binaries as disabled buttons and includes macOS targets', async () => {
@@ -204,6 +224,55 @@ describe('UserSettingsPage', () => {
       'href',
       '/api/v1/settings/bridge/connector/download/windows/amd64',
     );
+  });
+
+  it('falls back to textarea copy for the one-time bridge secret when clipboard is unavailable', async () => {
+    const execCommand = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    });
+    vi.mocked(fetchUserSettings).mockResolvedValue({
+      ...activeSettings,
+      bridge: {
+        configured: false,
+        credential: null,
+      },
+    });
+    vi.mocked(generateBridgeSecret).mockResolvedValue({ secret: 'theia_bridge_secret_once' });
+
+    render(<UserSettingsPage />);
+
+    await screen.findByRole('heading', { name: 'User Settings' });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Generate Bridge Secret' }));
+    });
+    await screen.findByText('theia_bridge_secret_once');
+
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy Bridge Secret' }));
+    });
+    await act(async () => {});
+
+    expect(execCommand).toHaveBeenCalledWith('copy');
+    expect(screen.getByText('Bridge Secret copied')).toBeInTheDocument();
+    const copiedButton = screen.getByRole('button', { name: 'Bridge Secret copied' });
+    expect(within(copiedButton).getByText('check')).toBeInTheDocument();
+    expect(copiedButton).toHaveClass('scale-105');
+
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+
+    const resetButton = screen.getByRole('button', { name: 'Copy Bridge Secret' });
+    expect(within(resetButton).getByText('content_copy')).toBeInTheDocument();
+    expect(resetButton).not.toHaveClass('scale-105');
   });
 
   it('opens the local connector setup wizard on the default bridge port', async () => {
