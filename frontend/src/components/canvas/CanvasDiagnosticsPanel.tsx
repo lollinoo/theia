@@ -49,13 +49,7 @@ function DiagnosticsRow({ label, value }: { label: string; value: unknown }) {
   );
 }
 
-function DiagnosticsSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
+function DiagnosticsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="pt-1">
       <h3 className="mb-2 text-xs font-semibold uppercase text-on-bg-secondary">{title}</h3>

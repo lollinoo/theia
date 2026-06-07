@@ -2,10 +2,11 @@
  * Coordinates canvas graph state state for the topology canvas.
  * Keeps canvas lifecycle, projected graph state, and cleanup behavior explicit for callers.
  */
-import * as ReactFlow from '@xyflow/react';
+
 import type { EdgeChange, NodeChange } from '@xyflow/react';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import * as ReactFlow from '@xyflow/react';
 import type React from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';

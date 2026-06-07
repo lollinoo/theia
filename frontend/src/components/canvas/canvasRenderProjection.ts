@@ -4,8 +4,8 @@
  */
 import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
-import type { LinkEdgeType } from '../LinkEdge';
 import { resolveDeviceMonitoringState } from '../deviceVisualState';
+import type { LinkEdgeType } from '../LinkEdge';
 import type { RuntimeState } from './runtimeAdapters';
 
 /** Describes the canvas render projection node cache entry contract used by the topology canvas. */

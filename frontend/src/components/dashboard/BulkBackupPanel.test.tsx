@@ -5,7 +5,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerError, ValidationError } from '../../api/errors';
 import type { Device } from '../../types/api';
-import { BulkBackupPanel, __resetBulkBackupSessionForTests } from './BulkBackupPanel';
+import { __resetBulkBackupSessionForTests, BulkBackupPanel } from './BulkBackupPanel';
 
 // Mock API calls — triggerBackup resolves by default; individual tests override as needed.
 // fetchDeviceCredentialProfiles returns one profile by default (device is eligible).

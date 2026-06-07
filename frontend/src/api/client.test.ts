@@ -3,10 +3,9 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  type CreateDevicePayload,
-  ValidationError,
   addDeviceToCanvasMap,
   assignAdminUserRole,
+  type CreateDevicePayload,
   cancelInstanceBackup,
   changePassword,
   createAdminPasswordReset,
@@ -32,8 +31,8 @@ import {
   fetchCanvasBootstrap,
   fetchCanvasMapAreas,
   fetchCanvasMapBootstrap,
-  fetchCanvasMapTopology,
   fetchCanvasMaps,
+  fetchCanvasMapTopology,
   fetchCanvasTopology,
   fetchCurrentUser,
   fetchDevices,
@@ -64,6 +63,7 @@ import {
   updateCanvasMapDeviceAreas,
   updateCanvasMapDeviceVisualColor,
   updateDevice,
+  ValidationError,
 } from './client';
 import { ServerError } from './errors';
 

@@ -6,7 +6,7 @@ import type { Device, Link } from '../../types/api';
 import type { AlertDTO, AlertStatus } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
-import { type LinkEdgeData, buildLinkTelemetryBadges } from '../linkSemantics';
+import { buildLinkTelemetryBadges, type LinkEdgeData } from '../linkSemantics';
 import { type HandleSide } from './canvasHelpers';
 
 function normalizeLinkValue(value: string): string {

@@ -3,13 +3,13 @@
  * Owns cleanup-sensitive lifecycle work so callers receive stable state and actions.
  */
 import {
-  type SimulationLinkDatum,
-  type SimulationNodeDatum,
   forceCenter,
   forceCollide,
   forceLink,
   forceManyBody,
   forceSimulation,
+  type SimulationLinkDatum,
+  type SimulationNodeDatum,
 } from 'd3-force';
 
 /** Describes the auto layout node contract used by the React hook lifecycle. */
@@ -59,7 +59,9 @@ function buildAdjacency(
 ): Map<string, Set<string>> {
   const adjacency = new Map<string, Set<string>>();
 
-  nodes.forEach((node) => adjacency.set(node.id, new Set()));
+  nodes.forEach((node) => {
+    adjacency.set(node.id, new Set());
+  });
   edges.forEach((edge) => {
     if (!adjacency.has(edge.source) || !adjacency.has(edge.target)) return;
     adjacency.get(edge.source)?.add(edge.target);

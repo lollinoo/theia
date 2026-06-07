@@ -8,12 +8,12 @@ import { ServerError, ValidationError } from '../../api/errors';
 import type { Device, MetricsSource, TopologyDiscoveryMode } from '../../types/api';
 import { createAsyncStaleGuard } from '../../utils/asyncStaleGuard';
 import {
-  TOPOLOGY_DISCOVERY_MODE_OPTIONS,
   formatTopologyBootstrapState,
   formatTopologyDiscoveryMode,
   formatTopologyDiscoveryResult,
   formatTopologyDiscoveryTimestamp,
   formatTopologyFollowupExpectation,
+  TOPOLOGY_DISCOVERY_MODE_OPTIONS,
 } from '../../utils/topologyDiscovery';
 
 interface DeviceTopologyDiscoverySectionProps {

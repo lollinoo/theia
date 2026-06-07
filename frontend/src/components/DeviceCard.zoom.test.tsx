@@ -1,13 +1,14 @@
 /**
  * Exercises device card zoom component behavior so refactors preserve the documented contract.
  */
+
+import { fireEvent, render, screen } from '@testing-library/react';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Device } from '../types/api';
 import type { DeviceMetricsDTO } from '../types/metrics';
-import DeviceCard, { resolveDeviceNodeReadabilityScale, type DeviceNodeData } from './DeviceCard';
+import DeviceCard, { type DeviceNodeData, resolveDeviceNodeReadabilityScale } from './DeviceCard';
 import { resolveDeviceMonitoringState } from './deviceVisualState';
 
 const css = readFileSync(join(__dirname, '../index.css'), 'utf-8').replace(/\r\n/g, '\n');

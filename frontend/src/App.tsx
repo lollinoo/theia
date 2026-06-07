@@ -17,12 +17,18 @@ import { AdminDashboard } from './components/AdminDashboard';
 import Canvas from './components/Canvas';
 import { Dashboard } from './components/Dashboard';
 import NavigationPill from './components/NavigationPill';
-import { Watermark } from './components/Watermark';
 import UserSettingsPage from './components/settings/UserSettingsPage';
 import {
   CreateMapDialog,
   type CreateMapDialogSubmit,
 } from './components/topology-hub/CreateMapDialog';
+import {
+  canvasMapErrorMessage,
+  fallbackCanvasMap,
+  mapFilterForArea,
+  setPrimaryCanvasMap,
+  upsertCanvasMap,
+} from './components/topology-hub/canvasMapState';
 import DeleteMapDialog from './components/topology-hub/DeleteMapDialog';
 import {
   DuplicateMapDialog,
@@ -33,13 +39,7 @@ import {
   type RenameMapDialogSubmit,
 } from './components/topology-hub/RenameMapDialog';
 import TopologyHub from './components/topology-hub/TopologyHub';
-import {
-  canvasMapErrorMessage,
-  fallbackCanvasMap,
-  mapFilterForArea,
-  setPrimaryCanvasMap,
-  upsertCanvasMap,
-} from './components/topology-hub/canvasMapState';
+import { Watermark } from './components/Watermark';
 import { useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useRuntimeUpdatePause } from './hooks/useRuntimeUpdatePause';
@@ -69,9 +69,9 @@ function viewLayerClass(active: boolean, className = ''): string {
 /** Mirrors layer visibility into accessibility state and inert handling for hidden views. */
 function viewLayerStateProps(active: boolean): {
   'aria-hidden': boolean;
-  inert?: '';
+  inert?: boolean;
 } {
-  return active ? { 'aria-hidden': false } : { 'aria-hidden': true, inert: '' };
+  return active ? { 'aria-hidden': false } : { 'aria-hidden': true, inert: true };
 }
 
 /**

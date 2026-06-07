@@ -6,8 +6,8 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { Link } from '../types/api';
 import { type AlertStatus, type DeviceMetricsDTO, type LinkMetricsDTO } from '../types/metrics';
 import {
-  type EdgeBadgeAnchor,
   computeLinkBadgeAnchor,
+  type EdgeBadgeAnchor,
   measureEdgePathLength,
 } from './edgeBadgeAnchors';
 

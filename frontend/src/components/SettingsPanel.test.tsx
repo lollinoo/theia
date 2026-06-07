@@ -1,7 +1,15 @@
 /**
  * Exercises settings panel component behavior so refactors preserve the documented contract.
  */
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  type RenderResult,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsPanel } from './SettingsPanel';
 
@@ -38,9 +46,24 @@ vi.mock('./InstanceBackupManager', () => ({
   InstanceBackupManager: () => <div data-testid="instance-backup-manager" />,
 }));
 
+async function renderSettingsPanel(ui = <SettingsPanel />): Promise<RenderResult> {
+  let result: RenderResult | undefined;
+
+  await act(async () => {
+    result = render(ui);
+    await Promise.resolve();
+  });
+
+  if (!result) {
+    throw new Error('SettingsPanel render did not complete');
+  }
+
+  return result;
+}
+
 describe('SettingsPanel (COMP-05)', () => {
-  it('renders settings in UserSettingsPage-style section cards', () => {
-    render(<SettingsPanel />);
+  it('renders settings in UserSettingsPage-style section cards', async () => {
+    await renderSettingsPanel();
 
     for (const heading of [
       'Polling',
@@ -57,8 +80,8 @@ describe('SettingsPanel (COMP-05)', () => {
     }
   });
 
-  it('uses independent desktop columns so expanded sections do not push the opposite column', () => {
-    render(<SettingsPanel />);
+  it('uses independent desktop columns so expanded sections do not push the opposite column', async () => {
+    await renderSettingsPanel();
 
     const layout = screen.getByTestId('settings-panel-layout');
     expect(layout.className).toContain('lg:grid-cols-2');
@@ -79,8 +102,8 @@ describe('SettingsPanel (COMP-05)', () => {
     ).toHaveLength(4);
   });
 
-  it('keeps section cards from stretching when a neighboring section expands', () => {
-    render(<SettingsPanel />);
+  it('keeps section cards from stretching when a neighboring section expands', async () => {
+    await renderSettingsPanel();
 
     const layout = screen.getByTestId('settings-panel-layout');
     expect(layout.className).toContain('items-start');
@@ -92,8 +115,8 @@ describe('SettingsPanel (COMP-05)', () => {
     }
   });
 
-  it('uses fixed-height cards with internal scrolling so columns remain aligned', () => {
-    render(<SettingsPanel />);
+  it('uses fixed-height cards with internal scrolling so columns remain aligned', async () => {
+    await renderSettingsPanel();
 
     for (const heading of [
       'Polling',
@@ -112,8 +135,8 @@ describe('SettingsPanel (COMP-05)', () => {
     }
   });
 
-  it('gives profile managers a surfaced well inside the Profiles section', () => {
-    render(<SettingsPanel />);
+  it('gives profile managers a surfaced well inside the Profiles section', async () => {
+    await renderSettingsPanel();
 
     expect(screen.getByTestId('snmp-profile-well').className).toContain(
       'bg-surface-container-high',
@@ -126,8 +149,8 @@ describe('SettingsPanel (COMP-05)', () => {
     );
   });
 
-  it('does not render the legacy Grafana URL field in Integrations', () => {
-    render(<SettingsPanel />);
+  it('does not render the legacy Grafana URL field in Integrations', async () => {
+    await renderSettingsPanel();
 
     expect(screen.queryByLabelText('Grafana URL')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('http://localhost:3001')).not.toBeInTheDocument();
@@ -135,7 +158,7 @@ describe('SettingsPanel (COMP-05)', () => {
   });
 
   it('uses stable label rows for device backup fields', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /device backups/i }));
@@ -146,7 +169,7 @@ describe('SettingsPanel (COMP-05)', () => {
   });
 
   it('uses stable helper rows for device backup fields', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /device backups/i }));
@@ -156,8 +179,8 @@ describe('SettingsPanel (COMP-05)', () => {
     expect(screen.getByTestId('device-backup-retention-helper-row').className).toContain('min-h-4');
   });
 
-  it('form inputs use border-outline-subtle (not border-outline)', () => {
-    const { container } = render(<SettingsPanel />);
+  it('form inputs use border-outline-subtle (not border-outline)', async () => {
+    const { container } = await renderSettingsPanel();
     const inputs = Array.from(container.querySelectorAll('input, select'));
     // Every input/select with a border class should use border-outline-subtle
     const withOldBorder = inputs.filter(
@@ -167,29 +190,29 @@ describe('SettingsPanel (COMP-05)', () => {
     expect(withOldBorder).toHaveLength(0);
   });
 
-  it('does not have border-t section separators (no-line rule)', () => {
-    const { container } = render(<SettingsPanel />);
+  it('does not have border-t section separators (no-line rule)', async () => {
+    const { container } = await renderSettingsPanel();
     const html = container.innerHTML;
     expect(html).not.toContain('border-t border-outline');
   });
 
-  it('inputs have focus:ring-primary/30 for standardized focus ring', () => {
-    const { container } = render(<SettingsPanel />);
+  it('inputs have focus:ring-primary/30 for standardized focus ring', async () => {
+    const { container } = await renderSettingsPanel();
     const inputs = Array.from(container.querySelectorAll('input, select'));
     // At least one input should have the standardized focus ring
     const withFocusRing = inputs.filter((el) => el.className.includes('ring-primary'));
     expect(withFocusRing.length).toBeGreaterThan(0);
   });
 
-  it('dev badge uses semantic warning token (not hardcoded yellow)', () => {
-    const { container } = render(<SettingsPanel />);
+  it('dev badge uses semantic warning token (not hardcoded yellow)', async () => {
+    const { container } = await renderSettingsPanel();
     const html = container.innerHTML;
     expect(html).not.toContain('yellow-500');
     expect(html).not.toContain('yellow-400');
   });
 
   it('renders deployment environment without build metadata', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     expect(await screen.findByText('staging')).toBeInTheDocument();
     expect(screen.queryByText(/Theia\s+v/i)).not.toBeInTheDocument();
@@ -197,8 +220,8 @@ describe('SettingsPanel (COMP-05)', () => {
     expect(screen.queryByText(/Built:/i)).not.toBeInTheDocument();
   });
 
-  it('does not render area management controls in global settings', () => {
-    render(<SettingsPanel />);
+  it('does not render area management controls in global settings', async () => {
+    await renderSettingsPanel();
 
     expect(screen.queryByTestId('area-manager')).not.toBeInTheDocument();
   });
@@ -206,7 +229,7 @@ describe('SettingsPanel (COMP-05)', () => {
   it('renders topology discovery default selector and saves changes', async () => {
     const { updateSetting } = await import('../api/client');
 
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     fireEvent.change(screen.getByLabelText('Topology Discovery Default'), {
       target: { value: 'bootstrap_once' },
@@ -224,7 +247,7 @@ describe('SettingsPanel (COMP-05)', () => {
     const { updateSetting } = await import('../api/client');
     const onSettingsChange = vi.fn();
 
-    render(<SettingsPanel onSettingsChange={onSettingsChange} />);
+    await renderSettingsPanel(<SettingsPanel onSettingsChange={onSettingsChange} />);
 
     expect(screen.getByText('Display timezone')).toBeInTheDocument();
     expect(
@@ -244,7 +267,7 @@ describe('SettingsPanel (COMP-05)', () => {
 
 describe('SettingsPanel — Prometheus URL validation on blur', () => {
   it('shows error text when Prometheus URL is blurred with an invalid value', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     const prometheusInput = screen.getByPlaceholderText('http://localhost:9090');
     fireEvent.change(prometheusInput, { target: { value: 'not-a-url' } });
@@ -261,7 +284,7 @@ describe('SettingsPanel — Prometheus URL validation on blur', () => {
 describe('SettingsPanel — invalid URL prevents updateSetting call', () => {
   it('does not call updateSetting for prometheus_url when URL is invalid', async () => {
     const { updateSetting } = await import('../api/client');
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     const prometheusInput = screen.getByPlaceholderText('http://localhost:9090');
     fireEvent.change(prometheusInput, { target: { value: 'ftp://bad' } });
@@ -278,7 +301,7 @@ describe('SettingsPanel — invalid URL prevents updateSetting call', () => {
 
 describe('SettingsPanel — Device Backups collapsible section (Gap 2)', () => {
   it('clicking the Device Backups button reveals the section content', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     // The section content should not be visible before toggling
     expect(screen.queryByText('Automatic Backup Schedule')).not.toBeInTheDocument();
@@ -298,7 +321,7 @@ describe('SettingsPanel — Device Backups collapsible section (Gap 2)', () => {
 
 describe('SettingsPanel — Device Backups schedule dropdown options (Gap 3)', () => {
   it('schedule dropdown has all 6 preset options after expanding the section', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     const toggleBtn = screen.getByRole('button', { name: /device backups/i });
     await act(async () => {
@@ -330,7 +353,7 @@ describe('SettingsPanel — Device Backups schedule dropdown options (Gap 3)', (
 
 describe('SettingsPanel — Device Backups retention input attributes (Gap 4)', () => {
   it('retention input has min=1 and max=365 after expanding the section', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     const toggleBtn = screen.getByRole('button', { name: /device backups/i });
     await act(async () => {
@@ -356,7 +379,7 @@ describe('SettingsPanel — Device Backups retention input attributes (Gap 4)', 
 
 describe('SettingsPanel — Device Backups helper text when disabled (Gap 5)', () => {
   it('shows "Scheduling disabled" text when interval defaults to 0', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     const toggleBtn = screen.getByRole('button', { name: /device backups/i });
     await act(async () => {
@@ -381,7 +404,7 @@ describe('SettingsPanel — Device Backups values loaded from fetchSettings on m
       secrets: {},
     });
 
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     // Expand the section
     const toggleBtn = screen.getByRole('button', { name: /device backups/i });
@@ -412,7 +435,7 @@ describe('SettingsPanel — Device Backups values loaded from fetchSettings on m
       secrets: {},
     });
 
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     const toggleBtn = screen.getByRole('button', { name: /device backups/i });
     await act(async () => {
@@ -435,7 +458,7 @@ describe('SettingsPanel — bridge secret migration', () => {
       secrets: {},
     });
 
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     await waitFor(() => {
       expect(screen.getByDisplayValue('1337')).toBeInTheDocument();
@@ -447,15 +470,15 @@ describe('SettingsPanel — bridge secret migration', () => {
 // --- Gap 14: Instance Backups collapsible section collapsed by default ---
 
 describe('SettingsPanel — Instance Backups collapsible section (Gap 14)', () => {
-  it('Instance Backups toggle button is present in the initial render', () => {
-    render(<SettingsPanel />);
+  it('Instance Backups toggle button is present in the initial render', async () => {
+    await renderSettingsPanel();
 
     // The collapsible header button must be visible without any interaction
     expect(screen.getByRole('button', { name: /instance backups/i })).toBeInTheDocument();
   });
 
-  it('InstanceBackupManager is NOT rendered before the toggle is clicked (collapsed by default)', () => {
-    render(<SettingsPanel />);
+  it('InstanceBackupManager is NOT rendered before the toggle is clicked (collapsed by default)', async () => {
+    await renderSettingsPanel();
 
     // The mock InstanceBackupManager renders a div[data-testid="instance-backup-manager"]
     // It must not be in the DOM until the toggle is clicked
@@ -463,7 +486,7 @@ describe('SettingsPanel — Instance Backups collapsible section (Gap 14)', () =
   });
 
   it('clicking the Instance Backups toggle renders InstanceBackupManager', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     const toggleBtn = screen.getByRole('button', { name: /instance backups/i });
     await act(async () => {
@@ -474,7 +497,7 @@ describe('SettingsPanel — Instance Backups collapsible section (Gap 14)', () =
   });
 
   it('clicking the toggle a second time collapses the section again', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     const toggleBtn = screen.getByRole('button', { name: /instance backups/i });
 
@@ -508,7 +531,7 @@ describe('SettingsPanel — Polling Workers settings', () => {
   });
 
   it('renders the Polling Workers section collapsed by default and expands on click', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     expect(screen.getByRole('button', { name: /polling workers/i })).toBeInTheDocument();
     expect(screen.queryByLabelText('Essential Workers')).not.toBeInTheDocument();
@@ -541,7 +564,7 @@ describe('SettingsPanel — Polling Workers settings', () => {
       secrets: {},
     });
 
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /polling workers/i }));
@@ -563,7 +586,7 @@ describe('SettingsPanel — Polling Workers settings', () => {
   it('saves a valid worker setting after the debounce window', async () => {
     vi.useFakeTimers();
     const { updateSetting } = await import('../api/client');
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /polling workers/i }));
@@ -581,7 +604,7 @@ describe('SettingsPanel — Polling Workers settings', () => {
   });
 
   it('sets worker input min and max attributes from tuning metadata', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /polling workers/i }));
@@ -603,7 +626,7 @@ describe('SettingsPanel — Polling Workers settings', () => {
   it('rejects out-of-range worker settings and does not save them', async () => {
     vi.useFakeTimers();
     const { updateSetting } = await import('../api/client');
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /polling workers/i }));
@@ -627,7 +650,7 @@ describe('SettingsPanel — Polling Workers settings', () => {
   });
 
   it('wraps long worker setting keys within the panel', async () => {
-    render(<SettingsPanel />);
+    await renderSettingsPanel();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /polling workers/i }));

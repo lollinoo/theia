@@ -13,18 +13,18 @@ import { BulkEditPanel } from '../BulkEditPanel';
 import type { DeviceNode } from '../DeviceCard';
 import { DeviceConfigPanel } from '../DeviceConfigPanel';
 import { DeviceDetailsPanel } from '../DeviceDetailsPanel';
-import { LinkCreatePanel } from '../LinkCreatePanel';
-import { LinkDetailsPanel } from '../LinkDetailsPanel';
-import type { LinkEdgeType } from '../LinkEdge';
 import {
   resolveDeviceMonitoringState,
   sanitizeDeviceMetricsForDisplay,
 } from '../deviceVisualState';
+import { LinkCreatePanel } from '../LinkCreatePanel';
+import { LinkDetailsPanel } from '../LinkDetailsPanel';
+import type { LinkEdgeType } from '../LinkEdge';
+import { viewportSize } from './canvasHelpers';
 import {
   DeviceInterfaceStatsPanelRoute,
   LinkInterfaceStatsPanelRoute,
 } from './InterfaceStatsPanelRoutes';
-import { viewportSize } from './canvasHelpers';
 import { buildAlertsPanelModel } from './panelAdapters';
 import type { RuntimeState } from './runtimeAdapters';
 

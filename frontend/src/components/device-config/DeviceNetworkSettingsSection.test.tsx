@@ -4,7 +4,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Device, SNMPProfile } from '../../types/api';
-import { type DeviceFormModel, createDeviceConfigFormModel } from '../forms/deviceFormModels';
+import { createDeviceConfigFormModel, type DeviceFormModel } from '../forms/deviceFormModels';
 import { DeviceNetworkSettingsSection } from './DeviceNetworkSettingsSection';
 
 vi.mock('../../api/client', () => ({

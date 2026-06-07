@@ -6,7 +6,9 @@ import type { Device, DeviceStatus, Link } from '../../types/api';
 import {
   type AlertDTO,
   type AlertStatus,
+  alertStatusForDevice,
   type DeviceMetricsDTO,
+  isPrometheusUnavailable,
   type LinkMetricsDTO,
   type OperationalStatus,
   type PrimaryHealth,
@@ -14,8 +16,6 @@ import {
   type RuntimeFlag,
   type RuntimeReason,
   type SnapshotPayload,
-  alertStatusForDevice,
-  isPrometheusUnavailable,
 } from '../../types/metrics';
 import {
   type DeviceMonitoringState,

@@ -175,14 +175,14 @@ function createWorkerTimerRefs(): Record<WorkerSettingKey, number | null> {
 const DEFAULT_WORKER_SETTINGS = createDefaultWorkerSettings();
 const PRESET_VALUES = new Set(POLLING_PRESETS.map((p) => p.value).filter((v) => v !== 'custom'));
 
+export type { WorkerSetting, WorkerSettingGroup, WorkerSettingKey };
 export {
+  createWorkerSavedFlags,
+  createWorkerTimerRefs,
   DEFAULT_WORKER_SETTINGS,
   POLLING_PRESETS,
   PRESET_VALUES,
   TIMEZONES,
   WORKER_SETTING_GROUPS,
   WORKER_SETTINGS,
-  createWorkerSavedFlags,
-  createWorkerTimerRefs,
 };
-export type { WorkerSetting, WorkerSettingGroup, WorkerSettingKey };

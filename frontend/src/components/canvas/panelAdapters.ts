@@ -5,10 +5,10 @@
 import type { Device, InterfaceInfo, Link } from '../../types/api';
 import {
   type AlertDTO,
+  formatThroughput,
   type LinkMetricsDTO,
   type RuntimeFlag,
   type RuntimeReason,
-  formatThroughput,
   utilizationColor,
 } from '../../types/metrics';
 import { formatBandwidth } from '../linkSemantics';
@@ -22,9 +22,9 @@ import type {
 } from '../panelModels';
 import { normalizeInterfaceName } from './canvasHelpers';
 import {
+  countActiveAlertsFromRuntimeState,
   type RuntimeDeviceModel,
   type RuntimeState,
-  countActiveAlertsFromRuntimeState,
 } from './runtimeAdapters';
 
 const UNKNOWN_UTILIZATION_COLOR = 'var(--color-status-unknown)';
@@ -593,7 +593,7 @@ function runtimeFlagAlert(runtimeDevice: RuntimeDeviceModel, flag: RuntimeFlag):
 function shouldShowWarningHealth(runtimeDevice: RuntimeDeviceModel): boolean {
   const metrics = runtimeDevice.metrics;
 
-  if (!metrics || metrics.health !== 'warning') {
+  if (metrics?.health !== 'warning') {
     return false;
   }
 

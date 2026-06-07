@@ -80,8 +80,6 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@xyflow/react', async () => {
-  const ReactModule = await import('react');
-
   return {
     ConnectionMode: { Loose: 'loose' },
     SelectionMode: { Partial: 'partial' },

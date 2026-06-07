@@ -6,9 +6,8 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
 
-function manualChunks(id: string): string | undefined {
+function chunkGroupName(id: string): string | null {
   const normalizedId = id.replace(/\\/g, '/');
-  if (!normalizedId.includes('/node_modules/')) return undefined;
 
   if (
     normalizedId.includes('/node_modules/react/') ||
@@ -26,7 +25,48 @@ function manualChunks(id: string): string | undefined {
     return 'd3-vendor';
   }
 
-  return 'vendor';
+  if (normalizedId.includes('/node_modules/')) {
+    return 'vendor';
+  }
+
+  if (normalizedId.includes('/src/components/canvas/')) {
+    return 'canvas-core';
+  }
+
+  if (
+    normalizedId.includes('/src/components/Canvas.tsx') ||
+    normalizedId.includes('/src/components/DeviceCard.tsx') ||
+    normalizedId.includes('/src/components/LinkEdge.tsx') ||
+    normalizedId.includes('/src/components/LinkLabelLayer.tsx')
+  ) {
+    return 'canvas-view';
+  }
+
+  if (
+    normalizedId.includes('/src/components/dashboard/') ||
+    normalizedId.includes('/src/components/Dashboard.tsx')
+  ) {
+    return 'dashboard-view';
+  }
+
+  if (
+    normalizedId.includes('/src/components/settings/') ||
+    normalizedId.includes('/src/components/settings-panel/') ||
+    normalizedId.includes('/src/components/SettingsPanel.tsx') ||
+    normalizedId.includes('/src/components/UserSettingsPage.tsx') ||
+    normalizedId.includes('/src/components/SNMPProfileManager.tsx') ||
+    normalizedId.includes('/src/components/CredentialProfileManager.tsx') ||
+    normalizedId.includes('/src/components/GrafanaDashboardProfileManager.tsx') ||
+    normalizedId.includes('/src/components/InstanceBackupManager.tsx')
+  ) {
+    return 'settings-view';
+  }
+
+  if (normalizedId.includes('/src/components/topology-hub/')) {
+    return 'topology-hub-view';
+  }
+
+  return null;
 }
 
 export default defineConfig(({ mode }) => {
@@ -55,9 +95,15 @@ export default defineConfig(({ mode }) => {
       },
     },
     build: {
-      rollupOptions: {
+      rolldownOptions: {
         output: {
-          manualChunks,
+          codeSplitting: {
+            groups: [
+              {
+                name: chunkGroupName,
+              },
+            ],
+          },
         },
       },
     },

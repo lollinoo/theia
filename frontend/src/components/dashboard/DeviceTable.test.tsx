@@ -5,8 +5,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Area, Device } from '../../types/api';
 import { DeviceTable } from './DeviceTable';
-import { buildRuntimeDeviceRows } from './runtimeDeviceRows';
 import type { RuntimeDeviceRow } from './runtimeDeviceRows';
+import { buildRuntimeDeviceRows } from './runtimeDeviceRows';
 
 // Mock DeviceRow as a simple <tr> stub
 vi.mock('./DeviceRow', () => ({

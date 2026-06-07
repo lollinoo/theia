@@ -3,7 +3,7 @@
  */
 import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ThemeProvider, requireThemeContext, useTheme } from './ThemeContext';
+import { requireThemeContext, ThemeProvider, useTheme } from './ThemeContext';
 
 function TestConsumer() {
   const { theme, resolvedTheme, setTheme } = useTheme();

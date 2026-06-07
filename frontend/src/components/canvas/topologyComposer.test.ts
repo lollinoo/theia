@@ -132,10 +132,7 @@ function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
  * Composes the topology under test with representative devices, links,
  * positions, and optional runtime inputs.
  */
-function buildSubject(options: {
-  snapshot?: SnapshotPayload | null;
-  alerts?: AlertDTO[];
-}) {
+function buildSubject(options: { snapshot?: SnapshotPayload | null; alerts?: AlertDTO[] }) {
   const devices = [
     mockDevice(),
     mockDevice({

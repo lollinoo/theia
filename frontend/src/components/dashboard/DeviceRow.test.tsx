@@ -4,11 +4,10 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Area, Device } from '../../types/api';
-import type { DeviceMetricsDTO } from '../../types/metrics';
-import type { SnapshotPayload } from '../../types/metrics';
+import type { DeviceMetricsDTO, SnapshotPayload } from '../../types/metrics';
 import { DeviceRow } from './DeviceRow';
-import { buildRuntimeDeviceRows } from './runtimeDeviceRows';
 import type { RuntimeDeviceRow } from './runtimeDeviceRows';
+import { buildRuntimeDeviceRows } from './runtimeDeviceRows';
 
 // Mock StatusDot as a simple stub
 vi.mock('../StatusDot', () => ({

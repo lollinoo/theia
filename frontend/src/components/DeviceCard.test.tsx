@@ -2,18 +2,18 @@
  * Exercises device card component behavior so refactors preserve the documented contract.
  */
 import { fireEvent, render, screen } from '@testing-library/react';
-import { ReactFlowProvider } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
+import { ReactFlowProvider } from '@xyflow/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../types/api';
 import type { AlertStatus, DeviceMetricsDTO } from '../types/metrics';
-import DeviceCard, { getDeviceRenderSignature } from './DeviceCard';
-import type { DeviceNode, DeviceNodeData } from './DeviceCard';
 import {
   clearCanvasMetrics,
   exportCanvasMetrics,
   setCanvasRenderMetricsEnabled,
 } from './canvas/canvasInstrumentation';
+import type { DeviceNode, DeviceNodeData } from './DeviceCard';
+import DeviceCard, { getDeviceRenderSignature } from './DeviceCard';
 import { type DeviceMonitoringState, resolveDeviceMonitoringState } from './deviceVisualState';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -168,6 +168,14 @@ describe('DeviceCard', () => {
     expect(screen.queryByText('Late')).toBeNull();
     expect(screen.queryByText('Partial')).toBeNull();
     expect(screen.queryByText(/Polling every/)).toBeNull();
+  });
+
+  it('does not expose the pointer-only card shell as a keyboard button', () => {
+    renderDeviceCard({ metrics: mockMetrics() });
+
+    const card = screen.getByTestId('device-node-card');
+    expect(card).not.toHaveAttribute('role', 'button');
+    expect(card).not.toHaveAttribute('tabindex');
   });
 
   it('keeps self-link details visible without backdrop blur or floating shadows on repeated cards', () => {
@@ -588,7 +596,7 @@ describe('DeviceCard', () => {
   });
 
   it('renders unmonitored virtual nodes as neutral capsule endpoints', () => {
-    const { container } = renderDeviceCard({
+    renderDeviceCard({
       device: mockDevice({
         device_type: 'virtual',
         ip: '',

@@ -89,6 +89,7 @@ function deviceMatchesTags(device: Device, tagFilter: Record<string, string>): b
     if (
       tags === undefined ||
       tags === null ||
+      // biome-ignore lint/suspicious/noPrototypeBuiltins: Object.hasOwn is unavailable under this package's current TypeScript lib target.
       !Object.prototype.hasOwnProperty.call(tags, key) ||
       tags[key] !== expected
     ) {

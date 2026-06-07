@@ -3,7 +3,7 @@
  * Keeps table, backup, and device-management responsibilities isolated by module.
  */
 import type { Device } from '../../types/api';
-import { type SnapshotPayload, formatUptime } from '../../types/metrics';
+import { formatUptime, type SnapshotPayload } from '../../types/metrics';
 import {
   resolveDeviceMonitoringState,
   resolveDeviceOperationalReadouts,

@@ -3,8 +3,8 @@
  * Centralizes shared lifecycle and persistence behavior behind a stable provider contract.
  */
 import {
-  type ReactNode,
   createContext,
+  type ReactNode,
   useCallback,
   useContext,
   useEffect,
@@ -15,9 +15,9 @@ import {
   type AuthSession,
   type AuthUser,
   type ChangePasswordPayload,
-  type LoginPayload,
   changePassword as changePasswordRequest,
   fetchCurrentUser,
+  type LoginPayload,
   loginUser,
   logoutUser,
 } from '../api/client';

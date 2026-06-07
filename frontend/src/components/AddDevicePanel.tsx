@@ -26,8 +26,8 @@ import type {
   TopologyDiscoveryMode,
 } from '../types/api';
 import {
-  TOPOLOGY_DISCOVERY_MODE_OPTIONS,
   formatTopologyDiscoveryMode,
+  TOPOLOGY_DISCOVERY_MODE_OPTIONS,
 } from '../utils/topologyDiscovery';
 import {
   MAX_STRING_LENGTH,
@@ -35,16 +35,16 @@ import {
   validateMaxLength,
   validateRequired,
 } from '../utils/validation';
-import { MaterialIcon } from './MaterialIcon';
 import {
-  type DeviceFormModel,
   applySNMPProfile,
   createAddDeviceFormModel,
+  type DeviceFormModel,
   defaultVirtualNodeColor,
   normalizeVirtualNodeColor,
   resetDeviceFormMode,
 } from './forms/deviceFormModels';
 import { buildCreateDevicePayload } from './forms/deviceFormSubmitters';
+import { MaterialIcon } from './MaterialIcon';
 
 interface AddDevicePanelProps {
   onDeviceAdded: () => void;

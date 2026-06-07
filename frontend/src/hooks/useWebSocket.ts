@@ -11,8 +11,11 @@ import {
 import {
   type AlertDTO,
   type AlertWSMessage,
+  mergeRuntimeDeltaPatch,
+  mergeSnapshotDelta,
   type PollingHealthPayload,
   type PrometheusStatusPayload,
+  parseWSMessage,
   type ReadyWSMessage,
   type ResyncRequiredPayload,
   type ResyncRequiredWSMessage,
@@ -21,9 +24,6 @@ import {
   type SnapshotPayload,
   type SnapshotWSMessage,
   type TopologyChangedWSMessage,
-  mergeRuntimeDeltaPatch,
-  mergeSnapshotDelta,
-  parseWSMessage,
 } from '../types/metrics';
 import {
   getCanvasRuntimeBootstrap,
@@ -35,7 +35,7 @@ import {
   recordIgnoredStaleRuntimeDelta,
   recordIgnoredStaleRuntimeSnapshot,
 } from './websocket/diagnostics';
-import { type CanvasHelloPayload, buildCanvasHelloPayload } from './websocket/hello';
+import { buildCanvasHelloPayload, type CanvasHelloPayload } from './websocket/hello';
 import { classifyRuntimeDelta, shouldIgnoreStaleRuntimeSnapshot } from './websocket/runtimeState';
 import { appendHelloQueryParams, buildWebSocketURL } from './websocket/url';
 

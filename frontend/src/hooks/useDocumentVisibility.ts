@@ -13,7 +13,9 @@ function currentVisibility(): boolean {
 
 function publishVisibility() {
   const visible = currentVisibility();
-  subscribers.forEach((notify) => notify(visible));
+  subscribers.forEach((notify) => {
+    notify(visible);
+  });
 }
 
 function handleVisibilityChange() {

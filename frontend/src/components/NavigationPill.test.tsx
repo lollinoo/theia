@@ -133,7 +133,6 @@ describe('NavigationPill', () => {
         />,
       );
 
-      const desktopAreaSelector = screen.getByTestId('desktop-area-selector');
       const scroller = screen.getByTestId('desktop-area-selector-scroll');
 
       expect(scroller.className).toContain('topology-scrollbar-none');

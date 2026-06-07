@@ -2,6 +2,7 @@
  * Exercises device API boundary behavior so refactors preserve the documented contract.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDocumentCookie } from '../test/documentCookie';
 import {
   type CreateDevicePayload,
   createBridgeLaunchRequest,
@@ -61,7 +62,7 @@ function deviceResource(id: string, hostname: string, ip: string) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  document.cookie = 'theia_csrf=device-csrf';
+  setDocumentCookie('theia_csrf=device-csrf');
 });
 
 describe('device client', () => {

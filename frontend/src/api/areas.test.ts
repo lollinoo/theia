@@ -2,6 +2,7 @@
  * Exercises areas API boundary behavior so refactors preserve the documented contract.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDocumentCookie } from '../test/documentCookie';
 import { createArea, deleteArea, fetchAreas, updateArea } from './areas';
 
 function mockResponse(
@@ -33,7 +34,7 @@ function areaPayload(id: string) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  document.cookie = 'theia_csrf=areas-csrf';
+  setDocumentCookie('theia_csrf=areas-csrf');
 });
 
 describe('areas client', () => {

@@ -3,8 +3,8 @@
  */
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { ContextMenu } from './ContextMenu';
 import type { ContextMenuItem } from './ContextMenu';
+import { ContextMenu } from './ContextMenu';
 
 const defaultPosition = { x: 100, y: 100 };
 const defaultOnClose = vi.fn();

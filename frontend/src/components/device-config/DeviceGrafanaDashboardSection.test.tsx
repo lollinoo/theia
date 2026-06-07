@@ -91,6 +91,25 @@ function createDeferredSave() {
   };
 }
 
+async function waitForLoadedProfileSelect(): Promise<HTMLSelectElement> {
+  let select: HTMLSelectElement | null = null;
+
+  await waitFor(() => {
+    select = screen.getByRole('combobox', {
+      name: /dashboard profile/i,
+    }) as HTMLSelectElement;
+    expect(Array.from(select.options).some((option) => option.value === 'grafana-profile-1')).toBe(
+      true,
+    );
+  });
+
+  if (!select) {
+    throw new Error('Dashboard profile select did not render');
+  }
+
+  return select;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -140,13 +159,11 @@ describe('DeviceGrafanaDashboardSection', () => {
       <DeviceGrafanaDashboardSection device={mockDevice()} onSettingsChange={onSettingsChange} />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByRole('combobox', { name: /dashboard profile/i })).toBeInTheDocument();
-    });
+    const profileSelect = await waitForLoadedProfileSelect();
 
     vi.useFakeTimers();
     try {
-      fireEvent.change(screen.getByRole('combobox', { name: /dashboard profile/i }), {
+      fireEvent.change(profileSelect, {
         target: { value: 'grafana-profile-1' },
       });
       fireEvent.change(screen.getByPlaceholderText('Optional custom URL override'), {
@@ -240,11 +257,9 @@ describe('DeviceGrafanaDashboardSection', () => {
       <DeviceGrafanaDashboardSection device={mockDevice()} onSettingsChange={onSettingsChange} />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByRole('combobox', { name: /dashboard profile/i })).toBeInTheDocument();
-    });
+    const profileSelect = await waitForLoadedProfileSelect();
 
-    fireEvent.change(screen.getByRole('combobox', { name: /dashboard profile/i }), {
+    fireEvent.change(profileSelect, {
       target: { value: 'grafana-profile-1' },
     });
     expect(saveDeviceGrafanaDashboardOverride).toHaveBeenCalledWith('dev-1', {
@@ -282,11 +297,9 @@ describe('DeviceGrafanaDashboardSection', () => {
       <DeviceGrafanaDashboardSection device={mockDevice()} onSettingsChange={onSettingsChange} />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByRole('combobox', { name: /dashboard profile/i })).toBeInTheDocument();
-    });
+    const profileSelect = await waitForLoadedProfileSelect();
 
-    fireEvent.change(screen.getByRole('combobox', { name: /dashboard profile/i }), {
+    fireEvent.change(profileSelect, {
       target: { value: 'grafana-profile-1' },
     });
     expect(saveDeviceGrafanaDashboardOverride).toHaveBeenCalledWith('dev-1', {
@@ -325,11 +338,9 @@ describe('DeviceGrafanaDashboardSection', () => {
       <DeviceGrafanaDashboardSection device={mockDevice()} onSettingsChange={onSettingsChange} />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByRole('combobox', { name: /dashboard profile/i })).toBeInTheDocument();
-    });
+    const profileSelect = await waitForLoadedProfileSelect();
 
-    fireEvent.change(screen.getByRole('combobox', { name: /dashboard profile/i }), {
+    fireEvent.change(profileSelect, {
       target: { value: 'grafana-profile-1' },
     });
     expect(saveDeviceGrafanaDashboardOverride).toHaveBeenCalledWith('dev-1', {

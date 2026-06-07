@@ -4,8 +4,8 @@
  */
 import { useDeferredValue, useEffect, useRef, useState } from 'react';
 import type { Device } from '../types/api';
-import { MaterialIcon } from './MaterialIcon';
 import { VendorIcon } from './icons/VendorIcon';
+import { MaterialIcon } from './MaterialIcon';
 
 interface SearchOverlayProps {
   devices: Device[];

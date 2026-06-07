@@ -3,7 +3,7 @@
  */
 import { render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { AlertsPanel } from './AlertsPanel';
+import { AlertsPanel, alertRowKey } from './AlertsPanel';
 import type { AlertsPanelModel } from './panelModels';
 
 vi.mock('./MaterialIcon', () => ({
@@ -39,6 +39,12 @@ function mockModel(overrides: Partial<AlertsPanelModel> = {}): AlertsPanelModel 
 }
 
 describe('AlertsPanel (COMP-06)', () => {
+  it('uses alert row occurrence as a final key tie breaker for duplicate alert rows', () => {
+    const alert = mockAlert();
+
+    expect(alertRowKey(alert, 'firing', 0)).not.toBe(alertRowKey(alert, 'firing', 1));
+  });
+
   it('firing status dot has animate-pulse class', () => {
     const alerts = [mockAlert({ state: 'firing' })];
     const { container } = render(<AlertsPanel model={mockModel({ firingAlerts: alerts })} />);

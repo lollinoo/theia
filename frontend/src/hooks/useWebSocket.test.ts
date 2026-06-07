@@ -2,7 +2,7 @@
  * Exercises use WebSocket hook lifecycle behavior so refactors preserve the documented contract.
  */
 import { act, renderHook } from '@testing-library/react';
-import { type ReactNode, StrictMode, createElement } from 'react';
+import { createElement, type ReactNode, StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   exportCanvasDiagnostics,

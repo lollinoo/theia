@@ -1,7 +1,7 @@
 /**
  * Exercises saved maps browser workflow behavior so refactors preserve the documented contract.
  */
-import { type APIRequestContext, type Page, expect, test } from '@playwright/test';
+import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
 
 const TEST_MAP_NAME = 'Backbone e2e';
 const DUPLICATE_TEST_MAP_NAME = `Copy of ${TEST_MAP_NAME}`;

@@ -87,6 +87,23 @@ function readableAlertTitle(alertName: string) {
     .join(' ');
 }
 
+export function alertRowKey(
+  alert: AlertsPanelModel['firingAlerts'][number],
+  stateGroup: string,
+  occurrence: number,
+): string {
+  return [
+    stateGroup,
+    occurrence,
+    alert.deviceId,
+    alert.alertName,
+    alert.deviceLabel,
+    alert.severity,
+    alert.state,
+    alert.summary,
+  ].join(':');
+}
+
 /** Renders the AlertsPanel component within the UI component boundary. */
 export function AlertsPanel({ model }: AlertsPanelProps) {
   const { activeAlertCount, firingAlerts, resolvedAlerts, prometheusDiagnostics } = model;
@@ -124,9 +141,9 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
           {hiddenActiveAlerts > 0 && (
             <p className="text-[11px] text-on-bg-secondary">{hiddenActiveAlertsMessage}</p>
           )}
-          {firingAlerts.map((alert, i) => (
+          {firingAlerts.map((alert, index) => (
             <div
-              key={`${alert.deviceId}-${alert.alertName}-${i}`}
+              key={alertRowKey(alert, 'firing', index)}
               className="rounded-lg bg-elevated shadow-panel p-3 space-y-1.5 transition-colors duration-200"
             >
               <div className="flex items-center gap-2">
@@ -155,9 +172,9 @@ export function AlertsPanel({ model }: AlertsPanelProps) {
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
             Resolved alerts ({resolvedAlerts.length})
           </p>
-          {resolvedAlerts.map((alert, i) => (
+          {resolvedAlerts.map((alert, index) => (
             <div
-              key={`${alert.deviceId}-${alert.alertName}-resolved-${i}`}
+              key={alertRowKey(alert, 'resolved', index)}
               className="rounded-lg bg-surface-high p-3 space-y-1.5 opacity-60 transition-colors duration-200"
             >
               <div className="flex items-center gap-2">

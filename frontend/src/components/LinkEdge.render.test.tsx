@@ -9,13 +9,9 @@ import { LinkLabelLayer } from './LinkLabelLayer';
 import { clearLinkLabelRegistry } from './linkLabelRegistry';
 
 vi.mock('@xyflow/react', () => ({
-  BaseEdge: ({
-    id,
-    style,
-  }: {
-    id: string;
-    style?: CSSProperties;
-  }) => <path data-testid={id} style={style} />,
+  BaseEdge: ({ id, style }: { id: string; style?: CSSProperties }) => (
+    <path data-testid={id} style={style} />
+  ),
   EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
   getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
 }));
@@ -74,6 +70,15 @@ describe('LinkEdge render', () => {
     expect(screen.queryByText('SPD 1 Gbps')).not.toBeInTheDocument();
     expect(screen.queryByText('AUTO')).not.toBeInTheDocument();
     expect(screen.getByTestId('edge-1')).toHaveStyle({ stroke: 'var(--color-status-up)' });
+  });
+
+  it('keeps the transparent pointer hit target out of the button accessibility tree', () => {
+    const { container } = renderEdge({}, { onContextMenu: vi.fn() });
+    const hitTarget = container.querySelector('path.cursor-pointer');
+
+    expect(hitTarget).not.toBeNull();
+    expect(hitTarget).not.toHaveAttribute('role', 'button');
+    expect(hitTarget).not.toHaveAttribute('tabindex');
   });
 
   it('keeps warning mismatches amber instead of green', () => {
