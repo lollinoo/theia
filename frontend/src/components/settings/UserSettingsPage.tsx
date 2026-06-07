@@ -100,6 +100,41 @@ function withCurrentOption(
   return [{ value: current, label: current }, ...options];
 }
 
+async function copyTextToClipboard(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall back below when the browser exposes Clipboard API but blocks it.
+    }
+  }
+
+  if (!copyTextWithTextarea(value)) {
+    throw new Error('clipboard unavailable');
+  }
+}
+
+function copyTextWithTextarea(value: string): boolean {
+  if (typeof document.execCommand !== 'function') {
+    return false;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    return document.execCommand('copy');
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 /** Renders the UserSettingsPage component within the settings workflow. */
 export function UserSettingsPage() {
   const [settings, setSettings] = useState<UserSettingsResponse | null>(null);
@@ -114,13 +149,22 @@ export function UserSettingsPage() {
   const [bridgeMenuOpen, setBridgeMenuOpen] = useState(false);
   const [useGlobalBridgePort, setUseGlobalBridgePort] = useState(true);
   const [bridgePortDraft, setBridgePortDraft] = useState('1337');
+  const [secretCopyStatus, setSecretCopyStatus] = useState<'idle' | 'copied'>('idle');
   const bridgeMenuRef = useRef<HTMLDivElement | null>(null);
+  const secretCopyFeedbackTimeoutRef = useRef<number | null>(null);
 
   function applySettings(next: UserSettingsResponse) {
     const override = next.preferences.bridge_port_override;
     setSettings(next);
     setUseGlobalBridgePort(override == null);
     setBridgePortDraft(String(override ?? next.preferences.bridge_port ?? 1337));
+  }
+
+  function clearSecretCopyFeedbackTimeout() {
+    if (secretCopyFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(secretCopyFeedbackTimeoutRef.current);
+      secretCopyFeedbackTimeoutRef.current = null;
+    }
   }
 
   useEffect(() => {
@@ -156,6 +200,10 @@ export function UserSettingsPage() {
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [bridgeMenuOpen]);
+
+  useEffect(() => {
+    return clearSecretCopyFeedbackTimeout;
+  }, []);
 
   const profile = useMemo(() => {
     return {
@@ -252,6 +300,8 @@ export function UserSettingsPage() {
     setSaving(true);
     setError(null);
     setMessage(null);
+    setSecretCopyStatus('idle');
+    clearSecretCopyFeedbackTimeout();
     setBridgeMenuOpen(false);
     try {
       if (action === 'generate') {
@@ -284,6 +334,24 @@ export function UserSettingsPage() {
       setConfigSnippet(JSON.stringify(result.config, null, 2));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load connector config');
+    }
+  }
+
+  async function copyBridgeSecret(secret: string) {
+    setError(null);
+    setMessage(null);
+    try {
+      await copyTextToClipboard(secret);
+      clearSecretCopyFeedbackTimeout();
+      setSecretCopyStatus('copied');
+      secretCopyFeedbackTimeoutRef.current = window.setTimeout(() => {
+        setSecretCopyStatus('idle');
+        secretCopyFeedbackTimeoutRef.current = null;
+      }, 1500);
+      setMessage('Bridge Secret copied');
+    } catch {
+      setSecretCopyStatus('idle');
+      setError('Failed to copy Bridge Secret');
     }
   }
 
@@ -577,11 +645,22 @@ export function UserSettingsPage() {
                   </code>
                   <button
                     type="button"
-                    className="theia-button-secondary"
-                    aria-label="Copy Bridge Secret"
-                    onClick={() => void navigator.clipboard?.writeText(oneTimeSecret)}
+                    className={`theia-button-secondary transition-[background-color,border-color,color,transform,opacity] duration-150 motion-reduce:transition-none ${
+                      secretCopyStatus === 'copied'
+                        ? 'scale-105 border-status-up/40 bg-status-up/10 text-status-up'
+                        : 'scale-100'
+                    }`}
+                    aria-label={
+                      secretCopyStatus === 'copied' ? 'Bridge Secret copied' : 'Copy Bridge Secret'
+                    }
+                    onClick={() => void copyBridgeSecret(oneTimeSecret)}
                   >
-                    <MaterialIcon name="content_copy" className="text-[18px]" />
+                    <MaterialIcon
+                      name={secretCopyStatus === 'copied' ? 'check' : 'content_copy'}
+                      className={`text-[18px] transition-[opacity,transform] duration-150 motion-reduce:transition-none ${
+                        secretCopyStatus === 'copied' ? 'scale-110 opacity-100' : 'opacity-90'
+                      }`}
+                    />
                   </button>
                 </div>
               </div>
