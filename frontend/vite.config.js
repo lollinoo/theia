@@ -2,10 +2,8 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
-function manualChunks(id) {
+function chunkGroupName(id) {
     var normalizedId = id.replace(/\\/g, '/');
-    if (!normalizedId.includes('/node_modules/'))
-        return undefined;
     if (normalizedId.includes('/node_modules/react/') ||
         normalizedId.includes('/node_modules/react-dom/') ||
         normalizedId.includes('/node_modules/scheduler/')) {
@@ -17,7 +15,36 @@ function manualChunks(id) {
     if (normalizedId.includes('/node_modules/d3-')) {
         return 'd3-vendor';
     }
-    return 'vendor';
+    if (normalizedId.includes('/node_modules/')) {
+        return 'vendor';
+    }
+    if (normalizedId.includes('/src/components/canvas/')) {
+        return 'canvas-core';
+    }
+    if (normalizedId.includes('/src/components/Canvas.tsx') ||
+        normalizedId.includes('/src/components/DeviceCard.tsx') ||
+        normalizedId.includes('/src/components/LinkEdge.tsx') ||
+        normalizedId.includes('/src/components/LinkLabelLayer.tsx')) {
+        return 'canvas-view';
+    }
+    if (normalizedId.includes('/src/components/dashboard/') ||
+        normalizedId.includes('/src/components/Dashboard.tsx')) {
+        return 'dashboard-view';
+    }
+    if (normalizedId.includes('/src/components/settings/') ||
+        normalizedId.includes('/src/components/settings-panel/') ||
+        normalizedId.includes('/src/components/SettingsPanel.tsx') ||
+        normalizedId.includes('/src/components/UserSettingsPage.tsx') ||
+        normalizedId.includes('/src/components/SNMPProfileManager.tsx') ||
+        normalizedId.includes('/src/components/CredentialProfileManager.tsx') ||
+        normalizedId.includes('/src/components/GrafanaDashboardProfileManager.tsx') ||
+        normalizedId.includes('/src/components/InstanceBackupManager.tsx')) {
+        return 'settings-view';
+    }
+    if (normalizedId.includes('/src/components/topology-hub/')) {
+        return 'topology-hub-view';
+    }
+    return null;
 }
 
 export default defineConfig(function (_a) {
@@ -48,7 +75,13 @@ export default defineConfig(function (_a) {
         build: {
             rolldownOptions: {
                 output: {
-                    manualChunks: manualChunks,
+                    codeSplitting: {
+                        groups: [
+                            {
+                                name: chunkGroupName,
+                            },
+                        ],
+                    },
                 },
             },
         },
