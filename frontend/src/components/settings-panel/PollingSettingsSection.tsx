@@ -3,10 +3,10 @@
  * Keeps validation, saved-state display, and defaults close to the controls that use them.
  */
 import { SavedIndicator } from './SavedIndicator';
-import { WorkerSettingsSection } from './WorkerSettingsSection';
-import { POLLING_PRESETS } from './settingsConstants';
 import type { WorkerSetting, WorkerSettingKey } from './settingsConstants';
+import { POLLING_PRESETS } from './settingsConstants';
 import { controlClass, fieldLabelClass } from './settingsPanelStyles';
+import { WorkerSettingsSection } from './WorkerSettingsSection';
 
 interface PollingSettingsSectionProps {
   pollingValue: string;

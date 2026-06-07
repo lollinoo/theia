@@ -2,9 +2,8 @@
  * Exercises canvas component behavior so refactors preserve the documented contract.
  */
 import { describe, expect, it, vi } from 'vitest';
-
-import type { DeviceNode } from './DeviceCard';
 import { buildDeviceContextMenuItems, buildPositionPayload } from './canvas/canvasHelpers';
+import type { DeviceNode } from './DeviceCard';
 
 function buildItems(isVirtual: boolean) {
   return buildDeviceContextMenuItems({

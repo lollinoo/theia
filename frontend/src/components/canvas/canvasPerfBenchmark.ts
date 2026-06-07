@@ -9,10 +9,10 @@ import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metri
 import type { DeviceNode } from '../DeviceCard';
 import { projectAreaTopology } from './areaProjection';
 import {
+  aggregateCanvasMetricSamples,
   type CanvasMetricAggregate,
   type CanvasMetricName,
   type CanvasMetricSample,
-  aggregateCanvasMetricSamples,
 } from './canvasInstrumentation';
 import {
   CANVAS_PERF_SCENARIOS,

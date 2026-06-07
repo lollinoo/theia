@@ -9,9 +9,9 @@ import { render } from '@testing-library/react';
  */
 import { describe, expect, it, vi } from 'vitest';
 import { AlertsPanel } from '../AlertsPanel';
+import type { AlertsPanelModel } from '../panelModels';
 import { StatusDot } from '../StatusDot';
 import { Toolbar } from '../Toolbar';
-import type { AlertsPanelModel } from '../panelModels';
 
 // Mock MaterialIcon for Toolbar and AlertsPanel
 vi.mock('../MaterialIcon', () => ({

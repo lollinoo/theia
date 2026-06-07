@@ -193,7 +193,9 @@ vi.mock('./canvas/useCanvasMenus', async () => {
 vi.mock('./canvas/useCanvasData', () => ({
   useCanvasData: ({
     openDeviceMenu,
-  }: { openDeviceMenu: (event: unknown, deviceId: string) => void }) => {
+  }: {
+    openDeviceMenu: (event: unknown, deviceId: string) => void;
+  }) => {
     testState.openDeviceMenu = openDeviceMenu;
     return {
       devices: testState.devices,

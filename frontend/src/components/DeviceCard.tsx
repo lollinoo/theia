@@ -9,14 +9,12 @@ import {
   type AlertStatus,
   type DeviceMetricsDTO,
   type FreshnessStatus,
-  type RuntimeFlag,
   formatUptime,
   metricColor,
+  type RuntimeFlag,
 } from '../types/metrics';
 import { formatPollingEvery } from '../utils/freshness';
 import { getEffectivePollingIntervalSeconds } from '../utils/polling';
-import { MaterialIcon } from './MaterialIcon';
-import { StatusDot } from './StatusDot';
 import {
   isCanvasRenderMetricsEnabled,
   recordCanvasComponentRenderMetric,
@@ -32,6 +30,8 @@ import {
   resolveDeviceVisualState,
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
+import { MaterialIcon } from './MaterialIcon';
+import { StatusDot } from './StatusDot';
 
 /** Describes the device node data contract used by the UI component boundary. */
 export interface DeviceNodeData {
@@ -652,6 +652,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
   }
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: The card shell only owns pointer context-menu plumbing; child controls expose keyboard actions.
     <div
       data-testid="device-node-card"
       data-topology-node-variant={renderVariant}
@@ -912,6 +913,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 ) : (
                   <div
                     data-testid="virtual-node-low-zoom-status-badge"
+                    role="img"
                     aria-label={headerState.label}
                     className={`topology-semantic-low-zoom-only topology-semantic-status-badge shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusStyles.badgeClass}`}
                     style={mergeReadableFontStyle(statusStyles.badgeStyle, 10)}

@@ -4,15 +4,15 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import {
-  type HealthRuntime,
   fetchHealthRuntime,
   fetchSettingsWithMetadata,
+  type HealthRuntime,
   updateSetting,
 } from '../api/client';
 import type { TopologyDiscoveryMode } from '../types/api';
 import {
-  TOPOLOGY_DISCOVERY_DEFAULT_OPTIONS,
   formatTopologyDiscoveryMode,
+  TOPOLOGY_DISCOVERY_DEFAULT_OPTIONS,
 } from '../utils/topologyDiscovery';
 import {
   validateIntervalAllowlist,
@@ -31,13 +31,13 @@ import { PrometheusSettingsSection } from './settings-panel/PrometheusSettingsSe
 import { SavedIndicator } from './settings-panel/SavedIndicator';
 import { SettingsSection } from './settings-panel/SettingsSection';
 import {
+  createWorkerSavedFlags,
+  createWorkerTimerRefs,
   DEFAULT_WORKER_SETTINGS,
   PRESET_VALUES,
   WORKER_SETTINGS,
   type WorkerSetting,
   type WorkerSettingKey,
-  createWorkerSavedFlags,
-  createWorkerTimerRefs,
 } from './settings-panel/settingsConstants';
 import { controlClass, fieldLabelClass } from './settings-panel/settingsPanelStyles';
 

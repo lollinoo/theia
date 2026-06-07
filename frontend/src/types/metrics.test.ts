@@ -5,15 +5,15 @@ import { describe, expect, it } from 'vitest';
 import {
   type DeviceRuntimeDTO,
   type LinkRuntimeDTO,
-  type RuntimeDeltaEnvelopePayload,
-  type SnapshotDeltaEnvelopePayload,
-  type SnapshotEnvelopePayload,
-  type SnapshotPayload,
   mergeRuntimeDeltaPatch,
   mergeSnapshotDelta,
   parseDeviceRuntime,
   parseLinkRuntime,
   parseWSMessage,
+  type RuntimeDeltaEnvelopePayload,
+  type SnapshotDeltaEnvelopePayload,
+  type SnapshotEnvelopePayload,
+  type SnapshotPayload,
 } from './metrics';
 
 function makeDeviceRuntime(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRuntimeDTO {

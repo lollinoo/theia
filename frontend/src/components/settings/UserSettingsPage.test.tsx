@@ -4,9 +4,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  type UserSettingsResponse,
   fetchBridgeConnectorConfig,
   fetchUserSettings,
+  type UserSettingsResponse,
   updateUserSettings,
 } from '../../api/client';
 import { UserSettingsPage } from './UserSettingsPage';

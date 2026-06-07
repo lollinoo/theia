@@ -1,7 +1,7 @@
 /**
  * Exercises no line audit component behavior so refactors preserve the documented contract.
  */
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 /**
  * COMP-12 No-Line Rule Audit

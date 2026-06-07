@@ -1,17 +1,18 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
   "files": {
-    "ignore": [
-      "coverage",
-      "dist",
-      "e2e/global.setup.ts",
-      "e2e/realtime.spec.ts",
-      "node_modules",
-      "package-lock.json",
-      "playwright-report",
-      "src/index.css",
-      "test-results",
-      "vite.config.js"
+    "includes": [
+      "**",
+      "!**/coverage",
+      "!**/dist",
+      "!**/e2e/global.setup.ts",
+      "!**/e2e/realtime.spec.ts",
+      "!**/node_modules",
+      "!**/package-lock.json",
+      "!**/playwright-report",
+      "!**/src/index.css",
+      "!**/test-results",
+      "!**/vite.config.js"
     ]
   },
   "formatter": {
@@ -19,9 +20,7 @@
     "indentStyle": "space",
     "lineWidth": 100
   },
-  "organizeImports": {
-    "enabled": true
-  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "linter": {
     "enabled": true,
     "rules": {

@@ -27,9 +27,9 @@ import {
   validateRequired,
 } from '../../utils/validation';
 import {
-  type DeviceFormModel,
   applySNMPProfile,
   createDeviceConfigFormModel,
+  type DeviceFormModel,
   normalizeVirtualNodeColor,
 } from '../forms/deviceFormModels';
 import { buildUpdateDevicePayload } from '../forms/deviceFormSubmitters';

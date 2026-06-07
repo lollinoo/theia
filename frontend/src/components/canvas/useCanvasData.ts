@@ -11,9 +11,9 @@ import { type PositionState, usePositions } from '../../hooks/usePositions';
 import type { Area, Device, GrafanaDashboardConfig, Link } from '../../types/api';
 import {
   type AlertDTO,
+  isPrometheusUnavailable,
   type PrometheusStatusPayload,
   type SnapshotPayload,
-  isPrometheusUnavailable,
 } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
@@ -47,8 +47,8 @@ import { buildAlertsPanelModel } from './panelAdapters';
 import { buildRuntimeState } from './runtimeAdapters';
 import { applyRuntimeSnapshotPatch } from './runtimeSnapshotPatch';
 import {
-  type StructuralRefreshQueue,
   createStructuralRefreshQueue,
+  type StructuralRefreshQueue,
 } from './structuralRefreshQueue';
 import {
   buildCanvasTopologyCompositionCacheKey,
@@ -68,11 +68,11 @@ import {
   nodePositionsToPositionMap,
 } from './topologyPositionState';
 import {
-  type StructuralRefreshCause,
-  type TopologyRecoveryNotice,
   buildTopologyRecoveryFailureNotice,
   buildTopologyRecoveryNotice,
   measurementTriggerForCauses,
+  type StructuralRefreshCause,
+  type TopologyRecoveryNotice,
 } from './topologyRecovery';
 
 export type { TopologyRecoveryNotice } from './topologyRecovery';

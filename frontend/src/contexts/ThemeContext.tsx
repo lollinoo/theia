@@ -2,7 +2,7 @@
  * Provides theme context context state for the React application.
  * Centralizes shared lifecycle and persistence behavior behind a stable provider contract.
  */
-import { type ReactNode, createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from 'react';
 
 type ThemePreference = 'dark' | 'light' | 'system';
 /** Describes the resolved theme contract used by the shared React context. */

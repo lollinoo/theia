@@ -5,8 +5,8 @@
 import { EdgeLabelRenderer } from '@xyflow/react';
 import { useSyncExternalStore } from 'react';
 import {
-  type RegisteredLinkLabel,
   getLinkLabelSnapshot,
+  type RegisteredLinkLabel,
   subscribeLinkLabels,
 } from './linkLabelRegistry';
 

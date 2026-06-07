@@ -7,13 +7,13 @@ import {
   type DeviceCredentialProfile,
   type InterfaceInfo,
   type Link,
-  type TopologyDiscoveryMode,
-  type WinBoxCredentials,
   parseDeviceCredentialProfilesResponse,
   parseDevicesResponse,
   parseInterfacesResponse,
   parseLinksResponse,
   parseWinBoxCredentialsResponse,
+  type TopologyDiscoveryMode,
+  type WinBoxCredentials,
 } from '../types/api';
 import { requestJSON, requestJSONWithBody } from './transport';
 

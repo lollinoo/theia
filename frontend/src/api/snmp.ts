@@ -3,9 +3,9 @@
  * Keeps request construction and backend response handling out of UI components.
  */
 import {
-  type SNMPProfile,
   parseSNMPProfileResponse,
   parseSNMPProfilesResponse,
+  type SNMPProfile,
 } from '../types/api';
 import { type SNMPPayload } from './device';
 import { requestJSON, requestJSONWithBody } from './transport';

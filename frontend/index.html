@@ -6,7 +6,7 @@
     <title>Theia</title>
     <script>
       // FOWT prevention: apply saved theme before first paint
-      (function() {
+      (() => {
         var stored = localStorage.getItem('theia-theme');
         var theme;
         if (stored === 'light') {

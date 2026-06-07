@@ -42,16 +42,23 @@ export function ShortcutHelp({ open, onClose }: ShortcutHelpProps) {
   ];
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-      onMouseDown={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <button
+        type="button"
+        className="absolute inset-0 h-full w-full cursor-default"
+        aria-label="Close keyboard shortcuts"
+        onMouseDown={onClose}
+      />
       <div
-        className="w-full max-w-md rounded-xl bg-surface p-6 shadow-panel transition-colors duration-200"
-        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shortcut-help-title"
+        className="relative z-10 w-full max-w-md rounded-xl bg-surface p-6 shadow-panel transition-colors duration-200"
       >
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-on-bg">Keyboard Shortcuts</h2>
+          <h2 id="shortcut-help-title" className="text-xl font-bold text-on-bg">
+            Keyboard Shortcuts
+          </h2>
           <button
             type="button"
             onClick={onClose}

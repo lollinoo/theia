@@ -111,6 +111,7 @@ function LinkEdgeInner({
 
   return (
     <>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: This transparent SVG path is a pointer-only edge hit target, not a keyboard command. */}
       <path
         d={edgePath}
         fill="none"

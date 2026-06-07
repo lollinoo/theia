@@ -3,7 +3,7 @@
  * Documents how canonical topology data is projected into the interactive view layer.
  */
 import type { Device, Link } from '../../types/api';
-import { type AlertDTO, type SnapshotPayload, alertStatusForDevice } from '../../types/metrics';
+import { type AlertDTO, alertStatusForDevice, type SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode, DeviceNodeRuntimeData } from '../DeviceCard';
 import {
   resolveDeviceMonitoringState,

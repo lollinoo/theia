@@ -46,7 +46,7 @@ export default defineConfig(function (_a) {
             },
         },
         build: {
-            rollupOptions: {
+            rolldownOptions: {
                 output: {
                     manualChunks: manualChunks,
                 },

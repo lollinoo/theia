@@ -6,13 +6,13 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type BridgeConnectorDownload,
   type BridgeCredentialMetadata,
-  type UserSettingsResponse,
   changePassword,
   fetchBridgeConnectorConfig,
   fetchUserSettings,
   generateBridgeSecret,
   revokeBridgeSecret,
   rotateBridgeSecret,
+  type UserSettingsResponse,
   updateUserSettings,
 } from '../../api/client';
 import { MaterialIcon } from '../MaterialIcon';
@@ -116,9 +116,16 @@ export function UserSettingsPage() {
   const [bridgePortDraft, setBridgePortDraft] = useState('1337');
   const bridgeMenuRef = useRef<HTMLDivElement | null>(null);
 
+  function applySettings(next: UserSettingsResponse) {
+    const override = next.preferences.bridge_port_override;
+    setSettings(next);
+    setUseGlobalBridgePort(override == null);
+    setBridgePortDraft(String(override ?? next.preferences.bridge_port ?? 1337));
+  }
+
   useEffect(() => {
     fetchUserSettings()
-      .then(setSettings)
+      .then(applySettings)
       .catch((err: unknown) =>
         setError(err instanceof Error ? err.message : 'Failed to load settings'),
       )
@@ -162,13 +169,6 @@ export function UserSettingsPage() {
     };
   }, [settings]);
 
-  useEffect(() => {
-    if (!settings) return;
-    const override = settings.preferences.bridge_port_override;
-    setUseGlobalBridgePort(override == null);
-    setBridgePortDraft(String(override ?? settings.preferences.bridge_port ?? 1337));
-  }, [settings]);
-
   const timezoneSelectOptions = useMemo(
     () => withCurrentOption(timezoneOptions, profile.timezone),
     [profile.timezone],
@@ -180,7 +180,7 @@ export function UserSettingsPage() {
 
   async function reload() {
     const next = await fetchUserSettings();
-    setSettings(next);
+    applySettings(next);
     return next;
   }
 
@@ -198,7 +198,7 @@ export function UserSettingsPage() {
         timezone: String(form.get('timezone') ?? ''),
         locale: String(form.get('locale') ?? ''),
       });
-      setSettings(next);
+      applySettings(next);
       setMessage('Settings saved');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save settings');
@@ -223,7 +223,7 @@ export function UserSettingsPage() {
       const next = await updateUserSettings({
         bridge_port_override: useGlobalBridgePort ? null : parsedBridgePort,
       });
-      setSettings(next);
+      applySettings(next);
       setMessage('Bridge port saved');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save Bridge port');

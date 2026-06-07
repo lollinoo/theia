@@ -7,17 +7,17 @@ import { deleteDevice, fetchDeviceCredentialProfiles, fetchOrphanDevices } from 
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import type { Area, Device } from '../types/api';
 import type { SnapshotPayload } from '../types/metrics';
-import { MaterialIcon } from './MaterialIcon';
-import { SidePanel } from './SidePanel';
 import { BackupHistoryTable } from './dashboard/BackupHistoryTable';
 import { BackupPanel } from './dashboard/BackupPanel';
 import { BulkBackupPanel } from './dashboard/BulkBackupPanel';
 import { ConfigViewer } from './dashboard/ConfigViewer';
 import { DeviceTable } from './dashboard/DeviceTable';
 import { type FilterOption, FilterSelect } from './dashboard/FilterSelect';
+import { buildRuntimeDeviceRows } from './dashboard/runtimeDeviceRows';
 import { SSHCredentialForm } from './dashboard/SSHCredentialForm';
 import { VendorSettingsPanel } from './dashboard/VendorSettingsPanel';
-import { buildRuntimeDeviceRows } from './dashboard/runtimeDeviceRows';
+import { MaterialIcon } from './MaterialIcon';
+import { SidePanel } from './SidePanel';
 
 type PanelType =
   | { kind: 'ssh-credentials'; device: Device }
