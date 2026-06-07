@@ -19,6 +19,10 @@ const LINK_EDGE_PATH = join(__dirname, 'LinkEdge.tsx');
 const LINK_LABEL_LAYER_PATH = join(__dirname, 'LinkLabelLayer.tsx');
 const LINK_SEMANTICS_PATH = join(__dirname, 'linkSemantics.ts');
 
+function sourceTemplateVariable(name: string): string {
+  return ['$', '{', name, '}'].join('');
+}
+
 describe('LinkEdge', () => {
   it('treats unknown interface status as neutral for link coloring', () => {
     expect(normalizeInterfaceStatusForLink('unknown')).toBeUndefined();
@@ -109,7 +113,9 @@ describe('LinkEdge', () => {
     expect(content).toContain('bg-surface-container-high');
     expect(content).toContain('topology-link-badge');
     expect(content).not.toContain('shadow-pill');
-    expect(content).toContain('data-testid={`${edgeId}-badge-${badge.key}`}');
+    expect(content).toContain(
+      `data-testid={\`${sourceTemplateVariable('edgeId')}-badge-${sourceTemplateVariable('badge.key')}\`}`,
+    );
   });
 
   it('delegates telemetry label DOM to the centralized link label layer', () => {
@@ -119,7 +125,9 @@ describe('LinkEdge', () => {
     expect(edgeContent).not.toContain('EdgeLabelRenderer');
     expect(edgeContent).toContain('registerLinkLabel');
     expect(labelLayerContent).toContain('EdgeLabelRenderer');
-    expect(labelLayerContent).toContain('data-testid={`${label.edgeId}-badge-stack`}');
+    expect(labelLayerContent).toContain(
+      `data-testid={\`${sourceTemplateVariable('label.edgeId')}-badge-stack\`}`,
+    );
   });
 
   it('animates label pills with opacity and transform transitions', () => {

@@ -593,7 +593,7 @@ function runtimeFlagAlert(runtimeDevice: RuntimeDeviceModel, flag: RuntimeFlag):
 function shouldShowWarningHealth(runtimeDevice: RuntimeDeviceModel): boolean {
   const metrics = runtimeDevice.metrics;
 
-  if (!metrics || metrics.health !== 'warning') {
+  if (metrics?.health !== 'warning') {
     return false;
   }
 

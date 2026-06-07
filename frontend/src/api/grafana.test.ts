@@ -2,6 +2,7 @@
  * Exercises Grafana API boundary behavior so refactors preserve the documented contract.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDocumentCookie } from '../test/documentCookie';
 import {
   checkPrometheusHealth,
   createGrafanaDashboardProfile,
@@ -23,14 +24,20 @@ function mockResponse(
   } as unknown as Response;
 }
 
+function templateVariable(name: string): string {
+  return ['$', '{', name, '}'].join('');
+}
+
 function grafanaConfigPayload() {
+  const deviceIdUrlTemplate = `https://grafana/d/${templateVariable('device_id')}`;
+
   return {
     data: {
       profiles: [
         {
           id: 'profile-1',
           name: 'Grafana',
-          url_template: 'https://grafana/d/${device_id}',
+          url_template: deviceIdUrlTemplate,
           variable_source: 'device',
           is_default: true,
           created_at: '2026-01-01T00:00:00Z',
@@ -45,7 +52,7 @@ function grafanaConfigPayload() {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  document.cookie = 'theia_csrf=grafana-csrf';
+  setDocumentCookie('theia_csrf=grafana-csrf');
 });
 
 describe('grafana client', () => {
@@ -65,7 +72,7 @@ describe('grafana client', () => {
 
     await createGrafanaDashboardProfile({
       name: 'Grafana',
-      url_template: 'https://grafana/d/${device_id}',
+      url_template: `https://grafana/d/${templateVariable('device_id')}`,
       variable_source: 'device',
       is_default: true,
     });

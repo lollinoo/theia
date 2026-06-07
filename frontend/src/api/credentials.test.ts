@@ -2,6 +2,7 @@
  * Exercises credentials API boundary behavior so refactors preserve the documented contract.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDocumentCookie } from '../test/documentCookie';
 import {
   createCredentialProfile,
   deleteCredentialProfile,
@@ -40,7 +41,7 @@ function credentialProfile(id: string) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  document.cookie = 'theia_csrf=credential-csrf';
+  setDocumentCookie('theia_csrf=credential-csrf');
 });
 
 describe('credential client', () => {

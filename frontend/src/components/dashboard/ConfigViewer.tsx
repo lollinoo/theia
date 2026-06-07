@@ -169,7 +169,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
     return <div className="text-xs text-on-bg-secondary">Loading configuration...</div>;
   }
 
-  if (!job || !job.files?.length) {
+  if (!job?.files?.length) {
     return <div className="text-xs text-on-bg-secondary">No configuration backup available</div>;
   }
 

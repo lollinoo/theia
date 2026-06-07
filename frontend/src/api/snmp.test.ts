@@ -2,6 +2,7 @@
  * Exercises SNMP API boundary behavior so refactors preserve the documented contract.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDocumentCookie } from '../test/documentCookie';
 import { createSNMPProfile, fetchSNMPProfiles, revealSNMPProfile } from './snmp';
 
 function mockResponse(
@@ -37,7 +38,7 @@ function snmpProfile(id: string, community?: string) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  document.cookie = 'theia_csrf=snmp-csrf';
+  setDocumentCookie('theia_csrf=snmp-csrf');
 });
 
 describe('snmp client', () => {

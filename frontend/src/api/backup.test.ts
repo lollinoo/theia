@@ -2,6 +2,7 @@
  * Exercises backup API boundary behavior so refactors preserve the documented contract.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDocumentCookie } from '../test/documentCookie';
 import {
   fetchBackupFileContent,
   fetchBackupJobs,
@@ -25,7 +26,7 @@ function mockResponse(
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  document.cookie = 'theia_csrf=backup-csrf';
+  setDocumentCookie('theia_csrf=backup-csrf');
 });
 
 describe('backup client', () => {

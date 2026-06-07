@@ -2,6 +2,7 @@
  * Exercises vendor API boundary behavior so refactors preserve the documented contract.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setDocumentCookie } from '../test/documentCookie';
 import { fetchVendorConfig, fetchVendorConfigs, updateVendorConfig } from './vendor';
 
 function mockResponse(
@@ -28,7 +29,7 @@ function vendorConfig(name: string) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  document.cookie = 'theia_csrf=vendor-csrf';
+  setDocumentCookie('theia_csrf=vendor-csrf');
 });
 
 describe('vendor client', () => {

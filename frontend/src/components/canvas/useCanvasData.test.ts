@@ -403,7 +403,7 @@ describe('useCanvasData', () => {
         }),
       ),
     );
-    const { result } = renderUseCanvasData(null);
+    renderUseCanvasData(null);
 
     await act(async () => {
       await Promise.resolve();
@@ -1203,7 +1203,7 @@ describe('useCanvasData', () => {
 
     const { result } = renderHook(() => {
       const [nodes, setNodes] = useState<DeviceNode[]>([]);
-      const [edges, setEdges] = useState<LinkEdgeType[]>([]);
+      const [, setEdges] = useState<LinkEdgeType[]>([]);
 
       return useCanvasData({
         mapId: null,
@@ -1317,7 +1317,7 @@ describe('useCanvasData', () => {
 
     const { result } = renderHook(() => {
       const [nodes, setNodes] = useState<DeviceNode[]>([]);
-      const [edges, setEdges] = useState<LinkEdgeType[]>([]);
+      const [, setEdges] = useState<LinkEdgeType[]>([]);
 
       return useCanvasData({
         mapId: null,

@@ -32,7 +32,7 @@ const TASK7_SWEEP_FILES = [
 
 const CLASS_START = '(?:^|[\\s"\'`])';
 const CLASS_END = '(?=$|[\\s"\'`>])';
-const VARIANT_PREFIX = String.raw`(?:[a-z0-9_-]+:)*`;
+const VARIANT_PREFIX = '(?:[a-z0-9_-]+:)*';
 
 const DISALLOWED_PATTERNS: { pattern: RegExp; reason: string }[] = [
   {
