@@ -281,12 +281,12 @@ jobs:
       - name: Upload bridge assets to release
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           find release-assets -maxdepth 1 -type f -name 'winbox-bridge-*' -print -quit | grep -q .
           ls -la release-assets
-          gh release upload "${{ github.event.release.tag_name }}" release-assets/winbox-bridge-* --clobber
+          gh release upload "${{ github.event.release.tag_name }}" release-assets/winbox-bridge-* --clobber --repo "${{ github.repository }}"
 
   branch-images:
     name: Branch Images
