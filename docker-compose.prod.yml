@@ -41,7 +41,7 @@ services:
   # Backend -- Go API server (pulled from GHCR)
   # ---------------------------------------------------------------------------
   backend:
-    image: ghcr.io/lollinoo/theia-backend:${IMAGE_TAG:-production}
+    image: ghcr.io/lollinoo/theia-backend:${IMAGE_TAG:-master}
     container_name: theia-backend
     restart: unless-stopped
     networks:
@@ -97,7 +97,7 @@ services:
   # Frontend -- nginx serving compiled React SPA + API proxy (pulled from GHCR)
   # ---------------------------------------------------------------------------
   frontend:
-    image: ghcr.io/lollinoo/theia-frontend:${IMAGE_TAG:-production}
+    image: ghcr.io/lollinoo/theia-frontend:${IMAGE_TAG:-master}
     container_name: theia-frontend
     restart: unless-stopped
     ports:

@@ -257,7 +257,7 @@ staging: ## Start staging stack (auto-updates via Watchtower)
 	@echo "MikroTik Theia staging stack is running:"
 	@echo "  Frontend: http://localhost:3001"
 	@echo "  API proxy: http://localhost:3001/api/v1"
-	@echo "  Watchtower polls for new :staging images every 30s"
+	@echo "  Watchtower polls for new :master images every 30s"
 	@echo ""
 	@echo "Run 'make staging-logs' to follow backend logs."
 

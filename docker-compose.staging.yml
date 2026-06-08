@@ -1,14 +1,14 @@
 # =============================================================================
 # Theia - Staging Docker Compose (GHCR Pull)
 # =============================================================================
-# Auto-updates via Watchtower: new :staging images are pulled every 30 seconds.
+# Auto-updates via Watchtower: new :master images are pulled every 30 seconds.
 #
 # Profiles:
 #   (default) -- Backend + PostgreSQL + frontend + watchtower
 #
 # Usage:
 #   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
-#   IMAGE_TAG=fix-links docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+#   IMAGE_TAG=v1.9.0 docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 #
 # First-time setup:
 #   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
@@ -34,7 +34,7 @@ services:
   # Backend — Pre-built Go binary from GHCR
   # ---------------------------------------------------------------------------
   backend:
-    image: ghcr.io/lollinoo/theia-backend:${IMAGE_TAG:-staging}
+    image: ghcr.io/lollinoo/theia-backend:${IMAGE_TAG:-master}
     container_name: theia-staging-backend
     restart: unless-stopped
     networks:
@@ -92,7 +92,7 @@ services:
   # Frontend — Pre-built nginx + React SPA from GHCR
   # ---------------------------------------------------------------------------
   frontend:
-    image: ghcr.io/lollinoo/theia-frontend:${IMAGE_TAG:-staging}
+    image: ghcr.io/lollinoo/theia-frontend:${IMAGE_TAG:-master}
     container_name: theia-staging-frontend
     restart: unless-stopped
     ports:
