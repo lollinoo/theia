@@ -186,7 +186,7 @@ jobs:
   build-bridge:
     name: "Bridge: ${{ matrix.goos }}/${{ matrix.goarch }}"
     needs: changes
-    if: needs.changes.outputs.bridge == 'true'
+    if: ${{ github.event_name == 'release' && !github.event.release.draft }}
     strategy:
       matrix:
         include:
