@@ -51,7 +51,7 @@ jobs:
           else
             base="${{ github.event.before }}"
             head="${{ github.sha }}"
-            if [[ "$base" == "0000000000000000000000000000000000000000" ]]; then
+            if [[ "$base" == "0000000000000000000000000000000000000000" ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
               base="$(git merge-base origin/master "$head")"
             fi
           fi
@@ -186,7 +186,7 @@ jobs:
   build-bridge:
     name: "Bridge: ${{ matrix.goos }}/${{ matrix.goarch }}"
     needs: changes
-    if: needs.changes.outputs.bridge == 'true'
+    if: ${{ github.event_name == 'release' && !github.event.release.draft }}
     strategy:
       matrix:
         include:
