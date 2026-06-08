@@ -57,7 +57,7 @@ jobs:
             browser_e2e=true
             bridge=true
           elif [[ "${{ github.event_name }}" == "release" ]]; then
-            :
+            bridge=true
           elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base="${{ github.event.pull_request.base.sha }}"
             head="${{ github.event.pull_request.head.sha }}"
@@ -262,6 +262,31 @@ jobs:
           name: winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}
           path: bridge_binaries/winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
           if-no-files-found: error
+
+  release-bridge-assets:
+    name: Release Bridge Assets
+    needs: build-bridge
+    if: ${{ github.event_name == 'release' && !github.event.release.draft }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download bridge artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: winbox-bridge-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Upload bridge assets to release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          find release-assets -maxdepth 1 -type f -name 'winbox-bridge-*' -print -quit | grep -q .
+          ls -la release-assets
+          gh release upload "${{ github.event.release.tag_name }}" release-assets/winbox-bridge-* --clobber
 
   branch-images:
     name: Branch Images
