@@ -81,6 +81,49 @@ describe('deviceFormSubmitters', () => {
     ]);
   });
 
+  it('includes valid device and address probe ports in create payloads', () => {
+    const payload = buildCreateDevicePayload({
+      ...createAddDeviceFormModel(),
+      hostname: 'router-01',
+      ip: '10.0.0.1',
+      probePorts: '22,8291',
+      additionalAddresses: [
+        {
+          address: '192.0.2.10',
+          role: 'backup',
+          label: 'OOB',
+          probePorts: '2222',
+        },
+      ],
+    });
+
+    expect(payload.probe_ports).toEqual([22, 8291]);
+    expect(payload.addresses?.[1]).toMatchObject({
+      address: '192.0.2.10',
+      probe_ports: [2222],
+    });
+  });
+
+  it('omits blank device and address probe ports from create payloads', () => {
+    const payload = buildCreateDevicePayload({
+      ...createAddDeviceFormModel(),
+      hostname: 'router-01',
+      ip: '10.0.0.1',
+      probePorts: ' ',
+      additionalAddresses: [
+        {
+          address: '192.0.2.10',
+          role: 'backup',
+          label: 'OOB',
+          probePorts: ' ',
+        },
+      ],
+    });
+
+    expect(payload).not.toHaveProperty('probe_ports');
+    expect(payload.addresses?.[1]).not.toHaveProperty('probe_ports');
+  });
+
   it('maps edit-device UI state back to the current update payload contract', () => {
     const payload = buildUpdateDevicePayload(mockDevice(), {
       ...createDeviceConfigFormModel(mockDevice(), false),
@@ -121,6 +164,77 @@ describe('deviceFormSubmitters', () => {
         priority: 10,
       },
     ]);
+  });
+
+  it('includes valid device and address probe ports in update payloads', () => {
+    const device = mockDevice({
+      addresses: [
+        {
+          id: 'addr-backup',
+          device_id: 'dev-1',
+          address: '192.0.2.10',
+          label: 'OOB',
+          role: 'backup',
+          is_primary: false,
+          priority: 10,
+          probe_ports: null,
+        },
+      ],
+    });
+    const payload = buildUpdateDevicePayload(device, {
+      ...createDeviceConfigFormModel(device, false),
+      probePorts: '22,8291',
+      additionalAddresses: [
+        {
+          address: '192.0.2.10',
+          role: 'backup',
+          label: 'OOB',
+          probePorts: '2222',
+        },
+      ],
+    });
+
+    expect(payload.probe_ports).toEqual([22, 8291]);
+    expect(payload.addresses?.[1]).toMatchObject({
+      address: '192.0.2.10',
+      probe_ports: [2222],
+    });
+  });
+
+  it('clears existing probe ports from update payloads when form strings are blank', () => {
+    const device = mockDevice({
+      probe_ports: [22, 8291],
+      addresses: [
+        {
+          id: 'addr-backup',
+          device_id: 'dev-1',
+          address: '192.0.2.10',
+          label: 'OOB',
+          role: 'backup',
+          is_primary: false,
+          priority: 10,
+          probe_ports: [2222],
+        },
+      ],
+    });
+    const payload = buildUpdateDevicePayload(device, {
+      ...createDeviceConfigFormModel(device, false),
+      probePorts: ' ',
+      additionalAddresses: [
+        {
+          address: '192.0.2.10',
+          role: 'backup',
+          label: 'OOB',
+          probePorts: ' ',
+        },
+      ],
+    });
+
+    expect(payload.probe_ports).toBeNull();
+    expect(payload.addresses?.[1]).toMatchObject({
+      address: '192.0.2.10',
+      probe_ports: null,
+    });
   });
 
   it('sends blank physical display name and vendor when clearing existing values', () => {

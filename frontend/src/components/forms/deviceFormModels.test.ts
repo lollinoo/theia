@@ -65,6 +65,7 @@ describe('deviceFormModels', () => {
   it('initializes additional address rows from non-primary device addresses', () => {
     const form = createDeviceConfigFormModel(
       mockDevice({
+        probe_ports: [22, 8291],
         addresses: [
           {
             id: 'addr-primary',
@@ -74,6 +75,7 @@ describe('deviceFormModels', () => {
             role: 'primary',
             is_primary: true,
             priority: 0,
+            probe_ports: null,
           },
           {
             id: 'addr-backup',
@@ -83,19 +85,49 @@ describe('deviceFormModels', () => {
             role: 'backup',
             is_primary: false,
             priority: 10,
+            probe_ports: [2222],
           },
         ],
       }),
       false,
     );
 
+    expect(form.probePorts).toBe('22,8291');
     expect(form.additionalAddresses).toEqual([
       {
+        formId: expect.stringMatching(/^device-address-row-/),
         address: '192.0.2.10',
         role: 'backup',
         label: 'OOB',
+        probePorts: '2222',
       },
     ]);
+  });
+
+  it('keeps edit address row form IDs stable when row labels change locally', () => {
+    const form = createDeviceConfigFormModel(
+      mockDevice({
+        addresses: [
+          {
+            id: 'addr-backup',
+            device_id: 'dev-1',
+            address: '192.0.2.10',
+            label: 'OOB',
+            role: 'backup',
+            is_primary: false,
+            priority: 10,
+            probe_ports: null,
+          },
+        ],
+      }),
+      false,
+    );
+
+    const [row] = form.additionalAddresses;
+    const editedRow = { ...row, label: 'OOB uplink' };
+
+    expect(row.formId).toMatch(/^device-address-row-/);
+    expect(editedRow.formId).toBe(row.formId);
   });
 
   it('does not inherit add-form v2c community defaults into edit state', () => {

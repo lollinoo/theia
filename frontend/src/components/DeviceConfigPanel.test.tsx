@@ -490,6 +490,28 @@ describe('DeviceConfigPanel', () => {
     expect(screen.getByDisplayValue('Unsaved local edit')).toBeInTheDocument();
   });
 
+  it('updates visible probe ports when parent device probe ports change', () => {
+    const { rerender } = render(
+      <DeviceConfigPanel
+        device={mockDevice({ probe_ports: [22, 8291] })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('Probe ports')).toHaveValue('22,8291');
+
+    rerender(
+      <DeviceConfigPanel
+        device={mockDevice({ probe_ports: [22, 443] })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('Probe ports')).toHaveValue('22,443');
+  });
+
   it('keeps edit controls read-only when readOnly is true', async () => {
     const { updateDevice } = await import('../api/client');
     const { container } = render(
@@ -943,6 +965,67 @@ describe('DeviceConfigPanel — submit validates before API call', () => {
     await waitFor(() => {
       expect(screen.getByText('IP address or hostname is required')).toBeInTheDocument();
     });
+    expect(updateDevice).not.toHaveBeenCalled();
+  });
+
+  it('does not call updateDevice when device probe ports are invalid on submit', async () => {
+    const { updateDevice } = await import('../api/client');
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice()}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    const probePorts = screen.getByLabelText('Probe ports');
+    await act(async () => {
+      fireEvent.change(probePorts, {
+        target: { value: '0,443' },
+      });
+      fireEvent.click(screen.getByText('Save Changes'));
+    });
+
+    expect(await screen.findByText('Ports must be between 1 and 65535')).toBeInTheDocument();
+    expect(probePorts.className).toContain('border-status-down');
+    expect(updateDevice).not.toHaveBeenCalled();
+  });
+
+  it('does not call updateDevice when address probe ports are invalid on submit', async () => {
+    const { updateDevice } = await import('../api/client');
+
+    render(
+      <DeviceConfigPanel
+        device={mockDevice({
+          addresses: [
+            {
+              id: 'addr-backup',
+              device_id: 'dev-1',
+              address: '192.0.2.10',
+              label: 'OOB',
+              role: 'backup',
+              is_primary: false,
+              priority: 10,
+              probe_ports: null,
+            },
+          ],
+        })}
+        onDeviceUpdated={vi.fn()}
+        onDeviceDeleted={vi.fn()}
+      />,
+    );
+
+    const addressProbePorts = screen.getByLabelText('Address probe ports 1');
+    await act(async () => {
+      fireEvent.change(addressProbePorts, {
+        target: { value: '0' },
+      });
+      fireEvent.click(screen.getByText('Save Changes'));
+    });
+
+    expect(await screen.findByText('Ports must be between 1 and 65535')).toBeInTheDocument();
+    expect(addressProbePorts.className).toContain('border-status-down');
     expect(updateDevice).not.toHaveBeenCalled();
   });
 });

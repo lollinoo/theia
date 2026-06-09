@@ -32,7 +32,7 @@ import {
   type DeviceFormModel,
   normalizeVirtualNodeColor,
 } from '../forms/deviceFormModels';
-import { buildUpdateDevicePayload } from '../forms/deviceFormSubmitters';
+import { buildUpdateDevicePayload, validateProbePorts } from '../forms/deviceFormSubmitters';
 
 type DeviceUpdatePayload = Parameters<typeof updateDevice>[1];
 
@@ -61,12 +61,14 @@ function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
     areaIds: [...(device.area_ids ?? [])].sort(),
     prometheusLabelName: device.prometheus_label_name || 'instance',
     prometheusLabelValue: device.prometheus_label_value || '',
+    probePorts: device.probe_ports ?? [],
     addresses: (device.addresses ?? []).map((address) => ({
       address: address.address,
       role: address.role,
       label: address.label,
       isPrimary: address.is_primary,
       priority: address.priority,
+      probePorts: address.probe_ports ?? [],
     })),
     virtualSubtype: device.tags?.virtual_subtype ?? 'internet',
     mapVisualColor: device.map_visual_color ?? null,
@@ -303,6 +305,14 @@ export function useDeviceConfigEditor({
     }
     if (!isVirtual) {
       Object.assign(errors, validateAdditionalAddressRows(form, trimmedIP));
+      const probePortsErr = validateProbePorts(form.probePorts);
+      if (probePortsErr) errors['probePorts'] = probePortsErr;
+      form.additionalAddresses.forEach((address, index) => {
+        const addressProbePortsErr = validateProbePorts(address.probePorts);
+        if (addressProbePortsErr) {
+          errors[`additionalAddressProbePorts${index}`] = addressProbePortsErr;
+        }
+      });
     }
     const displayNameErr = validateDisplayNameField(form.displayName);
     if (displayNameErr) errors['displayName'] = displayNameErr;

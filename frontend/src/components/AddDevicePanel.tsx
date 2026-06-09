@@ -45,7 +45,7 @@ import {
   resetDeviceFormMode,
   type SecondaryDeviceAddressRole,
 } from './forms/deviceFormModels';
-import { buildCreateDevicePayload } from './forms/deviceFormSubmitters';
+import { buildCreateDevicePayload, validateProbePorts } from './forms/deviceFormSubmitters';
 import { MaterialIcon } from './MaterialIcon';
 
 interface AddDevicePanelProps {
@@ -382,6 +382,11 @@ export function AddDevicePanel({
     }
 
     form.additionalAddresses.forEach((address, index) => {
+      const probePortsErr = validateProbePorts(address.probePorts);
+      if (probePortsErr) {
+        errors[`additionalAddressProbePorts${index}`] = probePortsErr;
+      }
+
       const trimmed = address.address.trim();
       if (trimmed === '') {
         return;
@@ -473,6 +478,8 @@ export function AddDevicePanel({
     const errors: Record<string, string> = {};
     const hostnameErr = validateIPOrHostname(form.hostname.trim());
     if (hostnameErr) errors['hostname'] = hostnameErr;
+    const probePortsErr = validateProbePorts(form.probePorts);
+    if (probePortsErr) errors['probePorts'] = probePortsErr;
     Object.assign(errors, validateAdditionalAddressRows(form.hostname.trim()));
     const displayNameErr = validateMaxLength(form.displayName, MAX_STRING_LENGTH, 'Display name');
     if (displayNameErr) errors['displayName'] = displayNameErr;
@@ -727,6 +734,28 @@ export function AddDevicePanel({
             )}
           </div>
 
+          <div className="space-y-2">
+            <label htmlFor="probe-ports" className={labelClass}>
+              Probe ports
+            </label>
+            <input
+              id="probe-ports"
+              aria-label="Probe ports"
+              type="text"
+              value={form.probePorts}
+              onChange={(e) => {
+                updateForm({ probePorts: e.target.value });
+                setFieldError('probePorts', null);
+              }}
+              onBlur={handleBlur('probePorts', () => validateProbePorts(form.probePorts))}
+              placeholder="22,8291"
+              className={`${inputClass}${fieldErrors['probePorts'] ? ' border-status-down' : ''}`}
+            />
+            {fieldErrors['probePorts'] && (
+              <p className="mt-1 text-xs text-status-down">{fieldErrors['probePorts']}</p>
+            )}
+          </div>
+
           <div className="space-y-3 rounded-lg bg-surface-high p-3">
             <div className="flex items-center justify-between gap-3">
               <p className={labelClass}>Additional addresses</p>
@@ -771,7 +800,7 @@ export function AddDevicePanel({
                     </p>
                   )}
                 </div>
-                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto]">
                   <div className="space-y-1">
                     <label
                       htmlFor={`additional-address-role-${index}`}
@@ -810,6 +839,33 @@ export function AddDevicePanel({
                       placeholder="OOB"
                       className={inputClass}
                     />
+                  </div>
+                  <div className="space-y-1">
+                    <label
+                      htmlFor={`additional-address-probe-ports-${index}`}
+                      className="text-xs text-on-bg-secondary"
+                    >
+                      Address probe ports {index + 1}
+                    </label>
+                    <input
+                      id={`additional-address-probe-ports-${index}`}
+                      type="text"
+                      value={address.probePorts}
+                      onChange={(e) => {
+                        updateAdditionalAddress(index, { probePorts: e.target.value });
+                        setFieldError(`additionalAddressProbePorts${index}`, null);
+                      }}
+                      onBlur={handleBlur(`additionalAddressProbePorts${index}`, () =>
+                        validateProbePorts(address.probePorts),
+                      )}
+                      placeholder="2222"
+                      className={`${inputClass}${fieldErrors[`additionalAddressProbePorts${index}`] ? ' border-status-down' : ''}`}
+                    />
+                    {fieldErrors[`additionalAddressProbePorts${index}`] && (
+                      <p className="mt-1 text-xs text-status-down">
+                        {fieldErrors[`additionalAddressProbePorts${index}`]}
+                      </p>
+                    )}
                   </div>
                   <button
                     type="button"

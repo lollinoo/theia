@@ -1,7 +1,7 @@
 /**
  * Exercises add device panel component behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addDeviceToCanvasMap,
@@ -378,6 +378,82 @@ describe('virtual mode', () => {
         }),
       );
     });
+  });
+
+  it('submits physical device and address probe ports', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+        target: { value: '10.0.0.1' },
+      });
+      fireEvent.change(screen.getByLabelText('Probe ports'), {
+        target: { value: '22,8291' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Additional address 1'), {
+        target: { value: '192.0.2.10' },
+      });
+      fireEvent.change(screen.getByLabelText('Address probe ports 1'), {
+        target: { value: '2222' },
+      });
+      fireEvent.click(screen.getByText('Add Device'));
+    });
+
+    await waitFor(() => {
+      expect(createDevice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          probe_ports: [22, 8291],
+          addresses: expect.arrayContaining([
+            expect.objectContaining({
+              address: '192.0.2.10',
+              probe_ports: [2222],
+            }),
+          ]),
+        }),
+      );
+    });
+  });
+
+  it('blocks submit when physical probe ports are invalid', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+        target: { value: '10.0.0.1' },
+      });
+      fireEvent.change(screen.getByLabelText('Probe ports'), {
+        target: { value: '0,443' },
+      });
+      fireEvent.click(screen.getByText('Add Device'));
+    });
+
+    expect(await screen.findByText('Ports must be between 1 and 65535')).toBeInTheDocument();
+    expect(createDevice).not.toHaveBeenCalled();
+  });
+
+  it('blocks submit when a blank additional address row has invalid probe ports', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+        target: { value: '10.0.0.1' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Address probe ports 1'), {
+        target: { value: '0' },
+      });
+      fireEvent.click(screen.getByText('Add Device'));
+    });
+
+    expect(await screen.findByText('Ports must be between 1 and 65535')).toBeInTheDocument();
+    expect(createDevice).not.toHaveBeenCalled();
   });
 
   it('blocks submit when an additional address is invalid', async () => {

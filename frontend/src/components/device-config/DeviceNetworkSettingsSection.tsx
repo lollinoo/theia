@@ -13,6 +13,7 @@ import {
   type DeviceFormModel,
   type SecondaryDeviceAddressRole,
 } from '../forms/deviceFormModels';
+import { validateProbePorts } from '../forms/deviceFormSubmitters';
 
 interface DeviceNetworkSettingsSectionProps {
   device: Device;
@@ -147,6 +148,29 @@ export function DeviceNetworkSettingsSection({
         </p>
       </div>
 
+      <div className="space-y-1">
+        <label htmlFor="device-config-probe-ports" className="text-xs text-on-bg-secondary">
+          Probe ports
+        </label>
+        <input
+          id="device-config-probe-ports"
+          aria-label="Probe ports"
+          type="text"
+          value={form.probePorts}
+          disabled={readOnly}
+          onChange={(e) => {
+            onFormChange({ probePorts: e.target.value });
+            onFieldError('probePorts', null);
+          }}
+          onBlur={() => onFieldError('probePorts', validateProbePorts(form.probePorts))}
+          placeholder="22,8291"
+          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60${fieldErrors['probePorts'] ? ' border-status-down' : ' border-outline-subtle'}`}
+        />
+        {fieldErrors['probePorts'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['probePorts']}</p>
+        )}
+      </div>
+
       <div className="space-y-3 rounded-lg bg-surface-high p-3">
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
@@ -191,7 +215,7 @@ export function DeviceNetworkSettingsSection({
                 </p>
               )}
             </div>
-            <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <div className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto]">
               <div className="space-y-1">
                 <label
                   htmlFor={`device-config-additional-address-role-${index}`}
@@ -232,6 +256,37 @@ export function DeviceNetworkSettingsSection({
                   placeholder="OOB"
                   className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
                 />
+              </div>
+              <div className="space-y-1">
+                <label
+                  htmlFor={`device-config-additional-address-probe-ports-${index}`}
+                  className="text-xs text-on-bg-secondary"
+                >
+                  Address probe ports {index + 1}
+                </label>
+                <input
+                  id={`device-config-additional-address-probe-ports-${index}`}
+                  type="text"
+                  value={address.probePorts}
+                  disabled={readOnly}
+                  onChange={(e) => {
+                    updateAdditionalAddress(index, { probePorts: e.target.value });
+                    onFieldError(`additionalAddressProbePorts${index}`, null);
+                  }}
+                  onBlur={() =>
+                    onFieldError(
+                      `additionalAddressProbePorts${index}`,
+                      validateProbePorts(address.probePorts),
+                    )
+                  }
+                  placeholder="2222"
+                  className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60${fieldErrors[`additionalAddressProbePorts${index}`] ? ' border-status-down' : ' border-outline-subtle'}`}
+                />
+                {fieldErrors[`additionalAddressProbePorts${index}`] && (
+                  <p className="mt-1 text-xs text-status-down">
+                    {fieldErrors[`additionalAddressProbePorts${index}`]}
+                  </p>
+                )}
               </div>
               <button
                 type="button"
