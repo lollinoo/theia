@@ -160,6 +160,30 @@ type Interface struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// DeviceAddressRole classifies how a device address should be used.
+type DeviceAddressRole string
+
+const (
+	DeviceAddressRolePrimary    DeviceAddressRole = "primary"
+	DeviceAddressRoleManagement DeviceAddressRole = "management"
+	DeviceAddressRoleBackup     DeviceAddressRole = "backup"
+	DeviceAddressRoleMonitoring DeviceAddressRole = "monitoring"
+	DeviceAddressRoleOther      DeviceAddressRole = "other"
+)
+
+// DeviceAddress is one reachable address associated with a device.
+type DeviceAddress struct {
+	ID        uuid.UUID         `json:"id"`
+	DeviceID  uuid.UUID         `json:"device_id"`
+	Address   string            `json:"address"`
+	Label     string            `json:"label"`
+	Role      DeviceAddressRole `json:"role"`
+	IsPrimary bool              `json:"is_primary"`
+	Priority  int               `json:"priority"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
+}
+
 // Device represents a managed or discovered network device.
 type Device struct {
 	ID                             uuid.UUID              `json:"id"`
@@ -181,6 +205,7 @@ type Device struct {
 	Managed                        bool                   `json:"managed"` // true=user-added, false=discovered placeholder
 	Tags                           map[string]string      `json:"tags"`
 	Interfaces                     []Interface            `json:"interfaces"`
+	Addresses                      []DeviceAddress        `json:"addresses"`
 	AreaIDs                        []uuid.UUID            `json:"area_ids"`
 	MetricsSource                  MetricsSource          `json:"metrics_source"`
 	PrometheusLabelName            string                 `json:"prometheus_label_name"`
@@ -212,6 +237,10 @@ type DeviceRepository interface {
 	Create(device *Device) error
 	GetByID(id uuid.UUID) (*Device, error)
 	GetByIP(ip string) (*Device, error)
+	GetByAddress(address string) (*Device, error)
+	GetDeviceAddresses(deviceID uuid.UUID) ([]DeviceAddress, error)
+	ReplaceDeviceAddresses(deviceID uuid.UUID, addresses []DeviceAddress) error
+	FindAddressConflict(address string, deviceType DeviceType, excludeID uuid.UUID) (*Device, error)
 	// FindPhysicalVirtualIPConflict returns a device with the same address and
 	// opposite virtualness, excluding the supplied device ID when non-zero.
 	FindPhysicalVirtualIPConflict(ip string, deviceType DeviceType, excludeID uuid.UUID) (*Device, error)
