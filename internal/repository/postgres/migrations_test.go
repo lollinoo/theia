@@ -239,6 +239,33 @@ func TestPostgresMigrationsDeclareBulkBackupRunProcessorLeaseSchema(t *testing.T
 	}
 }
 
+func TestPostgresMigrationsDeclareDeviceAddressSchema(t *testing.T) {
+	content, err := migrationsFS.ReadFile("migrations/000024_device_addresses.up.sql")
+	if err != nil {
+		t.Fatalf("reading device addresses migration: %v", err)
+	}
+	migration := string(content)
+
+	for _, expected := range []string{
+		"CREATE TABLE IF NOT EXISTS device_addresses",
+		"device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE",
+		"normalized_address TEXT NOT NULL",
+		"role TEXT NOT NULL DEFAULT 'other'",
+		"CHECK (role IN ('primary', 'management', 'backup', 'monitoring', 'other'))",
+		"UNIQUE (device_id, normalized_address)",
+		"idx_device_addresses_device_id",
+		"idx_device_addresses_normalized_address",
+		"idx_device_addresses_device_role_priority",
+		"idx_device_addresses_one_primary",
+		"INSERT INTO device_addresses",
+		"lower(btrim(ip))",
+	} {
+		if !strings.Contains(migration, expected) {
+			t.Fatalf("device addresses migration missing %q", expected)
+		}
+	}
+}
+
 func TestPostgresMigrationsDeclareLeastPrivilegeSystemRolePermissions(t *testing.T) {
 	managerPermissions := domain.SystemRolePermissionKeys(domain.RoleManager)
 	for _, disallowed := range []string{
