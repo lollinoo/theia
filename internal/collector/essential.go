@@ -132,7 +132,7 @@ func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, tim
 	}
 
 	result.SNMPReachable = polling.TriStateTrue
-	result.NetworkReachable = polling.TriStateTrue
+	c.markNetworkReachable(ctx, device.IP, timeout, probePorts, &result)
 	result.PollStatus = essentialPollStatus(result)
 	return result
 }
@@ -140,6 +140,21 @@ func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, tim
 func (c *EssentialCollector) markSNMPFailureNetworkEvidence(ctx context.Context, target string, timeout time.Duration, probePorts []int, result *EssentialResult) {
 	result.SNMPReachable = polling.TriStateFalse
 	if c == nil || c.networkProbe == nil {
+		return
+	}
+	if err := c.networkProbe(ctx, target, timeout, probePorts); err == nil {
+		result.NetworkReachable = polling.TriStateTrue
+		return
+	}
+	result.NetworkReachable = polling.TriStateFalse
+}
+
+func (c *EssentialCollector) markNetworkReachable(ctx context.Context, target string, timeout time.Duration, probePorts []int, result *EssentialResult) {
+	if c == nil || result == nil {
+		return
+	}
+	if c.networkProbe == nil {
+		result.NetworkReachable = polling.TriStateUnknown
 		return
 	}
 	if err := c.networkProbe(ctx, target, timeout, probePorts); err == nil {
