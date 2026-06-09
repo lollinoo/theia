@@ -173,15 +173,16 @@ const (
 
 // DeviceAddress is one reachable address associated with a device.
 type DeviceAddress struct {
-	ID        uuid.UUID         `json:"id"`
-	DeviceID  uuid.UUID         `json:"device_id"`
-	Address   string            `json:"address"`
-	Label     string            `json:"label"`
-	Role      DeviceAddressRole `json:"role"`
-	IsPrimary bool              `json:"is_primary"`
-	Priority  int               `json:"priority"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	ID         uuid.UUID         `json:"id"`
+	DeviceID   uuid.UUID         `json:"device_id"`
+	Address    string            `json:"address"`
+	Label      string            `json:"label"`
+	Role       DeviceAddressRole `json:"role"`
+	IsPrimary  bool              `json:"is_primary"`
+	Priority   int               `json:"priority"`
+	ProbePorts []int             `json:"probe_ports"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
 // Device represents a managed or discovered network device.
@@ -206,6 +207,7 @@ type Device struct {
 	Tags                           map[string]string      `json:"tags"`
 	Interfaces                     []Interface            `json:"interfaces"`
 	Addresses                      []DeviceAddress        `json:"addresses"`
+	ProbePorts                     []int                  `json:"probe_ports"`
 	AreaIDs                        []uuid.UUID            `json:"area_ids"`
 	MetricsSource                  MetricsSource          `json:"metrics_source"`
 	PrometheusLabelName            string                 `json:"prometheus_label_name"`

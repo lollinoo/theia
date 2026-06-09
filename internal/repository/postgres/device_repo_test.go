@@ -5,6 +5,7 @@ package postgres
 import (
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -436,6 +437,55 @@ func TestDeviceRepoCreateUpdateAndLookupDeviceAddresses(t *testing.T) {
 		t.Fatalf("GetByAddress stale failed: %v", err)
 	} else if stale != nil {
 		t.Fatalf("old backup address still resolved to device: %#v", stale)
+	}
+}
+
+func TestDeviceRepoCreateAndGetPersistsProbePorts(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-probe-ports",
+		IP:         "10.94.0.1",
+		ProbePorts: []int{22, 8291},
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.94.0.1", Label: "mgmt", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "198.51.100.94", Label: "backup oob", Role: domain.DeviceAddressRoleBackup, Priority: 10, ProbePorts: []int{2222}},
+		},
+	}
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	got, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if !slices.Equal(got.ProbePorts, []int{22, 8291}) {
+		t.Fatalf("ProbePorts = %#v, want %#v", got.ProbePorts, []int{22, 8291})
+	}
+
+	var backup *domain.DeviceAddress
+	for i := range got.Addresses {
+		if got.Addresses[i].Address == "198.51.100.94" && got.Addresses[i].Role == domain.DeviceAddressRoleBackup {
+			backup = &got.Addresses[i]
+			break
+		}
+	}
+	if backup == nil {
+		t.Fatalf("backup address not loaded: %#v", got.Addresses)
+	}
+	if !slices.Equal(backup.ProbePorts, []int{2222}) {
+		t.Fatalf("backup ProbePorts = %#v, want %#v", backup.ProbePorts, []int{2222})
 	}
 }
 

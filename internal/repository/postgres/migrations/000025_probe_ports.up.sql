@@ -1,0 +1,5 @@
+ALTER TABLE devices
+    ADD COLUMN IF NOT EXISTS probe_ports TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE device_addresses
+    ADD COLUMN IF NOT EXISTS probe_ports TEXT NOT NULL DEFAULT '';

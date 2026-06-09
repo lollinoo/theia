@@ -150,8 +150,8 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 			sys_name, sys_name_lookup, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 			poll_class, poll_interval_override, polling_enabled, notes,
-			topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			probe_ports, topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		device.ID.String(), device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
 		device.SysName, normalizeDeviceSysNameLookup(device.SysName), device.SysDescr,
@@ -159,7 +159,7 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 		device.Vendor, managedValue, string(tagsJSON), device.CreatedAt, device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
 		string(pollClass), device.PollIntervalOverride, boolToDBInt(domain.DevicePollingEnabled(*device)), nullableStringValue(device.Notes),
-		string(topologyMode), string(bootstrapState), nullableTimeValue(device.LastTopologyDiscoveryAt), device.LastTopologyDiscoveryResult,
+		domain.FormatProbePortsCSV(device.ProbePorts), string(topologyMode), string(bootstrapState), nullableTimeValue(device.LastTopologyDiscoveryAt), device.LastTopologyDiscoveryResult,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting device: %w", err)
@@ -224,7 +224,7 @@ func (r *DeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 				sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 				poll_class, poll_interval_override, polling_enabled, notes,
-				topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
+				probe_ports, topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 			FROM devices WHERE id = ?`, id.String(),
 		),
 	)
@@ -263,7 +263,7 @@ func (r *DeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 				sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 				poll_class, poll_interval_override, polling_enabled, notes,
-				topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
+				probe_ports, topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 			FROM devices WHERE ip = ?`, ip,
 		),
 	)
@@ -423,7 +423,7 @@ func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
 				sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 				poll_class, poll_interval_override, polling_enabled, notes,
-				topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
+				probe_ports, topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 			FROM devices
 			WHERE sys_name_lookup = ? AND sys_name_lookup != ''
 			ORDER BY updated_at DESC, created_at DESC
@@ -475,7 +475,7 @@ func (r *DeviceRepo) GetAll() ([]domain.Device, error) {
 			sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 			poll_class, poll_interval_override, polling_enabled, notes,
-			topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
+			probe_ports, topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 		FROM devices ORDER BY hostname`,
 	)
 	if err != nil {
@@ -542,7 +542,7 @@ func (r *DeviceRepo) GetOrphans() ([]domain.Device, error) {
 			sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 			poll_class, poll_interval_override, polling_enabled, notes,
-			topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
+			probe_ports, topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 		FROM devices d
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -616,7 +616,7 @@ func (r *DeviceRepo) GetByIDs(ids []uuid.UUID) ([]domain.Device, error) {
 			sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 			created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
 			poll_class, poll_interval_override, polling_enabled, notes,
-			topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
+			probe_ports, topology_discovery_mode, topology_bootstrap_state, last_topology_discovery_at, last_topology_discovery_result
 		FROM devices
 		WHERE id IN (`+strings.Join(placeholders, ", ")+`)
 		ORDER BY hostname`,
@@ -796,7 +796,7 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 			vendor=?, managed=?, tags_json=?, updated_at=?,
 			metrics_source=?, prometheus_label_name=?, prometheus_label_value=?,
 			poll_class=?, poll_interval_override=?, polling_enabled=?, notes=?,
-			topology_discovery_mode=?, topology_bootstrap_state=?, last_topology_discovery_at=?, last_topology_discovery_result=?
+			probe_ports=?, topology_discovery_mode=?, topology_bootstrap_state=?, last_topology_discovery_at=?, last_topology_discovery_result=?
 		WHERE id = ?`,
 		device.Hostname, device.IP, string(credsJSON),
 		string(device.DeviceType), string(device.Status),
@@ -805,7 +805,7 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 		device.Vendor, managedValue, string(tagsJSON), device.UpdatedAt,
 		string(device.MetricsSource), device.PrometheusLabelName, device.PrometheusLabelValue,
 		string(pollClass), device.PollIntervalOverride, boolToDBInt(domain.DevicePollingEnabled(*device)), nullableStringValue(device.Notes),
-		string(topologyMode), string(bootstrapState), nullableTimeValue(device.LastTopologyDiscoveryAt), device.LastTopologyDiscoveryResult,
+		domain.FormatProbePortsCSV(device.ProbePorts), string(topologyMode), string(bootstrapState), nullableTimeValue(device.LastTopologyDiscoveryAt), device.LastTopologyDiscoveryResult,
 		device.ID.String(),
 	)
 	if err != nil {
@@ -929,6 +929,7 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 	var pollIntervalOverride sql.NullInt64
 	var pollingEnabled int
 	var notes sql.NullString
+	var probePortsCSV string
 	var topologyMode, bootstrapState, lastTopologyResult string
 	var lastTopologyAt sql.NullTime
 
@@ -938,7 +939,7 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
 		&pollClass, &pollIntervalOverride, &pollingEnabled, &notes,
-		&topologyMode, &bootstrapState, &lastTopologyAt, &lastTopologyResult,
+		&probePortsCSV, &topologyMode, &bootstrapState, &lastTopologyAt, &lastTopologyResult,
 	)
 	if err != nil {
 		return nil, err
@@ -969,6 +970,11 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 		v := notes.String
 		d.Notes = &v
 	}
+	probePorts, err := domain.ParseProbePortsCSV(probePortsCSV)
+	if err != nil {
+		return nil, fmt.Errorf("parsing device probe_ports for device %s: %w", idStr, err)
+	}
+	d.ProbePorts = probePorts
 
 	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {
 		return nil, fmt.Errorf("unmarshaling snmp credentials: %w", err)
@@ -993,6 +999,7 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 	var pollIntervalOverride sql.NullInt64
 	var pollingEnabled int
 	var notes sql.NullString
+	var probePortsCSV string
 	var topologyMode, bootstrapState, lastTopologyResult string
 	var lastTopologyAt sql.NullTime
 
@@ -1002,7 +1009,7 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
 		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
 		&pollClass, &pollIntervalOverride, &pollingEnabled, &notes,
-		&topologyMode, &bootstrapState, &lastTopologyAt, &lastTopologyResult,
+		&probePortsCSV, &topologyMode, &bootstrapState, &lastTopologyAt, &lastTopologyResult,
 	)
 	if err != nil {
 		return nil, err
@@ -1033,6 +1040,11 @@ func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
 		v := notes.String
 		d.Notes = &v
 	}
+	probePorts, err := domain.ParseProbePortsCSV(probePortsCSV)
+	if err != nil {
+		return nil, fmt.Errorf("parsing device probe_ports for device %s: %w", idStr, err)
+	}
+	d.ProbePorts = probePorts
 
 	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {
 		return nil, fmt.Errorf("unmarshaling snmp credentials: %w", err)
@@ -1158,8 +1170,8 @@ func replaceDeviceAddressesTx(tx *Tx, deviceID uuid.UUID, addresses []domain.Dev
 		normalized := domain.NormalizeDeviceAddressValue(address.Address)
 		_, err := tx.Exec(
 			`INSERT INTO device_addresses (
-				id, device_id, address, normalized_address, label, role, is_primary, priority, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, device_id, address, normalized_address, label, role, is_primary, priority, probe_ports, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			address.ID.String(),
 			address.DeviceID.String(),
 			address.Address,
@@ -1168,6 +1180,7 @@ func replaceDeviceAddressesTx(tx *Tx, deviceID uuid.UUID, addresses []domain.Dev
 			string(address.Role),
 			address.IsPrimary,
 			address.Priority,
+			domain.FormatProbePortsCSV(address.ProbePorts),
 			address.CreatedAt,
 			address.UpdatedAt,
 		)
@@ -1181,7 +1194,7 @@ func replaceDeviceAddressesTx(tx *Tx, deviceID uuid.UUID, addresses []domain.Dev
 
 func (r *DeviceRepo) loadAddresses(deviceID uuid.UUID) ([]domain.DeviceAddress, error) {
 	rows, err := r.db.Query(
-		`SELECT id, device_id, address, label, role, is_primary, priority, created_at, updated_at
+		`SELECT id, device_id, address, label, role, is_primary, priority, probe_ports, created_at, updated_at
 		FROM device_addresses
 		WHERE device_id = ?
 		ORDER BY is_primary DESC, priority ASC, normalized_address ASC`,
@@ -1216,7 +1229,7 @@ func (r *DeviceRepo) loadAddressesForDeviceIDs(deviceIDs []uuid.UUID) (map[uuid.
 	}
 
 	rows, err := r.db.Query(
-		`SELECT id, device_id, address, label, role, is_primary, priority, created_at, updated_at
+		`SELECT id, device_id, address, label, role, is_primary, priority, probe_ports, created_at, updated_at
 		FROM device_addresses
 		WHERE device_id IN (`+strings.Join(placeholders, ", ")+`)
 		ORDER BY device_id, is_primary DESC, priority ASC, normalized_address ASC`,
@@ -1241,6 +1254,7 @@ func (r *DeviceRepo) loadAddressesForDeviceIDs(deviceIDs []uuid.UUID) (map[uuid.
 func scanDeviceAddressRow(rows *sql.Rows) (domain.DeviceAddress, error) {
 	var address domain.DeviceAddress
 	var idStr, deviceIDStr, role string
+	var probePortsCSV string
 	err := rows.Scan(
 		&idStr,
 		&deviceIDStr,
@@ -1249,6 +1263,7 @@ func scanDeviceAddressRow(rows *sql.Rows) (domain.DeviceAddress, error) {
 		&role,
 		&address.IsPrimary,
 		&address.Priority,
+		&probePortsCSV,
 		&address.CreatedAt,
 		&address.UpdatedAt,
 	)
@@ -1266,6 +1281,11 @@ func scanDeviceAddressRow(rows *sql.Rows) (domain.DeviceAddress, error) {
 	address.ID = id
 	address.DeviceID = deviceID
 	address.Role = domain.NormalizeDeviceAddressRole(domain.DeviceAddressRole(role))
+	probePorts, err := domain.ParseProbePortsCSV(probePortsCSV)
+	if err != nil {
+		return domain.DeviceAddress{}, fmt.Errorf("parsing device address probe_ports for address %s: %w", idStr, err)
+	}
+	address.ProbePorts = probePorts
 	return address, nil
 }
 

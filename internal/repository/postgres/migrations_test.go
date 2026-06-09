@@ -266,6 +266,24 @@ func TestPostgresMigrationsDeclareDeviceAddressSchema(t *testing.T) {
 	}
 }
 
+func TestPostgresMigrationsDeclareProbePorts(t *testing.T) {
+	content, err := migrationsFS.ReadFile("migrations/000025_probe_ports.up.sql")
+	if err != nil {
+		t.Fatalf("reading probe ports migration: %v", err)
+	}
+	migration := string(content)
+
+	for _, expected := range []string{
+		"ALTER TABLE devices",
+		"probe_ports",
+		"ALTER TABLE device_addresses",
+	} {
+		if !strings.Contains(migration, expected) {
+			t.Fatalf("probe ports migration missing %q", expected)
+		}
+	}
+}
+
 func TestPostgresMigrationsDeclareLeastPrivilegeSystemRolePermissions(t *testing.T) {
 	managerPermissions := domain.SystemRolePermissionKeys(domain.RoleManager)
 	for _, disallowed := range []string{
