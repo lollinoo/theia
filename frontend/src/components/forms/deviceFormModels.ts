@@ -12,9 +12,23 @@ export type SecondaryDeviceAddressRole = Exclude<DeviceAddressRole, 'primary'>;
 
 /** DeviceAddressFormRow stores one non-primary editable device address row. */
 export interface DeviceAddressFormRow {
+  formId?: string;
   address: string;
   role: SecondaryDeviceAddressRole;
   label: string;
+}
+
+let nextDeviceAddressFormRowID = 0;
+
+/** Creates a blank additional address row with a stable local render key. */
+export function createEmptyDeviceAddressFormRow(): DeviceAddressFormRow {
+  nextDeviceAddressFormRowID += 1;
+  return {
+    formId: `device-address-row-${nextDeviceAddressFormRowID}`,
+    address: '',
+    role: 'management',
+    label: '',
+  };
 }
 
 /** Normalizes virtual node color for the UI component boundary. */

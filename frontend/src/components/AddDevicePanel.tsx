@@ -38,10 +38,12 @@ import {
 import {
   applySNMPProfile,
   createAddDeviceFormModel,
+  createEmptyDeviceAddressFormRow,
   type DeviceFormModel,
   defaultVirtualNodeColor,
   normalizeVirtualNodeColor,
   resetDeviceFormMode,
+  type SecondaryDeviceAddressRole,
 } from './forms/deviceFormModels';
 import { buildCreateDevicePayload } from './forms/deviceFormSubmitters';
 import { MaterialIcon } from './MaterialIcon';
@@ -60,6 +62,16 @@ type DuplicateDeviceAddResult = 'not-handled' | 'added' | 'error';
 
 function normalizeDeviceLookupValue(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase();
+}
+
+function deviceAddressLookupValues(device: Device): string[] {
+  return [device.ip, ...(device.addresses ?? []).map((address) => address.address)]
+    .map(normalizeDeviceLookupValue)
+    .filter(Boolean);
+}
+
+function deviceAddressFormRowKey(address: DeviceFormModel['additionalAddresses'][number]): string {
+  return address.formId ?? `${address.address}-${address.role}-${address.label}`;
 }
 
 function duplicateMapDeviceAddressMessage(address: string): string {
@@ -132,6 +144,34 @@ export function AddDevicePanel({
     setForm((current) => ({
       ...current,
       virtual: { ...current.virtual, ...update },
+    }));
+  }
+
+  function addAdditionalAddress() {
+    setForm((current) => ({
+      ...current,
+      additionalAddresses: [...current.additionalAddresses, createEmptyDeviceAddressFormRow()],
+    }));
+  }
+
+  function updateAdditionalAddress(
+    index: number,
+    update: Partial<DeviceFormModel['additionalAddresses'][number]>,
+  ) {
+    setForm((current) => ({
+      ...current,
+      additionalAddresses: current.additionalAddresses.map((address, addressIndex) =>
+        addressIndex === index ? { ...address, ...update } : address,
+      ),
+    }));
+  }
+
+  function removeAdditionalAddress(index: number) {
+    setForm((current) => ({
+      ...current,
+      additionalAddresses: current.additionalAddresses.filter(
+        (_address, addressIndex) => addressIndex !== index,
+      ),
     }));
   }
 
@@ -214,12 +254,20 @@ export function AddDevicePanel({
     if (!mapContext) {
       return null;
     }
-    const address = normalizeDeviceLookupValue(payload.ip);
-    if (!address) {
+    const payloadAddresses = (payload.addresses ?? [{ address: payload.ip ?? '' }])
+      .map((address) => ({
+        raw: address.address,
+        normalized: normalizeDeviceLookupValue(address.address),
+      }))
+      .filter((address) => address.normalized !== '');
+    if (payloadAddresses.length === 0) {
       return null;
     }
-    const hasConflict = devices.some((device) => normalizeDeviceLookupValue(device.ip) === address);
-    return hasConflict ? duplicateMapDeviceAddressMessage(payload.ip ?? '') : null;
+    const existingAddresses = devices.flatMap(deviceAddressLookupValues);
+    const conflict = payloadAddresses.find((address) =>
+      existingAddresses.includes(address.normalized),
+    );
+    return conflict ? duplicateMapDeviceAddressMessage(conflict.raw) : null;
   }
 
   async function addDeviceToCurrentMap(deviceId: string) {
@@ -251,7 +299,9 @@ export function AddDevicePanel({
     }
 
     const lookupValues = new Set(
-      [payload.ip, payload.hostname].map(normalizeDeviceLookupValue).filter(Boolean),
+      [payload.ip, payload.hostname, ...(payload.addresses ?? []).map((address) => address.address)]
+        .map(normalizeDeviceLookupValue)
+        .filter(Boolean),
     );
     if (lookupValues.size === 0) {
       return 'not-handled';
@@ -260,7 +310,8 @@ export function AddDevicePanel({
     const existingDevice = (await fetchDevices()).find(
       (device) =>
         lookupValues.has(normalizeDeviceLookupValue(device.ip)) ||
-        lookupValues.has(normalizeDeviceLookupValue(device.hostname)),
+        lookupValues.has(normalizeDeviceLookupValue(device.hostname)) ||
+        deviceAddressLookupValues(device).some((address) => lookupValues.has(address)),
     );
     if (!existingDevice) {
       return 'not-handled';
@@ -320,6 +371,35 @@ export function AddDevicePanel({
       }
       return [...current, profileId];
     });
+  }
+
+  function validateAdditionalAddressRows(primaryAddress: string): Record<string, string> {
+    const errors: Record<string, string> = {};
+    const seen = new Set<string>();
+    const primary = normalizeDeviceLookupValue(primaryAddress);
+    if (primary) {
+      seen.add(primary);
+    }
+
+    form.additionalAddresses.forEach((address, index) => {
+      const trimmed = address.address.trim();
+      if (trimmed === '') {
+        return;
+      }
+      const validationError = validateIPOrHostname(trimmed);
+      if (validationError) {
+        errors[`additionalAddress${index}`] = validationError;
+        return;
+      }
+      const normalized = normalizeDeviceLookupValue(trimmed);
+      if (seen.has(normalized)) {
+        errors[`additionalAddress${index}`] = 'Duplicate device address';
+        return;
+      }
+      seen.add(normalized);
+    });
+
+    return errors;
   }
 
   async function assignSelectedCredentials(deviceId: string) {
@@ -393,6 +473,7 @@ export function AddDevicePanel({
     const errors: Record<string, string> = {};
     const hostnameErr = validateIPOrHostname(form.hostname.trim());
     if (hostnameErr) errors['hostname'] = hostnameErr;
+    Object.assign(errors, validateAdditionalAddressRows(form.hostname.trim()));
     const displayNameErr = validateMaxLength(form.displayName, MAX_STRING_LENGTH, 'Display name');
     if (displayNameErr) errors['displayName'] = displayNameErr;
     if (usesPrometheus) {
@@ -644,6 +725,103 @@ export function AddDevicePanel({
             {fieldErrors['hostname'] && (
               <p className="mt-1 text-xs text-status-down">{fieldErrors['hostname']}</p>
             )}
+          </div>
+
+          <div className="space-y-3 rounded-lg bg-surface-high p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className={labelClass}>Additional addresses</p>
+              <button
+                type="button"
+                onClick={addAdditionalAddress}
+                className="rounded-lg bg-elevated px-3 py-1.5 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg"
+              >
+                Add address
+              </button>
+            </div>
+            {form.additionalAddresses.map((address, index) => (
+              <div
+                key={deviceAddressFormRowKey(address)}
+                className="space-y-2 rounded-lg bg-elevated p-3"
+              >
+                <div className="space-y-1">
+                  <label
+                    htmlFor={`additional-address-${index}`}
+                    className="text-xs text-on-bg-secondary"
+                  >
+                    Additional address {index + 1}
+                  </label>
+                  <input
+                    id={`additional-address-${index}`}
+                    type="text"
+                    value={address.address}
+                    onChange={(e) => {
+                      updateAdditionalAddress(index, { address: e.target.value });
+                      setFieldError(`additionalAddress${index}`, null);
+                    }}
+                    onBlur={handleBlur(`additionalAddress${index}`, () => {
+                      const trimmed = address.address.trim();
+                      return trimmed ? validateIPOrHostname(trimmed) : null;
+                    })}
+                    placeholder="192.0.2.10 or oob-router"
+                    className={`${inputClass}${fieldErrors[`additionalAddress${index}`] ? ' border-status-down' : ''}`}
+                  />
+                  {fieldErrors[`additionalAddress${index}`] && (
+                    <p className="mt-1 text-xs text-status-down">
+                      {fieldErrors[`additionalAddress${index}`]}
+                    </p>
+                  )}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                  <div className="space-y-1">
+                    <label
+                      htmlFor={`additional-address-role-${index}`}
+                      className="text-xs text-on-bg-secondary"
+                    >
+                      Address role {index + 1}
+                    </label>
+                    <select
+                      id={`additional-address-role-${index}`}
+                      value={address.role}
+                      onChange={(e) =>
+                        updateAdditionalAddress(index, {
+                          role: e.target.value as SecondaryDeviceAddressRole,
+                        })
+                      }
+                      className={selectClass}
+                    >
+                      <option value="management">Management</option>
+                      <option value="backup">Backup</option>
+                      <option value="monitoring">Monitoring</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label
+                      htmlFor={`additional-address-label-${index}`}
+                      className="text-xs text-on-bg-secondary"
+                    >
+                      Address label {index + 1}
+                    </label>
+                    <input
+                      id={`additional-address-label-${index}`}
+                      type="text"
+                      value={address.label}
+                      onChange={(e) => updateAdditionalAddress(index, { label: e.target.value })}
+                      placeholder="OOB"
+                      className={inputClass}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeAdditionalAddress(index)}
+                    aria-label={`Remove address ${index + 1}`}
+                    className="self-end rounded-lg bg-surface px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Metrics & Collection Mode */}

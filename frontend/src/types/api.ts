@@ -377,7 +377,11 @@ function parseDeviceAddress(
   };
 }
 
-function parseDeviceAddresses(attributes: APIRecord, deviceID: string, ip: string): DeviceAddress[] {
+function parseDeviceAddresses(
+  attributes: APIRecord,
+  deviceID: string,
+  ip: string,
+): DeviceAddress[] {
   const rawAddresses = attributes.addresses;
   if (!Array.isArray(rawAddresses)) {
     return ip === '' ? [] : [primaryAddressFromIP(deviceID, ip)];

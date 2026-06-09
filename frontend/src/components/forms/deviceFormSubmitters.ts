@@ -37,7 +37,10 @@ function buildSnmpPayload(form: DeviceFormModel): SNMPPayload {
   };
 }
 
-function buildAddressPayloads(form: DeviceFormModel): DeviceAddressPayload[] | undefined {
+function buildAddressPayloads(
+  form: DeviceFormModel,
+  includeLegacyPrimaryOnly = false,
+): DeviceAddressPayload[] | undefined {
   const additionalAddresses = form.additionalAddresses
     .map((row, index) => ({
       address: row.address.trim(),
@@ -48,13 +51,18 @@ function buildAddressPayloads(form: DeviceFormModel): DeviceAddressPayload[] | u
     }))
     .filter((row) => row.address !== '');
 
-  if (additionalAddresses.length === 0) {
+  if (additionalAddresses.length === 0 && !includeLegacyPrimaryOnly) {
+    return undefined;
+  }
+
+  const primaryAddress = form.ip.trim();
+  if (primaryAddress === '') {
     return undefined;
   }
 
   return [
     {
-      address: form.ip.trim(),
+      address: primaryAddress,
       role: 'primary',
       is_primary: true,
       priority: 0,
@@ -122,7 +130,13 @@ export function buildUpdateDevicePayload(device: Device, form: DeviceFormModel) 
   const shouldSendPhysicalDisplayName =
     form.mode === 'physical' && (device.tags?.display_name !== undefined || displayName !== '');
   const shouldSendVendor = device.vendor !== '' || vendor !== '';
-  const addresses = form.mode === 'physical' ? buildAddressPayloads(form) : undefined;
+  const hasExistingAdditionalAddresses = (device.addresses ?? []).some(
+    (address) => !address.is_primary && address.role !== 'primary',
+  );
+  const addresses =
+    form.mode === 'physical'
+      ? buildAddressPayloads(form, hasExistingAdditionalAddresses)
+      : undefined;
 
   return {
     hostname: device.hostname,

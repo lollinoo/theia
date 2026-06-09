@@ -158,6 +158,37 @@ describe('DeviceNetworkSettingsSection', () => {
     expect(onFormChange).toHaveBeenCalledWith({ vendor: 'mikrotik' });
   });
 
+  it('renders additional address rows and reports edits to the parent form', () => {
+    const { onFormChange } = renderSection({
+      initialForm: {
+        ...createDeviceConfigFormModel(mockDevice(), false),
+        additionalAddresses: [{ address: '192.0.2.10', role: 'backup', label: 'OOB' }],
+      },
+    });
+
+    expect(screen.getByText('Additional addresses')).toBeInTheDocument();
+    expect(screen.getByLabelText('Additional address 1')).toHaveValue('192.0.2.10');
+    expect(screen.getByLabelText('Address role 1')).toHaveValue('backup');
+    expect(screen.getByLabelText('Address label 1')).toHaveValue('OOB');
+
+    fireEvent.change(screen.getByLabelText('Additional address 1'), {
+      target: { value: '192.0.2.11' },
+    });
+
+    expect(onFormChange).toHaveBeenCalledWith({
+      additionalAddresses: [{ address: '192.0.2.11', role: 'backup', label: 'OOB' }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+
+    expect(onFormChange).toHaveBeenCalledWith({
+      additionalAddresses: [
+        { address: '192.0.2.10', role: 'backup', label: 'OOB' },
+        expect.objectContaining({ address: '', role: 'management', label: '' }),
+      ],
+    });
+  });
+
   it('warns and rejects Prometheus modes when Prometheus health is unavailable', async () => {
     const { checkPrometheusHealth } = await import('../../api/client');
     (checkPrometheusHealth as ReturnType<typeof vi.fn>).mockResolvedValueOnce({

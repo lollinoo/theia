@@ -207,6 +207,66 @@ describe('useDeviceConfigEditor', () => {
     );
   });
 
+  it('submits address replacement when additional address rows change', async () => {
+    const onDeviceUpdated = vi.fn();
+    const updatedDevice = mockDevice({
+      addresses: [
+        {
+          id: 'addr-primary',
+          device_id: 'dev-1',
+          address: '10.0.0.1',
+          label: '',
+          role: 'primary',
+          is_primary: true,
+          priority: 0,
+        },
+        {
+          id: 'addr-backup',
+          device_id: 'dev-1',
+          address: '192.0.2.10',
+          label: 'OOB',
+          role: 'backup',
+          is_primary: false,
+          priority: 10,
+        },
+      ],
+    });
+    apiMocks.updateDevice.mockResolvedValueOnce(updatedDevice);
+    const { result } = renderEditor({ onDeviceUpdated });
+
+    act(() => {
+      result.current.updateForm({
+        additionalAddresses: [{ address: '192.0.2.10', role: 'backup', label: 'OOB' }],
+      });
+    });
+
+    await act(async () => {
+      await result.current.handleEditSave(submitEvent());
+    });
+
+    expect(apiMocks.updateDevice).toHaveBeenCalledWith(
+      'dev-1',
+      expect.objectContaining({
+        addresses: [
+          {
+            address: '10.0.0.1',
+            role: 'primary',
+            is_primary: true,
+            priority: 0,
+          },
+          {
+            address: '192.0.2.10',
+            role: 'backup',
+            label: 'OOB',
+            is_primary: false,
+            priority: 10,
+          },
+        ],
+      }),
+    );
+    expect(onDeviceUpdated).toHaveBeenCalledWith(updatedDevice);
+  });
+
   it('continues map-scoped save after polling-only device refresh', async () => {
     const save = deferred<Device>();
     const onDeviceUpdated = vi.fn();

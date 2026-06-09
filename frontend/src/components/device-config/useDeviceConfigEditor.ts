@@ -61,6 +61,13 @@ function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
     areaIds: [...(device.area_ids ?? [])].sort(),
     prometheusLabelName: device.prometheus_label_name || 'instance',
     prometheusLabelValue: device.prometheus_label_value || '',
+    addresses: (device.addresses ?? []).map((address) => ({
+      address: address.address,
+      role: address.role,
+      label: address.label,
+      isPrimary: address.is_primary,
+      priority: address.priority,
+    })),
     virtualSubtype: device.tags?.virtual_subtype ?? 'internet',
     mapVisualColor: device.map_visual_color ?? null,
   });
@@ -88,6 +95,42 @@ function sameStringRecord(
     ([key, value], index) =>
       secondEntries[index]?.[0] === key && secondEntries[index]?.[1] === value,
   );
+}
+
+function normalizeAddressLookupValue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function validateAdditionalAddressRows(
+  form: DeviceFormModel,
+  primaryAddress: string,
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const seen = new Set<string>();
+  const primary = normalizeAddressLookupValue(primaryAddress);
+  if (primary) {
+    seen.add(primary);
+  }
+
+  form.additionalAddresses.forEach((address, index) => {
+    const trimmed = address.address.trim();
+    if (trimmed === '') {
+      return;
+    }
+    const validationError = validateIPOrHostname(trimmed);
+    if (validationError) {
+      errors[`additionalAddress${index}`] = validationError;
+      return;
+    }
+    const normalized = normalizeAddressLookupValue(trimmed);
+    if (seen.has(normalized)) {
+      errors[`additionalAddress${index}`] = 'Duplicate device address';
+      return;
+    }
+    seen.add(normalized);
+  });
+
+  return errors;
 }
 
 function deviceConfigGlobalPayloadHasChanges(
@@ -257,6 +300,9 @@ export function useDeviceConfigEditor({
     if (!(isVirtual && trimmedIP === '')) {
       const ipErr = validateIPOrHostname(trimmedIP);
       if (ipErr) errors['ip'] = ipErr;
+    }
+    if (!isVirtual) {
+      Object.assign(errors, validateAdditionalAddressRows(form, trimmedIP));
     }
     const displayNameErr = validateDisplayNameField(form.displayName);
     if (displayNameErr) errors['displayName'] = displayNameErr;
