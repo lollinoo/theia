@@ -103,6 +103,94 @@ function normalizeAddressLookupValue(value: string): string {
   return value.trim().toLowerCase();
 }
 
+type DeviceAddressPayload = NonNullable<DeviceUpdatePayload['addresses']>[number];
+
+function normalizeProbePorts(ports: number[] | null | undefined): number[] {
+  return [...(ports ?? [])];
+}
+
+function probePortsEqual(
+  first: number[] | null | undefined,
+  second: number[] | null | undefined,
+): boolean {
+  const normalizedFirst = normalizeProbePorts(first);
+  const normalizedSecond = normalizeProbePorts(second);
+  if (normalizedFirst.length !== normalizedSecond.length) return false;
+  return normalizedFirst.every((value, index) => value === normalizedSecond[index]);
+}
+
+function normalizeDeviceAddressPayloadRole(role: string | undefined): string {
+  return normalizeAddressLookupValue(role ?? 'other') || 'other';
+}
+
+function normalizeDeviceAddressPayload(address: DeviceAddressPayload): {
+  normalizedAddress: string;
+  address: string;
+  role: string;
+  label: string;
+  isPrimary: boolean;
+  priority: number;
+  hasExplicitProbePorts: boolean;
+  probePorts: number[] | null;
+} {
+  return {
+    normalizedAddress: normalizeAddressLookupValue(address.address),
+    address: normalizeAddressLookupValue(address.address),
+    role: normalizeDeviceAddressPayloadRole(address.role),
+    label: address.label ?? '',
+    isPrimary: Boolean(address.is_primary),
+    priority: address.priority ?? 0,
+    hasExplicitProbePorts: Object.prototype.hasOwnProperty.call(address, 'probe_ports'),
+    probePorts: address.probe_ports ?? null,
+  };
+}
+
+function deviceAddressPayloadRowsEquivalent(
+  payloadAddress: ReturnType<typeof normalizeDeviceAddressPayload>,
+  deviceAddress: Device['addresses'][number],
+): boolean {
+  if (
+    payloadAddress.normalizedAddress !== normalizeAddressLookupValue(deviceAddress.address) ||
+    payloadAddress.role !== normalizeAddressLookupValue(deviceAddress.role) ||
+    payloadAddress.label.trim() !== deviceAddress.label.trim() ||
+    payloadAddress.isPrimary !== deviceAddress.is_primary ||
+    payloadAddress.priority !== deviceAddress.priority
+  ) {
+    return false;
+  }
+
+  if (payloadAddress.role !== 'primary' && payloadAddress.hasExplicitProbePorts) {
+    return probePortsEqual(payloadAddress.probePorts, deviceAddress.probe_ports);
+  }
+  return true;
+}
+
+function deviceAddressPayloadHasChanges(
+  device: Device,
+  payloadAddresses: DeviceUpdatePayload['addresses'],
+): boolean {
+  if (payloadAddresses === undefined) return false;
+
+  const normalizedPayloadAddresses = payloadAddresses
+    .map(normalizeDeviceAddressPayload)
+    .filter((address) => address.normalizedAddress !== '');
+
+  if (normalizedPayloadAddresses.length !== (device.addresses?.length ?? 0)) return true;
+
+  const normalizedDeviceAddresses = new Map(
+    (device.addresses ?? []).map((address) => [
+      normalizeAddressLookupValue(address.address),
+      address,
+    ]),
+  );
+
+  return normalizedPayloadAddresses.some((payloadAddress) => {
+    const deviceAddress = normalizedDeviceAddresses.get(payloadAddress.normalizedAddress);
+    if (!deviceAddress) return true;
+    return !deviceAddressPayloadRowsEquivalent(payloadAddress, deviceAddress);
+  });
+}
+
 function validateAdditionalAddressRows(
   form: DeviceFormModel,
   primaryAddress: string,
@@ -167,6 +255,15 @@ function deviceConfigGlobalPayloadHasChanges(
     return true;
   }
   if (payload.area_ids !== undefined && !sameAreaIds(payload.area_ids, device.area_ids ?? [])) {
+    return true;
+  }
+  if (
+    payload.probe_ports !== undefined &&
+    !probePortsEqual(payload.probe_ports, device.probe_ports)
+  ) {
+    return true;
+  }
+  if (deviceAddressPayloadHasChanges(device, payload.addresses)) {
     return true;
   }
   return false;

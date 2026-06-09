@@ -2583,6 +2583,141 @@ func TestUpdateDevice_IPChangeResetsRuntimeState(t *testing.T) {
 	}
 }
 
+func TestUpdateDevice_ProbePortsChangeResetsRuntimeState(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	resetter := &recordingRuntimeResetter{}
+	svc.SetRuntimeResetter(resetter)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "10.0.0.3",
+		Hostname:   "router-probe-reset",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		PollClass:  domain.PollClassCore,
+		ProbePorts: []int{22, 443},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	newProbePorts := []int{22, 8291}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		ProbePorts: &newProbePorts,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(resetter.deviceIDs); got != 1 {
+		t.Fatalf("runtime reset call count = %d, want 1", got)
+	}
+	if resetter.deviceIDs[0] != device.ID {
+		t.Fatalf("runtime reset device ID = %s, want %s", resetter.deviceIDs[0], device.ID)
+	}
+}
+
+func TestUpdateDevice_ProbePortsChangeTriggersSchedulerRedue(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "10.0.0.4",
+		Hostname:   "router-probe-redue",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		PollClass:  domain.PollClassCore,
+		ProbePorts: []int{22, 443},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	newProbePorts := []int{22, 8291}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		ProbePorts: &newProbePorts,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(rescheduler.calls); got != 1 {
+		t.Fatalf("redue call count = %d, want 1", got)
+	}
+	if rescheduler.calls[0].device.ID != device.ID {
+		t.Fatalf("rescheduled device ID = %q, want %s", rescheduler.calls[0].device.ID, device.ID)
+	}
+	if rescheduler.calls[0].device.ProbePorts == nil ||
+		len(rescheduler.calls[0].device.ProbePorts) != 2 ||
+		rescheduler.calls[0].device.ProbePorts[1] != 8291 {
+		t.Fatalf("rescheduled probe ports = %#v, want [22, 8291]", rescheduler.calls[0].device.ProbePorts)
+	}
+}
+
+func TestUpdateDevice_AddressProbePortsChangeTriggersSchedulerRedue(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	device := &domain.Device{
+		ID:        uuid.New(),
+		IP:        "10.0.0.5",
+		Hostname:  "router-address-ports-redue",
+		Managed:   true,
+		Status:    domain.DeviceStatusUp,
+		PollClass: domain.PollClassCore,
+		Addresses: []domain.DeviceAddress{
+			{
+				Address:    "10.0.0.5",
+				Label:      "primary",
+				Role:       domain.DeviceAddressRolePrimary,
+				IsPrimary:  true,
+				Priority:   0,
+				ProbePorts: []int{22},
+			},
+			{
+				Address:    "192.0.2.5",
+				Label:      "backup",
+				Role:       domain.DeviceAddressRoleBackup,
+				IsPrimary:  false,
+				Priority:   10,
+				ProbePorts: []int{2222},
+			},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	updated := []domain.DeviceAddress{
+		{
+			Address:    "10.0.0.5",
+			Label:      "primary",
+			Role:       domain.DeviceAddressRolePrimary,
+			IsPrimary:  true,
+			Priority:   0,
+			ProbePorts: []int{22},
+		},
+		{
+			Address:    "192.0.2.5",
+			Label:      "backup",
+			Role:       domain.DeviceAddressRoleBackup,
+			IsPrimary:  false,
+			Priority:   10,
+			ProbePorts: []int{2223},
+		},
+	}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		Addresses: &updated,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(rescheduler.calls); got != 1 {
+		t.Fatalf("redue call count = %d, want 1", got)
+	}
+}
+
 func TestAddDeviceWithAddressesNormalizesPrimaryAddress(t *testing.T) {
 	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
 

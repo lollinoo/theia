@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -163,6 +164,7 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	}
 	previousIP := device.IP
 	previousAddresses := append([]domain.DeviceAddress(nil), device.Addresses...)
+	previousProbePorts := append([]int(nil), device.ProbePorts...)
 	previousOverride := clonePollIntervalOverride(device.PollIntervalOverride)
 	previousPollingEnabled := domain.DevicePollingEnabled(*device)
 	defaultTopologyMode := m.parent.defaultTopologyDiscoveryMode()
@@ -258,8 +260,9 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 
 	changedAt := m.now().UTC()
 	ipChanged := update.IP != nil && previousIP != device.IP
+	probePortsChanged := !slices.Equal(previousProbePorts, device.ProbePorts)
 	addressesChanged := update.Addresses != nil && !domain.DeviceAddressesEqual(previousAddresses, device.Addresses)
-	if ipChanged || addressesChanged {
+	if ipChanged || addressesChanged || probePortsChanged {
 		if resetter := *m.runtimeResetter; resetter != nil {
 			resetter.ResetDeviceRuntime(device.ID)
 		}
@@ -270,7 +273,8 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 			rescheduler.ReconcileDeviceTasks(*device, changedAt)
 		}
 		pollIntervalChanged := update.PollIntervalOverride != nil && !pollIntervalOverridesEqual(previousOverride, device.PollIntervalOverride)
-		if (ipChanged || addressesChanged || pollIntervalChanged) && domain.DevicePollingEnabled(*device) {
+		if (ipChanged || addressesChanged || pollIntervalChanged || probePortsChanged) &&
+			domain.DevicePollingEnabled(*device) {
 			rescheduler.ReduePerformanceTask(*device, changedAt)
 		}
 	}

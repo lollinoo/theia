@@ -195,3 +195,16 @@ func TestDeviceAddressValuesAndEquality(t *testing.T) {
 		t.Fatalf("DeviceAddressesEqual returned false for normalized-equivalent addresses")
 	}
 }
+
+func TestDeviceAddressesEqualConsidersProbePorts(t *testing.T) {
+	first := []DeviceAddress{
+		{Address: "10.0.0.1", Role: DeviceAddressRolePrimary, IsPrimary: true, Priority: 0, ProbePorts: []int{22}},
+	}
+	second := []DeviceAddress{
+		{Address: "10.0.0.1", Role: DeviceAddressRolePrimary, IsPrimary: true, Priority: 0, ProbePorts: []int{22, 443}},
+	}
+
+	if DeviceAddressesEqual(first, second) {
+		t.Fatalf("DeviceAddressesEqual returned true for different probe ports")
+	}
+}

@@ -3,6 +3,7 @@ package domain
 // This file defines device normalization domain contracts and lifecycle invariants.
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -310,6 +311,9 @@ func DeviceAddressesEqual(first, second []DeviceAddress) bool {
 			return false
 		}
 		if first[i].Priority != second[i].Priority {
+			return false
+		}
+		if !slices.Equal(first[i].ProbePorts, second[i].ProbePorts) {
 			return false
 		}
 	}

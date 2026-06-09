@@ -207,6 +207,123 @@ describe('useDeviceConfigEditor', () => {
     );
   });
 
+  it('updates device probe ports in map-scope even when only probe ports changed', async () => {
+    const onDeviceUpdated = vi.fn();
+    const updatedDevice = mockDevice({ probe_ports: [22, 8080] });
+    apiMocks.updateDevice.mockResolvedValueOnce(updatedDevice);
+    const { result } = renderEditor({
+      device: mockDevice({ probe_ports: [22, 8291, 443] }),
+      mapContext: { mapId: 'map-1', mapName: 'Backbone' },
+      onDeviceUpdated,
+    });
+
+    act(() => {
+      result.current.updateForm({ probePorts: '22,8080' });
+    });
+
+    await act(async () => {
+      await result.current.handleEditSave(submitEvent());
+    });
+
+    expect(apiMocks.updateDevice).toHaveBeenCalledWith(
+      'dev-1',
+      expect.objectContaining({
+        probe_ports: [22, 8080],
+      }),
+    );
+    expect(onDeviceUpdated).toHaveBeenCalledWith(expect.objectContaining(updatedDevice));
+  });
+
+  it('updates map-scoped additional address probe ports', async () => {
+    const onDeviceUpdated = vi.fn();
+    const updatedDevice = mockDevice({
+      addresses: [
+        {
+          id: 'addr-primary',
+          device_id: 'dev-1',
+          address: '10.0.0.1',
+          label: '',
+          role: 'primary',
+          is_primary: true,
+          priority: 0,
+          probe_ports: null,
+        },
+        {
+          id: 'addr-backup',
+          device_id: 'dev-1',
+          address: '192.0.2.10',
+          label: 'OOB',
+          role: 'backup',
+          is_primary: false,
+          priority: 10,
+          probe_ports: [4444],
+        },
+      ],
+    });
+    apiMocks.updateDevice.mockResolvedValueOnce(updatedDevice);
+    const { result } = renderEditor({
+      device: mockDevice({
+        addresses: [
+          {
+            id: 'addr-primary',
+            device_id: 'dev-1',
+            address: '10.0.0.1',
+            label: '',
+            role: 'primary',
+            is_primary: true,
+            priority: 0,
+            probe_ports: [22],
+          },
+          {
+            id: 'addr-backup',
+            device_id: 'dev-1',
+            address: '192.0.2.10',
+            label: 'OOB',
+            role: 'backup',
+            is_primary: false,
+            priority: 10,
+            probe_ports: [2222],
+          },
+        ],
+      }),
+      mapContext: { mapId: 'map-1', mapName: 'Backbone' },
+      onDeviceUpdated,
+    });
+
+    act(() => {
+      result.current.updateForm({
+        additionalAddresses: [{ ...result.current.form.additionalAddresses[0], probePorts: '4444' }],
+      });
+    });
+
+    await act(async () => {
+      await result.current.handleEditSave(submitEvent());
+    });
+
+    expect(apiMocks.updateDevice).toHaveBeenCalledWith(
+      'dev-1',
+      expect.objectContaining({
+        addresses: expect.arrayContaining([
+          {
+            address: '10.0.0.1',
+            role: 'primary',
+            is_primary: true,
+            priority: 0,
+          },
+          {
+            address: '192.0.2.10',
+            role: 'backup',
+            label: 'OOB',
+            is_primary: false,
+            priority: 10,
+            probe_ports: [4444],
+          },
+        ]),
+      }),
+    );
+    expect(onDeviceUpdated).toHaveBeenCalledWith(expect.objectContaining(updatedDevice));
+  });
+
   it('submits address replacement when additional address rows change', async () => {
     const onDeviceUpdated = vi.fn();
     const updatedDevice = mockDevice({
