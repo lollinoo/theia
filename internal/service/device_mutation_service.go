@@ -269,7 +269,11 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	}
 
 	if rescheduler := *m.pollRescheduler; rescheduler != nil {
-		if update.PollingEnabled != nil && previousPollingEnabled != domain.DevicePollingEnabled(*device) {
+		needsReconcile := update.PollingEnabled != nil && previousPollingEnabled != domain.DevicePollingEnabled(*device)
+		if probePortsChanged {
+			needsReconcile = true
+		}
+		if needsReconcile {
 			rescheduler.ReconcileDeviceTasks(*device, changedAt)
 		}
 		pollIntervalChanged := update.PollIntervalOverride != nil && !pollIntervalOverridesEqual(previousOverride, device.PollIntervalOverride)

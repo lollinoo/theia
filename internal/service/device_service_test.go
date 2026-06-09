@@ -2654,6 +2654,44 @@ func TestUpdateDevice_ProbePortsChangeTriggersSchedulerRedue(t *testing.T) {
 	}
 }
 
+func TestUpdateDevice_ProbePortsChangeReconcilesScheduler(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "10.0.0.4",
+		Hostname:   "router-probe-reconcile",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		PollClass:  domain.PollClassCore,
+		ProbePorts: []int{22, 443},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	newProbePorts := []int{22, 8291}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		ProbePorts: &newProbePorts,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(rescheduler.reconcileCalls); got != 1 {
+		t.Fatalf("reconcile call count = %d, want 1", got)
+	}
+	if rescheduler.reconcileCalls[0].device.ID != device.ID {
+		t.Fatalf("reconciled device ID = %q, want %s", rescheduler.reconcileCalls[0].device.ID, device.ID)
+	}
+	if rescheduler.reconcileCalls[0].device.ProbePorts == nil ||
+		len(rescheduler.reconcileCalls[0].device.ProbePorts) != 2 ||
+		rescheduler.reconcileCalls[0].device.ProbePorts[1] != 8291 {
+		t.Fatalf("reconciled probe ports = %#v, want [22, 8291]", rescheduler.reconcileCalls[0].device.ProbePorts)
+	}
+}
+
 func TestUpdateDevice_AddressProbePortsChangeTriggersSchedulerRedue(t *testing.T) {
 	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
 	rescheduler := &fakePollRescheduler{}
