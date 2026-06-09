@@ -14,6 +14,7 @@ interface DeviceDetailsPanelProps {
   interfaceStats?: ReactNode;
   onCheckAddressReachability?: (deviceId: string) => Promise<DeviceAddressReachabilityResult[]>;
   onPromoteAddress?: (addressId: string) => Promise<void>;
+  addressReachabilityState?: DeviceAddressReachabilityPanelState;
 }
 
 function formatEmpty(value: string | number | null | undefined): string {
@@ -55,6 +56,12 @@ function formatTimestamp(value: string | null | undefined): string {
 
 function formatProbePorts(ports: number[] | null | undefined): string {
   return ports && ports.length > 0 ? ports.join(', ') : '-';
+}
+
+export interface DeviceAddressReachabilityPanelState {
+  results: DeviceAddressReachabilityResult[];
+  loading: boolean;
+  error: string | null;
 }
 
 function portReachabilityLabel(result: DeviceAddressReachabilityResult | undefined): string {
@@ -133,10 +140,16 @@ function addressResultKey(result: DeviceAddressReachabilityResult): string {
   return result.address_id || result.address;
 }
 
-function reachabilityStatus(result: DeviceAddressReachabilityResult | undefined): {
+function reachabilityStatus(
+  result: DeviceAddressReachabilityResult | undefined,
+  isProbing = false,
+): {
   label: string;
   className: string;
 } {
+  if (isProbing) {
+    return { label: 'probing', className: 'text-warning' };
+  }
   if (!result) {
     return { label: 'not checked', className: 'text-on-bg-secondary' };
   }
@@ -190,16 +203,27 @@ export function DeviceDetailsPanel({
   interfaceStats,
   onCheckAddressReachability,
   onPromoteAddress,
+  addressReachabilityState,
 }: DeviceDetailsPanelProps) {
   const [interfacesExpanded, setInterfacesExpanded] = useState(false);
-  const [addressReachability, setAddressReachability] = useState<DeviceAddressReachabilityResult[]>(
-    [],
-  );
-  const [addressReachabilityLoading, setAddressReachabilityLoading] = useState(false);
+  const [internalAddressReachability, setInternalAddressReachability] = useState<
+    DeviceAddressReachabilityResult[]
+  >([]);
+  const [internalAddressReachabilityLoading, setInternalAddressReachabilityLoading] = useState(false);
   const [promotingAddressId, setPromotingAddressId] = useState<string | null>(null);
-  const [addressActionError, setAddressActionError] = useState<string | null>(null);
+  const [internalAddressActionError, setInternalAddressActionError] = useState<string | null>(null);
   const addressReachabilityRequestRef = useRef(0);
   const addressPromotionRequestRef = useRef(0);
+  const isAddressReachabilityControlled = addressReachabilityState !== undefined;
+  const addressReachability = isAddressReachabilityControlled
+    ? addressReachabilityState.results
+    : internalAddressReachability;
+  const addressReachabilityLoading = isAddressReachabilityControlled
+    ? addressReachabilityState.loading
+    : internalAddressReachabilityLoading;
+  const addressActionError = isAddressReachabilityControlled
+    ? addressReachabilityState.error
+    : internalAddressActionError;
   const deviceLabel =
     device.tags?.display_name || device.sys_name || device.hostname || device.ip || device.id;
   const modelLabel = [device.vendor, device.hardware_model].filter(Boolean).join(' ');
@@ -213,10 +237,12 @@ export function DeviceDetailsPanel({
   useEffect(() => {
     addressReachabilityRequestRef.current += 1;
     addressPromotionRequestRef.current += 1;
-    setAddressReachability([]);
-    setAddressReachabilityLoading(false);
+    if (!isAddressReachabilityControlled) {
+      setInternalAddressReachability([]);
+      setInternalAddressReachabilityLoading(false);
+      setInternalAddressActionError(null);
+    }
     setPromotingAddressId(null);
-    setAddressActionError(null);
   }, [device.id]);
 
   async function handleCheckAddressReachability() {
@@ -224,11 +250,16 @@ export function DeviceDetailsPanel({
     const requestId = addressReachabilityRequestRef.current + 1;
     addressReachabilityRequestRef.current = requestId;
     setAddressActionError(null);
-    setAddressReachabilityLoading(true);
+    if (!isAddressReachabilityControlled) {
+      setInternalAddressReachabilityLoading(true);
+      setInternalAddressReachability([]);
+    }
     try {
       const results = await onCheckAddressReachability(device.id);
       if (addressReachabilityRequestRef.current === requestId) {
-        setAddressReachability(results);
+        if (!isAddressReachabilityControlled) {
+          setInternalAddressReachability(results);
+        }
       }
     } catch (error) {
       if (addressReachabilityRequestRef.current === requestId) {
@@ -236,7 +267,9 @@ export function DeviceDetailsPanel({
       }
     } finally {
       if (addressReachabilityRequestRef.current === requestId) {
-        setAddressReachabilityLoading(false);
+        if (!isAddressReachabilityControlled) {
+          setInternalAddressReachabilityLoading(false);
+        }
       }
     }
   }
@@ -258,6 +291,13 @@ export function DeviceDetailsPanel({
         setPromotingAddressId(null);
       }
     }
+  }
+
+  function setAddressActionError(error: string | null) {
+    if (isAddressReachabilityControlled) {
+      return;
+    }
+    setInternalAddressActionError(error);
   }
 
   return (
@@ -298,7 +338,7 @@ export function DeviceDetailsPanel({
                 disabled={addressReachabilityLoading}
                 className="rounded-md border border-outline-subtle px-2 py-1 text-xs text-on-bg-secondary transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Check address reachability
+                {addressReachabilityLoading ? 'Checking address reachability' : 'Check address reachability'}
               </button>
             )}
           </div>
@@ -311,7 +351,7 @@ export function DeviceDetailsPanel({
             {device.addresses.map((address) => {
               const key = address.id || address.address;
               const result = reachabilityByKey.get(key) ?? reachabilityByKey.get(address.address);
-              const status = reachabilityStatus(result);
+              const status = reachabilityStatus(result, addressReachabilityLoading);
               const addressId = address.id || address.address;
               return (
                 <div
@@ -335,7 +375,7 @@ export function DeviceDetailsPanel({
                       {formatProbePorts(result?.probe_ports ?? address.probe_ports)}
                     </span>
                   </div>
-                  {portReachabilityRows(result).length > 0 && (
+                  {!addressReachabilityLoading && portReachabilityRows(result).length > 0 && (
                     <div className="mt-2 space-y-1 text-xs">{portRowsForAddress(result)}</div>
                   )}
                   {result?.error && (

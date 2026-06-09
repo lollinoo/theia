@@ -1,7 +1,7 @@
 /**
  * Exercises canvas panels topology canvas behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { checkDeviceAddressReachability, updateDevice } from '../../api/client';
@@ -70,12 +70,20 @@ vi.mock('../DeviceDetailsPanel', () => ({
   DeviceDetailsPanel: (props: {
     device: Device;
     interfaceStats?: React.ReactNode;
+    addressReachabilityState?: {
+      results: { address: string }[];
+      loading: boolean;
+      error: string | null;
+    };
     onCheckAddressReachability?: (deviceId: string) => Promise<unknown>;
     onPromoteAddress?: (addressId: string) => Promise<void>;
   }) => (
     <div>
       <div>Details device:{props.device.hostname}</div>
       {props.interfaceStats}
+      <div>Address reachability loading:{String(props.addressReachabilityState?.loading ?? false)}</div>
+      <div>Address reachability results:{props.addressReachabilityState?.results.length ?? 0}</div>
+      <div>Address reachability error:{props.addressReachabilityState?.error ?? 'none'}</div>
       <button type="button" onClick={() => props.onCheckAddressReachability?.(props.device.id)}>
         Check mocked address reachability
       </button>
@@ -635,6 +643,74 @@ describe('CanvasPanels', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Check mocked address reachability' }));
 
     expect(checkDeviceAddressReachability).toHaveBeenCalledWith('dev-1');
+  });
+
+  it('preserves in-flight address reachability state when closing and reopening details panel', async () => {
+    const device = mockDevice();
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+    const setPanelContent = vi.fn();
+    let resolveProbe: (results: unknown[]) => void = () => {};
+    const probePromise = new Promise<unknown[]>((resolve) => {
+      resolveProbe = resolve;
+    });
+    (checkDeviceAddressReachability as ReturnType<typeof vi.fn>).mockImplementationOnce(() => probePromise);
+
+    const commonProps = {
+      setPanelContent,
+      devices: [device],
+      topologyLinks: [],
+      loadTopology: vi.fn().mockResolvedValue(undefined),
+      setDevices: vi.fn(),
+      setNodes: vi.fn(),
+      reactFlow: {} as never,
+      runtimeState,
+    };
+
+    const { rerender } = render(
+      <CanvasPanels
+        panelContent={{ type: 'deviceDetails', data: { deviceId: device.id } }}
+        {...commonProps}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check mocked address reachability' }));
+
+    expect(screen.getByText('Address reachability loading:true')).toBeInTheDocument();
+
+    rerender(<CanvasPanels panelContent={null} {...commonProps} />);
+    expect(screen.queryByText('Details device:router-01')).not.toBeInTheDocument();
+
+    rerender(
+      <CanvasPanels panelContent={{ type: 'deviceDetails', data: { deviceId: device.id } }} {...commonProps} />,
+    );
+
+    expect(screen.getByText('Address reachability loading:true')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveProbe([
+        {
+          address_id: 'addr-1',
+          address: '10.0.0.1',
+          role: 'primary',
+          label: 'Primary',
+          is_primary: true,
+          probe_ports: [22],
+          reachable_ports: [{ port: 22, reachable: true, error: '' }],
+          reachable: true,
+          error: '',
+        },
+      ]);
+      await probePromise;
+    });
+
+    expect(screen.getByText('Address reachability loading:false')).toBeInTheDocument();
+    expect(screen.getByText('Address reachability results:1')).toBeInTheDocument();
   });
 
   it('promotes a selected address to primary from the details panel', async () => {

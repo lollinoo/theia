@@ -106,6 +106,24 @@ describe('DeviceDetailsPanel', () => {
     expect(screen.getByText('Check transceiver levels weekly')).toBeInTheDocument();
   });
 
+  it('shows probing state when address reachability is in progress', () => {
+    render(
+      <DeviceDetailsPanel
+        device={mockDevice()}
+        detailMetrics={mockDeviceMetrics()}
+        onCheckAddressReachability={vi.fn()}
+        addressReachabilityState={{
+          results: [],
+          loading: true,
+          error: null,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Checking address reachability')).toBeInTheDocument();
+    expect(screen.getByText('probing')).toBeInTheDocument();
+  });
+
   it('formats memory and last poll values for operators', () => {
     render(
       <DeviceDetailsPanel
