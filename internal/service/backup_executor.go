@@ -42,14 +42,15 @@ func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.Cre
 	// Connect via SSH
 	var client *ssh.Client
 	timeout := 30 * time.Second
+	target := domain.BackupAddress(*device)
 
 	if profile.AuthMethod == domain.SSHAuthPassword {
-		client, err = ssh.NewClient(s.sshDialer, device.IP, profile.Port, profile.Username, secret, timeout, s.hostKeyCallback)
+		client, err = ssh.NewClient(s.sshDialer, target, profile.Port, profile.Username, secret, timeout, s.hostKeyCallback)
 	} else {
-		client, err = ssh.NewClientWithKey(s.sshDialer, device.IP, profile.Port, profile.Username, []byte(secret), timeout, s.hostKeyCallback)
+		client, err = ssh.NewClientWithKey(s.sshDialer, target, profile.Port, profile.Username, []byte(secret), timeout, s.hostKeyCallback)
 	}
 	if err != nil {
-		s.failJob(jobID, fmt.Sprintf("SSH connection failed: %v", err))
+		s.failJob(jobID, fmt.Sprintf("SSH connection to %s failed: %v", target, err))
 		return
 	}
 	defer client.Close()

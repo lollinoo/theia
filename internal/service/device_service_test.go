@@ -1158,6 +1158,96 @@ func TestDeviceDiscoveryCoordinatorTestSNMPUsesTopologyOff(t *testing.T) {
 	}
 }
 
+func TestDeviceDiscoveryCoordinatorTestSNMPUsesManagementAddress(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	var seenTarget string
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		seenTarget = target
+		return &snmp.DiscoveryResult{SysName: "agg-1", SysDescr: "SwitchOS"}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	device := &domain.Device{
+		ID:            uuid.New(),
+		IP:            "10.0.0.21",
+		Hostname:      "agg-1",
+		Managed:       true,
+		Status:        domain.DeviceStatusUp,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.0.0.21", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "10.0.0.22", Role: domain.DeviceAddressRoleManagement},
+		},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	result, err := svc.discovery.TestSNMP(context.Background(), device.ID)
+	if err != nil {
+		t.Fatalf("TestSNMP failed: %v", err)
+	}
+	if !result.Success {
+		t.Fatal("expected SNMP test to succeed")
+	}
+	if seenTarget != "10.0.0.22" {
+		t.Fatalf("SNMP target = %q, want management address", seenTarget)
+	}
+	if result.TargetIP != "10.0.0.22" {
+		t.Fatalf("result target = %q, want management address", result.TargetIP)
+	}
+}
+
+func TestDeviceDiscoveryCoordinatorProbeUsesManagementAddress(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	var seenTarget string
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		seenTarget = target
+		return &snmp.DiscoveryResult{SysName: "agg-1", SysDescr: "SwitchOS"}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	device := &domain.Device{
+		ID:            uuid.New(),
+		IP:            "10.0.0.31",
+		Hostname:      "agg-probe",
+		Managed:       true,
+		Status:        domain.DeviceStatusUp,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.0.0.31", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "10.0.0.32", Role: domain.DeviceAddressRoleManagement},
+		},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.ProbeDevice(context.Background(), device.ID); err != nil {
+		t.Fatalf("ProbeDevice failed: %v", err)
+	}
+	svc.WaitForProbes()
+	if seenTarget != "10.0.0.32" {
+		t.Fatalf("probe target = %q, want management address", seenTarget)
+	}
+}
+
 func TestProbeCompletes_DeviceStatusUp(t *testing.T) {
 	result := &snmp.DiscoveryResult{
 		SysName:       "core-router",

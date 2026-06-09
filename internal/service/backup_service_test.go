@@ -809,6 +809,69 @@ func TestConcurrentBackup(t *testing.T) {
 	}
 }
 
+func TestBackupServiceTestSSHConnectionUsesBackupAddress(t *testing.T) {
+	jobRepo := newMockBackupJobRepo()
+	fileRepo := newMockBackupFileRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockBackupSettingsRepo()
+	registry := buildTestVendorRegistry("testvendor", true)
+	dialer := &recordingSSHDialer{}
+	keyring := mustServiceTestKeyring(t, "active", map[string]string{
+		"active": "test-encryption-key-32-bytes!!!!",
+	})
+
+	svc := NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		registry, dialer, keyring, t.TempDir(),
+		ssh.InsecureIgnoreHostKey(),
+	)
+
+	secret, err := svc.EncryptSecret("password")
+	if err != nil {
+		t.Fatalf("EncryptSecret failed: %v", err)
+	}
+	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
+		ID:              uuid.New(),
+		Name:            "backup-profile",
+		Username:        "admin",
+		Port:            22,
+		AuthMethod:      domain.SSHAuthPassword,
+		EncryptedSecret: secret,
+		Role:            "Admin",
+	}); err != nil {
+		t.Fatalf("Create profile failed: %v", err)
+	}
+
+	deviceID := uuid.New()
+	if err := deviceRepo.Create(&domain.Device{
+		ID:         deviceID,
+		IP:         "10.40.0.1",
+		Vendor:     "testvendor",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		DeviceType: domain.DeviceTypeRouter,
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.40.0.1", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "10.40.0.2", Role: domain.DeviceAddressRoleManagement},
+			{Address: "198.51.100.40", Role: domain.DeviceAddressRoleBackup},
+		},
+	}); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+
+	err = svc.TestSSHConnection(context.Background(), deviceID)
+	if err == nil {
+		t.Fatal("expected recording dialer error")
+	}
+	if !dialer.called {
+		t.Fatal("expected SSH dialer to be called")
+	}
+	if dialer.capturedAddr != "198.51.100.40:22" {
+		t.Fatalf("dial address = %q, want backup address", dialer.capturedAddr)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test 2: TestBinaryBackupSFTPPoll (DEBT-04)
 // ---------------------------------------------------------------------------
@@ -3405,6 +3468,7 @@ func serverPort(t *testing.T, addr string) int {
 type recordingSSHDialer struct {
 	mu           sync.Mutex
 	called       bool
+	capturedAddr string
 	capturedUser string
 }
 
@@ -3412,6 +3476,7 @@ func (d *recordingSSHDialer) Dial(addr string, config *ssh.ClientConfig) (*ssh.C
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.called = true
+	d.capturedAddr = addr
 	d.capturedUser = config.User
 	return nil, fmt.Errorf("recording dialer: connection refused")
 }
