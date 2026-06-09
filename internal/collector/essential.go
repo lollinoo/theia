@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,7 +38,7 @@ type EssentialResult struct {
 type EssentialCollector struct {
 	registry     *vendor.Registry
 	newClient    NewSNMPClientFunc
-	networkProbe func(context.Context, string, time.Duration) error
+	networkProbe func(context.Context, string, time.Duration, []int) error
 	now          func() time.Time
 }
 
@@ -51,7 +52,7 @@ func NewEssentialCollector(registry *vendor.Registry, newClient NewSNMPClientFun
 	}
 }
 
-func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, timeout time.Duration, retries int) EssentialResult {
+func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, timeout time.Duration, retries int, probePorts []int) EssentialResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -102,7 +103,7 @@ func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, tim
 	}
 	if err := client.Connect(); err != nil {
 		result.Err = fmt.Errorf("connect SNMP client: %w", err)
-		c.markSNMPFailureNetworkEvidence(ctx, device.IP, timeout, &result)
+		c.markSNMPFailureNetworkEvidence(ctx, device.IP, timeout, probePorts, &result)
 		return result
 	}
 	defer func() {
@@ -124,7 +125,7 @@ func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, tim
 	result.CPU, result.CPUPercent = convertEssentialField(metrics.CPU)
 	result.Memory, result.MemPercent = convertEssentialField(metrics.Memory)
 	if !essentialMetricsHaveSuccessfulRead(metrics) {
-		c.markSNMPFailureNetworkEvidence(ctx, device.IP, timeout, &result)
+		c.markSNMPFailureNetworkEvidence(ctx, device.IP, timeout, probePorts, &result)
 		result.PollStatus = polling.PollStatusFailed
 		result.Err = essentialMetricsFailure(metrics)
 		return result
@@ -136,12 +137,12 @@ func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, tim
 	return result
 }
 
-func (c *EssentialCollector) markSNMPFailureNetworkEvidence(ctx context.Context, target string, timeout time.Duration, result *EssentialResult) {
+func (c *EssentialCollector) markSNMPFailureNetworkEvidence(ctx context.Context, target string, timeout time.Duration, probePorts []int, result *EssentialResult) {
 	result.SNMPReachable = polling.TriStateFalse
 	if c == nil || c.networkProbe == nil {
 		return
 	}
-	if err := c.networkProbe(ctx, target, timeout); err == nil {
+	if err := c.networkProbe(ctx, target, timeout, probePorts); err == nil {
 		result.NetworkReachable = polling.TriStateTrue
 		return
 	}
@@ -167,9 +168,7 @@ func essentialMetricsFailure(metrics snmp.EssentialMetricsResult) error {
 	return errors.New("essential SNMP read returned no data")
 }
 
-var essentialTCPReachabilityPorts = []string{"22", "8291", "80", "443"}
-
-func probeEssentialTCPReachability(ctx context.Context, target string, timeout time.Duration) error {
+func probeEssentialTCPReachability(ctx context.Context, target string, timeout time.Duration, ports []int) error {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return errors.New("network probe target is empty")
@@ -182,13 +181,13 @@ func probeEssentialTCPReachability(ctx context.Context, target string, timeout t
 	}
 
 	var lastErr error
-	for _, port := range essentialTCPReachabilityPorts {
+	for _, port := range domain.ResolveProbePorts(nil, nil, ports) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 
 		dialer := net.Dialer{Timeout: timeout}
-		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(target, port))
+		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(target, strconv.Itoa(port)))
 		if err == nil {
 			_ = conn.Close()
 			return nil

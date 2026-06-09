@@ -652,6 +652,92 @@ func TestDeviceHandlerList_IncludesPollClassificationFields(t *testing.T) {
 	}
 }
 
+func TestDeviceHandlerAddressReachability_ReturnsPerAddressResults(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	if err := settingsRepo.Set(domain.SettingNetworkProbePorts, "8291"); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	primaryID := uuid.New()
+	managementID := uuid.New()
+	device := &domain.Device{
+		ID:         deviceID,
+		IP:         "192.0.2.20",
+		Hostname:   "edge-router",
+		ProbePorts: []int{22, 443},
+		Addresses: []domain.DeviceAddress{
+			{
+				ID:         primaryID,
+				Address:    "192.0.2.20",
+				Role:       domain.DeviceAddressRolePrimary,
+				IsPrimary:  true,
+				ProbePorts: []int{2222},
+			},
+			{
+				ID:      managementID,
+				Address: "198.51.100.20",
+				Label:   "mgmt",
+				Role:    domain.DeviceAddressRoleManagement,
+			},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil, service.WithNetworkReachabilityProbe(
+		func(_ context.Context, _ string, _ time.Duration, _ []int) error {
+			return nil
+		},
+	))
+	handler := NewDeviceHandler(svc, credentialProfileRepo, buildTestVendorRegistry())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID.String()+"/addresses/reachability", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleAddressReachability(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data []struct {
+			AddressID  string `json:"address_id"`
+			Address    string `json:"address"`
+			Role       string `json:"role"`
+			Label      string `json:"label"`
+			IsPrimary  bool   `json:"is_primary"`
+			ProbePorts []int  `json:"probe_ports"`
+			Reachable  bool   `json:"reachable"`
+			Error      string `json:"error"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Data) != 2 {
+		t.Fatalf("data len = %d, want 2: %#v", len(resp.Data), resp.Data)
+	}
+	if resp.Data[0].AddressID != primaryID.String() || resp.Data[0].Address != "192.0.2.20" {
+		t.Fatalf("primary address result = %#v", resp.Data[0])
+	}
+	if resp.Data[0].Role != "primary" || !resp.Data[0].IsPrimary || !resp.Data[0].Reachable || resp.Data[0].Error != "" {
+		t.Fatalf("primary reachability result = %#v", resp.Data[0])
+	}
+	assertIntSliceEqual(t, resp.Data[0].ProbePorts, []int{2222})
+	if resp.Data[1].AddressID != managementID.String() || resp.Data[1].Address != "198.51.100.20" {
+		t.Fatalf("management address result = %#v", resp.Data[1])
+	}
+	if resp.Data[1].Role != "management" || resp.Data[1].Label != "mgmt" || !resp.Data[1].Reachable || resp.Data[1].Error != "" {
+		t.Fatalf("management reachability result = %#v", resp.Data[1])
+	}
+	assertIntSliceEqual(t, resp.Data[1].ProbePorts, []int{22, 443})
+}
+
 func TestDeviceHandlerCreate_HappyPath(t *testing.T) {
 	handler, _, _ := newTestDeviceHandler(t)
 

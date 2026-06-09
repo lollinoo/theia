@@ -109,6 +109,7 @@ func TestRequiredPermissionsForRegisteredProtectedRoutes(t *testing.T) {
 		{name: "device probe", method: http.MethodPost, path: "/api/v1/devices/" + id + "/probe", want: []string{domain.PermissionDevicesUpdate}},
 		{name: "device snmp test", method: http.MethodPost, path: "/api/v1/devices/" + id + "/snmp-test", want: []string{domain.PermissionDevicesUpdate}},
 		{name: "device topology discovery", method: http.MethodPost, path: "/api/v1/devices/" + id + "/topology-discovery", want: []string{domain.PermissionTopologyUpdate}},
+		{name: "device address reachability", method: http.MethodPost, path: "/api/v1/devices/" + id + "/addresses/reachability", want: []string{domain.PermissionDevicesUpdate}},
 		{name: "device ssh test", method: http.MethodPost, path: "/api/v1/devices/" + id + "/ssh-credentials/test", want: []string{domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate}},
 		{name: "device backup list", method: http.MethodGet, path: "/api/v1/devices/" + id + "/backups", want: []string{domain.PermissionBackupsRead}},
 		{name: "device backup trigger", method: http.MethodPost, path: "/api/v1/devices/" + id + "/backups", want: []string{domain.PermissionBackupsUpdate}},

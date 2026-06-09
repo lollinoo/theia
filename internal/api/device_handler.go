@@ -670,6 +670,28 @@ func (h *DeviceHandler) HandleTestSNMP(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+// HandleAddressReachability handles POST /api/v1/devices/{id}/addresses/reachability.
+func (h *DeviceHandler) HandleAddressReachability(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/addresses/reachability")
+	id, err := extractIDFromPath(path, "/api/v1/devices/")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid device ID")
+		return
+	}
+
+	results, err := h.svc.CheckDeviceAddressReachability(r.Context(), id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to check address reachability", err)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": addressReachabilityResultsToResponse(results)})
+}
+
 func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDeviceRequest, error) {
 	deviceType := domain.DeviceType(req.DeviceType)
 	addressesProvided := req.Addresses != nil
@@ -1023,6 +1045,23 @@ func deviceAddressesToResponse(addresses []domain.DeviceAddress) []map[string]in
 			"probe_ports": probePortsToResponse(address.ProbePorts),
 			"created_at":  address.CreatedAt,
 			"updated_at":  address.UpdatedAt,
+		})
+	}
+	return response
+}
+
+func addressReachabilityResultsToResponse(results []service.AddressReachabilityResult) []map[string]interface{} {
+	response := make([]map[string]interface{}, 0, len(results))
+	for _, result := range results {
+		response = append(response, map[string]interface{}{
+			"address_id":  result.AddressID.String(),
+			"address":     result.Address,
+			"role":        string(result.Role),
+			"label":       result.Label,
+			"is_primary":  result.IsPrimary,
+			"probe_ports": result.ProbePorts,
+			"reachable":   result.Reachable,
+			"error":       result.Error,
 		})
 	}
 	return response

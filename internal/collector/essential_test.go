@@ -5,6 +5,7 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -59,6 +60,31 @@ type assertiveError string
 
 func (e assertiveError) Error() string { return string(e) }
 
+func TestEssentialCollectorUsesConfiguredNetworkProbePorts(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return &scriptedEssentialClient{connectErr: assertiveError("timeout")}, nil
+	})
+	var capturedPorts []int
+	collector.networkProbe = func(_ context.Context, _ string, _ time.Duration, ports []int) error {
+		capturedPorts = append([]int(nil), ports...)
+		return nil
+	}
+
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.1"}, time.Second, 0, []int{2222})
+
+	if result.NetworkReachable != polling.TriStateTrue {
+		t.Fatalf("NetworkReachable = %q, want true", result.NetworkReachable)
+	}
+	if !reflect.DeepEqual(capturedPorts, []int{2222}) {
+		t.Fatalf("probe ports = %v, want [2222]", capturedPorts)
+	}
+}
+
 func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 	deviceID := uuid.New()
 	registry, err := vendor.LoadRegistryFromEmbedded()
@@ -70,7 +96,7 @@ func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 		return &scriptedEssentialClient{connectErr: assertiveError("timeout")}, nil
 	})
 	probeCalls := 0
-	collector.networkProbe = func(_ context.Context, target string, timeout time.Duration) error {
+	collector.networkProbe = func(_ context.Context, target string, timeout time.Duration, _ []int) error {
 		probeCalls++
 		if target != "10.0.0.1" {
 			t.Fatalf("target = %q, want 10.0.0.1", target)
@@ -81,7 +107,7 @@ func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 		return assertiveError("tcp probe failed")
 	}
 
-	result := collector.Poll(context.Background(), domain.Device{ID: deviceID, IP: "10.0.0.1"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: deviceID, IP: "10.0.0.1"}, time.Second, 0, nil)
 
 	if result.DeviceID != deviceID {
 		t.Fatalf("DeviceID = %s, want %s", result.DeviceID, deviceID)
@@ -113,11 +139,11 @@ func TestEssentialCollectorSysUpTimeFailureRecordsUnreachableNetworkProbe(t *tes
 	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
 		return client, nil
 	})
-	collector.networkProbe = func(context.Context, string, time.Duration) error {
+	collector.networkProbe = func(context.Context, string, time.Duration, []int) error {
 		return assertiveError("tcp probe failed")
 	}
 
-	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.2"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.2"}, time.Second, 0, nil)
 
 	if result.Err == nil {
 		t.Fatal("Err = nil, want sysUpTime failure")
@@ -149,7 +175,7 @@ func TestEssentialCollectorSysUpTimeFailureRecordsReachableNetworkProbe(t *testi
 	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
 		return client, nil
 	})
-	collector.networkProbe = func(_ context.Context, target string, timeout time.Duration) error {
+	collector.networkProbe = func(_ context.Context, target string, timeout time.Duration, _ []int) error {
 		if target != "10.0.0.3" {
 			t.Fatalf("target = %q, want 10.0.0.3", target)
 		}
@@ -159,7 +185,7 @@ func TestEssentialCollectorSysUpTimeFailureRecordsReachableNetworkProbe(t *testi
 		return nil
 	}
 
-	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.3"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.3"}, time.Second, 0, nil)
 
 	if result.Err == nil {
 		t.Fatal("Err = nil, want sysUpTime failure")
@@ -202,7 +228,7 @@ func TestEssentialCollectorCompleteResult(t *testing.T) {
 		return client, nil
 	})
 
-	result := collector.Poll(context.Background(), domain.Device{ID: deviceID, IP: "10.0.0.2"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: deviceID, IP: "10.0.0.2"}, time.Second, 0, nil)
 
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil", result.Err)
@@ -243,7 +269,7 @@ func TestEssentialCollectorPartialWhenDefaultRootsAreMissing(t *testing.T) {
 		return client, nil
 	})
 
-	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.3"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.3"}, time.Second, 0, nil)
 
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil", result.Err)
@@ -285,7 +311,7 @@ func TestEssentialCollectorPartialWhenMemoryErrors(t *testing.T) {
 		return client, nil
 	})
 
-	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.4"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.4"}, time.Second, 0, nil)
 
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil", result.Err)

@@ -306,7 +306,12 @@ func (d *deviceDiscoveryCoordinator) PingVirtualDevice(ctx context.Context, id u
 	}
 
 	newStatus := domain.DeviceStatusDown
-	if err := ProbeVirtualReachability(ctx, device.IP, timeout); err == nil {
+	probe := d.parent.networkProbe
+	if probe == nil {
+		probe = ProbeTCPReachability
+	}
+	ports := deviceTargetProbePorts(*device, device.IP, d.parent.globalNetworkProbePorts())
+	if err := probe(ctx, device.IP, timeout, ports); err == nil {
 		newStatus = domain.DeviceStatusUp
 	}
 
