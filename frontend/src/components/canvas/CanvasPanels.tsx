@@ -4,7 +4,12 @@
  */
 import type { ReactFlowInstance } from '@xyflow/react';
 
-import { fetchDevices } from '../../api/client';
+import {
+  checkDeviceAddressReachability,
+  type DeviceAddressPayload,
+  fetchDevices,
+  updateDevice,
+} from '../../api/client';
 import type { Area, Device, Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import { AddDevicePanel } from '../AddDevicePanel';
@@ -35,6 +40,20 @@ function sameAreaIds(first: string[] = [], second: string[] = []): boolean {
   const sortedFirst = [...first].sort();
   const sortedSecond = [...second].sort();
   return sortedFirst.every((value, index) => value === sortedSecond[index]);
+}
+
+function buildPromotedAddressPayloads(device: Device, addressId: string): DeviceAddressPayload[] {
+  return device.addresses.map((address) => {
+    const promoted = address.id === addressId;
+    return {
+      address: address.address,
+      label: address.label,
+      role: promoted ? 'primary' : address.is_primary ? 'other' : address.role,
+      is_primary: promoted,
+      priority: promoted ? 0 : address.priority,
+      probe_ports: address.probe_ports,
+    };
+  });
 }
 
 interface CanvasPanelsProps {
@@ -115,6 +134,16 @@ export function CanvasPanels({
             <DeviceDetailsPanel
               device={device}
               detailMetrics={runtimeState.devicesById.get(device.id)?.metrics ?? null}
+              onCheckAddressReachability={checkDeviceAddressReachability}
+              onPromoteAddress={async (addressId) => {
+                const address = device.addresses.find((candidate) => candidate.id === addressId);
+                if (!address) return;
+                await updateDevice(device.id, {
+                  ip: address.address,
+                  addresses: buildPromotedAddressPayloads(device, addressId),
+                });
+                await loadTopology(true);
+              }}
               interfaceStats={
                 device.device_type !== 'virtual' ? (
                   <DeviceInterfaceStatsPanelRoute

@@ -2,7 +2,8 @@
  * Renders device details panel UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
+import type { DeviceAddressReachabilityResult } from '../api/client';
 import type { Device } from '../types/api';
 import { type DeviceMetricsDTO, formatUptime } from '../types/metrics';
 import { MaterialIcon } from './MaterialIcon';
@@ -11,6 +12,8 @@ interface DeviceDetailsPanelProps {
   device: Device;
   detailMetrics: DeviceMetricsDTO | null;
   interfaceStats?: ReactNode;
+  onCheckAddressReachability?: (deviceId: string) => Promise<DeviceAddressReachabilityResult[]>;
+  onPromoteAddress?: (addressId: string) => Promise<void>;
 }
 
 function formatEmpty(value: string | number | null | undefined): string {
@@ -48,6 +51,30 @@ function formatTimestamp(value: string | null | undefined): string {
     timeZone: 'UTC',
     timeZoneName: 'short',
   }).format(parsed);
+}
+
+function formatProbePorts(ports: number[] | null | undefined): string {
+  return ports && ports.length > 0 ? ports.join(', ') : '-';
+}
+
+function addressResultKey(result: DeviceAddressReachabilityResult): string {
+  return result.address_id || result.address;
+}
+
+function reachabilityStatus(result: DeviceAddressReachabilityResult | undefined): {
+  label: string;
+  className: string;
+} {
+  if (!result) {
+    return { label: 'not checked', className: 'text-on-bg-secondary' };
+  }
+  return result.reachable
+    ? { label: 'reachable', className: 'text-status-up' }
+    : { label: 'unreachable', className: 'text-status-down' };
+}
+
+function actionErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Address action failed';
 }
 
 function DetailRow({
@@ -91,11 +118,77 @@ export function DeviceDetailsPanel({
   device,
   detailMetrics,
   interfaceStats,
+  onCheckAddressReachability,
+  onPromoteAddress,
 }: DeviceDetailsPanelProps) {
   const [interfacesExpanded, setInterfacesExpanded] = useState(false);
+  const [addressReachability, setAddressReachability] = useState<DeviceAddressReachabilityResult[]>(
+    [],
+  );
+  const [addressReachabilityLoading, setAddressReachabilityLoading] = useState(false);
+  const [promotingAddressId, setPromotingAddressId] = useState<string | null>(null);
+  const [addressActionError, setAddressActionError] = useState<string | null>(null);
+  const addressReachabilityRequestRef = useRef(0);
+  const addressPromotionRequestRef = useRef(0);
   const deviceLabel =
     device.tags?.display_name || device.sys_name || device.hostname || device.ip || device.id;
   const modelLabel = [device.vendor, device.hardware_model].filter(Boolean).join(' ');
+  const reachabilityByKey = new Map(
+    addressReachability.flatMap((result) => [
+      [addressResultKey(result), result],
+      [result.address, result],
+    ]),
+  );
+
+  useEffect(() => {
+    addressReachabilityRequestRef.current += 1;
+    addressPromotionRequestRef.current += 1;
+    setAddressReachability([]);
+    setAddressReachabilityLoading(false);
+    setPromotingAddressId(null);
+    setAddressActionError(null);
+  }, [device.id]);
+
+  async function handleCheckAddressReachability() {
+    if (!onCheckAddressReachability) return;
+    const requestId = addressReachabilityRequestRef.current + 1;
+    addressReachabilityRequestRef.current = requestId;
+    setAddressActionError(null);
+    setAddressReachabilityLoading(true);
+    try {
+      const results = await onCheckAddressReachability(device.id);
+      if (addressReachabilityRequestRef.current === requestId) {
+        setAddressReachability(results);
+      }
+    } catch (error) {
+      if (addressReachabilityRequestRef.current === requestId) {
+        setAddressActionError(actionErrorMessage(error));
+      }
+    } finally {
+      if (addressReachabilityRequestRef.current === requestId) {
+        setAddressReachabilityLoading(false);
+      }
+    }
+  }
+
+  async function handlePromoteAddress(addressId: string) {
+    if (!onPromoteAddress) return;
+    const requestId = addressPromotionRequestRef.current + 1;
+    addressPromotionRequestRef.current = requestId;
+    setAddressActionError(null);
+    setPromotingAddressId(addressId);
+    try {
+      await onPromoteAddress(addressId);
+    } catch (error) {
+      if (addressPromotionRequestRef.current === requestId) {
+        setAddressActionError(actionErrorMessage(error));
+      }
+    } finally {
+      if (addressPromotionRequestRef.current === requestId) {
+        setPromotingAddressId(null);
+      }
+    }
+  }
 
   return (
     <div className="space-y-5 p-4 transition-colors duration-200">
@@ -123,6 +216,75 @@ export function DeviceDetailsPanel({
           {device.notes?.trim() ? device.notes : 'No notes saved.'}
         </p>
       </div>
+
+      {device.addresses.length > 0 && (
+        <div className="space-y-3 rounded-lg bg-surface-high p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-medium uppercase text-on-bg-secondary">Addresses</p>
+            {onCheckAddressReachability && (
+              <button
+                type="button"
+                onClick={() => void handleCheckAddressReachability()}
+                disabled={addressReachabilityLoading}
+                className="rounded-md border border-outline-subtle px-2 py-1 text-xs text-on-bg-secondary transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Check address reachability
+              </button>
+            )}
+          </div>
+          {addressActionError && (
+            <p className="rounded-md border border-status-down/40 bg-status-down/10 px-2 py-1 text-xs text-status-down">
+              {addressActionError}
+            </p>
+          )}
+          <div className="space-y-2">
+            {device.addresses.map((address) => {
+              const key = address.id || address.address;
+              const result = reachabilityByKey.get(key) ?? reachabilityByKey.get(address.address);
+              const status = reachabilityStatus(result);
+              const addressId = address.id || address.address;
+              return (
+                <div
+                  key={key}
+                  className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="break-all font-mono text-xs text-on-bg">{address.address}</p>
+                      <p className="mt-1 text-[11px] uppercase text-on-bg-secondary">
+                        {address.label || address.role || 'address'}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 text-xs font-medium ${status.className}`}>
+                      {status.label}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+                    <span className="text-on-bg-secondary">Ports</span>
+                    <span className="font-mono text-on-bg">
+                      {formatProbePorts(result?.probe_ports ?? address.probe_ports)}
+                    </span>
+                  </div>
+                  {result?.error && (
+                    <p className="mt-2 break-words text-xs text-status-down">{result.error}</p>
+                  )}
+                  {!address.is_primary && onPromoteAddress && address.id && (
+                    <button
+                      type="button"
+                      aria-label={`Use ${address.address} as primary`}
+                      onClick={() => void handlePromoteAddress(address.id)}
+                      disabled={promotingAddressId === addressId}
+                      className="mt-2 rounded-md border border-outline-subtle px-2 py-1 text-xs text-on-bg-secondary transition-colors hover:bg-surface-high disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Use as primary
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-3" data-testid="device-detail-runtime">
         <div className="flex items-center justify-between">

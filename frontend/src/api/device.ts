@@ -47,6 +47,18 @@ export interface DeviceAddressPayload {
   probe_ports?: number[] | null;
 }
 
+/** Describes one address reachability probe result returned by the backend. */
+export interface DeviceAddressReachabilityResult {
+  address_id: string;
+  address: string;
+  role: DeviceAddressRole;
+  label: string;
+  is_primary: boolean;
+  probe_ports: number[];
+  reachable: boolean;
+  error: string;
+}
+
 /** Describes the create device payload contract used by the frontend API boundary. */
 export interface CreateDevicePayload {
   hostname: string;
@@ -64,6 +76,40 @@ export interface CreateDevicePayload {
   topology_discovery_mode?: TopologyDiscoveryMode;
   area_ids?: string[];
   skip_primary_map_membership?: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isDeviceAddressRole(value: unknown): value is DeviceAddressRole {
+  return (
+    value === 'primary' ||
+    value === 'management' ||
+    value === 'backup' ||
+    value === 'monitoring' ||
+    value === 'other'
+  );
+}
+
+function isIntegerArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((item) => Number.isInteger(item));
+}
+
+function isDeviceAddressReachabilityResult(
+  value: unknown,
+): value is DeviceAddressReachabilityResult {
+  return (
+    isRecord(value) &&
+    typeof value.address_id === 'string' &&
+    typeof value.address === 'string' &&
+    isDeviceAddressRole(value.role) &&
+    typeof value.label === 'string' &&
+    typeof value.is_primary === 'boolean' &&
+    isIntegerArray(value.probe_ports) &&
+    typeof value.reachable === 'boolean' &&
+    typeof value.error === 'string'
+  );
 }
 
 // fetchDevices loads all devices and keeps legacy error text used by callers.
@@ -157,6 +203,18 @@ export async function deleteDevice(id: string): Promise<void> {
 // runTopologyDiscovery triggers backend topology discovery for one device.
 export async function runTopologyDiscovery(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/devices/${encodeURIComponent(id)}/topology-discovery`, 'POST');
+}
+
+// checkDeviceAddressReachability asks the backend to probe all saved addresses for one device.
+export async function checkDeviceAddressReachability(
+  id: string,
+): Promise<DeviceAddressReachabilityResult[]> {
+  const response = await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(id)}/addresses/reachability`,
+    'POST',
+  );
+  const data = (response as { data?: unknown }).data;
+  return Array.isArray(data) ? data.filter(isDeviceAddressReachabilityResult) : [];
 }
 
 // fetchDeviceInterfaces loads interface telemetry metadata for one device.
