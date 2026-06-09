@@ -70,6 +70,20 @@ func (r *mockWorkerDeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 
 func (r *mockWorkerDeviceRepo) GetByIP(_ string) (*domain.Device, error) { return nil, nil }
 
+func (r *mockWorkerDeviceRepo) GetByAddress(_ string) (*domain.Device, error) { return nil, nil }
+
+func (r *mockWorkerDeviceRepo) GetDeviceAddresses(_ uuid.UUID) ([]domain.DeviceAddress, error) {
+	return nil, nil
+}
+
+func (r *mockWorkerDeviceRepo) ReplaceDeviceAddresses(_ uuid.UUID, _ []domain.DeviceAddress) error {
+	return nil
+}
+
+func (r *mockWorkerDeviceRepo) FindAddressConflict(_ string, _ domain.DeviceType, _ uuid.UUID) (*domain.Device, error) {
+	return nil, nil
+}
+
 func (r *mockWorkerDeviceRepo) FindPhysicalVirtualIPConflict(_ string, _ domain.DeviceType, _ uuid.UUID) (*domain.Device, error) {
 	return nil, nil
 }
