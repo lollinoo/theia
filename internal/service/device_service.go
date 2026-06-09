@@ -44,6 +44,7 @@ type DeviceUpdate struct {
 	Hostname              *string
 	IP                    *string
 	Addresses             *[]domain.DeviceAddress
+	ProbePorts            *[]int
 	Notes                 **string
 	Tags                  *map[string]string
 	SNMPCredentials       *domain.SNMPCredentials
@@ -269,7 +270,7 @@ func (s *DeviceService) AddDevice(
 	areaIDs []uuid.UUID,
 	notes ...*string,
 ) (*domain.Device, error) {
-	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, nil, notes...)
+	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, nil, nil, notes...)
 }
 
 // AddDeviceWithAddresses creates a device with an explicit address collection
@@ -286,10 +287,11 @@ func (s *DeviceService) AddDeviceWithAddresses(
 	prometheusLabelValue string,
 	topologyDiscoveryMode domain.TopologyDiscoveryMode,
 	areaIDs []uuid.UUID,
+	probePorts []int,
 	addresses []domain.DeviceAddress,
 	notes ...*string,
 ) (*domain.Device, error) {
-	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, addresses, notes...)
+	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, probePorts, addresses, notes...)
 }
 
 // probeDevice performs SNMP discovery and updates the device in the repository.

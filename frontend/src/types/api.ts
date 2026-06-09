@@ -49,6 +49,7 @@ export interface DeviceAddress {
   role: DeviceAddressRole;
   is_primary: boolean;
   priority: number;
+  probe_ports: number[] | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -73,6 +74,7 @@ export interface Device {
   hostname: string;
   ip: string;
   addresses: DeviceAddress[];
+  probe_ports: number[] | null;
   notes?: string | null;
   device_type: DeviceType;
   poll_class: DevicePollClass;
@@ -242,6 +244,17 @@ function readNullableNumber(record: APIRecord, key: string): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function readNullableNumberArray(record: APIRecord, key: string): number[] | null {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  if (!value.every((item) => typeof item === 'number' && Number.isInteger(item))) {
+    return null;
+  }
+  return [...value];
+}
+
 // readNullableString preserves null for absent or non-string fields.
 function readNullableString(record: APIRecord, key: string): string | null {
   const value = record[key];
@@ -346,6 +359,7 @@ function primaryAddressFromIP(deviceID: string, ip: string): DeviceAddress {
     role: 'primary',
     is_primary: true,
     priority: 0,
+    probe_ports: null,
   };
 }
 
@@ -372,6 +386,7 @@ function parseDeviceAddress(
     role,
     is_primary: readBoolean(value, 'is_primary', role === 'primary'),
     priority: readNumber(value, 'priority', fallbackPriority),
+    probe_ports: readNullableNumberArray(value, 'probe_ports'),
     created_at: readString(value, 'created_at') || undefined,
     updated_at: readString(value, 'updated_at') || undefined,
   };
@@ -456,6 +471,7 @@ export function parseDevicesResponse(payload: unknown): Device[] {
       hostname: readString(attributes, 'hostname'),
       ip,
       addresses: parseDeviceAddresses(attributes, deviceID, ip),
+      probe_ports: readNullableNumberArray(attributes, 'probe_ports'),
       notes: readNullableString(attributes, 'notes'),
       device_type: parseDeviceType(attributes.device_type),
       poll_class: parseDevicePollClass(attributes.poll_class),

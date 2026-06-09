@@ -44,6 +44,7 @@ export interface DeviceAddressPayload {
   role?: DeviceAddressRole;
   is_primary?: boolean;
   priority?: number;
+  probe_ports?: number[] | null;
 }
 
 /** Describes the create device payload contract used by the frontend API boundary. */
@@ -51,6 +52,7 @@ export interface CreateDevicePayload {
   hostname: string;
   ip?: string;
   addresses?: DeviceAddressPayload[];
+  probe_ports?: number[] | null;
   notes?: string | null;
   device_type?: string;
   snmp?: SNMPPayload;
@@ -116,6 +118,7 @@ export async function updateDevice(
     hostname: string;
     ip: string;
     addresses: DeviceAddressPayload[];
+    probe_ports: number[] | null;
     notes: string | null;
     snmp: SNMPPayload;
     tags: Record<string, string>;

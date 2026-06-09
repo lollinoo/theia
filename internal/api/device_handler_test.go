@@ -549,6 +549,38 @@ func responseAddresses(t *testing.T, attrs map[string]interface{}) []map[string]
 	return addresses
 }
 
+func responseIntArray(t *testing.T, value interface{}) []int {
+	t.Helper()
+	raw, ok := value.([]interface{})
+	if !ok {
+		t.Fatalf("expected JSON array, got %#v", value)
+	}
+	result := make([]int, 0, len(raw))
+	for i, item := range raw {
+		number, ok := item.(float64)
+		if !ok {
+			t.Fatalf("expected JSON number at index %d, got %#v", i, item)
+		}
+		if number != float64(int(number)) {
+			t.Fatalf("expected integer JSON number at index %d, got %#v", i, number)
+		}
+		result = append(result, int(number))
+	}
+	return result
+}
+
+func assertIntSliceEqual(t *testing.T, got []int, want []int) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %#v, want %#v", got, want)
+		}
+	}
+}
+
 // --- DeviceHandler tests ---
 
 func TestDeviceHandlerList(t *testing.T) {
@@ -690,6 +722,46 @@ func TestDeviceHandlerCreate_AddressesWithoutIPDerivesPrimary(t *testing.T) {
 	}
 	if addresses[1]["address"] != "198.51.100.31" || addresses[1]["role"] != "backup" {
 		t.Fatalf("backup address response = %#v", addresses[1])
+	}
+}
+
+func TestDeviceHandlerCreate_ProbePortsRoundTrip(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.34.0.1","hostname":"router-probe-ports","probe_ports":[22,8291],"snmp":{"version":"2c","community":"public"},"addresses":[{"address":"10.34.0.1","role":"primary","is_primary":true},{"address":"198.51.100.34","role":"backup","label":"backup link","probe_ports":[2222]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	assertIntSliceEqual(t, responseIntArray(t, resp.Data.Attributes["probe_ports"]), []int{22, 8291})
+	addresses := responseAddresses(t, resp.Data.Attributes)
+	if len(addresses) != 2 {
+		t.Fatalf("addresses len = %d, want 2: %#v", len(addresses), addresses)
+	}
+	assertIntSliceEqual(t, responseIntArray(t, addresses[1]["probe_ports"]), []int{2222})
+}
+
+func TestDeviceHandlerCreate_InvalidProbePortsRejected(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.34.0.2","hostname":"router-bad-probe-ports","probe_ports":[0],"snmp":{"version":"2c","community":"public"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(rec.Body.String()), "probe_ports") {
+		t.Fatalf("expected probe_ports error, got: %s", rec.Body.String())
 	}
 }
 
@@ -900,6 +972,86 @@ func TestDeviceHandlerUpdate_ReplacesAddresses(t *testing.T) {
 	}
 	if addresses[1]["address"] != "198.51.100.40" || addresses[1]["role"] != "backup" {
 		t.Fatalf("backup address response = %#v", addresses[1])
+	}
+}
+
+func TestDeviceHandlerUpdate_OmittedProbePortsPreservesOverride(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, repo)
+	device.ProbePorts = []int{22, 8291}
+	if err := repo.Update(device); err != nil {
+		t.Fatalf("Update seed failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device.ID.String(), strings.NewReader(`{"hostname":"renamed-router"}`))
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	updated, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	assertIntSliceEqual(t, updated.ProbePorts, []int{22, 8291})
+}
+
+func TestDeviceHandlerUpdate_NullProbePortsClearsOverride(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, repo)
+	device.ProbePorts = []int{22, 8291}
+	if err := repo.Update(device); err != nil {
+		t.Fatalf("Update seed failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device.ID.String(), strings.NewReader(`{"probe_ports":null}`))
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp.Data.Attributes["probe_ports"]; got != nil {
+		t.Fatalf("probe_ports = %#v, want nil", got)
+	}
+	updated, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if len(updated.ProbePorts) != 0 {
+		t.Fatalf("ProbePorts = %#v, want empty", updated.ProbePorts)
+	}
+}
+
+func TestDeviceHandlerUpdate_EmptyProbePortsClearsOverride(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, repo)
+	device.ProbePorts = []int{22, 8291}
+	if err := repo.Update(device); err != nil {
+		t.Fatalf("Update seed failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device.ID.String(), strings.NewReader(`{"probe_ports":[]}`))
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	updated, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if len(updated.ProbePorts) != 0 {
+		t.Fatalf("ProbePorts = %#v, want empty", updated.ProbePorts)
 	}
 }
 
@@ -2107,6 +2259,50 @@ func TestHandleBatchAdd_ValidRowsPersistBatchOnlyFields(t *testing.T) {
 		t.Fatalf("expected virtual metrics_source to normalize to %q, got %q", domain.MetricsSourceNone, virtual.MetricsSource)
 	}
 	assertDeviceAreaIDs(t, virtual, []uuid.UUID{virtualAreaID})
+}
+
+func TestHandleBatchAdd_ProbePortsPersist(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+
+	body := `{"devices":[
+		{
+			"ip":"10.20.1.1",
+			"hostname":"batch-probe-ports",
+			"probe_ports":[22,8291],
+			"addresses":[
+				{"address":"10.20.1.1","role":"primary","is_primary":true},
+				{"address":"198.51.100.201","role":"backup","label":"backup","probe_ports":[2222]}
+			],
+			"snmp":{"version":"2c","community":"public"}
+		}
+	]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/batch", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBatchAdd(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	resp := decodeBatchAddTestResponse(t, rec.Body.String())
+	if len(resp.Failures) != 0 {
+		t.Fatalf("expected 0 failures, got %d: %+v", len(resp.Failures), resp.Failures)
+	}
+	device, err := repo.GetByIP("10.20.1.1")
+	if err != nil {
+		t.Fatalf("GetByIP failed: %v", err)
+	}
+	if device == nil {
+		t.Fatal("expected batch device to be stored")
+	}
+	assertIntSliceEqual(t, device.ProbePorts, []int{22, 8291})
+	addresses, err := repo.GetDeviceAddresses(device.ID)
+	if err != nil {
+		t.Fatalf("GetDeviceAddresses failed: %v", err)
+	}
+	if len(addresses) != 2 {
+		t.Fatalf("addresses len = %d, want 2: %#v", len(addresses), addresses)
+	}
+	assertIntSliceEqual(t, addresses[1].ProbePorts, []int{2222})
 }
 
 func TestHandleBatchAdd_MixedRowsPreserveDiagnosticsAndCreateOnlyValidRows(t *testing.T) {

@@ -53,6 +53,7 @@ func (m *deviceMutationService) AddDevice(
 	prometheusLabelValue string,
 	topologyDiscoveryMode domain.TopologyDiscoveryMode,
 	areaIDs []uuid.UUID,
+	probePorts []int,
 	addresses []domain.DeviceAddress,
 	notes ...*string,
 ) (*domain.Device, error) {
@@ -91,6 +92,10 @@ func (m *deviceMutationService) AddDevice(
 	}
 	pollingEnabled := true
 	pollIntervalOverride := initialPollIntervalOverride(m.settingsRepo, deviceType)
+	normalizedProbePorts, err := domain.NormalizeProbePorts(probePorts)
+	if err != nil {
+		return nil, err
+	}
 
 	device := &domain.Device{
 		ID:                     uuid.New(),
@@ -112,6 +117,7 @@ func (m *deviceMutationService) AddDevice(
 		TopologyDiscoveryMode:  topologyDiscoveryMode,
 		TopologyBootstrapState: domain.TopologyBootstrapStateIdle,
 		AreaIDs:                areaIDs,
+		ProbePorts:             normalizedProbePorts,
 		Addresses:              append([]domain.DeviceAddress(nil), addresses...),
 	}
 	domain.NormalizeDeviceAddresses(device)
@@ -176,6 +182,13 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	}
 	if update.Addresses != nil {
 		device.Addresses = append([]domain.DeviceAddress(nil), (*update.Addresses)...)
+	}
+	if update.ProbePorts != nil {
+		probePorts, err := domain.NormalizeProbePorts(*update.ProbePorts)
+		if err != nil {
+			return err
+		}
+		device.ProbePorts = probePorts
 	}
 	if update.Notes != nil {
 		device.Notes = domain.NormalizeDeviceNotes(*update.Notes)

@@ -2599,6 +2599,7 @@ func TestAddDeviceWithAddressesNormalizesPrimaryAddress(t *testing.T) {
 		"",
 		domain.TopologyDiscoveryModeInherit,
 		nil,
+		nil,
 		[]domain.DeviceAddress{
 			{Address: "198.51.100.20", Role: domain.DeviceAddressRoleBackup, Label: "backup", Priority: 10},
 		},

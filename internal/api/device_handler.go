@@ -114,6 +114,7 @@ var validSNMPv3SecurityLevels = map[string]bool{
 type createDeviceRequest struct {
 	IP                       string                 `json:"ip"`
 	Addresses                []deviceAddressRequest `json:"addresses,omitempty"`
+	ProbePorts               *[]int                 `json:"probe_ports,omitempty"`
 	Hostname                 string                 `json:"hostname"`
 	Notes                    *string                `json:"notes"`
 	DeviceType               string                 `json:"device_type,omitempty"`
@@ -129,11 +130,12 @@ type createDeviceRequest struct {
 }
 
 type deviceAddressRequest struct {
-	Address   string `json:"address"`
-	Label     string `json:"label,omitempty"`
-	Role      string `json:"role,omitempty"`
-	IsPrimary *bool  `json:"is_primary,omitempty"`
-	Priority  *int   `json:"priority,omitempty"`
+	Address    string `json:"address"`
+	Label      string `json:"label,omitempty"`
+	Role       string `json:"role,omitempty"`
+	IsPrimary  *bool  `json:"is_primary,omitempty"`
+	Priority   *int   `json:"priority,omitempty"`
+	ProbePorts *[]int `json:"probe_ports,omitempty"`
 }
 
 type snmpCredsRequest struct {
@@ -169,6 +171,27 @@ func (o *optionalPollIntervalOverride) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type optionalProbePortsOverride struct {
+	Set   bool
+	Value []int
+}
+
+func (o *optionalProbePortsOverride) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+
+	var value []int
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+
+	o.Value = value
+	return nil
+}
+
 type optionalNullableString struct {
 	Set   bool
 	Value *string
@@ -194,6 +217,7 @@ type updateDeviceRequest struct {
 	Hostname              *string                      `json:"hostname,omitempty"`
 	IP                    *string                      `json:"ip,omitempty"`
 	Addresses             *[]deviceAddressRequest      `json:"addresses,omitempty"`
+	ProbePorts            optionalProbePortsOverride   `json:"probe_ports"`
 	Notes                 optionalNullableString       `json:"notes"`
 	Tags                  *map[string]string           `json:"tags,omitempty"`
 	SNMP                  *snmpCredsRequest            `json:"snmp,omitempty"`
@@ -220,6 +244,7 @@ type batchAddResponse struct {
 type validatedCreateDeviceRequest struct {
 	IP                       string
 	Addresses                []domain.DeviceAddress
+	ProbePorts               []int
 	Hostname                 string
 	DeviceType               domain.DeviceType
 	SNMPCredentials          domain.SNMPCredentials
@@ -251,7 +276,7 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	device, err := h.svc.AddDeviceWithAddresses(r.Context(), validated.IP, validated.Hostname,
 		validated.DeviceType,
 		validated.SNMPCredentials, validated.Tags, validated.Vendor, validated.MetricsSource,
-		validated.PrometheusLabelName, validated.PrometheusLabelValue, validated.TopologyDiscoveryMode, validated.AreaIDs, validated.Addresses, validated.Notes)
+		validated.PrometheusLabelName, validated.PrometheusLabelValue, validated.TopologyDiscoveryMode, validated.AreaIDs, validated.ProbePorts, validated.Addresses, validated.Notes)
 	if err != nil {
 		if isDeviceIPConflict(err) {
 			writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(validated.IP))
@@ -419,6 +444,15 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		addressesUpdate = &addresses
 	}
+	var probePortsUpdate *[]int
+	if req.ProbePorts.Set {
+		probePorts, err := normalizeProbePorts(req.ProbePorts.Value)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		probePortsUpdate = &probePorts
+	}
 	if req.Hostname != nil {
 		h := strings.TrimSpace(*req.Hostname)
 		if len(h) > 253 {
@@ -467,10 +501,11 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	update := service.DeviceUpdate{
-		Hostname:  req.Hostname,
-		IP:        req.IP,
-		Addresses: addressesUpdate,
-		Tags:      req.Tags,
+		Hostname:   req.Hostname,
+		IP:         req.IP,
+		Addresses:  addressesUpdate,
+		ProbePorts: probePortsUpdate,
+		Tags:       req.Tags,
 	}
 	if req.Notes.Set {
 		update.Notes = &req.Notes.Value
@@ -638,6 +673,10 @@ func (h *DeviceHandler) HandleTestSNMP(w http.ResponseWriter, r *http.Request) {
 func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDeviceRequest, error) {
 	deviceType := domain.DeviceType(req.DeviceType)
 	addressesProvided := req.Addresses != nil
+	probePorts, err := normalizeOptionalProbePorts(req.ProbePorts)
+	if err != nil {
+		return validatedCreateDeviceRequest{}, err
+	}
 
 	if deviceType == domain.DeviceTypeVirtual {
 		if req.Tags == nil {
@@ -660,6 +699,7 @@ func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDevice
 
 		return validatedCreateDeviceRequest{
 			IP:                       req.IP,
+			ProbePorts:               probePorts,
 			Hostname:                 req.Hostname,
 			DeviceType:               domain.DeviceTypeVirtual,
 			SNMPCredentials:          domain.SNMPCredentials{},
@@ -737,6 +777,7 @@ func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDevice
 	return validatedCreateDeviceRequest{
 		IP:                       req.IP,
 		Addresses:                addresses,
+		ProbePorts:               probePorts,
 		Hostname:                 req.Hostname,
 		DeviceType:               deviceType,
 		SNMPCredentials:          creds,
@@ -750,6 +791,21 @@ func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDevice
 		Notes:                    req.Notes,
 		SkipPrimaryMapMembership: req.SkipPrimaryMapMembership,
 	}, nil
+}
+
+func normalizeOptionalProbePorts(raw *[]int) ([]int, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	return normalizeProbePorts(*raw)
+}
+
+func normalizeProbePorts(raw []int) ([]int, error) {
+	ports, err := domain.NormalizeProbePorts(raw)
+	if err != nil {
+		return nil, fmt.Errorf("probe_ports: %w", err)
+	}
+	return ports, nil
 }
 
 func validateDeviceAddressRequests(ip string, raw []deviceAddressRequest, allowEmpty bool) ([]domain.DeviceAddress, string, error) {
@@ -793,12 +849,17 @@ func validateDeviceAddressRequests(ip string, raw []deviceAddressRequest, allowE
 		if item.Priority != nil {
 			priority = *item.Priority
 		}
+		probePorts, err := normalizeOptionalProbePorts(item.ProbePorts)
+		if err != nil {
+			return nil, "", err
+		}
 		addresses = append(addresses, domain.DeviceAddress{
-			Address:   address,
-			Label:     strings.TrimSpace(item.Label),
-			Role:      role,
-			IsPrimary: isPrimary,
-			Priority:  priority,
+			Address:    address,
+			Label:      strings.TrimSpace(item.Label),
+			Role:       role,
+			IsPrimary:  isPrimary,
+			Priority:   priority,
+			ProbePorts: probePorts,
 		})
 	}
 	if len(addresses) == 0 {
@@ -867,10 +928,10 @@ func (h *DeviceHandler) HandleBatchAdd(w http.ResponseWriter, r *http.Request) {
 			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
 			continue
 		}
-		device, err := h.svc.AddDevice(r.Context(), validated.IP, validated.Hostname,
+		device, err := h.svc.AddDeviceWithAddresses(r.Context(), validated.IP, validated.Hostname,
 			validated.DeviceType,
 			validated.SNMPCredentials, validated.Tags, validated.Vendor, validated.MetricsSource,
-			validated.PrometheusLabelName, validated.PrometheusLabelValue, validated.TopologyDiscoveryMode, validated.AreaIDs, validated.Notes)
+			validated.PrometheusLabelName, validated.PrometheusLabelValue, validated.TopologyDiscoveryMode, validated.AreaIDs, validated.ProbePorts, validated.Addresses, validated.Notes)
 		if err != nil {
 			failures = append(failures, batchAddFailure{IP: d.IP, Reason: err.Error()})
 			continue
@@ -901,6 +962,7 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 	attrs := map[string]interface{}{
 		"hostname":                          d.Hostname,
 		"ip":                                d.IP,
+		"probe_ports":                       probePortsToResponse(d.ProbePorts),
 		"notes":                             d.Notes,
 		"device_type":                       string(d.DeviceType),
 		"poll_class":                        string(d.PollClass),
@@ -951,18 +1013,27 @@ func deviceAddressesToResponse(addresses []domain.DeviceAddress) []map[string]in
 			continue
 		}
 		response = append(response, map[string]interface{}{
-			"id":         address.ID.String(),
-			"device_id":  address.DeviceID.String(),
-			"address":    address.Address,
-			"label":      address.Label,
-			"role":       string(address.Role),
-			"is_primary": address.IsPrimary,
-			"priority":   address.Priority,
-			"created_at": address.CreatedAt,
-			"updated_at": address.UpdatedAt,
+			"id":          address.ID.String(),
+			"device_id":   address.DeviceID.String(),
+			"address":     address.Address,
+			"label":       address.Label,
+			"role":        string(address.Role),
+			"is_primary":  address.IsPrimary,
+			"priority":    address.Priority,
+			"probe_ports": probePortsToResponse(address.ProbePorts),
+			"created_at":  address.CreatedAt,
+			"updated_at":  address.UpdatedAt,
 		})
 	}
 	return response
+}
+
+func probePortsToResponse(ports []int) interface{} {
+	normalized, err := domain.NormalizeProbePorts(ports)
+	if err != nil || len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func parseSNMPCreds(req snmpCredsRequest) (domain.SNMPCredentials, error) {

@@ -152,6 +152,7 @@ describe('parseDevicesResponse', () => {
         role: 'primary',
         is_primary: true,
         priority: 0,
+        probe_ports: null,
       },
     ]);
   });
@@ -160,6 +161,7 @@ describe('parseDevicesResponse', () => {
     const resource = deviceResource('router-5', 'router');
     resource.attributes = {
       ...resource.attributes,
+      probe_ports: [22, 8291],
       addresses: [
         {
           id: 'addr-primary',
@@ -169,6 +171,7 @@ describe('parseDevicesResponse', () => {
           role: 'primary',
           is_primary: true,
           priority: 0,
+          probe_ports: [22],
         },
         {
           id: 'addr-backup',
@@ -178,6 +181,7 @@ describe('parseDevicesResponse', () => {
           role: 'backup',
           is_primary: false,
           priority: 10,
+          probe_ports: null,
         },
         { address: 123 },
       ],
@@ -194,6 +198,7 @@ describe('parseDevicesResponse', () => {
         role: 'primary',
         is_primary: true,
         priority: 0,
+        probe_ports: [22],
       },
       {
         id: 'addr-backup',
@@ -203,8 +208,10 @@ describe('parseDevicesResponse', () => {
         role: 'backup',
         is_primary: false,
         priority: 10,
+        probe_ports: null,
       },
     ]);
+    expect(devices[0].probe_ports).toEqual([22, 8291]);
   });
 });
 

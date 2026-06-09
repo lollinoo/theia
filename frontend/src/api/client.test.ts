@@ -661,6 +661,33 @@ describe('createDevice', () => {
     expect(JSON.parse(options.body)).toEqual(payload);
   });
 
+  it('sends device and address probe_ports in create payloads', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: deviceResource('uuid-2', 'new-router', '10.0.0.2'),
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const payloadWithProbePorts: CreateDevicePayload = {
+      ...payload,
+      probe_ports: [22, 8291],
+      addresses: [
+        {
+          address: '10.0.0.2',
+          role: 'primary',
+          is_primary: true,
+          probe_ports: [22],
+        },
+      ],
+    };
+
+    await createDevice(payloadWithProbePorts);
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body)).toEqual(payloadWithProbePorts);
+  });
+
   it('throws on validation error', async () => {
     vi.stubGlobal(
       'fetch',
@@ -1642,6 +1669,39 @@ describe('updateDevice', () => {
 
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       topology_discovery_mode: 'bootstrap_once',
+    });
+  });
+
+  it('sends device and address probe_ports in update payloads', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: deviceResource('uuid-1', 'router-01', '10.0.0.1'),
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateDevice('uuid-1', {
+      probe_ports: [22, 8291],
+      addresses: [
+        {
+          address: '10.0.0.1',
+          role: 'primary',
+          is_primary: true,
+          probe_ports: [22],
+        },
+      ],
+    });
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      probe_ports: [22, 8291],
+      addresses: [
+        {
+          address: '10.0.0.1',
+          role: 'primary',
+          is_primary: true,
+          probe_ports: [22],
+        },
+      ],
     });
   });
 });
