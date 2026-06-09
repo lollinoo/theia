@@ -112,19 +112,28 @@ var validSNMPv3SecurityLevels = map[string]bool{
 // --- Request types ---
 
 type createDeviceRequest struct {
-	IP                       string            `json:"ip"`
-	Hostname                 string            `json:"hostname"`
-	Notes                    *string           `json:"notes"`
-	DeviceType               string            `json:"device_type,omitempty"`
-	SNMP                     snmpCredsRequest  `json:"snmp"`
-	Tags                     map[string]string `json:"tags"`
-	Vendor                   string            `json:"vendor,omitempty"`
-	MetricsSource            string            `json:"metrics_source,omitempty"`
-	PrometheusLabelName      string            `json:"prometheus_label_name,omitempty"`
-	PrometheusLabelValue     string            `json:"prometheus_label_value,omitempty"`
-	TopologyDiscoveryMode    string            `json:"topology_discovery_mode,omitempty"`
-	AreaIDs                  []string          `json:"area_ids,omitempty"`
-	SkipPrimaryMapMembership bool              `json:"skip_primary_map_membership,omitempty"`
+	IP                       string                 `json:"ip"`
+	Addresses                []deviceAddressRequest `json:"addresses,omitempty"`
+	Hostname                 string                 `json:"hostname"`
+	Notes                    *string                `json:"notes"`
+	DeviceType               string                 `json:"device_type,omitempty"`
+	SNMP                     snmpCredsRequest       `json:"snmp"`
+	Tags                     map[string]string      `json:"tags"`
+	Vendor                   string                 `json:"vendor,omitempty"`
+	MetricsSource            string                 `json:"metrics_source,omitempty"`
+	PrometheusLabelName      string                 `json:"prometheus_label_name,omitempty"`
+	PrometheusLabelValue     string                 `json:"prometheus_label_value,omitempty"`
+	TopologyDiscoveryMode    string                 `json:"topology_discovery_mode,omitempty"`
+	AreaIDs                  []string               `json:"area_ids,omitempty"`
+	SkipPrimaryMapMembership bool                   `json:"skip_primary_map_membership,omitempty"`
+}
+
+type deviceAddressRequest struct {
+	Address   string `json:"address"`
+	Label     string `json:"label,omitempty"`
+	Role      string `json:"role,omitempty"`
+	IsPrimary *bool  `json:"is_primary,omitempty"`
+	Priority  *int   `json:"priority,omitempty"`
 }
 
 type snmpCredsRequest struct {
@@ -184,6 +193,7 @@ func (o *optionalNullableString) UnmarshalJSON(data []byte) error {
 type updateDeviceRequest struct {
 	Hostname              *string                      `json:"hostname,omitempty"`
 	IP                    *string                      `json:"ip,omitempty"`
+	Addresses             *[]deviceAddressRequest      `json:"addresses,omitempty"`
 	Notes                 optionalNullableString       `json:"notes"`
 	Tags                  *map[string]string           `json:"tags,omitempty"`
 	SNMP                  *snmpCredsRequest            `json:"snmp,omitempty"`
@@ -209,6 +219,7 @@ type batchAddResponse struct {
 
 type validatedCreateDeviceRequest struct {
 	IP                       string
+	Addresses                []domain.DeviceAddress
 	Hostname                 string
 	DeviceType               domain.DeviceType
 	SNMPCredentials          domain.SNMPCredentials
@@ -237,10 +248,10 @@ func (h *DeviceHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	device, err := h.svc.AddDevice(r.Context(), validated.IP, validated.Hostname,
+	device, err := h.svc.AddDeviceWithAddresses(r.Context(), validated.IP, validated.Hostname,
 		validated.DeviceType,
 		validated.SNMPCredentials, validated.Tags, validated.Vendor, validated.MetricsSource,
-		validated.PrometheusLabelName, validated.PrometheusLabelValue, validated.TopologyDiscoveryMode, validated.AreaIDs, validated.Notes)
+		validated.PrometheusLabelName, validated.PrometheusLabelValue, validated.TopologyDiscoveryMode, validated.AreaIDs, validated.Addresses, validated.Notes)
 	if err != nil {
 		if isDeviceIPConflict(err) {
 			writeError(w, http.StatusConflict, duplicateDeviceAddressMessage(validated.IP))
@@ -399,6 +410,15 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ip must be a valid IP address or hostname")
 		return
 	}
+	var addressesUpdate *[]domain.DeviceAddress
+	if req.Addresses != nil {
+		addresses, _, err := validateDeviceAddressRequests(derefString(req.IP), *req.Addresses, true)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		addressesUpdate = &addresses
+	}
 	if req.Hostname != nil {
 		h := strings.TrimSpace(*req.Hostname)
 		if len(h) > 253 {
@@ -447,9 +467,10 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	update := service.DeviceUpdate{
-		Hostname: req.Hostname,
-		IP:       req.IP,
-		Tags:     req.Tags,
+		Hostname:  req.Hostname,
+		IP:        req.IP,
+		Addresses: addressesUpdate,
+		Tags:      req.Tags,
 	}
 	if req.Notes.Set {
 		update.Notes = &req.Notes.Value
@@ -616,6 +637,7 @@ func (h *DeviceHandler) HandleTestSNMP(w http.ResponseWriter, r *http.Request) {
 
 func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDeviceRequest, error) {
 	deviceType := domain.DeviceType(req.DeviceType)
+	addressesProvided := req.Addresses != nil
 
 	if deviceType == domain.DeviceTypeVirtual {
 		if req.Tags == nil {
@@ -650,6 +672,15 @@ func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDevice
 		}, nil
 	}
 
+	addresses, derivedIP, err := validateDeviceAddressRequests(req.IP, req.Addresses, false)
+	if err != nil {
+		return validatedCreateDeviceRequest{}, err
+	}
+	req.IP = derivedIP
+
+	if req.IP == "" && !addressesProvided {
+		return validatedCreateDeviceRequest{}, errors.New("ip is required")
+	}
 	if req.IP == "" {
 		return validatedCreateDeviceRequest{}, errors.New("ip is required")
 	}
@@ -705,6 +736,7 @@ func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDevice
 
 	return validatedCreateDeviceRequest{
 		IP:                       req.IP,
+		Addresses:                addresses,
 		Hostname:                 req.Hostname,
 		DeviceType:               deviceType,
 		SNMPCredentials:          creds,
@@ -718,6 +750,79 @@ func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDevice
 		Notes:                    req.Notes,
 		SkipPrimaryMapMembership: req.SkipPrimaryMapMembership,
 	}, nil
+}
+
+func validateDeviceAddressRequests(ip string, raw []deviceAddressRequest, allowEmpty bool) ([]domain.DeviceAddress, string, error) {
+	trimmedIP := strings.TrimSpace(ip)
+	if len(raw) == 0 {
+		return nil, trimmedIP, nil
+	}
+
+	addresses := make([]domain.DeviceAddress, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	primaryCount := 0
+	for _, item := range raw {
+		address := strings.TrimSpace(item.Address)
+		if address == "" {
+			if allowEmpty {
+				continue
+			}
+			return nil, "", errors.New("address is required")
+		}
+		if !isValidIPOrHostname(address) {
+			return nil, "", errors.New("address must be a valid IP address or hostname")
+		}
+		normalized := domain.NormalizeDeviceAddressValue(address)
+		if _, exists := seen[normalized]; exists {
+			return nil, "", fmt.Errorf("duplicate address: %s", address)
+		}
+		seen[normalized] = struct{}{}
+
+		role, err := parseDeviceAddressRole(item.Role)
+		if err != nil {
+			return nil, "", err
+		}
+		isPrimary := role == domain.DeviceAddressRolePrimary
+		if item.IsPrimary != nil {
+			isPrimary = *item.IsPrimary
+		}
+		if isPrimary {
+			primaryCount++
+		}
+		priority := 100
+		if item.Priority != nil {
+			priority = *item.Priority
+		}
+		addresses = append(addresses, domain.DeviceAddress{
+			Address:   address,
+			Label:     strings.TrimSpace(item.Label),
+			Role:      role,
+			IsPrimary: isPrimary,
+			Priority:  priority,
+		})
+	}
+	if len(addresses) == 0 {
+		return addresses, trimmedIP, nil
+	}
+	if primaryCount > 1 {
+		return nil, "", errors.New("multiple primary addresses are not allowed")
+	}
+
+	temp := domain.Device{IP: trimmedIP, Addresses: addresses}
+	domain.NormalizeDeviceAddresses(&temp)
+	return temp.Addresses, temp.IP, nil
+}
+
+func parseDeviceAddressRole(value string) (domain.DeviceAddressRole, error) {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if trimmed == "" {
+		return domain.DeviceAddressRoleOther, nil
+	}
+	role := domain.NormalizeDeviceAddressRole(domain.DeviceAddressRole(trimmed))
+	if string(role) != trimmed {
+		return "", fmt.Errorf("invalid address role: %s", value)
+	}
+	return role, nil
 }
 
 func parseCreateAreaIDs(rawIDs []string) ([]uuid.UUID, error) {
@@ -827,6 +932,7 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 		areaIDStrs = append(areaIDStrs, aid.String())
 	}
 	attrs["area_ids"] = areaIDStrs
+	attrs["addresses"] = deviceAddressesToResponse(d.Addresses)
 
 	attrs["backup_supported"] = h.vendorRegistry.ResolveBackupConfig(d.Vendor).Supported
 
@@ -836,6 +942,27 @@ func (h *DeviceHandler) deviceToResource(d *domain.Device) jsonAPIResource {
 		Attributes:    attrs,
 		Relationships: nil,
 	}
+}
+
+func deviceAddressesToResponse(addresses []domain.DeviceAddress) []map[string]interface{} {
+	response := make([]map[string]interface{}, 0, len(addresses))
+	for _, address := range addresses {
+		if strings.TrimSpace(address.Address) == "" {
+			continue
+		}
+		response = append(response, map[string]interface{}{
+			"id":         address.ID.String(),
+			"device_id":  address.DeviceID.String(),
+			"address":    address.Address,
+			"label":      address.Label,
+			"role":       string(address.Role),
+			"is_primary": address.IsPrimary,
+			"priority":   address.Priority,
+			"created_at": address.CreatedAt,
+			"updated_at": address.UpdatedAt,
+		})
+	}
+	return response
 }
 
 func parseSNMPCreds(req snmpCredsRequest) (domain.SNMPCredentials, error) {
@@ -915,11 +1042,13 @@ func isDeviceIPConflict(err error) bool {
 
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "idx_devices_ip") ||
+		strings.Contains(message, "device_addresses") ||
 		strings.Contains(message, "devices_ip_physical_virtual_excl") ||
 		strings.Contains(message, "exclusion constraint") ||
 		(strings.Contains(message, "duplicate key value violates unique constraint") && strings.Contains(message, "devices")) ||
 		strings.Contains(message, "unique constraint failed: devices.ip") ||
-		strings.Contains(message, "device ip conflict")
+		strings.Contains(message, "device ip conflict") ||
+		strings.Contains(message, "device address conflict")
 }
 
 func duplicateDeviceAddressMessage(address string) string {

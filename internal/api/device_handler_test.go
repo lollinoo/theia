@@ -36,6 +36,7 @@ func newMockDeviceRepo() *mockDeviceRepo {
 func (r *mockDeviceRepo) Create(device *domain.Device) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	domain.NormalizeDeviceAddresses(device)
 	for _, existing := range r.devices {
 		if device.IP != "" && existing.IP == device.IP {
 			return fmt.Errorf("inserting device: UNIQUE constraint failed: devices.ip")
@@ -66,12 +67,55 @@ func (r *mockDeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, d := range r.devices {
-		if d.IP == ip {
+		if strings.EqualFold(strings.TrimSpace(d.IP), strings.TrimSpace(ip)) {
 			cp := *d
 			return &cp, nil
 		}
 	}
 	return nil, nil
+}
+
+func (r *mockDeviceRepo) GetByAddress(address string) (*domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	normalized := domain.NormalizeDeviceAddressValue(address)
+	if normalized == "" {
+		return nil, nil
+	}
+	for _, d := range r.devices {
+		for _, value := range domain.DeviceAddressValues(*d) {
+			if domain.NormalizeDeviceAddressValue(value) == normalized {
+				cp := *d
+				return &cp, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (r *mockDeviceRepo) GetDeviceAddresses(deviceID uuid.UUID) ([]domain.DeviceAddress, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.devices[deviceID]
+	if !ok {
+		return nil, fmt.Errorf("device not found: %s", deviceID)
+	}
+	return append([]domain.DeviceAddress(nil), d.Addresses...), nil
+}
+
+func (r *mockDeviceRepo) ReplaceDeviceAddresses(deviceID uuid.UUID, addresses []domain.DeviceAddress) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.devices[deviceID]
+	if !ok {
+		return fmt.Errorf("device not found: %s", deviceID)
+	}
+	cp := *d
+	cp.Addresses = append([]domain.DeviceAddress(nil), addresses...)
+	domain.NormalizeDeviceAddresses(&cp)
+	cp.UpdatedAt = time.Now().UTC()
+	r.devices[deviceID] = &cp
+	return nil
 }
 
 func (r *mockDeviceRepo) GetAll() ([]domain.Device, error) {
@@ -107,6 +151,30 @@ func (r *mockDeviceRepo) FindPhysicalVirtualIPConflict(ip string, deviceType dom
 	return nil, nil
 }
 
+func (r *mockDeviceRepo) FindAddressConflict(address string, deviceType domain.DeviceType, excludeID uuid.UUID) (*domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	normalized := domain.NormalizeDeviceAddressValue(address)
+	if normalized == "" || deviceType == domain.DeviceTypeVirtual {
+		return nil, nil
+	}
+	for _, d := range r.devices {
+		if excludeID != uuid.Nil && d.ID == excludeID {
+			continue
+		}
+		if d.DeviceType == domain.DeviceTypeVirtual {
+			continue
+		}
+		for _, value := range domain.DeviceAddressValues(*d) {
+			if domain.NormalizeDeviceAddressValue(value) == normalized {
+				cp := *d
+				return &cp, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
 func (r *mockDeviceRepo) GetOrphans() ([]domain.Device, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -130,6 +198,7 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 			return fmt.Errorf("updating device: UNIQUE constraint failed: devices.ip")
 		}
 	}
+	domain.NormalizeDeviceAddresses(device)
 	device.UpdatedAt = time.Now().UTC()
 	r.devices[device.ID] = device
 	return nil
@@ -463,6 +532,23 @@ func seedDevice(t *testing.T, repo *mockDeviceRepo) *domain.Device {
 
 func intPtr(v int) *int { return &v }
 
+func responseAddresses(t *testing.T, attrs map[string]interface{}) []map[string]interface{} {
+	t.Helper()
+	raw, ok := attrs["addresses"].([]interface{})
+	if !ok {
+		t.Fatalf("expected addresses array in attributes, got %#v", attrs["addresses"])
+	}
+	addresses := make([]map[string]interface{}, 0, len(raw))
+	for i, item := range raw {
+		record, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("addresses[%d] = %#v, want object", i, item)
+		}
+		addresses = append(addresses, record)
+	}
+	return addresses
+}
+
 // --- DeviceHandler tests ---
 
 func TestDeviceHandlerList(t *testing.T) {
@@ -552,6 +638,90 @@ func TestDeviceHandlerCreate_HappyPath(t *testing.T) {
 	}
 	if resp.Data.Type != "device" {
 		t.Fatalf("expected resource type 'device', got %q", resp.Data.Type)
+	}
+}
+
+func TestDeviceHandlerCreate_LegacyIPReturnsAddresses(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.30.0.1","hostname":"router-addresses","snmp":{"version":"2c","community":"public"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	addresses := responseAddresses(t, resp.Data.Attributes)
+	if len(addresses) != 1 {
+		t.Fatalf("addresses len = %d, want 1: %#v", len(addresses), addresses)
+	}
+	if addresses[0]["address"] != "10.30.0.1" || addresses[0]["role"] != "primary" || addresses[0]["is_primary"] != true {
+		t.Fatalf("primary address response = %#v", addresses[0])
+	}
+}
+
+func TestDeviceHandlerCreate_AddressesWithoutIPDerivesPrimary(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"hostname":"router-derived","snmp":{"version":"2c","community":"public"},"addresses":[{"address":"10.31.0.1","role":"management","is_primary":true},{"address":"198.51.100.31","role":"backup","label":"backup link"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp.Data.Attributes["ip"]; got != "10.31.0.1" {
+		t.Fatalf("ip = %#v, want derived primary", got)
+	}
+	addresses := responseAddresses(t, resp.Data.Attributes)
+	if len(addresses) != 2 {
+		t.Fatalf("addresses len = %d, want 2: %#v", len(addresses), addresses)
+	}
+	if addresses[1]["address"] != "198.51.100.31" || addresses[1]["role"] != "backup" {
+		t.Fatalf("backup address response = %#v", addresses[1])
+	}
+}
+
+func TestDeviceHandlerCreate_AddressesDuplicateValidation(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.32.0.1","snmp":{"version":"2c","community":"public"},"addresses":[{"address":"10.32.0.1","role":"primary","is_primary":true},{"address":" 10.32.0.1 ","role":"backup"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(rec.Body.String()), "duplicate address") {
+		t.Fatalf("expected duplicate address error, got: %s", rec.Body.String())
+	}
+}
+
+func TestDeviceHandlerCreate_AddressInvalidValidation(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.33.0.1","snmp":{"version":"2c","community":"public"},"addresses":[{"address":"not valid!!","role":"backup"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "address must be a valid IP address or hostname") {
+		t.Fatalf("expected invalid address error, got: %s", rec.Body.String())
 	}
 }
 
@@ -704,6 +874,32 @@ func TestDeviceHandlerUpdate_AreaID(t *testing.T) {
 	}
 	if gotAreaIDs[0] != areaID {
 		t.Errorf("area_ids[0] = %q, want %q", gotAreaIDs[0], areaID)
+	}
+}
+
+func TestDeviceHandlerUpdate_ReplacesAddresses(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, repo)
+
+	body := `{"addresses":[{"address":"10.0.0.1","role":"primary","is_primary":true},{"address":"198.51.100.40","role":"backup","label":"backup"}]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device.ID.String(), strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	addresses := responseAddresses(t, resp.Data.Attributes)
+	if len(addresses) != 2 {
+		t.Fatalf("addresses len = %d, want 2: %#v", len(addresses), addresses)
+	}
+	if addresses[1]["address"] != "198.51.100.40" || addresses[1]["role"] != "backup" {
+		t.Fatalf("backup address response = %#v", addresses[1])
 	}
 }
 
