@@ -137,6 +137,75 @@ describe('parseDevicesResponse', () => {
 
     expect(devices[0].polling_enabled).toBe(false);
   });
+
+  it('synthesizes a primary address from legacy ip when addresses are omitted', () => {
+    const devices = parseDevicesResponse({
+      data: [deviceResource('router-4', 'router')],
+    });
+
+    expect(devices[0].addresses).toEqual([
+      {
+        id: '',
+        device_id: 'router-4',
+        address: '10.0.0.2',
+        label: '',
+        role: 'primary',
+        is_primary: true,
+        priority: 0,
+      },
+    ]);
+  });
+
+  it('parses populated device address collections and skips malformed entries', () => {
+    const resource = deviceResource('router-5', 'router');
+    resource.attributes = {
+      ...resource.attributes,
+      addresses: [
+        {
+          id: 'addr-primary',
+          device_id: 'router-5',
+          address: '10.0.0.5',
+          label: 'LAN',
+          role: 'primary',
+          is_primary: true,
+          priority: 0,
+        },
+        {
+          id: 'addr-backup',
+          device_id: 'router-5',
+          address: '192.0.2.5',
+          label: 'OOB',
+          role: 'backup',
+          is_primary: false,
+          priority: 10,
+        },
+        { address: 123 },
+      ],
+    };
+
+    const devices = parseDevicesResponse({ data: [resource] });
+
+    expect(devices[0].addresses).toEqual([
+      {
+        id: 'addr-primary',
+        device_id: 'router-5',
+        address: '10.0.0.5',
+        label: 'LAN',
+        role: 'primary',
+        is_primary: true,
+        priority: 0,
+      },
+      {
+        id: 'addr-backup',
+        device_id: 'router-5',
+        address: '192.0.2.5',
+        label: 'OOB',
+        role: 'backup',
+        is_primary: false,
+        priority: 10,
+      },
+    ]);
+  });
 });
 
 describe('parseCanvasMapResponse', () => {

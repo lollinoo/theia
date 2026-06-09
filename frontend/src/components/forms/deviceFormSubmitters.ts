@@ -2,7 +2,7 @@
  * Renders device form submitters UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import type { CreateDevicePayload, SNMPPayload } from '../../api/client';
+import type { CreateDevicePayload, DeviceAddressPayload, SNMPPayload } from '../../api/client';
 import type { Device } from '../../types/api';
 import type { DeviceFormModel } from './deviceFormModels';
 
@@ -37,6 +37,38 @@ function buildSnmpPayload(form: DeviceFormModel): SNMPPayload {
   };
 }
 
+function buildAddressPayloads(form: DeviceFormModel): DeviceAddressPayload[] | undefined {
+  const additionalAddresses = form.additionalAddresses
+    .map((row, index) => ({
+      address: row.address.trim(),
+      role: row.role,
+      label: row.label.trim(),
+      is_primary: false,
+      priority: (index + 1) * 10,
+    }))
+    .filter((row) => row.address !== '');
+
+  if (additionalAddresses.length === 0) {
+    return undefined;
+  }
+
+  return [
+    {
+      address: form.ip.trim(),
+      role: 'primary',
+      is_primary: true,
+      priority: 0,
+    },
+    ...additionalAddresses.map((row) => ({
+      address: row.address,
+      role: row.role,
+      ...(row.label ? { label: row.label } : {}),
+      is_primary: false,
+      priority: row.priority,
+    })),
+  ];
+}
+
 /** Builds create device payload for the UI component boundary. */
 export function buildCreateDevicePayload(form: DeviceFormModel): CreateDevicePayload {
   if (form.mode === 'virtual') {
@@ -55,10 +87,12 @@ export function buildCreateDevicePayload(form: DeviceFormModel): CreateDevicePay
   const usesPrometheus =
     form.metricsMode === 'prometheus' || form.metricsMode === 'prometheus_snmp_fallback';
   const labelValue = form.prometheus.labelValue.trim() || form.hostname.trim();
+  const addresses = buildAddressPayloads(form);
 
   return {
     hostname: form.hostname.trim(),
     ip: form.ip.trim(),
+    ...(addresses ? { addresses } : {}),
     snmp: buildSnmpPayload(form),
     tags: form.displayName.trim() ? { display_name: form.displayName.trim() } : undefined,
     metrics_source: form.metricsMode,
@@ -88,10 +122,12 @@ export function buildUpdateDevicePayload(device: Device, form: DeviceFormModel) 
   const shouldSendPhysicalDisplayName =
     form.mode === 'physical' && (device.tags?.display_name !== undefined || displayName !== '');
   const shouldSendVendor = device.vendor !== '' || vendor !== '';
+  const addresses = form.mode === 'physical' ? buildAddressPayloads(form) : undefined;
 
   return {
     hostname: device.hostname,
     ip: form.ip.trim(),
+    ...(addresses ? { addresses } : {}),
     notes: form.notes.trim() === '' ? null : form.notes.trim(),
     ...(hasSnmpChanges ? { snmp: buildSnmpPayload(form) } : {}),
     tags:

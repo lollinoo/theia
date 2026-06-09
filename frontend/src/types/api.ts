@@ -37,6 +37,22 @@ export interface SNMPProfile {
 /** DeviceStatus is the persisted reachability state stored with the canonical device record. */
 export type DeviceStatus = 'up' | 'down' | 'probing' | 'unknown';
 
+/** DeviceAddressRole describes how the backend should use one saved device address. */
+export type DeviceAddressRole = 'primary' | 'management' | 'backup' | 'monitoring' | 'other';
+
+/** DeviceAddress is one persisted address attached to the canonical device record. */
+export interface DeviceAddress {
+  id: string;
+  device_id: string;
+  address: string;
+  label: string;
+  role: DeviceAddressRole;
+  is_primary: boolean;
+  priority: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 /** DeviceInterface is the last known interface inventory for one device. */
 export interface DeviceInterface {
   id: string;
@@ -56,6 +72,7 @@ export interface Device {
   id: string;
   hostname: string;
   ip: string;
+  addresses: DeviceAddress[];
   notes?: string | null;
   device_type: DeviceType;
   poll_class: DevicePollClass;
@@ -306,6 +323,73 @@ function parseTopologyBootstrapState(value: unknown): TopologyBootstrapState {
   }
 }
 
+// parseDeviceAddressRole validates address role values with a conservative fallback.
+function parseDeviceAddressRole(value: unknown): DeviceAddressRole {
+  switch (value) {
+    case 'primary':
+    case 'management':
+    case 'backup':
+    case 'monitoring':
+    case 'other':
+      return value;
+    default:
+      return 'other';
+  }
+}
+
+function primaryAddressFromIP(deviceID: string, ip: string): DeviceAddress {
+  return {
+    id: '',
+    device_id: deviceID,
+    address: ip,
+    label: '',
+    role: 'primary',
+    is_primary: true,
+    priority: 0,
+  };
+}
+
+function parseDeviceAddress(
+  value: unknown,
+  fallbackDeviceID: string,
+  fallbackPriority: number,
+): DeviceAddress | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const address = readString(value, 'address').trim();
+  if (address === '') {
+    return null;
+  }
+
+  const role = parseDeviceAddressRole(value.role);
+  return {
+    id: readString(value, 'id'),
+    device_id: readString(value, 'device_id', fallbackDeviceID),
+    address,
+    label: readString(value, 'label'),
+    role,
+    is_primary: readBoolean(value, 'is_primary', role === 'primary'),
+    priority: readNumber(value, 'priority', fallbackPriority),
+    created_at: readString(value, 'created_at') || undefined,
+    updated_at: readString(value, 'updated_at') || undefined,
+  };
+}
+
+function parseDeviceAddresses(attributes: APIRecord, deviceID: string, ip: string): DeviceAddress[] {
+  const rawAddresses = attributes.addresses;
+  if (!Array.isArray(rawAddresses)) {
+    return ip === '' ? [] : [primaryAddressFromIP(deviceID, ip)];
+  }
+
+  const addresses = rawAddresses
+    .map((address, index) => parseDeviceAddress(address, deviceID, index))
+    .filter((address): address is DeviceAddress => address !== null);
+
+  return addresses.length > 0 ? addresses : ip === '' ? [] : [primaryAddressFromIP(deviceID, ip)];
+}
+
 // parseDeviceInterface validates one embedded device interface resource.
 function parseDeviceInterface(value: unknown): DeviceInterface {
   if (!isRecord(value)) {
@@ -360,10 +444,14 @@ export function parseDevicesResponse(payload: unknown): Device[] {
             ? 'none'
             : 'prometheus';
 
+    const deviceID = readString(resource, 'id');
+    const ip = readString(attributes, 'ip');
+
     return {
-      id: readString(resource, 'id'),
+      id: deviceID,
       hostname: readString(attributes, 'hostname'),
-      ip: readString(attributes, 'ip'),
+      ip,
+      addresses: parseDeviceAddresses(attributes, deviceID, ip),
       notes: readNullableString(attributes, 'notes'),
       device_type: parseDeviceType(attributes.device_type),
       poll_class: parseDevicePollClass(attributes.poll_class),

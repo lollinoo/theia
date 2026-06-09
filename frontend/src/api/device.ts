@@ -4,6 +4,7 @@
  */
 import {
   type Device,
+  type DeviceAddressRole,
   type DeviceCredentialProfile,
   type InterfaceInfo,
   type Link,
@@ -36,10 +37,20 @@ export interface SNMPPayload {
   security_level?: string;
 }
 
+/** Describes one device address submitted to the backend from editable forms. */
+export interface DeviceAddressPayload {
+  address: string;
+  label?: string;
+  role?: DeviceAddressRole;
+  is_primary?: boolean;
+  priority?: number;
+}
+
 /** Describes the create device payload contract used by the frontend API boundary. */
 export interface CreateDevicePayload {
   hostname: string;
   ip?: string;
+  addresses?: DeviceAddressPayload[];
   notes?: string | null;
   device_type?: string;
   snmp?: SNMPPayload;
@@ -104,6 +115,7 @@ export async function updateDevice(
   payload: Partial<{
     hostname: string;
     ip: string;
+    addresses: DeviceAddressPayload[];
     notes: string | null;
     snmp: SNMPPayload;
     tags: Record<string, string>;

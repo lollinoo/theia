@@ -50,6 +50,35 @@ describe('deviceFormSubmitters', () => {
       prometheus_label_name: 'instance',
       prometheus_label_value: '10.0.0.1',
     });
+    expect(payload).not.toHaveProperty('addresses');
+  });
+
+  it('includes address collections for add-device forms with secondary addresses', () => {
+    const payload = buildCreateDevicePayload({
+      ...createAddDeviceFormModel(),
+      hostname: 'router-01',
+      ip: '10.0.0.1',
+      additionalAddresses: [
+        { address: '192.0.2.10', role: 'management', label: 'OOB' },
+        { address: ' ', role: 'backup', label: 'ignored' },
+      ],
+    });
+
+    expect(payload.addresses).toEqual([
+      {
+        address: '10.0.0.1',
+        role: 'primary',
+        is_primary: true,
+        priority: 0,
+      },
+      {
+        address: '192.0.2.10',
+        role: 'management',
+        label: 'OOB',
+        is_primary: false,
+        priority: 10,
+      },
+    ]);
   });
 
   it('maps edit-device UI state back to the current update payload contract', () => {
@@ -68,6 +97,30 @@ describe('deviceFormSubmitters', () => {
       metrics_source: 'snmp',
     });
     expect(payload).not.toHaveProperty('prometheus_label_name');
+    expect(payload).not.toHaveProperty('addresses');
+  });
+
+  it('includes address collections for edit forms with secondary addresses', () => {
+    const payload = buildUpdateDevicePayload(mockDevice(), {
+      ...createDeviceConfigFormModel(mockDevice(), false),
+      additionalAddresses: [{ address: '192.0.2.10', role: 'backup', label: 'OOB' }],
+    });
+
+    expect(payload.addresses).toEqual([
+      {
+        address: '10.0.0.1',
+        role: 'primary',
+        is_primary: true,
+        priority: 0,
+      },
+      {
+        address: '192.0.2.10',
+        role: 'backup',
+        label: 'OOB',
+        is_primary: false,
+        priority: 10,
+      },
+    ]);
   });
 
   it('sends blank physical display name and vendor when clearing existing values', () => {

@@ -77,11 +77,27 @@ function buildDevice(index: number, areaCount: number, random: () => number): De
   const primaryArea = `area-${(index % areaCount) + 1}`;
   const secondaryArea = index % 13 === 0 ? `area-${((index + 3) % areaCount) + 1}` : null;
   const interfaceBaseSpeed = pick(linkSpeeds, random);
+  const ip = deviceType === 'virtual' ? '' : `10.${Math.floor(index / 250)}.${index % 250}.1`;
+  const id = `dev-${String(index + 1).padStart(4, '0')}`;
 
   return {
-    id: `dev-${String(index + 1).padStart(4, '0')}`,
+    id,
     hostname: `device-${String(index + 1).padStart(4, '0')}`,
-    ip: deviceType === 'virtual' ? '' : `10.${Math.floor(index / 250)}.${index % 250}.1`,
+    ip,
+    addresses:
+      ip === ''
+        ? []
+        : [
+            {
+              id: `${id}-primary-address`,
+              device_id: id,
+              address: ip,
+              label: '',
+              role: 'primary',
+              is_primary: true,
+              priority: 0,
+            },
+          ],
     device_type: deviceType,
     poll_class: index % 10 === 0 ? 'core' : index % 5 === 0 ? 'low' : 'standard',
     poll_interval_override: index % 19 === 0 ? 120 : null,
