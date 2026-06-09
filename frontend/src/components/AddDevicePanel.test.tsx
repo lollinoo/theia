@@ -1,7 +1,7 @@
 /**
  * Exercises add device panel component behavior so refactors preserve the documented contract.
  */
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addDeviceToCanvasMap,
@@ -378,6 +378,22 @@ describe('virtual mode', () => {
         }),
       );
     });
+  });
+
+  it('stacks additional address controls vertically with compact visible labels', () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+
+    const row = screen.getByTestId('additional-address-row-1');
+    expect(row).toHaveClass('space-y-3');
+    expect(within(row).getByText('Address')).toBeInTheDocument();
+    expect(within(row).getByText('Role')).toBeInTheDocument();
+    expect(within(row).getByText('Label')).toBeInTheDocument();
+    expect(within(row).getByText('Probe ports')).toBeInTheDocument();
+    expect(within(row).queryByText('Address label 1')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Address label 1')).toBeInTheDocument();
+    expect(screen.getByLabelText('Address probe ports 1')).toBeInTheDocument();
   });
 
   it('submits physical device and address probe ports', async () => {

@@ -1,7 +1,7 @@
 /**
  * Exercises device network settings section device configuration behavior so refactors preserve the documented contract.
  */
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Device, SNMPProfile } from '../../types/api';
 import { createDeviceConfigFormModel, type DeviceFormModel } from '../forms/deviceFormModels';
@@ -187,6 +187,25 @@ describe('DeviceNetworkSettingsSection', () => {
         expect.objectContaining({ address: '', role: 'management', label: '' }),
       ],
     });
+  });
+
+  it('stacks additional address controls vertically with compact visible labels', () => {
+    renderSection({
+      initialForm: {
+        ...createDeviceConfigFormModel(mockDevice(), false),
+        additionalAddresses: [{ address: '192.0.2.10', role: 'backup', label: 'OOB' }],
+      },
+    });
+
+    const row = screen.getByTestId('device-config-additional-address-row-1');
+    expect(row).toHaveClass('space-y-3');
+    expect(within(row).getByText('Address')).toBeInTheDocument();
+    expect(within(row).getByText('Role')).toBeInTheDocument();
+    expect(within(row).getByText('Label')).toBeInTheDocument();
+    expect(within(row).getByText('Probe ports')).toBeInTheDocument();
+    expect(within(row).queryByText('Address label 1')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Address label 1')).toBeInTheDocument();
+    expect(screen.getByLabelText('Address probe ports 1')).toBeInTheDocument();
   });
 
   it('renders device and address probe port fields and reports edits to the parent form', async () => {

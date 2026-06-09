@@ -770,17 +770,14 @@ export function AddDevicePanel({
             {form.additionalAddresses.map((address, index) => (
               <div
                 key={deviceAddressFormRowKey(address)}
-                className="space-y-2 rounded-lg bg-elevated p-3"
+                data-testid={`additional-address-row-${index + 1}`}
+                className="space-y-3 rounded-lg bg-elevated p-3"
               >
                 <div className="space-y-1">
-                  <label
-                    htmlFor={`additional-address-${index}`}
-                    className="text-xs text-on-bg-secondary"
-                  >
-                    Additional address {index + 1}
-                  </label>
+                  <span className="text-xs text-on-bg-secondary">Address</span>
                   <input
                     id={`additional-address-${index}`}
+                    aria-label={`Additional address ${index + 1}`}
                     type="text"
                     value={address.address}
                     onChange={(e) => {
@@ -800,16 +797,12 @@ export function AddDevicePanel({
                     </p>
                   )}
                 </div>
-                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto]">
+                <div className="space-y-2">
                   <div className="space-y-1">
-                    <label
-                      htmlFor={`additional-address-role-${index}`}
-                      className="text-xs text-on-bg-secondary"
-                    >
-                      Address role {index + 1}
-                    </label>
+                    <span className="text-xs text-on-bg-secondary">Role</span>
                     <select
                       id={`additional-address-role-${index}`}
+                      aria-label={`Address role ${index + 1}`}
                       value={address.role}
                       onChange={(e) =>
                         updateAdditionalAddress(index, {
@@ -825,14 +818,10 @@ export function AddDevicePanel({
                     </select>
                   </div>
                   <div className="space-y-1">
-                    <label
-                      htmlFor={`additional-address-label-${index}`}
-                      className="text-xs text-on-bg-secondary"
-                    >
-                      Address label {index + 1}
-                    </label>
+                    <span className="text-xs text-on-bg-secondary">Label</span>
                     <input
                       id={`additional-address-label-${index}`}
+                      aria-label={`Address label ${index + 1}`}
                       type="text"
                       value={address.label}
                       onChange={(e) => updateAdditionalAddress(index, { label: e.target.value })}
@@ -841,14 +830,10 @@ export function AddDevicePanel({
                     />
                   </div>
                   <div className="space-y-1">
-                    <label
-                      htmlFor={`additional-address-probe-ports-${index}`}
-                      className="text-xs text-on-bg-secondary"
-                    >
-                      Address probe ports {index + 1}
-                    </label>
+                    <span className="text-xs text-on-bg-secondary">Probe ports</span>
                     <input
                       id={`additional-address-probe-ports-${index}`}
+                      aria-label={`Address probe ports ${index + 1}`}
                       type="text"
                       value={address.probePorts}
                       onChange={(e) => {
@@ -867,14 +852,16 @@ export function AddDevicePanel({
                       </p>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => removeAdditionalAddress(index)}
-                    aria-label={`Remove address ${index + 1}`}
-                    className="self-end rounded-lg bg-surface px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg"
-                  >
-                    Remove
-                  </button>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => removeAdditionalAddress(index)}
+                      aria-label={`Remove address ${index + 1}`}
+                      className="rounded-lg bg-surface px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
