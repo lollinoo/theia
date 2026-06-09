@@ -280,6 +280,7 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 		if (ipChanged || addressesChanged || pollIntervalChanged || probePortsChanged) &&
 			domain.DevicePollingEnabled(*device) {
 			rescheduler.ReduePerformanceTask(*device, changedAt)
+			rescheduler.RedueEssentialTask(*device, changedAt)
 		}
 	}
 

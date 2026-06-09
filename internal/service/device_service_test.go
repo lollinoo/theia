@@ -481,6 +481,7 @@ func newTestService(snmpResult *snmp.DiscoveryResult, snmpErr error) (*DeviceSer
 
 type fakePollRescheduler struct {
 	calls          []pollRescheduleCall
+	essentialCalls []pollRescheduleCall
 	reconcileCalls []pollReconcileCall
 }
 
@@ -500,6 +501,13 @@ type pollReconcileCall struct {
 
 func (f *fakePollRescheduler) ReduePerformanceTask(device domain.Device, changedAt time.Time) {
 	f.calls = append(f.calls, pollRescheduleCall{
+		device:    device,
+		changedAt: changedAt,
+	})
+}
+
+func (f *fakePollRescheduler) RedueEssentialTask(device domain.Device, changedAt time.Time) {
+	f.essentialCalls = append(f.essentialCalls, pollRescheduleCall{
 		device:    device,
 		changedAt: changedAt,
 	})
@@ -2651,6 +2659,44 @@ func TestUpdateDevice_ProbePortsChangeTriggersSchedulerRedue(t *testing.T) {
 		len(rescheduler.calls[0].device.ProbePorts) != 2 ||
 		rescheduler.calls[0].device.ProbePorts[1] != 8291 {
 		t.Fatalf("rescheduled probe ports = %#v, want [22, 8291]", rescheduler.calls[0].device.ProbePorts)
+	}
+}
+
+func TestUpdateDevice_ProbePortsChangeTriggersEssentialRedue(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "10.0.0.4",
+		Hostname:   "router-probe-essential",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		PollClass:  domain.PollClassCore,
+		ProbePorts: []int{22, 443},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	newProbePorts := []int{22, 8291}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		ProbePorts: &newProbePorts,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(rescheduler.essentialCalls); got != 1 {
+		t.Fatalf("essential redue call count = %d, want 1", got)
+	}
+	if rescheduler.essentialCalls[0].device.ID != device.ID {
+		t.Fatalf("essential redue device ID = %q, want %s", rescheduler.essentialCalls[0].device.ID, device.ID)
+	}
+	if rescheduler.essentialCalls[0].device.ProbePorts == nil ||
+		len(rescheduler.essentialCalls[0].device.ProbePorts) != 2 ||
+		rescheduler.essentialCalls[0].device.ProbePorts[1] != 8291 {
+		t.Fatalf("essential redue probe ports = %#v, want [22, 8291]", rescheduler.essentialCalls[0].device.ProbePorts)
 	}
 }
 

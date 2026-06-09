@@ -525,6 +525,74 @@ func TestSchedulerReduePerformanceTask_HeapItemBecomesImmediatelyDueWithUpdatedI
 	}
 }
 
+func TestSchedulerRedueEssentialTask_HeapItemBecomesImmediatelyDueWithUpdatedInterval(t *testing.T) {
+	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
+	targetKey := NewEssentialTaskKey(uuid.MustParse("41000000-0000-0000-0000-000000000003"))
+	now := time.Unix(1_700_000_000, 0).UTC()
+	changedAt := now.Add(5 * time.Second)
+
+	target := &heapItem{
+		task: PollTask{
+			Key:              targetKey,
+			Device:           domain.Device{ID: targetKey.DeviceID, Hostname: "target-old", Managed: true, PollClass: domain.PollClassStandard},
+			PollClass:        domain.PollClassStandard,
+			Kind:             polling.TaskKindEssential,
+			Lane:             polling.LaneEssential,
+			ExpectedInterval: 60 * time.Second,
+			DueAt:            now.Add(40 * time.Second),
+		},
+		dueAt:    now.Add(40 * time.Second),
+		interval: 60 * time.Second,
+		index:    -1,
+	}
+
+	scheduler.items[targetKey] = target
+	heap.Push(&scheduler.heap, target)
+
+	updatedDevice := domain.Device{
+		ID:                   targetKey.DeviceID,
+		Hostname:             "target-new",
+		Managed:              true,
+		PollClass:            domain.PollClassCore,
+		PollIntervalOverride: schedulerIntPtr(15),
+	}
+
+	scheduler.handleRedueEssentialTask(reduePerformanceTaskRequest{
+		device:    updatedDevice,
+		changedAt: changedAt,
+		taskKind:  polling.TaskKindEssential,
+	})
+
+	if scheduler.heap[0] != target {
+		t.Fatalf("heap root = %p, want target item %p after heap.Fix", scheduler.heap[0], target)
+	}
+	if !target.dueAt.Equal(changedAt) {
+		t.Fatalf("dueAt = %v, want %v", target.dueAt, changedAt)
+	}
+	if !target.task.DueAt.Equal(changedAt) {
+		t.Fatalf("task dueAt = %v, want %v", target.task.DueAt, changedAt)
+	}
+	expectedInterval := EssentialInterval(updatedDevice)
+	if target.interval != expectedInterval {
+		t.Fatalf("interval = %v, want %v", target.interval, expectedInterval)
+	}
+	if target.task.ExpectedInterval != expectedInterval {
+		t.Fatalf("expected interval = %v, want %v", target.task.ExpectedInterval, expectedInterval)
+	}
+	if target.task.Device.Hostname != "target-new" {
+		t.Fatalf("device hostname = %q, want updated snapshot", target.task.Device.Hostname)
+	}
+	if target.task.PollClass != domain.PollClassCore {
+		t.Fatalf("task poll class = %q, want %q", target.task.PollClass, domain.PollClassCore)
+	}
+	if target.task.Kind != polling.TaskKindEssential {
+		t.Fatalf("task kind = %q, want %q", target.task.Kind, polling.TaskKindEssential)
+	}
+	if target.task.Lane != polling.LaneEssential {
+		t.Fatalf("task lane = %q, want %q", target.task.Lane, polling.LaneEssential)
+	}
+}
+
 func TestSchedulerReduePerformanceTask_QueuedItemMovesToFront(t *testing.T) {
 	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
 	firstKey := NewTaskKey(uuid.MustParse("42000000-0000-0000-0000-000000000001"), domain.VolatilityClassPerformance)
