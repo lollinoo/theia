@@ -292,7 +292,9 @@ describe('useDeviceConfigEditor', () => {
 
     act(() => {
       result.current.updateForm({
-        additionalAddresses: [{ ...result.current.form.additionalAddresses[0], probePorts: '4444' }],
+        additionalAddresses: [
+          { ...result.current.form.additionalAddresses[0], probePorts: '4444' },
+        ],
       });
     });
 

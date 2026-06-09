@@ -7,8 +7,8 @@ import { useRef, useState } from 'react';
 
 import {
   checkDeviceAddressReachability,
-  type DeviceAddressReachabilityResult,
   type DeviceAddressPayload,
+  type DeviceAddressReachabilityResult,
   fetchDevices,
   updateDevice,
 } from '../../api/client';
@@ -20,8 +20,8 @@ import { BulkEditPanel } from '../BulkEditPanel';
 import type { DeviceNode } from '../DeviceCard';
 import { DeviceConfigPanel } from '../DeviceConfigPanel';
 import {
-  DeviceDetailsPanel,
   type DeviceAddressReachabilityPanelState,
+  DeviceDetailsPanel,
 } from '../DeviceDetailsPanel';
 import {
   resolveDeviceMonitoringState,
@@ -122,7 +122,9 @@ export function CanvasPanels({
     });
   }
 
-  async function handleCheckAddressReachability(deviceId: string): Promise<DeviceAddressReachabilityResult[]> {
+  async function handleCheckAddressReachability(
+    deviceId: string,
+  ): Promise<DeviceAddressReachabilityResult[]> {
     const requestId = (addressReachabilityRequestRef.current.get(deviceId) ?? 0) + 1;
     addressReachabilityRequestRef.current.set(deviceId, requestId);
     updateAddressReachabilityState(deviceId, { loading: true, error: null });

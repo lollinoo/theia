@@ -360,6 +360,48 @@ describe('DeviceDetailsPanel', () => {
     expect(screen.getByText('promotion failed')).toBeInTheDocument();
   });
 
+  it('shows promotion failures while address reachability state is controlled', async () => {
+    const onPromoteAddress = vi.fn().mockRejectedValue(new Error('promotion failed'));
+
+    render(
+      <DeviceDetailsPanel
+        device={mockDevice({
+          addresses: [
+            {
+              id: 'addr-1',
+              device_id: 'dev-1',
+              address: '10.0.0.1',
+              label: 'Primary',
+              role: 'primary',
+              is_primary: true,
+              priority: 0,
+              probe_ports: [22],
+            },
+            {
+              id: 'addr-2',
+              device_id: 'dev-1',
+              address: '198.51.100.10',
+              label: 'Backup',
+              role: 'backup',
+              is_primary: false,
+              priority: 1,
+              probe_ports: [2222],
+            },
+          ],
+        })}
+        detailMetrics={mockDeviceMetrics()}
+        addressReachabilityState={{ results: [], loading: false, error: null }}
+        onPromoteAddress={onPromoteAddress}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Use 198.51.100.10 as primary' }));
+    });
+
+    expect(screen.getByText('promotion failed')).toBeInTheDocument();
+  });
+
   it('clears stale address reachability when the selected device changes', async () => {
     let resolveProbe: (results: AddressReachabilityResults) => void = () => {};
     const onCheckAddressReachability = vi.fn(

@@ -81,7 +81,9 @@ vi.mock('../DeviceDetailsPanel', () => ({
     <div>
       <div>Details device:{props.device.hostname}</div>
       {props.interfaceStats}
-      <div>Address reachability loading:{String(props.addressReachabilityState?.loading ?? false)}</div>
+      <div>
+        Address reachability loading:{String(props.addressReachabilityState?.loading ?? false)}
+      </div>
       <div>Address reachability results:{props.addressReachabilityState?.results.length ?? 0}</div>
       <div>Address reachability error:{props.addressReachabilityState?.error ?? 'none'}</div>
       <button type="button" onClick={() => props.onCheckAddressReachability?.(props.device.id)}>
@@ -659,7 +661,9 @@ describe('CanvasPanels', () => {
     const probePromise = new Promise<unknown[]>((resolve) => {
       resolveProbe = resolve;
     });
-    (checkDeviceAddressReachability as ReturnType<typeof vi.fn>).mockImplementationOnce(() => probePromise);
+    (checkDeviceAddressReachability as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => probePromise,
+    );
 
     const commonProps = {
       setPanelContent,
@@ -687,7 +691,10 @@ describe('CanvasPanels', () => {
     expect(screen.queryByText('Details device:router-01')).not.toBeInTheDocument();
 
     rerender(
-      <CanvasPanels panelContent={{ type: 'deviceDetails', data: { deviceId: device.id } }} {...commonProps} />,
+      <CanvasPanels
+        panelContent={{ type: 'deviceDetails', data: { deviceId: device.id } }}
+        {...commonProps}
+      />,
     );
 
     expect(screen.getByText('Address reachability loading:true')).toBeInTheDocument();

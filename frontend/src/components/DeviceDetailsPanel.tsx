@@ -209,7 +209,8 @@ export function DeviceDetailsPanel({
   const [internalAddressReachability, setInternalAddressReachability] = useState<
     DeviceAddressReachabilityResult[]
   >([]);
-  const [internalAddressReachabilityLoading, setInternalAddressReachabilityLoading] = useState(false);
+  const [internalAddressReachabilityLoading, setInternalAddressReachabilityLoading] =
+    useState(false);
   const [promotingAddressId, setPromotingAddressId] = useState<string | null>(null);
   const [internalAddressActionError, setInternalAddressActionError] = useState<string | null>(null);
   const addressReachabilityRequestRef = useRef(0);
@@ -221,9 +222,10 @@ export function DeviceDetailsPanel({
   const addressReachabilityLoading = isAddressReachabilityControlled
     ? addressReachabilityState.loading
     : internalAddressReachabilityLoading;
-  const addressActionError = isAddressReachabilityControlled
+  const addressReachabilityError = isAddressReachabilityControlled
     ? addressReachabilityState.error
-    : internalAddressActionError;
+    : null;
+  const addressActionError = internalAddressActionError ?? addressReachabilityError;
   const deviceLabel =
     device.tags?.display_name || device.sys_name || device.hostname || device.ip || device.id;
   const modelLabel = [device.vendor, device.hardware_model].filter(Boolean).join(' ');
@@ -240,8 +242,8 @@ export function DeviceDetailsPanel({
     if (!isAddressReachabilityControlled) {
       setInternalAddressReachability([]);
       setInternalAddressReachabilityLoading(false);
-      setInternalAddressActionError(null);
     }
+    setInternalAddressActionError(null);
     setPromotingAddressId(null);
   }, [device.id]);
 
@@ -249,7 +251,7 @@ export function DeviceDetailsPanel({
     if (!onCheckAddressReachability) return;
     const requestId = addressReachabilityRequestRef.current + 1;
     addressReachabilityRequestRef.current = requestId;
-    setAddressActionError(null);
+    setInternalAddressActionError(null);
     if (!isAddressReachabilityControlled) {
       setInternalAddressReachabilityLoading(true);
       setInternalAddressReachability([]);
@@ -263,7 +265,9 @@ export function DeviceDetailsPanel({
       }
     } catch (error) {
       if (addressReachabilityRequestRef.current === requestId) {
-        setAddressActionError(actionErrorMessage(error));
+        if (!isAddressReachabilityControlled) {
+          setInternalAddressActionError(actionErrorMessage(error));
+        }
       }
     } finally {
       if (addressReachabilityRequestRef.current === requestId) {
@@ -278,26 +282,19 @@ export function DeviceDetailsPanel({
     if (!onPromoteAddress) return;
     const requestId = addressPromotionRequestRef.current + 1;
     addressPromotionRequestRef.current = requestId;
-    setAddressActionError(null);
+    setInternalAddressActionError(null);
     setPromotingAddressId(addressId);
     try {
       await onPromoteAddress(addressId);
     } catch (error) {
       if (addressPromotionRequestRef.current === requestId) {
-        setAddressActionError(actionErrorMessage(error));
+        setInternalAddressActionError(actionErrorMessage(error));
       }
     } finally {
       if (addressPromotionRequestRef.current === requestId) {
         setPromotingAddressId(null);
       }
     }
-  }
-
-  function setAddressActionError(error: string | null) {
-    if (isAddressReachabilityControlled) {
-      return;
-    }
-    setInternalAddressActionError(error);
   }
 
   return (
@@ -338,7 +335,9 @@ export function DeviceDetailsPanel({
                 disabled={addressReachabilityLoading}
                 className="rounded-md border border-outline-subtle px-2 py-1 text-xs text-on-bg-secondary transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {addressReachabilityLoading ? 'Checking address reachability' : 'Check address reachability'}
+                {addressReachabilityLoading
+                  ? 'Checking address reachability'
+                  : 'Check address reachability'}
               </button>
             )}
           </div>

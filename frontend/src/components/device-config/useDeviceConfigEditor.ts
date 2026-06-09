@@ -140,7 +140,7 @@ function normalizeDeviceAddressPayload(address: DeviceAddressPayload): {
     label: address.label ?? '',
     isPrimary: Boolean(address.is_primary),
     priority: address.priority ?? 0,
-    hasExplicitProbePorts: Object.prototype.hasOwnProperty.call(address, 'probe_ports'),
+    hasExplicitProbePorts: Reflect.has(address, 'probe_ports'),
     probePorts: address.probe_ports ?? null,
   };
 }
