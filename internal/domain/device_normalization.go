@@ -155,6 +155,15 @@ func NormalizeDeviceAddresses(device *Device) {
 				Priority:  0,
 			}}, addresses...)
 		}
+		for i := range addresses {
+			if NormalizeDeviceAddressValue(addresses[i].Address) == normalizedLegacy {
+				continue
+			}
+			addresses[i].IsPrimary = false
+			if addresses[i].Role == DeviceAddressRolePrimary {
+				addresses[i].Role = DeviceAddressRoleOther
+			}
+		}
 	} else if len(addresses) > 0 {
 		primaryIndex := firstPrimaryAddressIndex(addresses)
 		if primaryIndex < 0 {

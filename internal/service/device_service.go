@@ -43,6 +43,7 @@ type runtimeResetter interface {
 type DeviceUpdate struct {
 	Hostname              *string
 	IP                    *string
+	Addresses             *[]domain.DeviceAddress
 	Notes                 **string
 	Tags                  *map[string]string
 	SNMPCredentials       *domain.SNMPCredentials
@@ -268,7 +269,27 @@ func (s *DeviceService) AddDevice(
 	areaIDs []uuid.UUID,
 	notes ...*string,
 ) (*domain.Device, error) {
-	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, notes...)
+	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, nil, notes...)
+}
+
+// AddDeviceWithAddresses creates a device with an explicit address collection
+// while preserving AddDevice's legacy single-IP signature for existing callers.
+func (s *DeviceService) AddDeviceWithAddresses(
+	ctx context.Context,
+	ip, hostname string,
+	deviceType domain.DeviceType,
+	creds domain.SNMPCredentials,
+	tags map[string]string,
+	vendor string,
+	metricsSource domain.MetricsSource,
+	prometheusLabelName string,
+	prometheusLabelValue string,
+	topologyDiscoveryMode domain.TopologyDiscoveryMode,
+	areaIDs []uuid.UUID,
+	addresses []domain.DeviceAddress,
+	notes ...*string,
+) (*domain.Device, error) {
+	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, addresses, notes...)
 }
 
 // probeDevice performs SNMP discovery and updates the device in the repository.
