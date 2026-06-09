@@ -229,6 +229,10 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 				deviceHandler.HandleRunTopologyDiscovery(w, r)
 				return
 			}
+			if strings.HasSuffix(r.URL.Path, "/addresses/reachability") && r.Method == http.MethodPost {
+				deviceHandler.HandleAddressReachability(w, r)
+				return
+			}
 			if strings.HasSuffix(r.URL.Path, "/ssh-credentials/test") && r.Method == http.MethodPost {
 				backupHandler.HandleTestSSH(w, r)
 				return

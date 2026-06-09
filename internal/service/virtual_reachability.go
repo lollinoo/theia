@@ -6,22 +6,18 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lollinoo/theia/internal/domain"
 )
 
-// virtualReachabilityPorts is the set of TCP ports attempted when probing a
-// virtual node for basic reachability. The probe succeeds if any port accepts
-// a connection.
-var virtualReachabilityPorts = []string{"80", "443", "22"}
-
-// ProbeVirtualReachability performs a lightweight TCP reachability probe for a
-// virtual node. It returns nil as soon as any common port accepts a
-// connection; otherwise it returns the last dial error.
-func ProbeVirtualReachability(ctx context.Context, ip string, timeout time.Duration) error {
-	ip = strings.TrimSpace(ip)
-	if ip == "" {
-		return fmt.Errorf("virtual reachability probe requires an IP")
+// ProbeTCPReachability performs a lightweight TCP reachability probe.
+func ProbeTCPReachability(ctx context.Context, target string, timeout time.Duration, ports []int) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return fmt.Errorf("reachability probe requires a target")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -31,13 +27,14 @@ func ProbeVirtualReachability(ctx context.Context, ip string, timeout time.Durat
 	}
 
 	var lastErr error
-	for _, port := range virtualReachabilityPorts {
+	for _, port := range domain.ResolveProbePorts(nil, nil, ports) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 
-		addr := net.JoinHostPort(ip, port)
-		conn, err := net.DialTimeout("tcp", addr, timeout)
+		dialer := net.Dialer{Timeout: timeout}
+		addr := net.JoinHostPort(target, strconv.Itoa(port))
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
 		if err == nil {
 			_ = conn.Close()
 			return nil
@@ -46,8 +43,13 @@ func ProbeVirtualReachability(ctx context.Context, ip string, timeout time.Durat
 	}
 
 	if lastErr != nil {
-		return fmt.Errorf("virtual reachability probe failed for %s: %w", ip, lastErr)
+		return fmt.Errorf("reachability probe failed for %s: %w", target, lastErr)
 	}
 
-	return fmt.Errorf("virtual reachability probe failed for %s", ip)
+	return fmt.Errorf("reachability probe failed for %s", target)
+}
+
+// ProbeVirtualReachability performs a lightweight TCP reachability probe for a virtual node.
+func ProbeVirtualReachability(ctx context.Context, ip string, timeout time.Duration, ports []int) error {
+	return ProbeTCPReachability(ctx, ip, timeout, ports)
 }

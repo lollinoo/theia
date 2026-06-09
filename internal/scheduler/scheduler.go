@@ -93,6 +93,7 @@ type dispatchScanState struct {
 type reduePerformanceTaskRequest struct {
 	device    domain.Device
 	changedAt time.Time
+	taskKind  polling.TaskKind
 }
 
 // NewScheduler constructs scheduler state for the scheduler.
@@ -236,6 +237,35 @@ func (s *Scheduler) ReduePerformanceTask(device domain.Device, changedAt time.Ti
 	request := reduePerformanceTaskRequest{
 		device:    device,
 		changedAt: changedAt.UTC(),
+		taskKind:  polling.TaskKindBackground,
+	}
+
+	select {
+	case s.redueRequests <- request:
+	case <-s.done:
+	}
+}
+
+// RedueEssentialTask makes the device's essential task immediately due after a
+// probe-settings change.
+func (s *Scheduler) RedueEssentialTask(device domain.Device, changedAt time.Time) {
+	if !s.running.Load() {
+		return
+	}
+	if !shouldScheduleRecurringDevice(device) || device.DeviceType == domain.DeviceTypeVirtual {
+		return
+	}
+	if !s.sourceIncludesDevice(device.ID) {
+		return
+	}
+
+	if changedAt.IsZero() {
+		changedAt = s.now()
+	}
+	request := reduePerformanceTaskRequest{
+		device:    device,
+		changedAt: changedAt.UTC(),
+		taskKind:  polling.TaskKindEssential,
 	}
 
 	select {
@@ -281,6 +311,7 @@ func (s *Scheduler) ScheduleBootstrap(device domain.Device, dueAt time.Time) boo
 	request := reduePerformanceTaskRequest{
 		device:    device,
 		changedAt: dueAt.UTC(),
+		taskKind:  polling.TaskKindBackground,
 	}
 
 	select {
@@ -341,7 +372,12 @@ func (s *Scheduler) run(ctx context.Context) {
 			s.mu.Unlock()
 		case request := <-s.redueRequests:
 			s.mu.Lock()
-			s.handleReduePerformanceTask(request)
+			switch request.taskKind {
+			case polling.TaskKindEssential:
+				s.handleRedueEssentialTask(request)
+			default:
+				s.handleReduePerformanceTask(request)
+			}
 			s.recordMetricsLocked(s.now().UTC())
 			s.mu.Unlock()
 		case completion := <-s.completions:
@@ -782,6 +818,66 @@ func (s *Scheduler) handleReduePerformanceTask(request reduePerformanceTaskReque
 	s.pushReadyFront(item)
 }
 
+func (s *Scheduler) handleRedueEssentialTask(request reduePerformanceTaskRequest) {
+	device := request.device
+	if !shouldScheduleRecurringDevice(device) {
+		return
+	}
+	if !s.sourceIncludesDevice(device.ID) {
+		return
+	}
+	if device.DeviceType == domain.DeviceTypeVirtual {
+		return
+	}
+
+	changedAt := request.changedAt
+	if changedAt.IsZero() {
+		changedAt = s.now().UTC()
+	} else {
+		changedAt = changedAt.UTC()
+	}
+
+	key := NewEssentialTaskKey(device.ID)
+	interval := EssentialInterval(device)
+
+	if item, ok := s.items[key]; ok {
+		s.applyEssentialRedue(item, device, changedAt, interval)
+
+		switch {
+		case item.inFlight:
+			item.pending = true
+			item.immediateRerun = true
+		case item.queued:
+			s.removeReadyItem(item)
+			s.pushReadyFront(item)
+		case item.index >= 0:
+			heap.Fix(&s.heap, item.index)
+		default:
+			s.pushReadyFront(item)
+		}
+		return
+	}
+
+	item := &heapItem{
+		task: PollTask{
+			Key:              key,
+			Kind:             polling.TaskKindEssential,
+			Lane:             polling.LaneEssential,
+			Device:           device,
+			PollClass:        device.PollClass,
+			VolatilityClass:  "",
+			ExpectedInterval: interval,
+			DueAt:            changedAt,
+			DeadlineAt:       changedAt.Add(interval),
+		},
+		dueAt:    changedAt,
+		interval: interval,
+		index:    -1,
+	}
+	s.items[key] = item
+	s.pushReadyFront(item)
+}
+
 func (s *Scheduler) scheduleBootstrapItem(device domain.Device, dueAt time.Time) {
 	key := NewBootstrapTaskKey(device.ID)
 	interval := domain.StaticClassInterval
@@ -846,6 +942,21 @@ func (s *Scheduler) applyPerformanceRedue(item *heapItem, device domain.Device, 
 	item.task.Device = device
 	item.task.PollClass = device.PollClass
 	item.task.VolatilityClass = domain.VolatilityClassPerformance
+	item.task.ExpectedInterval = interval
+	item.interval = interval
+	item.dueAt = changedAt
+	item.task.DueAt = changedAt
+	item.task.DeadlineAt = changedAt.Add(interval)
+}
+
+func (s *Scheduler) applyEssentialRedue(item *heapItem, device domain.Device, changedAt time.Time, interval time.Duration) {
+	item.disabled = false
+	item.task.Key = NewEssentialTaskKey(device.ID)
+	item.task.Kind = polling.TaskKindEssential
+	item.task.Lane = polling.LaneEssential
+	item.task.Device = device
+	item.task.PollClass = device.PollClass
+	item.task.VolatilityClass = ""
 	item.task.ExpectedInterval = interval
 	item.interval = interval
 	item.dueAt = changedAt

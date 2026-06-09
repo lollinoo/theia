@@ -108,6 +108,43 @@ func TestSettingsHandlerUpdate_HappyPath(t *testing.T) {
 	}
 }
 
+func TestSettingsHandler_NetworkProbePorts_NormalizesValidList(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":" 22,8291,443 "}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingNetworkProbePorts, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	got, _ := repo.Get(domain.SettingNetworkProbePorts)
+	if got != "22,8291,443" {
+		t.Fatalf("expected network_probe_ports=22,8291,443, got %s", got)
+	}
+}
+
+func TestSettingsHandler_NetworkProbePorts_RejectsInvalidList(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+
+	body := `{"value":"22,65536"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingNetworkProbePorts, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), domain.SettingNetworkProbePorts) {
+		t.Fatalf("expected error mentioning %s, got: %s", domain.SettingNetworkProbePorts, rec.Body.String())
+	}
+}
+
 func TestSettingsHandlerUpdate_PerDeviceGrafanaDashboardURLAllowed(t *testing.T) {
 	repo := newMockSettingsRepo()
 	h := NewSettingsHandler(repo)

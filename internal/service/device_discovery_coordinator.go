@@ -154,6 +154,7 @@ func (d *deviceDiscoveryCoordinator) probeDevice(device *domain.Device) {
 	s := d.parent
 	deviceID := device.ID
 	deviceIP := device.IP
+	target := managementTargetAddress(*device)
 
 	if device.DeviceType == domain.DeviceTypeVirtual {
 		if device.IP != "" {
@@ -186,9 +187,9 @@ func (d *deviceDiscoveryCoordinator) probeDevice(device *domain.Device) {
 
 	topologyMode := domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode())
 
-	result, err := s.discoverFunc(deviceIP, device.SNMPCredentials, topologyMode)
+	result, err := s.discoverFunc(target, device.SNMPCredentials, topologyMode)
 	if err != nil {
-		log.Printf("SNMP discovery failed for %s: %v", deviceIP, err)
+		log.Printf("SNMP discovery failed for %s: %v", target, err)
 		s.markDeviceStatus(deviceID, deviceIP, domain.DeviceStatusDown)
 		return
 	}
@@ -210,7 +211,7 @@ func (d *deviceDiscoveryCoordinator) probeDevice(device *domain.Device) {
 		if statusErr := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); statusErr != nil {
 			log.Printf("Failed to update device %s status to up after discovery persistence failure: %v", deviceIP, statusErr)
 		}
-		log.Printf("Failed to persist static discovery for %s: %v", deviceIP, err)
+		log.Printf("Failed to persist static discovery for %s: %v", target, err)
 		return
 	}
 	followupScheduled := false
@@ -277,7 +278,7 @@ func (d *deviceDiscoveryCoordinator) RunTopologyDiscoveryNow(ctx context.Context
 	if err != nil {
 		return fmt.Errorf("getting device: %w", err)
 	}
-	if device.DeviceType == domain.DeviceTypeVirtual || strings.TrimSpace(device.IP) == "" {
+	if device.DeviceType == domain.DeviceTypeVirtual || strings.TrimSpace(managementTargetAddress(*device)) == "" {
 		return fmt.Errorf("topology discovery requires a non-virtual device with an IP")
 	}
 	if device.MetricsSource == domain.MetricsSourcePrometheus {
@@ -305,7 +306,12 @@ func (d *deviceDiscoveryCoordinator) PingVirtualDevice(ctx context.Context, id u
 	}
 
 	newStatus := domain.DeviceStatusDown
-	if err := ProbeVirtualReachability(ctx, device.IP, timeout); err == nil {
+	probe := d.parent.networkProbe
+	if probe == nil {
+		probe = ProbeTCPReachability
+	}
+	ports := deviceTargetProbePorts(*device, device.IP, d.parent.globalNetworkProbePorts())
+	if err := probe(ctx, device.IP, timeout, ports); err == nil {
 		newStatus = domain.DeviceStatusUp
 	}
 
@@ -327,11 +333,11 @@ func (d *deviceDiscoveryCoordinator) TestSNMP(ctx context.Context, id uuid.UUID)
 	}
 
 	result := &SNMPTestResult{
-		TargetIP:    device.IP,
+		TargetIP:    managementTargetAddress(*device),
 		SNMPVersion: string(device.SNMPCredentials.Version),
 	}
 
-	discoveryResult, err := d.parent.discoverFunc(device.IP, device.SNMPCredentials, domain.TopologyDiscoveryModeOff)
+	discoveryResult, err := d.parent.discoverFunc(result.TargetIP, device.SNMPCredentials, domain.TopologyDiscoveryModeOff)
 	if err != nil {
 		result.Error = err.Error()
 		return result, nil
@@ -341,4 +347,11 @@ func (d *deviceDiscoveryCoordinator) TestSNMP(ctx context.Context, id uuid.UUID)
 	result.SysName = discoveryResult.SysName
 	result.SysDescr = discoveryResult.SysDescr
 	return result, nil
+}
+
+func managementTargetAddress(device domain.Device) string {
+	if address := domain.AddressForRole(device, domain.DeviceAddressRoleManagement); address != "" {
+		return address
+	}
+	return domain.PrimaryAddress(device)
 }

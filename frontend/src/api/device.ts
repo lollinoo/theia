@@ -4,6 +4,7 @@
  */
 import {
   type Device,
+  type DeviceAddressRole,
   type DeviceCredentialProfile,
   type InterfaceInfo,
   type Link,
@@ -36,10 +37,41 @@ export interface SNMPPayload {
   security_level?: string;
 }
 
+/** Describes one device address submitted to the backend from editable forms. */
+export interface DeviceAddressPayload {
+  address: string;
+  label?: string;
+  role?: DeviceAddressRole;
+  is_primary?: boolean;
+  priority?: number;
+  probe_ports?: number[] | null;
+}
+
+/** Describes one address reachability probe result returned by the backend. */
+export interface DeviceAddressProbePortResult {
+  port: number;
+  reachable: boolean;
+  error: string;
+}
+
+export interface DeviceAddressReachabilityResult {
+  address_id: string;
+  address: string;
+  role: DeviceAddressRole;
+  label: string;
+  is_primary: boolean;
+  probe_ports: number[];
+  reachable_ports: DeviceAddressProbePortResult[];
+  reachable: boolean;
+  error: string;
+}
+
 /** Describes the create device payload contract used by the frontend API boundary. */
 export interface CreateDevicePayload {
   hostname: string;
   ip?: string;
+  addresses?: DeviceAddressPayload[];
+  probe_ports?: number[] | null;
   notes?: string | null;
   device_type?: string;
   snmp?: SNMPPayload;
@@ -51,6 +83,55 @@ export interface CreateDevicePayload {
   topology_discovery_mode?: TopologyDiscoveryMode;
   area_ids?: string[];
   skip_primary_map_membership?: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isDeviceAddressRole(value: unknown): value is DeviceAddressRole {
+  return (
+    value === 'primary' ||
+    value === 'management' ||
+    value === 'backup' ||
+    value === 'monitoring' ||
+    value === 'other'
+  );
+}
+
+function isIntegerArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((item) => Number.isInteger(item));
+}
+
+function isAddressProbePortResult(value: unknown): value is DeviceAddressProbePortResult {
+  return (
+    isRecord(value) &&
+    typeof value.port === 'number' &&
+    Number.isInteger(value.port) &&
+    typeof value.reachable === 'boolean' &&
+    typeof value.error === 'string'
+  );
+}
+
+function isAddressProbePortResults(value: unknown): value is DeviceAddressProbePortResult[] {
+  return Array.isArray(value) && value.every(isAddressProbePortResult);
+}
+
+function isDeviceAddressReachabilityResult(
+  value: unknown,
+): value is DeviceAddressReachabilityResult {
+  return (
+    isRecord(value) &&
+    typeof value.address_id === 'string' &&
+    typeof value.address === 'string' &&
+    isDeviceAddressRole(value.role) &&
+    typeof value.label === 'string' &&
+    typeof value.is_primary === 'boolean' &&
+    isIntegerArray(value.probe_ports) &&
+    isAddressProbePortResults(value.reachable_ports) &&
+    typeof value.reachable === 'boolean' &&
+    typeof value.error === 'string'
+  );
 }
 
 // fetchDevices loads all devices and keeps legacy error text used by callers.
@@ -104,6 +185,8 @@ export async function updateDevice(
   payload: Partial<{
     hostname: string;
     ip: string;
+    addresses: DeviceAddressPayload[];
+    probe_ports: number[] | null;
     notes: string | null;
     snmp: SNMPPayload;
     tags: Record<string, string>;
@@ -142,6 +225,18 @@ export async function deleteDevice(id: string): Promise<void> {
 // runTopologyDiscovery triggers backend topology discovery for one device.
 export async function runTopologyDiscovery(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/devices/${encodeURIComponent(id)}/topology-discovery`, 'POST');
+}
+
+// checkDeviceAddressReachability asks the backend to probe all saved addresses for one device.
+export async function checkDeviceAddressReachability(
+  id: string,
+): Promise<DeviceAddressReachabilityResult[]> {
+  const response = await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(id)}/addresses/reachability`,
+    'POST',
+  );
+  const data = (response as { data?: unknown }).data;
+  return Array.isArray(data) ? data.filter(isDeviceAddressReachabilityResult) : [];
 }
 
 // fetchDeviceInterfaces loads interface telemetry metadata for one device.

@@ -70,6 +70,7 @@ var validSettingKeys = map[string]bool{
 	domain.SettingDeviceBackupIntervalHours:     true,
 	domain.SettingDeviceBackupRetentionCount:    true,
 	domain.SettingBridgePort:                    true,
+	domain.SettingNetworkProbePorts:             true,
 }
 
 // boolSettings lists keys that must parse as valid booleans.
@@ -101,6 +102,16 @@ func validateSetting(key, value string) (string, error) {
 	normalized, err := domain.NormalizeConstrainedSetting(key, value)
 	if err != nil {
 		return "", err
+	}
+	if key == domain.SettingNetworkProbePorts {
+		ports, err := domain.ParseProbePortsCSV(value)
+		if err != nil {
+			return "", fmt.Errorf("%s invalid: %w", key, err)
+		}
+		if len(ports) == 0 {
+			return "", fmt.Errorf("%s must contain at least one probe port", key)
+		}
+		normalized = domain.FormatProbePortsCSV(ports)
 	}
 	if boolSettings[key] {
 		trimmed := strings.TrimSpace(value)

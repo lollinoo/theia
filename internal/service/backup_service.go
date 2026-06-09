@@ -299,13 +299,14 @@ func (s *BackupService) TestSSHConnection(ctx context.Context, deviceID uuid.UUI
 	timeout := 10 * time.Second
 	var client *ssh.Client
 
+	target := domain.BackupAddress(*device)
 	if profile.AuthMethod == domain.SSHAuthPassword {
-		client, err = ssh.NewClient(s.sshDialer, device.IP, profile.Port, profile.Username, secret, timeout, s.hostKeyCallback)
+		client, err = ssh.NewClient(s.sshDialer, target, profile.Port, profile.Username, secret, timeout, s.hostKeyCallback)
 	} else {
-		client, err = ssh.NewClientWithKey(s.sshDialer, device.IP, profile.Port, profile.Username, []byte(secret), timeout, s.hostKeyCallback)
+		client, err = ssh.NewClientWithKey(s.sshDialer, target, profile.Port, profile.Username, []byte(secret), timeout, s.hostKeyCallback)
 	}
 	if err != nil {
-		return fmt.Errorf("SSH connection failed: %w", err)
+		return fmt.Errorf("SSH connection to %s failed: %w", target, err)
 	}
 	defer client.Close()
 

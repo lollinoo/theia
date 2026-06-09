@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -144,6 +145,91 @@ func TestPipelineTaskRunnerPersistStaticDiscoveryPropagatesNeighborDiscoveryFail
 	failure := topologyService.lastIn.NeighborDiscoveryFailures[0]
 	if failure.Protocol != domain.DiscoveryProtocolCDP || failure.OID != snmp.OidCDPDeviceID || !failure.Critical || failure.Error != "cdp walk failed" {
 		t.Fatalf("propagated failure = %#v, want CDP device ID critical failure", failure)
+	}
+}
+
+func TestPipelineTaskRunnerNetworkProbePortsResolvesInheritance(t *testing.T) {
+	tests := []struct {
+		name   string
+		device domain.Device
+		want   []int
+	}{
+		{
+			name: "address override",
+			device: domain.Device{
+				IP:         "192.0.2.30",
+				ProbePorts: []int{22, 443},
+				Addresses: []domain.DeviceAddress{
+					{
+						Address:    "192.0.2.30",
+						Role:       domain.DeviceAddressRolePrimary,
+						IsPrimary:  true,
+						ProbePorts: []int{2222},
+					},
+				},
+			},
+			want: []int{2222},
+		},
+		{
+			name: "device override",
+			device: domain.Device{
+				IP:         "198.51.100.30",
+				ProbePorts: []int{22, 443},
+				Addresses: []domain.DeviceAddress{
+					{
+						Address:   "198.51.100.30",
+						Role:      domain.DeviceAddressRolePrimary,
+						IsPrimary: true,
+					},
+				},
+			},
+			want: []int{22, 443},
+		},
+		{
+			name: "primary fallback target address override",
+			device: domain.Device{
+				IP:         "192.0.2.31",
+				ProbePorts: []int{22, 443},
+				Addresses: []domain.DeviceAddress{
+					{
+						Address:    "192.0.2.31",
+						Role:       domain.DeviceAddressRoleManagement,
+						ProbePorts: []int{9443},
+					},
+				},
+			},
+			want: []int{9443},
+		},
+		{
+			name: "global setting",
+			device: domain.Device{
+				IP: "203.0.113.30",
+				Addresses: []domain.DeviceAddress{
+					{
+						Address:   "203.0.113.30",
+						Role:      domain.DeviceAddressRolePrimary,
+						IsPrimary: true,
+					},
+				},
+			},
+			want: []int{8291},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			settingsRepo := newMockWorkerSettingsRepo()
+			if err := settingsRepo.Set(domain.SettingNetworkProbePorts, "8291"); err != nil {
+				t.Fatalf("Set() error = %v", err)
+			}
+			runner := &pipelineTaskRunner{pipeline: &PipelineOrchestrator{settingsRepo: settingsRepo}}
+
+			got := runner.networkProbePorts(tt.device)
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("networkProbePorts() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -11,8 +11,11 @@ import { WorkerSettingsSection } from './WorkerSettingsSection';
 interface PollingSettingsSectionProps {
   pollingValue: string;
   customPolling: string;
+  networkProbePorts: string;
   savedPolling: boolean;
+  savedNetworkProbePorts: boolean;
   customPollingError?: string;
+  networkProbePortsError?: string;
   workerSectionOpen: boolean;
   workerSettings: Record<WorkerSettingKey, string>;
   savedWorkerSettings: Record<WorkerSettingKey, boolean>;
@@ -20,6 +23,8 @@ interface PollingSettingsSectionProps {
   onPollingPresetChange: (value: string) => void;
   onCustomPollingChange: (value: string) => void;
   onCustomPollingBlur: () => void;
+  onNetworkProbePortsChange: (value: string) => void;
+  onNetworkProbePortsBlur: () => void;
   onWorkerSectionToggle: () => void;
   onWorkerSettingChange: (key: WorkerSettingKey, value: string) => void;
   onWorkerSettingBlur: (setting: WorkerSetting) => void;
@@ -29,8 +34,11 @@ interface PollingSettingsSectionProps {
 export function PollingSettingsSection({
   pollingValue,
   customPolling,
+  networkProbePorts,
   savedPolling,
+  savedNetworkProbePorts,
   customPollingError,
+  networkProbePortsError,
   workerSectionOpen,
   workerSettings,
   savedWorkerSettings,
@@ -38,6 +46,8 @@ export function PollingSettingsSection({
   onPollingPresetChange,
   onCustomPollingChange,
   onCustomPollingBlur,
+  onNetworkProbePortsChange,
+  onNetworkProbePortsBlur,
   onWorkerSectionToggle,
   onWorkerSettingChange,
   onWorkerSettingBlur,
@@ -87,6 +97,27 @@ export function PollingSettingsSection({
           </div>
         </div>
       )}
+
+      <label className="grid gap-1 text-sm" htmlFor="default-network-probe-ports">
+        <span className="flex items-center justify-between gap-3">
+          <span className={fieldLabelClass}>Default network probe ports</span>
+          <SavedIndicator visible={savedNetworkProbePorts} />
+        </span>
+        <input
+          id="default-network-probe-ports"
+          aria-label="Default network probe ports"
+          type="text"
+          inputMode="numeric"
+          value={networkProbePorts}
+          placeholder="22,8291,80,443"
+          onChange={(e) => onNetworkProbePortsChange(e.target.value)}
+          onBlur={onNetworkProbePortsBlur}
+          className={controlClass(Boolean(networkProbePortsError))}
+        />
+        {networkProbePortsError && (
+          <p className="text-xs text-status-down">{networkProbePortsError}</p>
+        )}
+      </label>
 
       <WorkerSettingsSection
         open={workerSectionOpen}

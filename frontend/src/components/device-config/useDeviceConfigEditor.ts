@@ -32,7 +32,7 @@ import {
   type DeviceFormModel,
   normalizeVirtualNodeColor,
 } from '../forms/deviceFormModels';
-import { buildUpdateDevicePayload } from '../forms/deviceFormSubmitters';
+import { buildUpdateDevicePayload, validateProbePorts } from '../forms/deviceFormSubmitters';
 
 type DeviceUpdatePayload = Parameters<typeof updateDevice>[1];
 
@@ -61,6 +61,15 @@ function buildDeviceConfigSyncKey(device: Device, isVirtual: boolean): string {
     areaIds: [...(device.area_ids ?? [])].sort(),
     prometheusLabelName: device.prometheus_label_name || 'instance',
     prometheusLabelValue: device.prometheus_label_value || '',
+    probePorts: device.probe_ports ?? [],
+    addresses: (device.addresses ?? []).map((address) => ({
+      address: address.address,
+      role: address.role,
+      label: address.label,
+      isPrimary: address.is_primary,
+      priority: address.priority,
+      probePorts: address.probe_ports ?? [],
+    })),
     virtualSubtype: device.tags?.virtual_subtype ?? 'internet',
     mapVisualColor: device.map_visual_color ?? null,
   });
@@ -88,6 +97,130 @@ function sameStringRecord(
     ([key, value], index) =>
       secondEntries[index]?.[0] === key && secondEntries[index]?.[1] === value,
   );
+}
+
+function normalizeAddressLookupValue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+type DeviceAddressPayload = NonNullable<DeviceUpdatePayload['addresses']>[number];
+
+function normalizeProbePorts(ports: number[] | null | undefined): number[] {
+  return [...(ports ?? [])];
+}
+
+function probePortsEqual(
+  first: number[] | null | undefined,
+  second: number[] | null | undefined,
+): boolean {
+  const normalizedFirst = normalizeProbePorts(first);
+  const normalizedSecond = normalizeProbePorts(second);
+  if (normalizedFirst.length !== normalizedSecond.length) return false;
+  return normalizedFirst.every((value, index) => value === normalizedSecond[index]);
+}
+
+function normalizeDeviceAddressPayloadRole(role: string | undefined): string {
+  return normalizeAddressLookupValue(role ?? 'other') || 'other';
+}
+
+function normalizeDeviceAddressPayload(address: DeviceAddressPayload): {
+  normalizedAddress: string;
+  address: string;
+  role: string;
+  label: string;
+  isPrimary: boolean;
+  priority: number;
+  hasExplicitProbePorts: boolean;
+  probePorts: number[] | null;
+} {
+  return {
+    normalizedAddress: normalizeAddressLookupValue(address.address),
+    address: normalizeAddressLookupValue(address.address),
+    role: normalizeDeviceAddressPayloadRole(address.role),
+    label: address.label ?? '',
+    isPrimary: Boolean(address.is_primary),
+    priority: address.priority ?? 0,
+    hasExplicitProbePorts: Reflect.has(address, 'probe_ports'),
+    probePorts: address.probe_ports ?? null,
+  };
+}
+
+function deviceAddressPayloadRowsEquivalent(
+  payloadAddress: ReturnType<typeof normalizeDeviceAddressPayload>,
+  deviceAddress: Device['addresses'][number],
+): boolean {
+  if (
+    payloadAddress.normalizedAddress !== normalizeAddressLookupValue(deviceAddress.address) ||
+    payloadAddress.role !== normalizeAddressLookupValue(deviceAddress.role) ||
+    payloadAddress.label.trim() !== deviceAddress.label.trim() ||
+    payloadAddress.isPrimary !== deviceAddress.is_primary ||
+    payloadAddress.priority !== deviceAddress.priority
+  ) {
+    return false;
+  }
+
+  if (payloadAddress.role !== 'primary' && payloadAddress.hasExplicitProbePorts) {
+    return probePortsEqual(payloadAddress.probePorts, deviceAddress.probe_ports);
+  }
+  return true;
+}
+
+function deviceAddressPayloadHasChanges(
+  device: Device,
+  payloadAddresses: DeviceUpdatePayload['addresses'],
+): boolean {
+  if (payloadAddresses === undefined) return false;
+
+  const normalizedPayloadAddresses = payloadAddresses
+    .map(normalizeDeviceAddressPayload)
+    .filter((address) => address.normalizedAddress !== '');
+
+  if (normalizedPayloadAddresses.length !== (device.addresses?.length ?? 0)) return true;
+
+  const normalizedDeviceAddresses = new Map(
+    (device.addresses ?? []).map((address) => [
+      normalizeAddressLookupValue(address.address),
+      address,
+    ]),
+  );
+
+  return normalizedPayloadAddresses.some((payloadAddress) => {
+    const deviceAddress = normalizedDeviceAddresses.get(payloadAddress.normalizedAddress);
+    if (!deviceAddress) return true;
+    return !deviceAddressPayloadRowsEquivalent(payloadAddress, deviceAddress);
+  });
+}
+
+function validateAdditionalAddressRows(
+  form: DeviceFormModel,
+  primaryAddress: string,
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const seen = new Set<string>();
+  const primary = normalizeAddressLookupValue(primaryAddress);
+  if (primary) {
+    seen.add(primary);
+  }
+
+  form.additionalAddresses.forEach((address, index) => {
+    const trimmed = address.address.trim();
+    if (trimmed === '') {
+      return;
+    }
+    const validationError = validateIPOrHostname(trimmed);
+    if (validationError) {
+      errors[`additionalAddress${index}`] = validationError;
+      return;
+    }
+    const normalized = normalizeAddressLookupValue(trimmed);
+    if (seen.has(normalized)) {
+      errors[`additionalAddress${index}`] = 'Duplicate device address';
+      return;
+    }
+    seen.add(normalized);
+  });
+
+  return errors;
 }
 
 function deviceConfigGlobalPayloadHasChanges(
@@ -122,6 +255,15 @@ function deviceConfigGlobalPayloadHasChanges(
     return true;
   }
   if (payload.area_ids !== undefined && !sameAreaIds(payload.area_ids, device.area_ids ?? [])) {
+    return true;
+  }
+  if (
+    payload.probe_ports !== undefined &&
+    !probePortsEqual(payload.probe_ports, device.probe_ports)
+  ) {
+    return true;
+  }
+  if (deviceAddressPayloadHasChanges(device, payload.addresses)) {
     return true;
   }
   return false;
@@ -257,6 +399,17 @@ export function useDeviceConfigEditor({
     if (!(isVirtual && trimmedIP === '')) {
       const ipErr = validateIPOrHostname(trimmedIP);
       if (ipErr) errors['ip'] = ipErr;
+    }
+    if (!isVirtual) {
+      Object.assign(errors, validateAdditionalAddressRows(form, trimmedIP));
+      const probePortsErr = validateProbePorts(form.probePorts);
+      if (probePortsErr) errors['probePorts'] = probePortsErr;
+      form.additionalAddresses.forEach((address, index) => {
+        const addressProbePortsErr = validateProbePorts(address.probePorts);
+        if (addressProbePortsErr) {
+          errors[`additionalAddressProbePorts${index}`] = addressProbePortsErr;
+        }
+      });
     }
     const displayNameErr = validateDisplayNameField(form.displayName);
     if (displayNameErr) errors['displayName'] = displayNameErr;

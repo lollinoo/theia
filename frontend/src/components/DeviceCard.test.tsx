@@ -170,6 +170,15 @@ describe('DeviceCard', () => {
     expect(screen.queryByText(/Polling every/)).toBeNull();
   });
 
+  it('shows persisted primary device ip on physical node card', () => {
+    renderDeviceCard({
+      device: mockDevice({ ip: '198.51.100.10' }),
+      metrics: mockMetrics(),
+    });
+
+    expect(screen.getByText('IP 198.51.100.10')).toBeInTheDocument();
+  });
+
   it('does not expose the pointer-only card shell as a keyboard button', () => {
     renderDeviceCard({ metrics: mockMetrics() });
 

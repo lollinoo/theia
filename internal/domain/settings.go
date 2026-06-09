@@ -37,7 +37,8 @@ const (
 	SettingBridgeSecret = "bridge_secret"
 	// SettingBridgePort holds the TCP port the WinBox bridge listens on.
 	// Defaults to "1337" to match the bridge's default ListenPort.
-	SettingBridgePort = "bridge_port"
+	SettingBridgePort        = "bridge_port"
+	SettingNetworkProbePorts = "network_probe_ports"
 )
 
 // DefaultSettings returns the default runtime settings.
@@ -71,6 +72,7 @@ func DefaultSettings() map[string]string {
 		SettingDeviceBackupIntervalHours:     "0",
 		SettingDeviceBackupRetentionCount:    "5",
 		SettingBridgePort:                    "1337",
+		SettingNetworkProbePorts:             FormatProbePortsCSV(DefaultNetworkProbePorts),
 	}
 }
 

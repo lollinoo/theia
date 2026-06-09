@@ -38,12 +38,14 @@ import {
 import {
   applySNMPProfile,
   createAddDeviceFormModel,
+  createEmptyDeviceAddressFormRow,
   type DeviceFormModel,
   defaultVirtualNodeColor,
   normalizeVirtualNodeColor,
   resetDeviceFormMode,
+  type SecondaryDeviceAddressRole,
 } from './forms/deviceFormModels';
-import { buildCreateDevicePayload } from './forms/deviceFormSubmitters';
+import { buildCreateDevicePayload, validateProbePorts } from './forms/deviceFormSubmitters';
 import { MaterialIcon } from './MaterialIcon';
 
 interface AddDevicePanelProps {
@@ -60,6 +62,16 @@ type DuplicateDeviceAddResult = 'not-handled' | 'added' | 'error';
 
 function normalizeDeviceLookupValue(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase();
+}
+
+function deviceAddressLookupValues(device: Device): string[] {
+  return [device.ip, ...(device.addresses ?? []).map((address) => address.address)]
+    .map(normalizeDeviceLookupValue)
+    .filter(Boolean);
+}
+
+function deviceAddressFormRowKey(address: DeviceFormModel['additionalAddresses'][number]): string {
+  return address.formId ?? `${address.address}-${address.role}-${address.label}`;
 }
 
 function duplicateMapDeviceAddressMessage(address: string): string {
@@ -132,6 +144,34 @@ export function AddDevicePanel({
     setForm((current) => ({
       ...current,
       virtual: { ...current.virtual, ...update },
+    }));
+  }
+
+  function addAdditionalAddress() {
+    setForm((current) => ({
+      ...current,
+      additionalAddresses: [...current.additionalAddresses, createEmptyDeviceAddressFormRow()],
+    }));
+  }
+
+  function updateAdditionalAddress(
+    index: number,
+    update: Partial<DeviceFormModel['additionalAddresses'][number]>,
+  ) {
+    setForm((current) => ({
+      ...current,
+      additionalAddresses: current.additionalAddresses.map((address, addressIndex) =>
+        addressIndex === index ? { ...address, ...update } : address,
+      ),
+    }));
+  }
+
+  function removeAdditionalAddress(index: number) {
+    setForm((current) => ({
+      ...current,
+      additionalAddresses: current.additionalAddresses.filter(
+        (_address, addressIndex) => addressIndex !== index,
+      ),
     }));
   }
 
@@ -214,12 +254,20 @@ export function AddDevicePanel({
     if (!mapContext) {
       return null;
     }
-    const address = normalizeDeviceLookupValue(payload.ip);
-    if (!address) {
+    const payloadAddresses = (payload.addresses ?? [{ address: payload.ip ?? '' }])
+      .map((address) => ({
+        raw: address.address,
+        normalized: normalizeDeviceLookupValue(address.address),
+      }))
+      .filter((address) => address.normalized !== '');
+    if (payloadAddresses.length === 0) {
       return null;
     }
-    const hasConflict = devices.some((device) => normalizeDeviceLookupValue(device.ip) === address);
-    return hasConflict ? duplicateMapDeviceAddressMessage(payload.ip ?? '') : null;
+    const existingAddresses = devices.flatMap(deviceAddressLookupValues);
+    const conflict = payloadAddresses.find((address) =>
+      existingAddresses.includes(address.normalized),
+    );
+    return conflict ? duplicateMapDeviceAddressMessage(conflict.raw) : null;
   }
 
   async function addDeviceToCurrentMap(deviceId: string) {
@@ -251,7 +299,9 @@ export function AddDevicePanel({
     }
 
     const lookupValues = new Set(
-      [payload.ip, payload.hostname].map(normalizeDeviceLookupValue).filter(Boolean),
+      [payload.ip, payload.hostname, ...(payload.addresses ?? []).map((address) => address.address)]
+        .map(normalizeDeviceLookupValue)
+        .filter(Boolean),
     );
     if (lookupValues.size === 0) {
       return 'not-handled';
@@ -260,7 +310,8 @@ export function AddDevicePanel({
     const existingDevice = (await fetchDevices()).find(
       (device) =>
         lookupValues.has(normalizeDeviceLookupValue(device.ip)) ||
-        lookupValues.has(normalizeDeviceLookupValue(device.hostname)),
+        lookupValues.has(normalizeDeviceLookupValue(device.hostname)) ||
+        deviceAddressLookupValues(device).some((address) => lookupValues.has(address)),
     );
     if (!existingDevice) {
       return 'not-handled';
@@ -320,6 +371,40 @@ export function AddDevicePanel({
       }
       return [...current, profileId];
     });
+  }
+
+  function validateAdditionalAddressRows(primaryAddress: string): Record<string, string> {
+    const errors: Record<string, string> = {};
+    const seen = new Set<string>();
+    const primary = normalizeDeviceLookupValue(primaryAddress);
+    if (primary) {
+      seen.add(primary);
+    }
+
+    form.additionalAddresses.forEach((address, index) => {
+      const probePortsErr = validateProbePorts(address.probePorts);
+      if (probePortsErr) {
+        errors[`additionalAddressProbePorts${index}`] = probePortsErr;
+      }
+
+      const trimmed = address.address.trim();
+      if (trimmed === '') {
+        return;
+      }
+      const validationError = validateIPOrHostname(trimmed);
+      if (validationError) {
+        errors[`additionalAddress${index}`] = validationError;
+        return;
+      }
+      const normalized = normalizeDeviceLookupValue(trimmed);
+      if (seen.has(normalized)) {
+        errors[`additionalAddress${index}`] = 'Duplicate device address';
+        return;
+      }
+      seen.add(normalized);
+    });
+
+    return errors;
   }
 
   async function assignSelectedCredentials(deviceId: string) {
@@ -393,6 +478,9 @@ export function AddDevicePanel({
     const errors: Record<string, string> = {};
     const hostnameErr = validateIPOrHostname(form.hostname.trim());
     if (hostnameErr) errors['hostname'] = hostnameErr;
+    const probePortsErr = validateProbePorts(form.probePorts);
+    if (probePortsErr) errors['probePorts'] = probePortsErr;
+    Object.assign(errors, validateAdditionalAddressRows(form.hostname.trim()));
     const displayNameErr = validateMaxLength(form.displayName, MAX_STRING_LENGTH, 'Display name');
     if (displayNameErr) errors['displayName'] = displayNameErr;
     if (usesPrometheus) {
@@ -644,6 +732,139 @@ export function AddDevicePanel({
             {fieldErrors['hostname'] && (
               <p className="mt-1 text-xs text-status-down">{fieldErrors['hostname']}</p>
             )}
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="probe-ports" className={labelClass}>
+              Probe ports
+            </label>
+            <input
+              id="probe-ports"
+              aria-label="Probe ports"
+              type="text"
+              value={form.probePorts}
+              onChange={(e) => {
+                updateForm({ probePorts: e.target.value });
+                setFieldError('probePorts', null);
+              }}
+              onBlur={handleBlur('probePorts', () => validateProbePorts(form.probePorts))}
+              placeholder="22,8291"
+              className={`${inputClass}${fieldErrors['probePorts'] ? ' border-status-down' : ''}`}
+            />
+            {fieldErrors['probePorts'] && (
+              <p className="mt-1 text-xs text-status-down">{fieldErrors['probePorts']}</p>
+            )}
+          </div>
+
+          <div className="space-y-3 rounded-lg bg-surface-high p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className={labelClass}>Additional addresses</p>
+              <button
+                type="button"
+                onClick={addAdditionalAddress}
+                className="rounded-lg bg-elevated px-3 py-1.5 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg"
+              >
+                Add address
+              </button>
+            </div>
+            {form.additionalAddresses.map((address, index) => (
+              <div
+                key={deviceAddressFormRowKey(address)}
+                data-testid={`additional-address-row-${index + 1}`}
+                className="space-y-3 rounded-lg bg-elevated p-3"
+              >
+                <div className="space-y-1">
+                  <span className="text-xs text-on-bg-secondary">Address</span>
+                  <input
+                    id={`additional-address-${index}`}
+                    aria-label={`Additional address ${index + 1}`}
+                    type="text"
+                    value={address.address}
+                    onChange={(e) => {
+                      updateAdditionalAddress(index, { address: e.target.value });
+                      setFieldError(`additionalAddress${index}`, null);
+                    }}
+                    onBlur={handleBlur(`additionalAddress${index}`, () => {
+                      const trimmed = address.address.trim();
+                      return trimmed ? validateIPOrHostname(trimmed) : null;
+                    })}
+                    placeholder="192.0.2.10 or oob-router"
+                    className={`${inputClass}${fieldErrors[`additionalAddress${index}`] ? ' border-status-down' : ''}`}
+                  />
+                  {fieldErrors[`additionalAddress${index}`] && (
+                    <p className="mt-1 text-xs text-status-down">
+                      {fieldErrors[`additionalAddress${index}`]}
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <span className="text-xs text-on-bg-secondary">Role</span>
+                    <select
+                      id={`additional-address-role-${index}`}
+                      aria-label={`Address role ${index + 1}`}
+                      value={address.role}
+                      onChange={(e) =>
+                        updateAdditionalAddress(index, {
+                          role: e.target.value as SecondaryDeviceAddressRole,
+                        })
+                      }
+                      className={selectClass}
+                    >
+                      <option value="management">Management</option>
+                      <option value="backup">Backup</option>
+                      <option value="monitoring">Monitoring</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-xs text-on-bg-secondary">Label</span>
+                    <input
+                      id={`additional-address-label-${index}`}
+                      aria-label={`Address label ${index + 1}`}
+                      type="text"
+                      value={address.label}
+                      onChange={(e) => updateAdditionalAddress(index, { label: e.target.value })}
+                      placeholder="OOB"
+                      className={inputClass}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-xs text-on-bg-secondary">Probe ports</span>
+                    <input
+                      id={`additional-address-probe-ports-${index}`}
+                      aria-label={`Address probe ports ${index + 1}`}
+                      type="text"
+                      value={address.probePorts}
+                      onChange={(e) => {
+                        updateAdditionalAddress(index, { probePorts: e.target.value });
+                        setFieldError(`additionalAddressProbePorts${index}`, null);
+                      }}
+                      onBlur={handleBlur(`additionalAddressProbePorts${index}`, () =>
+                        validateProbePorts(address.probePorts),
+                      )}
+                      placeholder="2222"
+                      className={`${inputClass}${fieldErrors[`additionalAddressProbePorts${index}`] ? ' border-status-down' : ''}`}
+                    />
+                    {fieldErrors[`additionalAddressProbePorts${index}`] && (
+                      <p className="mt-1 text-xs text-status-down">
+                        {fieldErrors[`additionalAddressProbePorts${index}`]}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => removeAdditionalAddress(index)}
+                      aria-label={`Remove address ${index + 1}`}
+                      className="rounded-lg bg-surface px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Metrics & Collection Mode */}

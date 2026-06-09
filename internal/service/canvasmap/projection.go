@@ -637,19 +637,36 @@ func MissingLinkIDs(existing []uuid.UUID, candidates []uuid.UUID) []uuid.UUID {
 // HasDuplicateDeviceAddress reports whether another map member already has the
 // device address being added.
 func HasDuplicateDeviceAddress(device domain.Device, existing []domain.Device) bool {
-	address := NormalizeDeviceAddress(device.IP)
-	if address == "" {
-		return false
-	}
+	return DuplicateDeviceAddress(device, existing) != ""
+}
+
+// DuplicateDeviceAddress returns the candidate address that conflicts with an
+// existing map member, or an empty string when no address collision exists.
+func DuplicateDeviceAddress(device domain.Device, existing []domain.Device) string {
+	candidateAddresses := domain.DeviceAddressValues(device)
 	for _, existingDevice := range existing {
 		if existingDevice.ID == device.ID {
 			continue
 		}
-		if NormalizeDeviceAddress(existingDevice.IP) == address {
-			return true
+		existingAddresses := make(map[string]struct{})
+		for _, existingAddress := range domain.DeviceAddressValues(existingDevice) {
+			normalizedExisting := NormalizeDeviceAddress(existingAddress)
+			if normalizedExisting == "" {
+				continue
+			}
+			existingAddresses[normalizedExisting] = struct{}{}
+		}
+		for _, candidateAddress := range candidateAddresses {
+			normalizedCandidate := NormalizeDeviceAddress(candidateAddress)
+			if normalizedCandidate == "" {
+				continue
+			}
+			if _, ok := existingAddresses[normalizedCandidate]; ok {
+				return strings.TrimSpace(candidateAddress)
+			}
 		}
 	}
-	return false
+	return ""
 }
 
 // NormalizeDeviceAddress canonicalizes device addresses before saved-map duplicate checks.

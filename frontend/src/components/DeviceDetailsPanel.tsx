@@ -2,7 +2,8 @@
  * Renders device details panel UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
+import type { DeviceAddressReachabilityResult } from '../api/client';
 import type { Device } from '../types/api';
 import { type DeviceMetricsDTO, formatUptime } from '../types/metrics';
 import { MaterialIcon } from './MaterialIcon';
@@ -11,6 +12,9 @@ interface DeviceDetailsPanelProps {
   device: Device;
   detailMetrics: DeviceMetricsDTO | null;
   interfaceStats?: ReactNode;
+  onCheckAddressReachability?: (deviceId: string) => Promise<DeviceAddressReachabilityResult[]>;
+  onPromoteAddress?: (addressId: string) => Promise<void>;
+  addressReachabilityState?: DeviceAddressReachabilityPanelState;
 }
 
 function formatEmpty(value: string | number | null | undefined): string {
@@ -48,6 +52,112 @@ function formatTimestamp(value: string | null | undefined): string {
     timeZone: 'UTC',
     timeZoneName: 'short',
   }).format(parsed);
+}
+
+function formatProbePorts(ports: number[] | null | undefined): string {
+  return ports && ports.length > 0 ? ports.join(', ') : '-';
+}
+
+export interface DeviceAddressReachabilityPanelState {
+  results: DeviceAddressReachabilityResult[];
+  loading: boolean;
+  error: string | null;
+}
+
+function portReachabilityLabel(result: DeviceAddressReachabilityResult | undefined): string {
+  if (!result) {
+    return '';
+  }
+
+  const ports = result.reachable_ports ?? [];
+  if (ports.length === 0) {
+    return result.reachable ? 'reachable' : 'unreachable';
+  }
+
+  const allReachable = ports.every((probe) => probe.reachable);
+  const allUnreachable = ports.every((probe) => !probe.reachable);
+
+  if (allReachable) {
+    return 'reachable';
+  }
+  if (allUnreachable) {
+    return 'unreachable';
+  }
+  return 'partially reachable';
+}
+
+function portReachabilityClass(result: DeviceAddressReachabilityResult | undefined): string {
+  if (!result) {
+    return 'text-on-bg-secondary';
+  }
+
+  const label = portReachabilityLabel(result);
+  if (label === 'reachable') {
+    return 'text-status-up';
+  }
+  if (label === 'unreachable') {
+    return 'text-status-down';
+  }
+  return 'text-warning';
+}
+
+function portReachabilityRows(
+  result: DeviceAddressReachabilityResult | undefined,
+): Array<{ port: number; status: string; reachable: boolean }> {
+  if (!result || result.reachable_ports.length === 0) {
+    return [];
+  }
+
+  return result.reachable_ports.map((probe) => ({
+    port: probe.port,
+    reachable: probe.reachable,
+    status: probe.reachable ? 'up' : 'down',
+  }));
+}
+
+function portStatusClass(reachable: boolean): string {
+  return reachable ? 'text-status-up' : 'text-status-down';
+}
+
+function portRowsForAddress(result: DeviceAddressReachabilityResult | undefined) {
+  const rows = portReachabilityRows(result);
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return rows.map((row) => (
+    <div
+      key={`${row.port}`}
+      className="flex items-center justify-between gap-3 text-xs text-on-bg-secondary"
+    >
+      <span>Port {row.port}</span>
+      <span className={`font-mono ${portStatusClass(row.reachable)}`}>{row.status}</span>
+    </div>
+  ));
+}
+
+function addressResultKey(result: DeviceAddressReachabilityResult): string {
+  return result.address_id || result.address;
+}
+
+function reachabilityStatus(
+  result: DeviceAddressReachabilityResult | undefined,
+  isProbing = false,
+): {
+  label: string;
+  className: string;
+} {
+  if (isProbing) {
+    return { label: 'probing', className: 'text-warning' };
+  }
+  if (!result) {
+    return { label: 'not checked', className: 'text-on-bg-secondary' };
+  }
+  return { label: portReachabilityLabel(result), className: portReachabilityClass(result) };
+}
+
+function actionErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Address action failed';
 }
 
 function DetailRow({
@@ -91,11 +201,101 @@ export function DeviceDetailsPanel({
   device,
   detailMetrics,
   interfaceStats,
+  onCheckAddressReachability,
+  onPromoteAddress,
+  addressReachabilityState,
 }: DeviceDetailsPanelProps) {
   const [interfacesExpanded, setInterfacesExpanded] = useState(false);
+  const [internalAddressReachability, setInternalAddressReachability] = useState<
+    DeviceAddressReachabilityResult[]
+  >([]);
+  const [internalAddressReachabilityLoading, setInternalAddressReachabilityLoading] =
+    useState(false);
+  const [promotingAddressId, setPromotingAddressId] = useState<string | null>(null);
+  const [internalAddressActionError, setInternalAddressActionError] = useState<string | null>(null);
+  const addressReachabilityRequestRef = useRef(0);
+  const addressPromotionRequestRef = useRef(0);
+  const isAddressReachabilityControlled = addressReachabilityState !== undefined;
+  const addressReachability = isAddressReachabilityControlled
+    ? addressReachabilityState.results
+    : internalAddressReachability;
+  const addressReachabilityLoading = isAddressReachabilityControlled
+    ? addressReachabilityState.loading
+    : internalAddressReachabilityLoading;
+  const addressReachabilityError = isAddressReachabilityControlled
+    ? addressReachabilityState.error
+    : null;
+  const addressActionError = internalAddressActionError ?? addressReachabilityError;
   const deviceLabel =
     device.tags?.display_name || device.sys_name || device.hostname || device.ip || device.id;
   const modelLabel = [device.vendor, device.hardware_model].filter(Boolean).join(' ');
+  const reachabilityByKey = new Map(
+    addressReachability.flatMap((result) => [
+      [addressResultKey(result), result],
+      [result.address, result],
+    ]),
+  );
+
+  useEffect(() => {
+    addressReachabilityRequestRef.current += 1;
+    addressPromotionRequestRef.current += 1;
+    if (!isAddressReachabilityControlled) {
+      setInternalAddressReachability([]);
+      setInternalAddressReachabilityLoading(false);
+    }
+    setInternalAddressActionError(null);
+    setPromotingAddressId(null);
+  }, [device.id]);
+
+  async function handleCheckAddressReachability() {
+    if (!onCheckAddressReachability) return;
+    const requestId = addressReachabilityRequestRef.current + 1;
+    addressReachabilityRequestRef.current = requestId;
+    setInternalAddressActionError(null);
+    if (!isAddressReachabilityControlled) {
+      setInternalAddressReachabilityLoading(true);
+      setInternalAddressReachability([]);
+    }
+    try {
+      const results = await onCheckAddressReachability(device.id);
+      if (addressReachabilityRequestRef.current === requestId) {
+        if (!isAddressReachabilityControlled) {
+          setInternalAddressReachability(results);
+        }
+      }
+    } catch (error) {
+      if (addressReachabilityRequestRef.current === requestId) {
+        if (!isAddressReachabilityControlled) {
+          setInternalAddressActionError(actionErrorMessage(error));
+        }
+      }
+    } finally {
+      if (addressReachabilityRequestRef.current === requestId) {
+        if (!isAddressReachabilityControlled) {
+          setInternalAddressReachabilityLoading(false);
+        }
+      }
+    }
+  }
+
+  async function handlePromoteAddress(addressId: string) {
+    if (!onPromoteAddress) return;
+    const requestId = addressPromotionRequestRef.current + 1;
+    addressPromotionRequestRef.current = requestId;
+    setInternalAddressActionError(null);
+    setPromotingAddressId(addressId);
+    try {
+      await onPromoteAddress(addressId);
+    } catch (error) {
+      if (addressPromotionRequestRef.current === requestId) {
+        setInternalAddressActionError(actionErrorMessage(error));
+      }
+    } finally {
+      if (addressPromotionRequestRef.current === requestId) {
+        setPromotingAddressId(null);
+      }
+    }
+  }
 
   return (
     <div className="space-y-5 p-4 transition-colors duration-200">
@@ -123,6 +323,80 @@ export function DeviceDetailsPanel({
           {device.notes?.trim() ? device.notes : 'No notes saved.'}
         </p>
       </div>
+
+      {device.addresses.length > 0 && (
+        <div className="space-y-3 rounded-lg bg-surface-high p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-medium uppercase text-on-bg-secondary">Addresses</p>
+            {onCheckAddressReachability && (
+              <button
+                type="button"
+                onClick={() => void handleCheckAddressReachability()}
+                disabled={addressReachabilityLoading}
+                className="rounded-md border border-outline-subtle px-2 py-1 text-xs text-on-bg-secondary transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {addressReachabilityLoading
+                  ? 'Checking address reachability'
+                  : 'Check address reachability'}
+              </button>
+            )}
+          </div>
+          {addressActionError && (
+            <p className="rounded-md border border-status-down/40 bg-status-down/10 px-2 py-1 text-xs text-status-down">
+              {addressActionError}
+            </p>
+          )}
+          <div className="space-y-2">
+            {device.addresses.map((address) => {
+              const key = address.id || address.address;
+              const result = reachabilityByKey.get(key) ?? reachabilityByKey.get(address.address);
+              const status = reachabilityStatus(result, addressReachabilityLoading);
+              const addressId = address.id || address.address;
+              return (
+                <div
+                  key={key}
+                  className="rounded-lg border border-outline-subtle bg-elevated px-3 py-2"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="break-all font-mono text-xs text-on-bg">{address.address}</p>
+                      <p className="mt-1 text-[11px] uppercase text-on-bg-secondary">
+                        {address.label || address.role || 'address'}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 text-xs font-medium ${status.className}`}>
+                      {status.label}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+                    <span className="text-on-bg-secondary">Ports</span>
+                    <span className="font-mono text-on-bg">
+                      {formatProbePorts(result?.probe_ports ?? address.probe_ports)}
+                    </span>
+                  </div>
+                  {!addressReachabilityLoading && portReachabilityRows(result).length > 0 && (
+                    <div className="mt-2 space-y-1 text-xs">{portRowsForAddress(result)}</div>
+                  )}
+                  {result?.error && (
+                    <p className="mt-2 break-words text-xs text-status-down">{result.error}</p>
+                  )}
+                  {!address.is_primary && onPromoteAddress && address.id && (
+                    <button
+                      type="button"
+                      aria-label={`Use ${address.address} as primary`}
+                      onClick={() => void handlePromoteAddress(address.id)}
+                      disabled={promotingAddressId === addressId}
+                      className="mt-2 rounded-md border border-outline-subtle px-2 py-1 text-xs text-on-bg-secondary transition-colors hover:bg-surface-high disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Use as primary
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-3" data-testid="device-detail-runtime">
         <div className="flex items-center justify-between">

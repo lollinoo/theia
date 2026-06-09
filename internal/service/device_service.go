@@ -28,6 +28,7 @@ type SNMPPollFunc func(target string, creds domain.SNMPCredentials, vendorName s
 
 type pollRescheduler interface {
 	ReduePerformanceTask(device domain.Device, changedAt time.Time)
+	RedueEssentialTask(device domain.Device, changedAt time.Time)
 	ReconcileDeviceTasks(device domain.Device, changedAt time.Time)
 }
 
@@ -43,6 +44,8 @@ type runtimeResetter interface {
 type DeviceUpdate struct {
 	Hostname              *string
 	IP                    *string
+	Addresses             *[]domain.DeviceAddress
+	ProbePorts            *[]int
 	Notes                 **string
 	Tags                  *map[string]string
 	SNMPCredentials       *domain.SNMPCredentials
@@ -63,6 +66,7 @@ type DeviceService struct {
 	linkRepo           domain.LinkRepository
 	topologyStore      topology.ObservationStore
 	settingsRepo       domain.SettingsRepository
+	networkProbe       func(context.Context, string, time.Duration, []int) error
 	mutation           *deviceMutationService
 	discovery          *deviceDiscoveryCoordinator
 	discoverFunc       DiscoverFunc
@@ -113,6 +117,7 @@ func NewDeviceService(
 		deviceRepo:      deviceRepo,
 		linkRepo:        linkRepo,
 		settingsRepo:    settingsRepo,
+		networkProbe:    ProbeTCPReachability,
 		discoverFunc:    discoverFunc,
 		now:             time.Now,
 		scheduleFunc:    func(delay time.Duration, fn func()) { time.AfterFunc(delay, fn) },
@@ -138,6 +143,15 @@ func NewDeviceService(
 		svc.delayedReprobe = svc.discovery.runDelayedReprobe
 	}
 	return svc
+}
+
+// WithNetworkReachabilityProbe overrides the TCP reachability probe used by diagnostics.
+func WithNetworkReachabilityProbe(probe func(context.Context, string, time.Duration, []int) error) DeviceServiceOption {
+	return func(s *DeviceService) {
+		if probe != nil {
+			s.networkProbe = probe
+		}
+	}
 }
 
 // WithLifecycleContext binds async device probes and delayed reprobes to a service parent context.
@@ -268,7 +282,28 @@ func (s *DeviceService) AddDevice(
 	areaIDs []uuid.UUID,
 	notes ...*string,
 ) (*domain.Device, error) {
-	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, notes...)
+	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, nil, nil, notes...)
+}
+
+// AddDeviceWithAddresses creates a device with an explicit address collection
+// while preserving AddDevice's legacy single-IP signature for existing callers.
+func (s *DeviceService) AddDeviceWithAddresses(
+	ctx context.Context,
+	ip, hostname string,
+	deviceType domain.DeviceType,
+	creds domain.SNMPCredentials,
+	tags map[string]string,
+	vendor string,
+	metricsSource domain.MetricsSource,
+	prometheusLabelName string,
+	prometheusLabelValue string,
+	topologyDiscoveryMode domain.TopologyDiscoveryMode,
+	areaIDs []uuid.UUID,
+	probePorts []int,
+	addresses []domain.DeviceAddress,
+	notes ...*string,
+) (*domain.Device, error) {
+	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, probePorts, addresses, notes...)
 }
 
 // probeDevice performs SNMP discovery and updates the device in the repository.

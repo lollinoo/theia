@@ -36,6 +36,7 @@ func newMockDeviceRepo() *mockDeviceRepo {
 func (r *mockDeviceRepo) Create(device *domain.Device) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	domain.NormalizeDeviceAddresses(device)
 	for _, existing := range r.devices {
 		if device.IP != "" && existing.IP == device.IP {
 			return fmt.Errorf("inserting device: UNIQUE constraint failed: devices.ip")
@@ -66,12 +67,55 @@ func (r *mockDeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, d := range r.devices {
-		if d.IP == ip {
+		if strings.EqualFold(strings.TrimSpace(d.IP), strings.TrimSpace(ip)) {
 			cp := *d
 			return &cp, nil
 		}
 	}
 	return nil, nil
+}
+
+func (r *mockDeviceRepo) GetByAddress(address string) (*domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	normalized := domain.NormalizeDeviceAddressValue(address)
+	if normalized == "" {
+		return nil, nil
+	}
+	for _, d := range r.devices {
+		for _, value := range domain.DeviceAddressValues(*d) {
+			if domain.NormalizeDeviceAddressValue(value) == normalized {
+				cp := *d
+				return &cp, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (r *mockDeviceRepo) GetDeviceAddresses(deviceID uuid.UUID) ([]domain.DeviceAddress, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.devices[deviceID]
+	if !ok {
+		return nil, fmt.Errorf("device not found: %s", deviceID)
+	}
+	return append([]domain.DeviceAddress(nil), d.Addresses...), nil
+}
+
+func (r *mockDeviceRepo) ReplaceDeviceAddresses(deviceID uuid.UUID, addresses []domain.DeviceAddress) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.devices[deviceID]
+	if !ok {
+		return fmt.Errorf("device not found: %s", deviceID)
+	}
+	cp := *d
+	cp.Addresses = append([]domain.DeviceAddress(nil), addresses...)
+	domain.NormalizeDeviceAddresses(&cp)
+	cp.UpdatedAt = time.Now().UTC()
+	r.devices[deviceID] = &cp
+	return nil
 }
 
 func (r *mockDeviceRepo) GetAll() ([]domain.Device, error) {
@@ -107,6 +151,30 @@ func (r *mockDeviceRepo) FindPhysicalVirtualIPConflict(ip string, deviceType dom
 	return nil, nil
 }
 
+func (r *mockDeviceRepo) FindAddressConflict(address string, deviceType domain.DeviceType, excludeID uuid.UUID) (*domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	normalized := domain.NormalizeDeviceAddressValue(address)
+	if normalized == "" || deviceType == domain.DeviceTypeVirtual {
+		return nil, nil
+	}
+	for _, d := range r.devices {
+		if excludeID != uuid.Nil && d.ID == excludeID {
+			continue
+		}
+		if d.DeviceType == domain.DeviceTypeVirtual {
+			continue
+		}
+		for _, value := range domain.DeviceAddressValues(*d) {
+			if domain.NormalizeDeviceAddressValue(value) == normalized {
+				cp := *d
+				return &cp, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
 func (r *mockDeviceRepo) GetOrphans() ([]domain.Device, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -130,6 +198,7 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 			return fmt.Errorf("updating device: UNIQUE constraint failed: devices.ip")
 		}
 	}
+	domain.NormalizeDeviceAddresses(device)
 	device.UpdatedAt = time.Now().UTC()
 	r.devices[device.ID] = device
 	return nil
@@ -463,6 +532,55 @@ func seedDevice(t *testing.T, repo *mockDeviceRepo) *domain.Device {
 
 func intPtr(v int) *int { return &v }
 
+func responseAddresses(t *testing.T, attrs map[string]interface{}) []map[string]interface{} {
+	t.Helper()
+	raw, ok := attrs["addresses"].([]interface{})
+	if !ok {
+		t.Fatalf("expected addresses array in attributes, got %#v", attrs["addresses"])
+	}
+	addresses := make([]map[string]interface{}, 0, len(raw))
+	for i, item := range raw {
+		record, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("addresses[%d] = %#v, want object", i, item)
+		}
+		addresses = append(addresses, record)
+	}
+	return addresses
+}
+
+func responseIntArray(t *testing.T, value interface{}) []int {
+	t.Helper()
+	raw, ok := value.([]interface{})
+	if !ok {
+		t.Fatalf("expected JSON array, got %#v", value)
+	}
+	result := make([]int, 0, len(raw))
+	for i, item := range raw {
+		number, ok := item.(float64)
+		if !ok {
+			t.Fatalf("expected JSON number at index %d, got %#v", i, item)
+		}
+		if number != float64(int(number)) {
+			t.Fatalf("expected integer JSON number at index %d, got %#v", i, number)
+		}
+		result = append(result, int(number))
+	}
+	return result
+}
+
+func assertIntSliceEqual(t *testing.T, got []int, want []int) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %#v, want %#v", got, want)
+		}
+	}
+}
+
 // --- DeviceHandler tests ---
 
 func TestDeviceHandlerList(t *testing.T) {
@@ -534,6 +652,101 @@ func TestDeviceHandlerList_IncludesPollClassificationFields(t *testing.T) {
 	}
 }
 
+func TestDeviceHandlerAddressReachability_ReturnsPerAddressResults(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	if err := settingsRepo.Set(domain.SettingNetworkProbePorts, "8291"); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	primaryID := uuid.New()
+	managementID := uuid.New()
+	device := &domain.Device{
+		ID:         deviceID,
+		IP:         "192.0.2.20",
+		Hostname:   "edge-router",
+		ProbePorts: []int{22, 443},
+		Addresses: []domain.DeviceAddress{
+			{
+				ID:         primaryID,
+				Address:    "192.0.2.20",
+				Role:       domain.DeviceAddressRolePrimary,
+				IsPrimary:  true,
+				ProbePorts: []int{2222},
+			},
+			{
+				ID:      managementID,
+				Address: "198.51.100.20",
+				Label:   "mgmt",
+				Role:    domain.DeviceAddressRoleManagement,
+			},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	svc := service.NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil, service.WithNetworkReachabilityProbe(
+		func(_ context.Context, _ string, _ time.Duration, _ []int) error {
+			return nil
+		},
+	))
+	handler := NewDeviceHandler(svc, credentialProfileRepo, buildTestVendorRegistry())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID.String()+"/addresses/reachability", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleAddressReachability(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data []struct {
+			AddressID      string `json:"address_id"`
+			Address        string `json:"address"`
+			Role           string `json:"role"`
+			Label          string `json:"label"`
+			IsPrimary      bool   `json:"is_primary"`
+			ProbePorts     []int  `json:"probe_ports"`
+			ReachablePorts []struct {
+				Port      int    `json:"port"`
+				Reachable bool   `json:"reachable"`
+				Error     string `json:"error"`
+			} `json:"reachable_ports"`
+			Reachable bool   `json:"reachable"`
+			Error     string `json:"error"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Data) != 2 {
+		t.Fatalf("data len = %d, want 2: %#v", len(resp.Data), resp.Data)
+	}
+	if resp.Data[0].AddressID != primaryID.String() || resp.Data[0].Address != "192.0.2.20" {
+		t.Fatalf("primary address result = %#v", resp.Data[0])
+	}
+	if resp.Data[0].Role != "primary" || !resp.Data[0].IsPrimary || !resp.Data[0].Reachable || resp.Data[0].Error != "" {
+		t.Fatalf("primary reachability result = %#v", resp.Data[0])
+	}
+	assertIntSliceEqual(t, []int{resp.Data[0].ReachablePorts[0].Port}, []int{2222})
+	assertIntSliceEqual(t, resp.Data[0].ProbePorts, []int{2222})
+	if resp.Data[1].AddressID != managementID.String() || resp.Data[1].Address != "198.51.100.20" {
+		t.Fatalf("management address result = %#v", resp.Data[1])
+	}
+	if resp.Data[1].Role != "management" || resp.Data[1].Label != "mgmt" || !resp.Data[1].Reachable || resp.Data[1].Error != "" {
+		t.Fatalf("management reachability result = %#v", resp.Data[1])
+	}
+	if len(resp.Data[1].ReachablePorts) != 2 {
+		t.Fatalf("management reachable_ports length = %d, want 2", len(resp.Data[1].ReachablePorts))
+	}
+	assertIntSliceEqual(t, resp.Data[1].ProbePorts, []int{22, 443})
+}
+
 func TestDeviceHandlerCreate_HappyPath(t *testing.T) {
 	handler, _, _ := newTestDeviceHandler(t)
 
@@ -552,6 +765,130 @@ func TestDeviceHandlerCreate_HappyPath(t *testing.T) {
 	}
 	if resp.Data.Type != "device" {
 		t.Fatalf("expected resource type 'device', got %q", resp.Data.Type)
+	}
+}
+
+func TestDeviceHandlerCreate_LegacyIPReturnsAddresses(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.30.0.1","hostname":"router-addresses","snmp":{"version":"2c","community":"public"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	addresses := responseAddresses(t, resp.Data.Attributes)
+	if len(addresses) != 1 {
+		t.Fatalf("addresses len = %d, want 1: %#v", len(addresses), addresses)
+	}
+	if addresses[0]["address"] != "10.30.0.1" || addresses[0]["role"] != "primary" || addresses[0]["is_primary"] != true {
+		t.Fatalf("primary address response = %#v", addresses[0])
+	}
+}
+
+func TestDeviceHandlerCreate_AddressesWithoutIPDerivesPrimary(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"hostname":"router-derived","snmp":{"version":"2c","community":"public"},"addresses":[{"address":"10.31.0.1","role":"management","is_primary":true},{"address":"198.51.100.31","role":"backup","label":"backup link"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp.Data.Attributes["ip"]; got != "10.31.0.1" {
+		t.Fatalf("ip = %#v, want derived primary", got)
+	}
+	addresses := responseAddresses(t, resp.Data.Attributes)
+	if len(addresses) != 2 {
+		t.Fatalf("addresses len = %d, want 2: %#v", len(addresses), addresses)
+	}
+	if addresses[1]["address"] != "198.51.100.31" || addresses[1]["role"] != "backup" {
+		t.Fatalf("backup address response = %#v", addresses[1])
+	}
+}
+
+func TestDeviceHandlerCreate_ProbePortsRoundTrip(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.34.0.1","hostname":"router-probe-ports","probe_ports":[22,8291],"snmp":{"version":"2c","community":"public"},"addresses":[{"address":"10.34.0.1","role":"primary","is_primary":true},{"address":"198.51.100.34","role":"backup","label":"backup link","probe_ports":[2222]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	assertIntSliceEqual(t, responseIntArray(t, resp.Data.Attributes["probe_ports"]), []int{22, 8291})
+	addresses := responseAddresses(t, resp.Data.Attributes)
+	if len(addresses) != 2 {
+		t.Fatalf("addresses len = %d, want 2: %#v", len(addresses), addresses)
+	}
+	assertIntSliceEqual(t, responseIntArray(t, addresses[1]["probe_ports"]), []int{2222})
+}
+
+func TestDeviceHandlerCreate_InvalidProbePortsRejected(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.34.0.2","hostname":"router-bad-probe-ports","probe_ports":[0],"snmp":{"version":"2c","community":"public"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(rec.Body.String()), "probe_ports") {
+		t.Fatalf("expected probe_ports error, got: %s", rec.Body.String())
+	}
+}
+
+func TestDeviceHandlerCreate_AddressesDuplicateValidation(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.32.0.1","snmp":{"version":"2c","community":"public"},"addresses":[{"address":"10.32.0.1","role":"primary","is_primary":true},{"address":" 10.32.0.1 ","role":"backup"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(rec.Body.String()), "duplicate address") {
+		t.Fatalf("expected duplicate address error, got: %s", rec.Body.String())
+	}
+}
+
+func TestDeviceHandlerCreate_AddressInvalidValidation(t *testing.T) {
+	handler, _, _ := newTestDeviceHandler(t)
+
+	body := `{"ip":"10.33.0.1","snmp":{"version":"2c","community":"public"},"addresses":[{"address":"not valid!!","role":"backup"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "address must be a valid IP address or hostname") {
+		t.Fatalf("expected invalid address error, got: %s", rec.Body.String())
 	}
 }
 
@@ -704,6 +1041,112 @@ func TestDeviceHandlerUpdate_AreaID(t *testing.T) {
 	}
 	if gotAreaIDs[0] != areaID {
 		t.Errorf("area_ids[0] = %q, want %q", gotAreaIDs[0], areaID)
+	}
+}
+
+func TestDeviceHandlerUpdate_ReplacesAddresses(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, repo)
+
+	body := `{"addresses":[{"address":"10.0.0.1","role":"primary","is_primary":true},{"address":"198.51.100.40","role":"backup","label":"backup"}]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device.ID.String(), strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	addresses := responseAddresses(t, resp.Data.Attributes)
+	if len(addresses) != 2 {
+		t.Fatalf("addresses len = %d, want 2: %#v", len(addresses), addresses)
+	}
+	if addresses[1]["address"] != "198.51.100.40" || addresses[1]["role"] != "backup" {
+		t.Fatalf("backup address response = %#v", addresses[1])
+	}
+}
+
+func TestDeviceHandlerUpdate_OmittedProbePortsPreservesOverride(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, repo)
+	device.ProbePorts = []int{22, 8291}
+	if err := repo.Update(device); err != nil {
+		t.Fatalf("Update seed failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device.ID.String(), strings.NewReader(`{"hostname":"renamed-router"}`))
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	updated, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	assertIntSliceEqual(t, updated.ProbePorts, []int{22, 8291})
+}
+
+func TestDeviceHandlerUpdate_NullProbePortsClearsOverride(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, repo)
+	device.ProbePorts = []int{22, 8291}
+	if err := repo.Update(device); err != nil {
+		t.Fatalf("Update seed failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device.ID.String(), strings.NewReader(`{"probe_ports":null}`))
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp jsonAPISingle
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp.Data.Attributes["probe_ports"]; got != nil {
+		t.Fatalf("probe_ports = %#v, want nil", got)
+	}
+	updated, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if len(updated.ProbePorts) != 0 {
+		t.Fatalf("ProbePorts = %#v, want empty", updated.ProbePorts)
+	}
+}
+
+func TestDeviceHandlerUpdate_EmptyProbePortsClearsOverride(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+	device := seedDevice(t, repo)
+	device.ProbePorts = []int{22, 8291}
+	if err := repo.Update(device); err != nil {
+		t.Fatalf("Update seed failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device.ID.String(), strings.NewReader(`{"probe_ports":[]}`))
+	rec := httptest.NewRecorder()
+
+	handler.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	updated, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if len(updated.ProbePorts) != 0 {
+		t.Fatalf("ProbePorts = %#v, want empty", updated.ProbePorts)
 	}
 }
 
@@ -1911,6 +2354,50 @@ func TestHandleBatchAdd_ValidRowsPersistBatchOnlyFields(t *testing.T) {
 		t.Fatalf("expected virtual metrics_source to normalize to %q, got %q", domain.MetricsSourceNone, virtual.MetricsSource)
 	}
 	assertDeviceAreaIDs(t, virtual, []uuid.UUID{virtualAreaID})
+}
+
+func TestHandleBatchAdd_ProbePortsPersist(t *testing.T) {
+	handler, repo, _ := newTestDeviceHandler(t)
+
+	body := `{"devices":[
+		{
+			"ip":"10.20.1.1",
+			"hostname":"batch-probe-ports",
+			"probe_ports":[22,8291],
+			"addresses":[
+				{"address":"10.20.1.1","role":"primary","is_primary":true},
+				{"address":"198.51.100.201","role":"backup","label":"backup","probe_ports":[2222]}
+			],
+			"snmp":{"version":"2c","community":"public"}
+		}
+	]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/batch", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.HandleBatchAdd(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	resp := decodeBatchAddTestResponse(t, rec.Body.String())
+	if len(resp.Failures) != 0 {
+		t.Fatalf("expected 0 failures, got %d: %+v", len(resp.Failures), resp.Failures)
+	}
+	device, err := repo.GetByIP("10.20.1.1")
+	if err != nil {
+		t.Fatalf("GetByIP failed: %v", err)
+	}
+	if device == nil {
+		t.Fatal("expected batch device to be stored")
+	}
+	assertIntSliceEqual(t, device.ProbePorts, []int{22, 8291})
+	addresses, err := repo.GetDeviceAddresses(device.ID)
+	if err != nil {
+		t.Fatalf("GetDeviceAddresses failed: %v", err)
+	}
+	if len(addresses) != 2 {
+		t.Fatalf("addresses len = %d, want 2: %#v", len(addresses), addresses)
+	}
+	assertIntSliceEqual(t, addresses[1].ProbePorts, []int{2222})
 }
 
 func TestHandleBatchAdd_MixedRowsPreserveDiagnosticsAndCreateOnlyValidRows(t *testing.T) {

@@ -44,6 +44,7 @@ describe('deviceFormModels', () => {
     expect(form.mode).toBe('physical');
     expect(form.prometheus.labelName).toBe('instance');
     expect(form.virtual.subtype).toBe('internet');
+    expect(form.additionalAddresses).toEqual([]);
   });
 
   it('initializes edit state from the current device without reusing the raw DTO as mutable state', () => {
@@ -59,6 +60,74 @@ describe('deviceFormModels', () => {
     expect(form.notes).toBe('rack A');
     expect(form.metricsMode).toBe('prometheus_snmp_fallback');
     expect(form.areaIds).toEqual(['area-1']);
+  });
+
+  it('initializes additional address rows from non-primary device addresses', () => {
+    const form = createDeviceConfigFormModel(
+      mockDevice({
+        probe_ports: [22, 8291],
+        addresses: [
+          {
+            id: 'addr-primary',
+            device_id: 'dev-1',
+            address: '10.0.0.1',
+            label: '',
+            role: 'primary',
+            is_primary: true,
+            priority: 0,
+            probe_ports: null,
+          },
+          {
+            id: 'addr-backup',
+            device_id: 'dev-1',
+            address: '192.0.2.10',
+            label: 'OOB',
+            role: 'backup',
+            is_primary: false,
+            priority: 10,
+            probe_ports: [2222],
+          },
+        ],
+      }),
+      false,
+    );
+
+    expect(form.probePorts).toBe('22,8291');
+    expect(form.additionalAddresses).toEqual([
+      {
+        formId: expect.stringMatching(/^device-address-row-/),
+        address: '192.0.2.10',
+        role: 'backup',
+        label: 'OOB',
+        probePorts: '2222',
+      },
+    ]);
+  });
+
+  it('keeps edit address row form IDs stable when row labels change locally', () => {
+    const form = createDeviceConfigFormModel(
+      mockDevice({
+        addresses: [
+          {
+            id: 'addr-backup',
+            device_id: 'dev-1',
+            address: '192.0.2.10',
+            label: 'OOB',
+            role: 'backup',
+            is_primary: false,
+            priority: 10,
+            probe_ports: null,
+          },
+        ],
+      }),
+      false,
+    );
+
+    const [row] = form.additionalAddresses;
+    const editedRow = { ...row, label: 'OOB uplink' };
+
+    expect(row.formId).toMatch(/^device-address-row-/);
+    expect(editedRow.formId).toBe(row.formId);
   });
 
   it('does not inherit add-form v2c community defaults into edit state', () => {
@@ -81,6 +150,7 @@ describe('deviceFormModels', () => {
     expect(next.mode).toBe('virtual');
     expect(next.hostname).toBe('');
     expect(next.prometheus.labelValue).toBe('');
+    expect(next.additionalAddresses).toEqual([]);
   });
 
   it('applies revealed SNMP profile credentials to add-device state', () => {

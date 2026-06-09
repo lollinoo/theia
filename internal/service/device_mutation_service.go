@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +54,8 @@ func (m *deviceMutationService) AddDevice(
 	prometheusLabelValue string,
 	topologyDiscoveryMode domain.TopologyDiscoveryMode,
 	areaIDs []uuid.UUID,
+	probePorts []int,
+	addresses []domain.DeviceAddress,
 	notes ...*string,
 ) (*domain.Device, error) {
 	_ = ctx
@@ -90,6 +93,10 @@ func (m *deviceMutationService) AddDevice(
 	}
 	pollingEnabled := true
 	pollIntervalOverride := initialPollIntervalOverride(m.settingsRepo, deviceType)
+	normalizedProbePorts, err := domain.NormalizeProbePorts(probePorts)
+	if err != nil {
+		return nil, err
+	}
 
 	device := &domain.Device{
 		ID:                     uuid.New(),
@@ -111,13 +118,16 @@ func (m *deviceMutationService) AddDevice(
 		TopologyDiscoveryMode:  topologyDiscoveryMode,
 		TopologyBootstrapState: domain.TopologyBootstrapStateIdle,
 		AreaIDs:                areaIDs,
+		ProbePorts:             normalizedProbePorts,
+		Addresses:              append([]domain.DeviceAddress(nil), addresses...),
 	}
+	domain.NormalizeDeviceAddresses(device)
 	device.TopologyDiscoveryMode = domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
 	if domain.ResolveTopologyDiscoveryMode(device, m.parent.defaultTopologyDiscoveryMode()) == domain.TopologyDiscoveryModeBootstrapOnce {
 		device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
 	}
 	domain.NormalizeVirtualDevice(device)
-	if err := m.ensureNoPhysicalVirtualIPConflict(*device, uuid.Nil); err != nil {
+	if err := m.ensureNoDeviceAddressConflicts(*device, uuid.Nil); err != nil {
 		return nil, err
 	}
 
@@ -153,6 +163,8 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 		return fmt.Errorf("getting device: %w", err)
 	}
 	previousIP := device.IP
+	previousAddresses := append([]domain.DeviceAddress(nil), device.Addresses...)
+	previousProbePorts := append([]int(nil), device.ProbePorts...)
 	previousOverride := clonePollIntervalOverride(device.PollIntervalOverride)
 	previousPollingEnabled := domain.DevicePollingEnabled(*device)
 	defaultTopologyMode := m.parent.defaultTopologyDiscoveryMode()
@@ -166,6 +178,19 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	}
 	if update.IP != nil {
 		device.IP = *update.IP
+		if strings.TrimSpace(*update.IP) == "" && update.Addresses == nil {
+			device.Addresses = nil
+		}
+	}
+	if update.Addresses != nil {
+		device.Addresses = append([]domain.DeviceAddress(nil), (*update.Addresses)...)
+	}
+	if update.ProbePorts != nil {
+		probePorts, err := domain.NormalizeProbePorts(*update.ProbePorts)
+		if err != nil {
+			return err
+		}
+		device.ProbePorts = probePorts
 	}
 	if update.Notes != nil {
 		device.Notes = domain.NormalizeDeviceNotes(*update.Notes)
@@ -224,7 +249,8 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	}
 	domain.NormalizeDevicePollingEnabled(device)
 	domain.NormalizeVirtualDevice(device)
-	if err := m.ensureNoPhysicalVirtualIPConflict(*device, device.ID); err != nil {
+	domain.NormalizeDeviceAddresses(device)
+	if err := m.ensureNoDeviceAddressConflicts(*device, device.ID); err != nil {
 		return err
 	}
 
@@ -234,19 +260,27 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 
 	changedAt := m.now().UTC()
 	ipChanged := update.IP != nil && previousIP != device.IP
-	if ipChanged {
+	probePortsChanged := !slices.Equal(previousProbePorts, device.ProbePorts)
+	addressesChanged := update.Addresses != nil && !domain.DeviceAddressesEqual(previousAddresses, device.Addresses)
+	if ipChanged || addressesChanged || probePortsChanged {
 		if resetter := *m.runtimeResetter; resetter != nil {
 			resetter.ResetDeviceRuntime(device.ID)
 		}
 	}
 
 	if rescheduler := *m.pollRescheduler; rescheduler != nil {
-		if update.PollingEnabled != nil && previousPollingEnabled != domain.DevicePollingEnabled(*device) {
+		needsReconcile := update.PollingEnabled != nil && previousPollingEnabled != domain.DevicePollingEnabled(*device)
+		if probePortsChanged {
+			needsReconcile = true
+		}
+		if needsReconcile {
 			rescheduler.ReconcileDeviceTasks(*device, changedAt)
 		}
 		pollIntervalChanged := update.PollIntervalOverride != nil && !pollIntervalOverridesEqual(previousOverride, device.PollIntervalOverride)
-		if (ipChanged || pollIntervalChanged) && domain.DevicePollingEnabled(*device) {
+		if (ipChanged || addressesChanged || pollIntervalChanged || probePortsChanged) &&
+			domain.DevicePollingEnabled(*device) {
 			rescheduler.ReduePerformanceTask(*device, changedAt)
+			rescheduler.RedueEssentialTask(*device, changedAt)
 		}
 	}
 
@@ -268,6 +302,33 @@ func (m *deviceMutationService) ensureNoPhysicalVirtualIPConflict(candidate doma
 	}
 	if conflict != nil {
 		return fmt.Errorf("device IP conflict: %s is already used by a %s device", address, conflict.DeviceType)
+	}
+	return nil
+}
+
+func (m *deviceMutationService) ensureNoDeviceAddressConflicts(candidate domain.Device, excludeID uuid.UUID) error {
+	if err := m.ensureNoPhysicalVirtualIPConflict(candidate, excludeID); err != nil {
+		return err
+	}
+
+	seen := make(map[string]struct{}, len(candidate.Addresses)+1)
+	for _, address := range domain.DeviceAddressValues(candidate) {
+		normalized := domain.NormalizeDeviceAddressValue(address)
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+
+		conflict, err := m.deviceRepo.FindAddressConflict(address, candidate.DeviceType, excludeID)
+		if err != nil {
+			return fmt.Errorf("checking device address conflict: %w", err)
+		}
+		if conflict != nil {
+			return fmt.Errorf("device address conflict: %s is already used by device %s", strings.TrimSpace(address), conflict.ID)
+		}
 	}
 	return nil
 }

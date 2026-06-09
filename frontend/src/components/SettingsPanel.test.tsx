@@ -265,6 +265,75 @@ describe('SettingsPanel (COMP-05)', () => {
   });
 });
 
+describe('SettingsPanel — default network probe ports', () => {
+  beforeEach(async () => {
+    const { fetchSettingsWithMetadata, updateSetting } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockClear();
+    (updateSetting as ReturnType<typeof vi.fn>).mockClear();
+  });
+
+  it('loads network_probe_ports from settings into the default probe ports input', async () => {
+    const { fetchSettingsWithMetadata } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {
+        network_probe_ports: '22,8291,80,443',
+      },
+      secrets: {},
+    });
+
+    await renderSettingsPanel();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Default network probe ports')).toHaveValue('22,8291,80,443');
+    });
+  });
+
+  it('saves normalized default network probe ports on blur', async () => {
+    const { fetchSettingsWithMetadata, updateSetting } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {
+        network_probe_ports: '22,8291,80,443',
+      },
+      secrets: {},
+    });
+
+    await renderSettingsPanel();
+    const input = await screen.findByLabelText('Default network probe ports');
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '22,443' } });
+      fireEvent.blur(input);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(updateSetting).toHaveBeenCalledWith('network_probe_ports', '22,443');
+    });
+  });
+
+  it('rejects invalid default network probe ports without saving', async () => {
+    const { fetchSettingsWithMetadata, updateSetting } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {
+        network_probe_ports: '22,8291,80,443',
+      },
+      secrets: {},
+    });
+
+    await renderSettingsPanel();
+    const input = await screen.findByLabelText('Default network probe ports');
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '0,443' } });
+      fireEvent.blur(input);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('Ports must be between 1 and 65535')).toBeInTheDocument();
+    expect(updateSetting).not.toHaveBeenCalledWith('network_probe_ports', '0,443');
+  });
+});
+
 describe('SettingsPanel — Prometheus URL validation on blur', () => {
   it('shows error text when Prometheus URL is blurred with an invalid value', async () => {
     await renderSettingsPanel();

@@ -3,8 +3,15 @@
  * Documents how canonical topology data is projected into the interactive view layer.
  */
 import type { ReactFlowInstance } from '@xyflow/react';
+import { useRef, useState } from 'react';
 
-import { fetchDevices } from '../../api/client';
+import {
+  checkDeviceAddressReachability,
+  type DeviceAddressPayload,
+  type DeviceAddressReachabilityResult,
+  fetchDevices,
+  updateDevice,
+} from '../../api/client';
 import type { Area, Device, Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import { AddDevicePanel } from '../AddDevicePanel';
@@ -12,7 +19,10 @@ import { AlertsPanel } from '../AlertsPanel';
 import { BulkEditPanel } from '../BulkEditPanel';
 import type { DeviceNode } from '../DeviceCard';
 import { DeviceConfigPanel } from '../DeviceConfigPanel';
-import { DeviceDetailsPanel } from '../DeviceDetailsPanel';
+import {
+  type DeviceAddressReachabilityPanelState,
+  DeviceDetailsPanel,
+} from '../DeviceDetailsPanel';
 import {
   resolveDeviceMonitoringState,
   sanitizeDeviceMetricsForDisplay,
@@ -35,6 +45,20 @@ function sameAreaIds(first: string[] = [], second: string[] = []): boolean {
   const sortedFirst = [...first].sort();
   const sortedSecond = [...second].sort();
   return sortedFirst.every((value, index) => value === sortedSecond[index]);
+}
+
+function buildPromotedAddressPayloads(device: Device, addressId: string): DeviceAddressPayload[] {
+  return device.addresses.map((address) => {
+    const promoted = address.id === addressId;
+    return {
+      address: address.address,
+      label: address.label,
+      role: promoted ? 'primary' : address.is_primary ? 'other' : address.role,
+      is_primary: promoted,
+      priority: promoted ? 0 : address.priority,
+      probe_ports: address.probe_ports,
+    };
+  });
 }
 
 interface CanvasPanelsProps {
@@ -77,6 +101,55 @@ export function CanvasPanels({
   onSettingsChange,
   onWinBoxAvailabilityChange,
 }: CanvasPanelsProps) {
+  const [addressReachabilityByDevice, setAddressReachabilityByDevice] = useState<
+    Map<string, DeviceAddressReachabilityPanelState>
+  >(new Map());
+  const addressReachabilityRequestRef = useRef(new Map<string, number>());
+
+  function actionErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : 'Address action failed';
+  }
+
+  function updateAddressReachabilityState(
+    deviceId: string,
+    patch: Partial<DeviceAddressReachabilityPanelState>,
+  ) {
+    setAddressReachabilityByDevice((prev) => {
+      const next = new Map(prev);
+      const current = prev.get(deviceId) ?? { results: [], loading: false, error: null };
+      next.set(deviceId, { ...current, ...patch });
+      return next;
+    });
+  }
+
+  async function handleCheckAddressReachability(
+    deviceId: string,
+  ): Promise<DeviceAddressReachabilityResult[]> {
+    const requestId = (addressReachabilityRequestRef.current.get(deviceId) ?? 0) + 1;
+    addressReachabilityRequestRef.current.set(deviceId, requestId);
+    updateAddressReachabilityState(deviceId, { loading: true, error: null });
+
+    try {
+      const results = await checkDeviceAddressReachability(deviceId);
+      if (addressReachabilityRequestRef.current.get(deviceId) !== requestId) {
+        return [];
+      }
+
+      updateAddressReachabilityState(deviceId, { loading: false, results, error: null });
+      return results;
+    } catch (error) {
+      if (addressReachabilityRequestRef.current.get(deviceId) !== requestId) {
+        return [];
+      }
+
+      updateAddressReachabilityState(deviceId, {
+        loading: false,
+        error: actionErrorMessage(error),
+      });
+      return Promise.reject(error);
+    }
+  }
+
   return (
     <>
       {panelContent?.type === 'interfaceStats' &&
@@ -111,10 +184,22 @@ export function CanvasPanels({
             ? devices.find((candidate) => candidate.id === data.deviceId)
             : undefined;
           if (!device) return null;
+          const addressReachabilityState = addressReachabilityByDevice.get(device.id);
           return (
             <DeviceDetailsPanel
               device={device}
               detailMetrics={runtimeState.devicesById.get(device.id)?.metrics ?? null}
+              onCheckAddressReachability={handleCheckAddressReachability}
+              addressReachabilityState={addressReachabilityState}
+              onPromoteAddress={async (addressId) => {
+                const address = device.addresses.find((candidate) => candidate.id === addressId);
+                if (!address) return;
+                await updateDevice(device.id, {
+                  ip: address.address,
+                  addresses: buildPromotedAddressPayloads(device, addressId),
+                });
+                await loadTopology(true);
+              }}
               interfaceStats={
                 device.device_type !== 'virtual' ? (
                   <DeviceInterfaceStatsPanelRoute

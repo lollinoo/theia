@@ -8,6 +8,7 @@ import {
   type CreateDevicePayload,
   cancelInstanceBackup,
   changePassword,
+  checkDeviceAddressReachability,
   createAdminPasswordReset,
   createAdminUser,
   createBridgeLaunchRequest,
@@ -659,6 +660,33 @@ describe('createDevice', () => {
     expect(url).toBe('/api/v1/devices');
     expect(options.method).toBe('POST');
     expect(JSON.parse(options.body)).toEqual(payload);
+  });
+
+  it('sends device and address probe_ports in create payloads', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: deviceResource('uuid-2', 'new-router', '10.0.0.2'),
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const payloadWithProbePorts: CreateDevicePayload = {
+      ...payload,
+      probe_ports: [22, 8291],
+      addresses: [
+        {
+          address: '10.0.0.2',
+          role: 'primary',
+          is_primary: true,
+          probe_ports: [22],
+        },
+      ],
+    };
+
+    await createDevice(payloadWithProbePorts);
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body)).toEqual(payloadWithProbePorts);
   });
 
   it('throws on validation error', async () => {
@@ -1644,6 +1672,39 @@ describe('updateDevice', () => {
       topology_discovery_mode: 'bootstrap_once',
     });
   });
+
+  it('sends device and address probe_ports in update payloads', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: deviceResource('uuid-1', 'router-01', '10.0.0.1'),
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateDevice('uuid-1', {
+      probe_ports: [22, 8291],
+      addresses: [
+        {
+          address: '10.0.0.1',
+          role: 'primary',
+          is_primary: true,
+          probe_ports: [22],
+        },
+      ],
+    });
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      probe_ports: [22, 8291],
+      addresses: [
+        {
+          address: '10.0.0.1',
+          role: 'primary',
+          is_primary: true,
+          probe_ports: [22],
+        },
+      ],
+    });
+  });
 });
 
 describe('runTopologyDiscovery', () => {
@@ -1659,6 +1720,86 @@ describe('runTopologyDiscovery', () => {
     const [url, options] = fetchMock.mock.calls[0];
     expect(url).toBe('/api/v1/devices/uuid-1/topology-discovery');
     expect(options.method).toBe('POST');
+  });
+});
+
+describe('checkDeviceAddressReachability', () => {
+  it('posts to the device address reachability endpoint and returns address results', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: [
+          {
+            address_id: 'addr-1',
+            address: '10.0.0.1',
+            role: 'primary',
+            label: 'Primary',
+            is_primary: true,
+            probe_ports: [22],
+            reachable_ports: [{ port: 22, reachable: true, error: '' }],
+            reachable: true,
+            error: '',
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await checkDeviceAddressReachability('dev-1');
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        address: '10.0.0.1',
+        reachable: true,
+        probe_ports: [22],
+      }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/devices/dev-1/addresses/reachability');
+    expect(options.method).toBe('POST');
+  });
+
+  it('filters invalid address reachability results and falls back to an empty array', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        mockResponse({
+          data: [
+            {
+              address_id: 'addr-1',
+              address: '10.0.0.1',
+              role: 'primary',
+              label: 'Primary',
+              is_primary: true,
+              probe_ports: [22],
+              reachable_ports: [{ port: 22, reachable: true, error: '' }],
+              reachable: true,
+              error: '',
+            },
+            {
+              address_id: 'addr-2',
+              address: '198.51.100.10',
+              role: 'backup',
+              label: 'Backup',
+              is_primary: false,
+              probe_ports: ['2222'],
+              reachable_ports: [],
+              reachable: false,
+              error: 'invalid port shape',
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockResponse({ data: null }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(checkDeviceAddressReachability('dev-1')).resolves.toEqual([
+      expect.objectContaining({
+        address_id: 'addr-1',
+        probe_ports: [22],
+      }),
+    ]);
+    await expect(checkDeviceAddressReachability('dev-1')).resolves.toEqual([]);
   });
 });
 

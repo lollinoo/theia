@@ -54,8 +54,8 @@ func PlanAddDeviceMembership(
 		}, nil
 	}
 
-	if HasDuplicateDeviceAddress(device, memberDevices) {
-		return AddDeviceMembershipPlan{}, DuplicateDeviceAddressError{Address: device.IP}
+	if address := DuplicateDeviceAddress(device, memberDevices); address != "" {
+		return AddDeviceMembershipPlan{}, DuplicateDeviceAddressError{Address: address}
 	}
 
 	linkIDs := []uuid.UUID{}

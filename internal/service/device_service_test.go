@@ -42,6 +42,7 @@ func (r *mockDeviceRepo) Create(device *domain.Device) error {
 	if device.ID == uuid.Nil {
 		device.ID = uuid.New()
 	}
+	domain.NormalizeDeviceAddresses(device)
 	now := time.Now().UTC()
 	device.CreatedAt = now
 	device.UpdatedAt = now
@@ -64,12 +65,55 @@ func (r *mockDeviceRepo) GetByIP(ip string) (*domain.Device, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, d := range r.devices {
-		if d.IP == ip {
+		if strings.EqualFold(strings.TrimSpace(d.IP), strings.TrimSpace(ip)) {
 			cp := *d
 			return &cp, nil
 		}
 	}
 	return nil, nil
+}
+
+func (r *mockDeviceRepo) GetByAddress(address string) (*domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	normalized := domain.NormalizeDeviceAddressValue(address)
+	if normalized == "" {
+		return nil, nil
+	}
+	for _, d := range r.devices {
+		for _, value := range domain.DeviceAddressValues(*d) {
+			if domain.NormalizeDeviceAddressValue(value) == normalized {
+				cp := *d
+				return &cp, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (r *mockDeviceRepo) GetDeviceAddresses(deviceID uuid.UUID) ([]domain.DeviceAddress, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.devices[deviceID]
+	if !ok {
+		return nil, fmt.Errorf("device not found: %s", deviceID)
+	}
+	return append([]domain.DeviceAddress(nil), d.Addresses...), nil
+}
+
+func (r *mockDeviceRepo) ReplaceDeviceAddresses(deviceID uuid.UUID, addresses []domain.DeviceAddress) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.devices[deviceID]
+	if !ok {
+		return fmt.Errorf("device not found: %s", deviceID)
+	}
+	cp := *d
+	cp.Addresses = append([]domain.DeviceAddress(nil), addresses...)
+	domain.NormalizeDeviceAddresses(&cp)
+	cp.UpdatedAt = time.Now().UTC()
+	r.devices[deviceID] = &cp
+	return nil
 }
 
 func (r *mockDeviceRepo) GetAll() ([]domain.Device, error) {
@@ -104,6 +148,30 @@ func (r *mockDeviceRepo) FindPhysicalVirtualIPConflict(ip string, deviceType dom
 		if (d.DeviceType == domain.DeviceTypeVirtual) != candidateVirtual {
 			cp := *d
 			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *mockDeviceRepo) FindAddressConflict(address string, deviceType domain.DeviceType, excludeID uuid.UUID) (*domain.Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	normalized := domain.NormalizeDeviceAddressValue(address)
+	if normalized == "" || deviceType == domain.DeviceTypeVirtual {
+		return nil, nil
+	}
+	for _, d := range r.devices {
+		if excludeID != uuid.Nil && d.ID == excludeID {
+			continue
+		}
+		if d.DeviceType == domain.DeviceTypeVirtual {
+			continue
+		}
+		for _, value := range domain.DeviceAddressValues(*d) {
+			if domain.NormalizeDeviceAddressValue(value) == normalized {
+				cp := *d
+				return &cp, nil
+			}
 		}
 	}
 	return nil, nil
@@ -156,6 +224,7 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 			return err
 		}
 	}
+	domain.NormalizeDeviceAddresses(device)
 	device.UpdatedAt = time.Now().UTC()
 	r.devices[device.ID] = device
 	return nil
@@ -412,6 +481,7 @@ func newTestService(snmpResult *snmp.DiscoveryResult, snmpErr error) (*DeviceSer
 
 type fakePollRescheduler struct {
 	calls          []pollRescheduleCall
+	essentialCalls []pollRescheduleCall
 	reconcileCalls []pollReconcileCall
 }
 
@@ -431,6 +501,13 @@ type pollReconcileCall struct {
 
 func (f *fakePollRescheduler) ReduePerformanceTask(device domain.Device, changedAt time.Time) {
 	f.calls = append(f.calls, pollRescheduleCall{
+		device:    device,
+		changedAt: changedAt,
+	})
+}
+
+func (f *fakePollRescheduler) RedueEssentialTask(device domain.Device, changedAt time.Time) {
+	f.essentialCalls = append(f.essentialCalls, pollRescheduleCall{
 		device:    device,
 		changedAt: changedAt,
 	})
@@ -1086,6 +1163,96 @@ func TestDeviceDiscoveryCoordinatorTestSNMPUsesTopologyOff(t *testing.T) {
 	}
 	if seenMode != domain.TopologyDiscoveryModeOff {
 		t.Fatalf("expected TestSNMP to force topology mode off, got %s", seenMode)
+	}
+}
+
+func TestDeviceDiscoveryCoordinatorTestSNMPUsesManagementAddress(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	var seenTarget string
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		seenTarget = target
+		return &snmp.DiscoveryResult{SysName: "agg-1", SysDescr: "SwitchOS"}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	device := &domain.Device{
+		ID:            uuid.New(),
+		IP:            "10.0.0.21",
+		Hostname:      "agg-1",
+		Managed:       true,
+		Status:        domain.DeviceStatusUp,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.0.0.21", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "10.0.0.22", Role: domain.DeviceAddressRoleManagement},
+		},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	result, err := svc.discovery.TestSNMP(context.Background(), device.ID)
+	if err != nil {
+		t.Fatalf("TestSNMP failed: %v", err)
+	}
+	if !result.Success {
+		t.Fatal("expected SNMP test to succeed")
+	}
+	if seenTarget != "10.0.0.22" {
+		t.Fatalf("SNMP target = %q, want management address", seenTarget)
+	}
+	if result.TargetIP != "10.0.0.22" {
+		t.Fatalf("result target = %q, want management address", result.TargetIP)
+	}
+}
+
+func TestDeviceDiscoveryCoordinatorProbeUsesManagementAddress(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	var seenTarget string
+	discoverFn := func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		seenTarget = target
+		return &snmp.DiscoveryResult{SysName: "agg-1", SysDescr: "SwitchOS"}, nil
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	device := &domain.Device{
+		ID:            uuid.New(),
+		IP:            "10.0.0.31",
+		Hostname:      "agg-probe",
+		Managed:       true,
+		Status:        domain.DeviceStatusUp,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.0.0.31", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "10.0.0.32", Role: domain.DeviceAddressRoleManagement},
+		},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := svc.ProbeDevice(context.Background(), device.ID); err != nil {
+		t.Fatalf("ProbeDevice failed: %v", err)
+	}
+	svc.WaitForProbes()
+	if seenTarget != "10.0.0.32" {
+		t.Fatalf("probe target = %q, want management address", seenTarget)
 	}
 }
 
@@ -2421,6 +2588,344 @@ func TestUpdateDevice_IPChangeResetsRuntimeState(t *testing.T) {
 	}
 	if resetter.deviceIDs[0] != device.ID {
 		t.Fatalf("runtime reset device ID = %s, want %s", resetter.deviceIDs[0], device.ID)
+	}
+}
+
+func TestUpdateDevice_ProbePortsChangeResetsRuntimeState(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	resetter := &recordingRuntimeResetter{}
+	svc.SetRuntimeResetter(resetter)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "10.0.0.3",
+		Hostname:   "router-probe-reset",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		PollClass:  domain.PollClassCore,
+		ProbePorts: []int{22, 443},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	newProbePorts := []int{22, 8291}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		ProbePorts: &newProbePorts,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(resetter.deviceIDs); got != 1 {
+		t.Fatalf("runtime reset call count = %d, want 1", got)
+	}
+	if resetter.deviceIDs[0] != device.ID {
+		t.Fatalf("runtime reset device ID = %s, want %s", resetter.deviceIDs[0], device.ID)
+	}
+}
+
+func TestUpdateDevice_ProbePortsChangeTriggersSchedulerRedue(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "10.0.0.4",
+		Hostname:   "router-probe-redue",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		PollClass:  domain.PollClassCore,
+		ProbePorts: []int{22, 443},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	newProbePorts := []int{22, 8291}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		ProbePorts: &newProbePorts,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(rescheduler.calls); got != 1 {
+		t.Fatalf("redue call count = %d, want 1", got)
+	}
+	if rescheduler.calls[0].device.ID != device.ID {
+		t.Fatalf("rescheduled device ID = %q, want %s", rescheduler.calls[0].device.ID, device.ID)
+	}
+	if rescheduler.calls[0].device.ProbePorts == nil ||
+		len(rescheduler.calls[0].device.ProbePorts) != 2 ||
+		rescheduler.calls[0].device.ProbePorts[1] != 8291 {
+		t.Fatalf("rescheduled probe ports = %#v, want [22, 8291]", rescheduler.calls[0].device.ProbePorts)
+	}
+}
+
+func TestUpdateDevice_ProbePortsChangeTriggersEssentialRedue(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "10.0.0.4",
+		Hostname:   "router-probe-essential",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		PollClass:  domain.PollClassCore,
+		ProbePorts: []int{22, 443},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	newProbePorts := []int{22, 8291}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		ProbePorts: &newProbePorts,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(rescheduler.essentialCalls); got != 1 {
+		t.Fatalf("essential redue call count = %d, want 1", got)
+	}
+	if rescheduler.essentialCalls[0].device.ID != device.ID {
+		t.Fatalf("essential redue device ID = %q, want %s", rescheduler.essentialCalls[0].device.ID, device.ID)
+	}
+	if rescheduler.essentialCalls[0].device.ProbePorts == nil ||
+		len(rescheduler.essentialCalls[0].device.ProbePorts) != 2 ||
+		rescheduler.essentialCalls[0].device.ProbePorts[1] != 8291 {
+		t.Fatalf("essential redue probe ports = %#v, want [22, 8291]", rescheduler.essentialCalls[0].device.ProbePorts)
+	}
+}
+
+func TestUpdateDevice_ProbePortsChangeReconcilesScheduler(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "10.0.0.4",
+		Hostname:   "router-probe-reconcile",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		PollClass:  domain.PollClassCore,
+		ProbePorts: []int{22, 443},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	newProbePorts := []int{22, 8291}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		ProbePorts: &newProbePorts,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(rescheduler.reconcileCalls); got != 1 {
+		t.Fatalf("reconcile call count = %d, want 1", got)
+	}
+	if rescheduler.reconcileCalls[0].device.ID != device.ID {
+		t.Fatalf("reconciled device ID = %q, want %s", rescheduler.reconcileCalls[0].device.ID, device.ID)
+	}
+	if rescheduler.reconcileCalls[0].device.ProbePorts == nil ||
+		len(rescheduler.reconcileCalls[0].device.ProbePorts) != 2 ||
+		rescheduler.reconcileCalls[0].device.ProbePorts[1] != 8291 {
+		t.Fatalf("reconciled probe ports = %#v, want [22, 8291]", rescheduler.reconcileCalls[0].device.ProbePorts)
+	}
+}
+
+func TestUpdateDevice_AddressProbePortsChangeTriggersSchedulerRedue(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	rescheduler := &fakePollRescheduler{}
+	svc.SetPollRescheduler(rescheduler)
+
+	device := &domain.Device{
+		ID:        uuid.New(),
+		IP:        "10.0.0.5",
+		Hostname:  "router-address-ports-redue",
+		Managed:   true,
+		Status:    domain.DeviceStatusUp,
+		PollClass: domain.PollClassCore,
+		Addresses: []domain.DeviceAddress{
+			{
+				Address:    "10.0.0.5",
+				Label:      "primary",
+				Role:       domain.DeviceAddressRolePrimary,
+				IsPrimary:  true,
+				Priority:   0,
+				ProbePorts: []int{22},
+			},
+			{
+				Address:    "192.0.2.5",
+				Label:      "backup",
+				Role:       domain.DeviceAddressRoleBackup,
+				IsPrimary:  false,
+				Priority:   10,
+				ProbePorts: []int{2222},
+			},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	updated := []domain.DeviceAddress{
+		{
+			Address:    "10.0.0.5",
+			Label:      "primary",
+			Role:       domain.DeviceAddressRolePrimary,
+			IsPrimary:  true,
+			Priority:   0,
+			ProbePorts: []int{22},
+		},
+		{
+			Address:    "192.0.2.5",
+			Label:      "backup",
+			Role:       domain.DeviceAddressRoleBackup,
+			IsPrimary:  false,
+			Priority:   10,
+			ProbePorts: []int{2223},
+		},
+	}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{
+		Addresses: &updated,
+	}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	if got := len(rescheduler.calls); got != 1 {
+		t.Fatalf("redue call count = %d, want 1", got)
+	}
+}
+
+func TestAddDeviceWithAddressesNormalizesPrimaryAddress(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+
+	device, err := svc.AddDeviceWithAddresses(
+		context.Background(),
+		"10.20.0.1",
+		"router-address-create",
+		domain.DeviceTypeRouter,
+		domain.SNMPCredentials{},
+		map[string]string{},
+		"default",
+		domain.MetricsSourcePrometheus,
+		"instance",
+		"",
+		domain.TopologyDiscoveryModeInherit,
+		nil,
+		nil,
+		[]domain.DeviceAddress{
+			{Address: "198.51.100.20", Role: domain.DeviceAddressRoleBackup, Label: "backup", Priority: 10},
+		},
+	)
+	if err != nil {
+		t.Fatalf("AddDeviceWithAddresses failed: %v", err)
+	}
+	svc.WaitForProbes()
+
+	stored, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if stored.IP != "10.20.0.1" {
+		t.Fatalf("stored IP = %q, want primary legacy IP", stored.IP)
+	}
+	if got := domain.BackupAddress(*stored); got != "198.51.100.20" {
+		t.Fatalf("BackupAddress = %q, want backup address", got)
+	}
+}
+
+func TestUpdateDeviceReplacesAddressesAndTriggersRuntimeWork(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+	resetter := &recordingRuntimeResetter{}
+	rescheduler := &fakePollRescheduler{}
+	svc.SetRuntimeResetter(resetter)
+	svc.SetPollRescheduler(rescheduler)
+
+	device := &domain.Device{
+		ID:        uuid.New(),
+		IP:        "10.21.0.1",
+		Hostname:  "router-address-update",
+		Managed:   true,
+		Status:    domain.DeviceStatusUp,
+		PollClass: domain.PollClassCore,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	addresses := []domain.DeviceAddress{
+		{Address: "10.21.0.1", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+		{Address: "198.51.100.21", Role: domain.DeviceAddressRoleBackup, Label: "backup"},
+	}
+	if err := svc.UpdateDevice(context.Background(), device.ID, DeviceUpdate{Addresses: &addresses}); err != nil {
+		t.Fatalf("UpdateDevice failed: %v", err)
+	}
+
+	updated, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if got := domain.BackupAddress(*updated); got != "198.51.100.21" {
+		t.Fatalf("BackupAddress = %q, want updated backup address", got)
+	}
+	if got := len(resetter.deviceIDs); got != 1 {
+		t.Fatalf("runtime reset calls = %d, want 1", got)
+	}
+	if got := len(rescheduler.calls); got != 1 {
+		t.Fatalf("reschedule calls = %d, want 1", got)
+	}
+}
+
+func TestUpdateDeviceRejectsDuplicateSecondaryAddress(t *testing.T) {
+	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{}, nil)
+
+	existing := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "10.22.0.1",
+		Hostname:   "router-address-owner",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		DeviceType: domain.DeviceTypeRouter,
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.22.0.1", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "198.51.100.22", Role: domain.DeviceAddressRoleBackup},
+		},
+	}
+	if err := deviceRepo.Create(existing); err != nil {
+		t.Fatalf("Create existing failed: %v", err)
+	}
+	candidate := &domain.Device{
+		ID:         uuid.New(),
+		IP:         "10.22.0.2",
+		Hostname:   "router-address-candidate",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		DeviceType: domain.DeviceTypeRouter,
+	}
+	if err := deviceRepo.Create(candidate); err != nil {
+		t.Fatalf("Create candidate failed: %v", err)
+	}
+
+	addresses := []domain.DeviceAddress{
+		{Address: "10.22.0.2", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+		{Address: "198.51.100.22", Role: domain.DeviceAddressRoleBackup},
+	}
+	err := svc.UpdateDevice(context.Background(), candidate.ID, DeviceUpdate{Addresses: &addresses})
+	if err == nil {
+		t.Fatal("expected duplicate secondary address error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "address conflict") {
+		t.Fatalf("duplicate address error = %v, want address conflict", err)
 	}
 }
 

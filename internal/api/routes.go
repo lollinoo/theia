@@ -465,6 +465,7 @@ var apiRouteSpecs = []apiRouteSpec{
 	protectedRoute("device probe", "/api/v1/devices/{deviceID}/probe", "/api/v1/devices/", routeHandlerDeviceItem, routeMiddlewareNormalJSON, postPolicy(domain.PermissionDevicesUpdate)),
 	protectedRoute("device snmp test", "/api/v1/devices/{deviceID}/snmp-test", "/api/v1/devices/", routeHandlerDeviceItem, routeMiddlewareNormalJSON, postPolicy(domain.PermissionDevicesUpdate)),
 	protectedRoute("device topology discovery", "/api/v1/devices/{deviceID}/topology-discovery", "/api/v1/devices/", routeHandlerDeviceItem, routeMiddlewareNormalJSON, postPolicy(domain.PermissionTopologyUpdate)),
+	protectedRoute("device address reachability", "/api/v1/devices/{deviceID}/addresses/reachability", "/api/v1/devices/", routeHandlerDeviceItem, routeMiddlewareNormalJSON, postPolicy(domain.PermissionDevicesUpdate)),
 	protectedRoute("device ssh credential test", "/api/v1/devices/{deviceID}/ssh-credentials/test", "/api/v1/devices/", routeHandlerDeviceItem, routeMiddlewareNormalJSON, postPolicy(domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate)),
 	protectedRoute("device", "/api/v1/devices/{deviceID}", "/api/v1/devices/", routeHandlerDeviceItem, routeMiddlewareNormalJSON, policy(
 		methodPolicy(http.MethodGet, domain.PermissionDevicesRead),

@@ -41,9 +41,37 @@ import {
 } from './settings-panel/settingsConstants';
 import { controlClass, fieldLabelClass } from './settings-panel/settingsPanelStyles';
 
+const DEFAULT_NETWORK_PROBE_PORTS = '22,8291,80,443';
+
 /** Props for the admin settings container; changes notify parents that runtime config may need refresh. */
 interface SettingsPanelProps {
   onSettingsChange?: (changed?: { timezone?: string }) => void;
+}
+
+function normalizeNetworkProbePorts(value: string): { value: string; error: string | null } {
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return { value: '', error: 'Ports must be between 1 and 65535' };
+  }
+
+  const ports: number[] = [];
+  const seen = new Set<number>();
+  for (const part of trimmed.split(',')) {
+    const segment = part.trim();
+    if (!/^\d+$/.test(segment)) {
+      return { value: '', error: 'Ports must be between 1 and 65535' };
+    }
+    const port = Number(segment);
+    if (port < 1 || port > 65535) {
+      return { value: '', error: 'Ports must be between 1 and 65535' };
+    }
+    if (!seen.has(port)) {
+      seen.add(port);
+      ports.push(port);
+    }
+  }
+
+  return { value: ports.join(','), error: null };
 }
 
 /**
@@ -53,11 +81,13 @@ interface SettingsPanelProps {
 export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [pollingValue, setPollingValue] = useState('60');
   const [customPolling, setCustomPolling] = useState('');
+  const [networkProbePorts, setNetworkProbePorts] = useState(DEFAULT_NETWORK_PROBE_PORTS);
   const [prometheusUrl, setPrometheusUrl] = useState('');
   const [timezone, setTimezone] = useState('UTC');
   const [topologyDiscoveryDefaultMode, setTopologyDiscoveryDefaultMode] =
     useState<TopologyDiscoveryMode>('lldp_cdp');
   const [savedPolling, setSavedPolling] = useState(false);
+  const [savedNetworkProbePorts, setSavedNetworkProbePorts] = useState(false);
   const [savedPrometheus, setSavedPrometheus] = useState(false);
   const [savedTimezone, setSavedTimezone] = useState(false);
   const [savedTopologyDiscovery, setSavedTopologyDiscovery] = useState(false);
@@ -80,6 +110,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const pollingTimerRef = useRef<number | null>(null);
   const prometheusTimerRef = useRef<number | null>(null);
   const savedPollingTimerRef = useRef<number | null>(null);
+  const savedNetworkProbePortsTimerRef = useRef<number | null>(null);
   const savedPrometheusTimerRef = useRef<number | null>(null);
   const savedTimezoneTimerRef = useRef<number | null>(null);
   const savedTopologyDiscoveryTimerRef = useRef<number | null>(null);
@@ -104,6 +135,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           setPollingValue('custom');
           setCustomPolling(interval);
         }
+        setNetworkProbePorts(settings['network_probe_ports'] ?? DEFAULT_NETWORK_PROBE_PORTS);
         setPrometheusUrl(settings['prometheus_url'] ?? '');
         setTimezone(settings['timezone'] || 'UTC');
         setTopologyDiscoveryDefaultMode(
@@ -291,6 +323,24 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     schedulePollingUpdate(value);
   }
 
+  function handleNetworkProbePortsChange(value: string) {
+    setNetworkProbePorts(value);
+    setFieldError('networkProbePorts', null);
+  }
+
+  function handleNetworkProbePortsBlur() {
+    const normalized = normalizeNetworkProbePorts(networkProbePorts);
+    if (normalized.error) {
+      setFieldError('networkProbePorts', normalized.error);
+      return;
+    }
+    setFieldError('networkProbePorts', null);
+    setNetworkProbePorts(normalized.value);
+    void updateSetting('network_probe_ports', normalized.value).then(() =>
+      showSaved(setSavedNetworkProbePorts, savedNetworkProbePortsTimerRef),
+    );
+  }
+
   /** Reports custom polling validation on blur without changing the debounced save contract. */
   function handleCustomPollingBlur() {
     const trimmed = customPolling.trim();
@@ -354,8 +404,11 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           <PollingSettingsSection
             pollingValue={pollingValue}
             customPolling={customPolling}
+            networkProbePorts={networkProbePorts}
             savedPolling={savedPolling}
+            savedNetworkProbePorts={savedNetworkProbePorts}
             customPollingError={fieldErrors.customPolling}
+            networkProbePortsError={fieldErrors.networkProbePorts}
             workerSectionOpen={workerSectionOpen}
             workerSettings={workerSettings}
             savedWorkerSettings={savedWorkerSettings}
@@ -363,6 +416,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
             onPollingPresetChange={handlePollingPresetChange}
             onCustomPollingChange={handleCustomPollingChange}
             onCustomPollingBlur={handleCustomPollingBlur}
+            onNetworkProbePortsChange={handleNetworkProbePortsChange}
+            onNetworkProbePortsBlur={handleNetworkProbePortsBlur}
             onWorkerSectionToggle={() => setWorkerSectionOpen((prev) => !prev)}
             onWorkerSettingChange={handleWorkerSettingChange}
             onWorkerSettingBlur={handleWorkerSettingBlur}

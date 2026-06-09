@@ -250,6 +250,36 @@ func TestDuplicateDeviceAddressDetectsExistingMemberAddress(t *testing.T) {
 	}
 }
 
+func TestDuplicateDeviceAddressDetectsAnyKnownAddress(t *testing.T) {
+	newID := uuid.New()
+	otherID := uuid.New()
+
+	duplicate := HasDuplicateDeviceAddress(
+		domain.Device{
+			ID: newID,
+			IP: "10.50.0.10",
+			Addresses: []domain.DeviceAddress{
+				{Address: "10.50.0.10", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+				{Address: "198.51.100.50", Role: domain.DeviceAddressRoleBackup},
+			},
+		},
+		[]domain.Device{
+			{
+				ID: otherID,
+				IP: "10.50.0.20",
+				Addresses: []domain.DeviceAddress{
+					{Address: "10.50.0.20", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+					{Address: " 198.51.100.50 ", Role: domain.DeviceAddressRoleManagement},
+				},
+			},
+		},
+	)
+
+	if !duplicate {
+		t.Fatal("HasDuplicateDeviceAddress() = false, want true for secondary address collision")
+	}
+}
+
 func TestDuplicateDeviceAddressMessagePreservesHTTPErrorText(t *testing.T) {
 	if got, want := DuplicateDeviceAddressMessage(" Router.EXAMPLE.com "), `a device with IP/host "Router.EXAMPLE.com" already exists in this map`; got != want {
 		t.Fatalf("DuplicateDeviceAddressMessage() = %q, want %q", got, want)

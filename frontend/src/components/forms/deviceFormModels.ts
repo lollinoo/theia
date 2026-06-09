@@ -2,10 +2,45 @@
  * Renders device form models UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import type { Device, SNMPProfile } from '../../types/api';
+import type { Device, DeviceAddressRole, SNMPProfile } from '../../types/api';
 
 /** Defines default virtual node color constants and helper contracts for the UI component boundary. */
 export const defaultVirtualNodeColor = '#00E676';
+
+/** SecondaryDeviceAddressRole excludes primary because the form keeps the primary value in ip. */
+export type SecondaryDeviceAddressRole = Exclude<DeviceAddressRole, 'primary'>;
+
+/** DeviceAddressFormRow stores one non-primary editable device address row. */
+export interface DeviceAddressFormRow {
+  formId?: string;
+  address: string;
+  role: SecondaryDeviceAddressRole;
+  label: string;
+  probePorts: string;
+}
+
+let nextDeviceAddressFormRowID = 0;
+
+/** Creates a stable local render key for editable device address rows. */
+export function createDeviceAddressFormRowID(): string {
+  nextDeviceAddressFormRowID += 1;
+  return `device-address-row-${nextDeviceAddressFormRowID}`;
+}
+
+/** Creates a blank additional address row with a stable local render key. */
+export function createEmptyDeviceAddressFormRow(): DeviceAddressFormRow {
+  return {
+    formId: createDeviceAddressFormRowID(),
+    address: '',
+    role: 'management',
+    label: '',
+    probePorts: '',
+  };
+}
+
+function formatProbePorts(ports: number[] | null | undefined): string {
+  return (ports ?? []).join(',');
+}
 
 /** Normalizes virtual node color for the UI component boundary. */
 export function normalizeVirtualNodeColor(color: string): string {
@@ -21,6 +56,8 @@ export interface DeviceFormModel {
   mode: 'physical' | 'virtual';
   hostname: string;
   ip: string;
+  probePorts: string;
+  additionalAddresses: DeviceAddressFormRow[];
   displayName: string;
   notes: string;
   vendor: string;
@@ -53,6 +90,8 @@ export function createAddDeviceFormModel(): DeviceFormModel {
     mode: 'physical',
     hostname: '',
     ip: '',
+    probePorts: '',
+    additionalAddresses: [],
     displayName: '',
     notes: '',
     vendor: '',
@@ -87,6 +126,16 @@ export function createDeviceConfigFormModel(device: Device, isVirtual: boolean):
     mode: isVirtual ? 'virtual' : 'physical',
     hostname: device.hostname,
     ip: device.ip,
+    probePorts: formatProbePorts(device.probe_ports),
+    additionalAddresses: (device.addresses ?? [])
+      .filter((address) => !address.is_primary && address.role !== 'primary')
+      .map((address) => ({
+        formId: createDeviceAddressFormRowID(),
+        address: address.address,
+        role: address.role === 'primary' ? 'other' : address.role,
+        label: address.label,
+        probePorts: formatProbePorts(address.probe_ports),
+      })),
     displayName: device.tags?.display_name ?? '',
     notes: device.notes ?? '',
     vendor: device.vendor ?? '',

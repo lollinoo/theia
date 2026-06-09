@@ -5,6 +5,7 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -59,6 +60,117 @@ type assertiveError string
 
 func (e assertiveError) Error() string { return string(e) }
 
+func TestEssentialCollectorUsesConfiguredNetworkProbePorts(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return &scriptedEssentialClient{connectErr: assertiveError("timeout")}, nil
+	})
+	var capturedPorts []int
+	collector.networkProbe = func(_ context.Context, _ string, _ time.Duration, ports []int) error {
+		capturedPorts = append(capturedPorts, ports...)
+		return nil
+	}
+
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.1"}, time.Second, 0, []int{2222})
+
+	if result.NetworkReachable != polling.TriStateTrue {
+		t.Fatalf("NetworkReachable = %q, want true", result.NetworkReachable)
+	}
+	if !reflect.DeepEqual(capturedPorts, []int{2222}) {
+		t.Fatalf("probe ports = %v, want [2222]", capturedPorts)
+	}
+}
+
+func TestEssentialCollectorUsesConfiguredMultiPortProbeList(t *testing.T) {
+	client := &scriptedEssentialClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysUpTime: {
+				{Name: snmp.OidSysUpTime, Value: uint32(12000)},
+			},
+			".1.3.6.1.4.1.9999.1.0": {
+				{Name: ".1.3.6.1.4.1.9999.1.0", Value: int(12)},
+			},
+			".1.3.6.1.4.1.9999.2.0": {
+				{Name: ".1.3.6.1.4.1.9999.2.0", Value: int(30)},
+			},
+			".1.3.6.1.4.1.9999.3.0": {
+				{Name: ".1.3.6.1.4.1.9999.3.0", Value: int(60)},
+			},
+		},
+	}
+	collector := NewEssentialCollector(essentialTestRegistry(t, vendor.PerformanceOIDs{
+		CPUOID:         ".1.3.6.1.4.1.9999.1.0",
+		MemoryUsedOID:  ".1.3.6.1.4.1.9999.2.0",
+		MemoryTotalOID: ".1.3.6.1.4.1.9999.3.0",
+	}), func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+	var capturedPorts []int
+	collector.networkProbe = func(_ context.Context, _ string, _ time.Duration, ports []int) error {
+		capturedPorts = append(capturedPorts, ports...)
+		return nil
+	}
+
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.2"}, time.Second, 0, []int{22, 8291, 443})
+
+	if result.NetworkReachable != polling.TriStateTrue {
+		t.Fatalf("NetworkReachable = %q, want true", result.NetworkReachable)
+	}
+	if result.SNMPReachable != polling.TriStateTrue {
+		t.Fatalf("SNMPReachable = %q, want true", result.SNMPReachable)
+	}
+	if !reflect.DeepEqual(capturedPorts, []int{22, 8291, 443}) {
+		t.Fatalf("probe ports = %v, want [22, 8291, 443]", capturedPorts)
+	}
+}
+
+func TestEssentialCollectorConfiguredMultiPortProbeListFailsWhenAllPortsClosed(t *testing.T) {
+	client := &scriptedEssentialClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysUpTime: {
+				{Name: snmp.OidSysUpTime, Value: uint32(12000)},
+			},
+			".1.3.6.1.4.1.9999.1.0": {
+				{Name: ".1.3.6.1.4.1.9999.1.0", Value: int(12)},
+			},
+			".1.3.6.1.4.1.9999.2.0": {
+				{Name: ".1.3.6.1.4.1.9999.2.0", Value: int(30)},
+			},
+			".1.3.6.1.4.1.9999.3.0": {
+				{Name: ".1.3.6.1.4.1.9999.3.0", Value: int(60)},
+			},
+		},
+	}
+	collector := NewEssentialCollector(essentialTestRegistry(t, vendor.PerformanceOIDs{
+		CPUOID:         ".1.3.6.1.4.1.9999.1.0",
+		MemoryUsedOID:  ".1.3.6.1.4.1.9999.2.0",
+		MemoryTotalOID: ".1.3.6.1.4.1.9999.3.0",
+	}), func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+	var capturedPorts []int
+	collector.networkProbe = func(_ context.Context, _ string, _ time.Duration, ports []int) error {
+		capturedPorts = append(capturedPorts, ports...)
+		return assertiveError("tcp probe failed")
+	}
+
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.3"}, time.Second, 0, []int{22, 8291, 443})
+
+	if result.NetworkReachable != polling.TriStateFalse {
+		t.Fatalf("NetworkReachable = %q, want false", result.NetworkReachable)
+	}
+	if result.SNMPReachable != polling.TriStateTrue {
+		t.Fatalf("SNMPReachable = %q, want true", result.SNMPReachable)
+	}
+	if !reflect.DeepEqual(capturedPorts, []int{22, 8291, 443}) {
+		t.Fatalf("probe ports = %v, want [22, 8291, 443]", capturedPorts)
+	}
+}
+
 func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 	deviceID := uuid.New()
 	registry, err := vendor.LoadRegistryFromEmbedded()
@@ -70,7 +182,7 @@ func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 		return &scriptedEssentialClient{connectErr: assertiveError("timeout")}, nil
 	})
 	probeCalls := 0
-	collector.networkProbe = func(_ context.Context, target string, timeout time.Duration) error {
+	collector.networkProbe = func(_ context.Context, target string, timeout time.Duration, _ []int) error {
 		probeCalls++
 		if target != "10.0.0.1" {
 			t.Fatalf("target = %q, want 10.0.0.1", target)
@@ -81,7 +193,7 @@ func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 		return assertiveError("tcp probe failed")
 	}
 
-	result := collector.Poll(context.Background(), domain.Device{ID: deviceID, IP: "10.0.0.1"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: deviceID, IP: "10.0.0.1"}, time.Second, 0, nil)
 
 	if result.DeviceID != deviceID {
 		t.Fatalf("DeviceID = %s, want %s", result.DeviceID, deviceID)
@@ -95,8 +207,8 @@ func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 	if result.NetworkReachable != polling.TriStateFalse {
 		t.Fatalf("NetworkReachable = %q, want false", result.NetworkReachable)
 	}
-	if probeCalls != 1 {
-		t.Fatalf("network probe calls = %d, want 1", probeCalls)
+	if probeCalls != 4 {
+		t.Fatalf("network probe calls = %d, want 4", probeCalls)
 	}
 }
 
@@ -113,11 +225,11 @@ func TestEssentialCollectorSysUpTimeFailureRecordsUnreachableNetworkProbe(t *tes
 	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
 		return client, nil
 	})
-	collector.networkProbe = func(context.Context, string, time.Duration) error {
+	collector.networkProbe = func(context.Context, string, time.Duration, []int) error {
 		return assertiveError("tcp probe failed")
 	}
 
-	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.2"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.2"}, time.Second, 0, nil)
 
 	if result.Err == nil {
 		t.Fatal("Err = nil, want sysUpTime failure")
@@ -149,7 +261,7 @@ func TestEssentialCollectorSysUpTimeFailureRecordsReachableNetworkProbe(t *testi
 	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
 		return client, nil
 	})
-	collector.networkProbe = func(_ context.Context, target string, timeout time.Duration) error {
+	collector.networkProbe = func(_ context.Context, target string, timeout time.Duration, _ []int) error {
 		if target != "10.0.0.3" {
 			t.Fatalf("target = %q, want 10.0.0.3", target)
 		}
@@ -159,7 +271,7 @@ func TestEssentialCollectorSysUpTimeFailureRecordsReachableNetworkProbe(t *testi
 		return nil
 	}
 
-	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.3"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.3"}, time.Second, 0, nil)
 
 	if result.Err == nil {
 		t.Fatal("Err = nil, want sysUpTime failure")
@@ -201,8 +313,11 @@ func TestEssentialCollectorCompleteResult(t *testing.T) {
 	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
 		return client, nil
 	})
+	collector.networkProbe = func(context.Context, string, time.Duration, []int) error {
+		return nil
+	}
 
-	result := collector.Poll(context.Background(), domain.Device{ID: deviceID, IP: "10.0.0.2"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: deviceID, IP: "10.0.0.2"}, time.Second, 0, nil)
 
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil", result.Err)
@@ -242,8 +357,11 @@ func TestEssentialCollectorPartialWhenDefaultRootsAreMissing(t *testing.T) {
 	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
 		return client, nil
 	})
+	collector.networkProbe = func(context.Context, string, time.Duration, []int) error {
+		return nil
+	}
 
-	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.3"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.3"}, time.Second, 0, nil)
 
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil", result.Err)
@@ -284,8 +402,11 @@ func TestEssentialCollectorPartialWhenMemoryErrors(t *testing.T) {
 	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
 		return client, nil
 	})
+	collector.networkProbe = func(context.Context, string, time.Duration, []int) error {
+		return nil
+	}
 
-	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.4"}, time.Second, 0)
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.4"}, time.Second, 0, nil)
 
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil", result.Err)
@@ -300,6 +421,49 @@ func TestEssentialCollectorPartialWhenMemoryErrors(t *testing.T) {
 	assertFloatPtrEqual(t, result.CPUPercent, 12, "CPUPercent")
 	if result.MemPercent != nil {
 		t.Fatalf("MemPercent = %v, want nil", *result.MemPercent)
+	}
+}
+
+func TestEssentialCollectorSuccessfulPollUsesConfiguredNetworkResult(t *testing.T) {
+	registry := essentialTestRegistry(t, vendor.PerformanceOIDs{
+		CPUOID:         ".1.3.6.1.4.1.9999.1.0",
+		MemoryUsedOID:  ".1.3.6.1.4.1.9999.2.0",
+		MemoryTotalOID: ".1.3.6.1.4.1.9999.3.0",
+	})
+	deviceID := uuid.New()
+	client := &scriptedEssentialClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysUpTime: {
+				{Name: snmp.OidSysUpTime, Value: uint32(4500)},
+			},
+			".1.3.6.1.4.1.9999.1.0": {
+				{Name: ".1.3.6.1.4.1.9999.1.0", Value: int(12)},
+			},
+			".1.3.6.1.4.1.9999.2.0": {
+				{Name: ".1.3.6.1.4.1.9999.2.0", Value: int(30)},
+			},
+			".1.3.6.1.4.1.9999.3.0": {
+				{Name: ".1.3.6.1.4.1.9999.3.0", Value: int(60)},
+			},
+		},
+	}
+	collector := NewEssentialCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+	collector.networkProbe = func(context.Context, string, time.Duration, []int) error {
+		return assertiveError("tcp probe failed")
+	}
+
+	result := collector.Poll(context.Background(), domain.Device{ID: deviceID, IP: "10.0.0.2"}, time.Second, 0, []int{26})
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if result.SNMPReachable != polling.TriStateTrue {
+		t.Fatalf("SNMPReachable = %q, want true", result.SNMPReachable)
+	}
+	if result.NetworkReachable != polling.TriStateFalse {
+		t.Fatalf("NetworkReachable = %q, want false", result.NetworkReachable)
 	}
 }
 

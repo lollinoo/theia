@@ -59,15 +59,26 @@ func (r EssentialResult) ToStoreUpdate(expectedInterval time.Duration, deadlineM
 		ExpectedInterval: expectedInterval,
 		Timestamp:        r.CollectedAt,
 		Essential: &state.EssentialUpdate{
-			PollStatus:       r.PollStatus,
-			NetworkReachable: r.NetworkReachable,
-			SNMPReachable:    r.SNMPReachable,
-			Uptime:           r.Uptime,
-			CPU:              r.CPU,
-			Memory:           r.Memory,
-			DeadlineMissed:   deadlineMissed,
+			PollStatus:                 r.PollStatus,
+			NetworkReachable:           r.NetworkReachable,
+			NetworkReachabilityResults: cloneNetworkProbeResults(r.NetworkReachabilityResults),
+			SNMPReachable:              r.SNMPReachable,
+			Uptime:                     r.Uptime,
+			CPU:                        r.CPU,
+			Memory:                     r.Memory,
+			DeadlineMissed:             deadlineMissed,
 		},
 	}
+}
+
+func cloneNetworkProbeResults(results []polling.NetworkProbeResult) []polling.NetworkProbeResult {
+	if len(results) == 0 {
+		return nil
+	}
+
+	cloned := make([]polling.NetworkProbeResult, len(results))
+	copy(cloned, results)
+	return cloned
 }
 
 func (r EssentialResult) toMetrics() *domain.DeviceMetrics {

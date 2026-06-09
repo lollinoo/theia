@@ -160,3 +160,40 @@ func TestPlanAddDeviceMembershipRejectsDuplicateDeviceAddress(t *testing.T) {
 		t.Fatalf("PlanAddDeviceMembership() duplicate error = %q, want %q", got, want)
 	}
 }
+
+func TestPlanAddDeviceMembershipRejectsDuplicateSecondaryAddress(t *testing.T) {
+	device := domain.Device{
+		ID: uuid.New(),
+		IP: "10.60.0.10",
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.60.0.10", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "198.51.100.60", Role: domain.DeviceAddressRoleBackup},
+		},
+	}
+
+	_, err := PlanAddDeviceMembership(
+		device,
+		domain.CanvasMapMembership{},
+		[]domain.Device{
+			{
+				ID: uuid.New(),
+				IP: "10.60.0.20",
+				Addresses: []domain.DeviceAddress{
+					{Address: "10.60.0.20", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+					{Address: "198.51.100.60", Role: domain.DeviceAddressRoleManagement},
+				},
+			},
+		},
+		nil,
+		nil,
+		false,
+	)
+
+	var duplicateErr DuplicateDeviceAddressError
+	if !errors.As(err, &duplicateErr) {
+		t.Fatalf("PlanAddDeviceMembership() error = %T %[1]v, want DuplicateDeviceAddressError", err)
+	}
+	if duplicateErr.Address != "198.51.100.60" {
+		t.Fatalf("duplicate address = %q, want secondary collision", duplicateErr.Address)
+	}
+}

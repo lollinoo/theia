@@ -711,6 +711,8 @@ Programmatic API clients should first `POST /auth/login` with `{"identifier":"<u
 
 ### Device payload example
 
+Legacy single-address clients can continue to send only `ip`. The backend treats `ip` as the primary address and returns it for compatibility:
+
 ```json
 {
   "ip": "192.168.1.1",
@@ -727,6 +729,62 @@ Programmatic API clients should first `POST /auth/login` with `{"identifier":"<u
   }
 }
 ```
+
+Multi-address clients can include `addresses`. When both `ip` and `addresses` are provided, `ip` remains authoritative and is normalized as the primary address:
+
+```json
+{
+  "ip": "192.168.1.1",
+  "hostname": "core-router",
+  "addresses": [
+    {
+      "address": "192.168.1.1",
+      "role": "primary",
+      "is_primary": true,
+      "priority": 0
+    },
+    {
+      "address": "192.0.2.10",
+      "label": "OOB",
+      "role": "backup",
+      "priority": 10
+    }
+  ],
+  "snmp": {
+    "version": "2c",
+    "community": "public"
+  }
+}
+```
+
+Device responses include both the legacy `ip` field and address metadata:
+
+```json
+{
+  "data": {
+    "id": "<uuid>",
+    "attributes": {
+      "hostname": "core-router",
+      "ip": "192.168.1.1",
+      "addresses": [
+        {
+          "id": "<uuid>",
+          "device_id": "<uuid>",
+          "address": "192.168.1.1",
+          "label": "",
+          "role": "primary",
+          "is_primary": true,
+          "priority": 0,
+          "created_at": "2026-06-09T00:00:00Z",
+          "updated_at": "2026-06-09T00:00:00Z"
+        }
+      ]
+    }
+  }
+}
+```
+
+Backup jobs select targets by address role: `backup` first, then `management`, then the primary `ip`.
 
 ### Link payload example
 

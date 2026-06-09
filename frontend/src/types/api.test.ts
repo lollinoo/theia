@@ -137,6 +137,82 @@ describe('parseDevicesResponse', () => {
 
     expect(devices[0].polling_enabled).toBe(false);
   });
+
+  it('synthesizes a primary address from legacy ip when addresses are omitted', () => {
+    const devices = parseDevicesResponse({
+      data: [deviceResource('router-4', 'router')],
+    });
+
+    expect(devices[0].addresses).toEqual([
+      {
+        id: '',
+        device_id: 'router-4',
+        address: '10.0.0.2',
+        label: '',
+        role: 'primary',
+        is_primary: true,
+        priority: 0,
+        probe_ports: null,
+      },
+    ]);
+  });
+
+  it('parses populated device address collections and skips malformed entries', () => {
+    const resource = deviceResource('router-5', 'router');
+    resource.attributes = {
+      ...resource.attributes,
+      probe_ports: [22, 8291],
+      addresses: [
+        {
+          id: 'addr-primary',
+          device_id: 'router-5',
+          address: '10.0.0.5',
+          label: 'LAN',
+          role: 'primary',
+          is_primary: true,
+          priority: 0,
+          probe_ports: [22],
+        },
+        {
+          id: 'addr-backup',
+          device_id: 'router-5',
+          address: '192.0.2.5',
+          label: 'OOB',
+          role: 'backup',
+          is_primary: false,
+          priority: 10,
+          probe_ports: null,
+        },
+        { address: 123 },
+      ],
+    };
+
+    const devices = parseDevicesResponse({ data: [resource] });
+
+    expect(devices[0].addresses).toEqual([
+      {
+        id: 'addr-primary',
+        device_id: 'router-5',
+        address: '10.0.0.5',
+        label: 'LAN',
+        role: 'primary',
+        is_primary: true,
+        priority: 0,
+        probe_ports: [22],
+      },
+      {
+        id: 'addr-backup',
+        device_id: 'router-5',
+        address: '192.0.2.5',
+        label: 'OOB',
+        role: 'backup',
+        is_primary: false,
+        priority: 10,
+        probe_ports: null,
+      },
+    ]);
+    expect(devices[0].probe_ports).toEqual([22, 8291]);
+  });
 });
 
 describe('parseCanvasMapResponse', () => {

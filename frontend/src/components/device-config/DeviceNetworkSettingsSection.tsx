@@ -8,7 +8,12 @@ import { checkPrometheusHealth, fetchSNMPProfiles } from '../../api/client';
 import type { Device, MetricsSource, SNMPProfile } from '../../types/api';
 import { createAsyncStaleGuard } from '../../utils/asyncStaleGuard';
 import { MAX_STRING_LENGTH, validateMaxLength } from '../../utils/validation';
-import type { DeviceFormModel } from '../forms/deviceFormModels';
+import {
+  createEmptyDeviceAddressFormRow,
+  type DeviceFormModel,
+  type SecondaryDeviceAddressRole,
+} from '../forms/deviceFormModels';
+import { validateProbePorts } from '../forms/deviceFormSubmitters';
 
 interface DeviceNetworkSettingsSectionProps {
   device: Device;
@@ -22,6 +27,10 @@ interface DeviceNetworkSettingsSectionProps {
   onSnmpChange: (update: Partial<DeviceFormModel['snmp']>) => void;
   onFieldError: (field: string, err: string | null) => void;
   onSNMPProfileSelected: (profileId: string) => void;
+}
+
+function deviceAddressFormRowKey(address: DeviceFormModel['additionalAddresses'][number]): string {
+  return address.formId ?? `${address.address}-${address.role}-${address.label}`;
 }
 
 /** Renders the DeviceNetworkSettingsSection component within the device configuration workflow. */
@@ -76,6 +85,31 @@ export function DeviceNetworkSettingsSection({
     return <>{children}</>;
   }
 
+  function addAdditionalAddress() {
+    onFormChange({
+      additionalAddresses: [...form.additionalAddresses, createEmptyDeviceAddressFormRow()],
+    });
+  }
+
+  function updateAdditionalAddress(
+    index: number,
+    update: Partial<DeviceFormModel['additionalAddresses'][number]>,
+  ) {
+    onFormChange({
+      additionalAddresses: form.additionalAddresses.map((address, addressIndex) =>
+        addressIndex === index ? { ...address, ...update } : address,
+      ),
+    });
+  }
+
+  function removeAdditionalAddress(index: number) {
+    onFormChange({
+      additionalAddresses: form.additionalAddresses.filter(
+        (_address, addressIndex) => addressIndex !== index,
+      ),
+    });
+  }
+
   function handlePrometheusLabelValueBlur() {
     onFieldError(
       'prometheusLabelValue',
@@ -112,6 +146,147 @@ export function DeviceNetworkSettingsSection({
         <p className="text-xs text-on-bg-secondary">
           Vendor tag determines backup commands and metric queries.
         </p>
+      </div>
+
+      <div className="space-y-1">
+        <label htmlFor="device-config-probe-ports" className="text-xs text-on-bg-secondary">
+          Probe ports
+        </label>
+        <input
+          id="device-config-probe-ports"
+          aria-label="Probe ports"
+          type="text"
+          value={form.probePorts}
+          disabled={readOnly}
+          onChange={(e) => {
+            onFormChange({ probePorts: e.target.value });
+            onFieldError('probePorts', null);
+          }}
+          onBlur={() => onFieldError('probePorts', validateProbePorts(form.probePorts))}
+          placeholder="22,8291"
+          className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60${fieldErrors['probePorts'] ? ' border-status-down' : ' border-outline-subtle'}`}
+        />
+        {fieldErrors['probePorts'] && (
+          <p className="mt-1 text-xs text-status-down">{fieldErrors['probePorts']}</p>
+        )}
+      </div>
+
+      <div className="space-y-3 rounded-lg bg-surface-high p-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs font-medium uppercase tracking-widest text-on-bg-secondary">
+            Additional addresses
+          </p>
+          <button
+            type="button"
+            disabled={readOnly}
+            onClick={addAdditionalAddress}
+            className="rounded-lg bg-elevated px-3 py-1.5 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Add address
+          </button>
+        </div>
+        {form.additionalAddresses.map((address, index) => (
+          <div
+            key={deviceAddressFormRowKey(address)}
+            data-testid={`device-config-additional-address-row-${index + 1}`}
+            className="space-y-3 rounded-lg bg-elevated p-3"
+          >
+            <div className="space-y-1">
+              <span className="text-xs text-on-bg-secondary">Address</span>
+              <input
+                id={`device-config-additional-address-${index}`}
+                aria-label={`Additional address ${index + 1}`}
+                type="text"
+                value={address.address}
+                disabled={readOnly}
+                onChange={(e) => {
+                  updateAdditionalAddress(index, { address: e.target.value });
+                  onFieldError(`additionalAddress${index}`, null);
+                }}
+                placeholder="192.0.2.10 or oob-router"
+                className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60${fieldErrors[`additionalAddress${index}`] ? ' border-status-down' : ' border-outline-subtle'}`}
+              />
+              {fieldErrors[`additionalAddress${index}`] && (
+                <p className="mt-1 text-xs text-status-down">
+                  {fieldErrors[`additionalAddress${index}`]}
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <span className="text-xs text-on-bg-secondary">Role</span>
+                <select
+                  id={`device-config-additional-address-role-${index}`}
+                  aria-label={`Address role ${index + 1}`}
+                  value={address.role}
+                  disabled={readOnly}
+                  onChange={(e) =>
+                    updateAdditionalAddress(index, {
+                      role: e.target.value as SecondaryDeviceAddressRole,
+                    })
+                  }
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <option value="management">Management</option>
+                  <option value="backup">Backup</option>
+                  <option value="monitoring">Monitoring</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <span className="text-xs text-on-bg-secondary">Label</span>
+                <input
+                  id={`device-config-additional-address-label-${index}`}
+                  aria-label={`Address label ${index + 1}`}
+                  type="text"
+                  value={address.label}
+                  disabled={readOnly}
+                  onChange={(e) => updateAdditionalAddress(index, { label: e.target.value })}
+                  placeholder="OOB"
+                  className="w-full rounded-lg border border-outline-subtle bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                />
+              </div>
+              <div className="space-y-1">
+                <span className="text-xs text-on-bg-secondary">Probe ports</span>
+                <input
+                  id={`device-config-additional-address-probe-ports-${index}`}
+                  aria-label={`Address probe ports ${index + 1}`}
+                  type="text"
+                  value={address.probePorts}
+                  disabled={readOnly}
+                  onChange={(e) => {
+                    updateAdditionalAddress(index, { probePorts: e.target.value });
+                    onFieldError(`additionalAddressProbePorts${index}`, null);
+                  }}
+                  onBlur={() =>
+                    onFieldError(
+                      `additionalAddressProbePorts${index}`,
+                      validateProbePorts(address.probePorts),
+                    )
+                  }
+                  placeholder="2222"
+                  className={`w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-on-bg placeholder-on-bg-muted focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60${fieldErrors[`additionalAddressProbePorts${index}`] ? ' border-status-down' : ' border-outline-subtle'}`}
+                />
+                {fieldErrors[`additionalAddressProbePorts${index}`] && (
+                  <p className="mt-1 text-xs text-status-down">
+                    {fieldErrors[`additionalAddressProbePorts${index}`]}
+                  </p>
+                )}
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  disabled={readOnly}
+                  onClick={() => removeAdditionalAddress(index)}
+                  aria-label={`Remove address ${index + 1}`}
+                  className="rounded-lg bg-surface px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:text-on-bg disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
 
       {children}

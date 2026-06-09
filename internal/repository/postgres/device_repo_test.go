@@ -5,6 +5,7 @@ package postgres
 import (
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -339,6 +340,255 @@ func TestDeviceRepoGetByIDsLoadsOnlyRequestedDevicesWithInterfacesAndAreas(t *te
 	}
 	if len(empty) != 0 {
 		t.Fatalf("GetByIDs(nil) = %#v, want empty", empty)
+	}
+}
+
+func TestDeviceRepoCreateHydratesLegacyPrimaryAddress(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-addresses",
+		IP:         " 10.90.0.1 ",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	got, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if got.IP != "10.90.0.1" {
+		t.Fatalf("IP = %q, want trimmed legacy primary", got.IP)
+	}
+	assertDeviceAddresses(t, got.Addresses, []addressExpectation{
+		{address: "10.90.0.1", role: domain.DeviceAddressRolePrimary, isPrimary: true, priority: 0},
+	})
+}
+
+func TestDeviceRepoCreateUpdateAndLookupDeviceAddresses(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-multi-address",
+		IP:         "10.91.0.1",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.91.0.1", Label: "mgmt", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "198.51.100.91", Label: "backup link", Role: domain.DeviceAddressRoleBackup, Priority: 10},
+		},
+	}
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	byAddress, err := repo.GetByAddress(" 198.51.100.91 ")
+	if err != nil {
+		t.Fatalf("GetByAddress failed: %v", err)
+	}
+	if byAddress == nil || byAddress.ID != device.ID {
+		t.Fatalf("GetByAddress returned %#v, want device %s", byAddress, device.ID)
+	}
+	assertDeviceAddresses(t, byAddress.Addresses, []addressExpectation{
+		{address: "10.91.0.1", label: "mgmt", role: domain.DeviceAddressRolePrimary, isPrimary: true, priority: 0},
+		{address: "198.51.100.91", label: "backup link", role: domain.DeviceAddressRoleBackup, priority: 10},
+	})
+
+	byAddress.IP = "10.91.0.2"
+	byAddress.Addresses = []domain.DeviceAddress{
+		{Address: "10.91.0.2", Label: "new mgmt", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+		{Address: "monitor.example.test", Label: "monitor", Role: domain.DeviceAddressRoleMonitoring, Priority: 20},
+	}
+	if err := repo.Update(byAddress); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	updated, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after update failed: %v", err)
+	}
+	if updated.IP != "10.91.0.2" {
+		t.Fatalf("updated IP = %q, want new primary", updated.IP)
+	}
+	assertDeviceAddresses(t, updated.Addresses, []addressExpectation{
+		{address: "10.91.0.2", label: "new mgmt", role: domain.DeviceAddressRolePrimary, isPrimary: true, priority: 0},
+		{address: "monitor.example.test", label: "monitor", role: domain.DeviceAddressRoleMonitoring, priority: 20},
+	})
+	if stale, err := repo.GetByAddress("198.51.100.91"); err != nil {
+		t.Fatalf("GetByAddress stale failed: %v", err)
+	} else if stale != nil {
+		t.Fatalf("old backup address still resolved to device: %#v", stale)
+	}
+}
+
+func TestDeviceRepoCreateAndGetPersistsProbePorts(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-probe-ports",
+		IP:         "10.94.0.1",
+		ProbePorts: []int{22, 8291},
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.94.0.1", Label: "mgmt", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "198.51.100.94", Label: "backup oob", Role: domain.DeviceAddressRoleBackup, Priority: 10, ProbePorts: []int{2222}},
+		},
+	}
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	got, err := repo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if !slices.Equal(got.ProbePorts, []int{22, 8291}) {
+		t.Fatalf("ProbePorts = %#v, want %#v", got.ProbePorts, []int{22, 8291})
+	}
+
+	var backup *domain.DeviceAddress
+	for i := range got.Addresses {
+		if got.Addresses[i].Address == "198.51.100.94" && got.Addresses[i].Role == domain.DeviceAddressRoleBackup {
+			backup = &got.Addresses[i]
+			break
+		}
+	}
+	if backup == nil {
+		t.Fatalf("backup address not loaded: %#v", got.Addresses)
+	}
+	if !slices.Equal(backup.ProbePorts, []int{2222}) {
+		t.Fatalf("backup ProbePorts = %#v, want %#v", backup.ProbePorts, []int{2222})
+	}
+}
+
+func TestDeviceRepoBatchReadsHydrateAddresses(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+
+	first := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-address-a",
+		IP:         "10.92.0.1",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.92.0.1", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: "198.51.100.92", Role: domain.DeviceAddressRoleBackup, Priority: 5},
+		},
+	}
+	second := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-address-b",
+		IP:         "10.92.0.2",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	for _, device := range []*domain.Device{first, second} {
+		if err := repo.Create(device); err != nil {
+			t.Fatalf("Create %s failed: %v", device.Hostname, err)
+		}
+	}
+
+	all, err := repo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll failed: %v", err)
+	}
+	assertDeviceFromListHasAddress(t, all, first.ID, "198.51.100.92")
+
+	selected, err := repo.GetByIDs([]uuid.UUID{first.ID})
+	if err != nil {
+		t.Fatalf("GetByIDs failed: %v", err)
+	}
+	assertDeviceFromListHasAddress(t, selected, first.ID, "198.51.100.92")
+
+	topology, err := repo.GetByIDsForTopology([]uuid.UUID{first.ID})
+	if err != nil {
+		t.Fatalf("GetByIDsForTopology failed: %v", err)
+	}
+	assertDeviceFromListHasAddress(t, topology, first.ID, "198.51.100.92")
+
+	orphans, err := repo.GetOrphans()
+	if err != nil {
+		t.Fatalf("GetOrphans failed: %v", err)
+	}
+	assertDeviceFromListHasAddress(t, orphans, first.ID, "198.51.100.92")
+}
+
+func TestDeviceRepoRejectsDuplicateAddressForSameDevice(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+
+	device := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "router-duplicate-address",
+		IP:         "10.93.0.1",
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		DeviceType: domain.DeviceTypeRouter,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Addresses: []domain.DeviceAddress{
+			{Address: "10.93.0.1", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+			{Address: " 10.93.0.1 ", Role: domain.DeviceAddressRoleBackup},
+		},
+	}
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create should normalize duplicate addresses instead of failing: %v", err)
+	}
+
+	err := repo.ReplaceDeviceAddresses(device.ID, []domain.DeviceAddress{
+		{Address: "10.93.0.1", Role: domain.DeviceAddressRolePrimary, IsPrimary: true},
+		{Address: "10.93.0.1", Role: domain.DeviceAddressRoleBackup},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate address replacement to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "duplicate") &&
+		!strings.Contains(strings.ToLower(err.Error()), "unique") {
+		t.Fatalf("duplicate replacement error = %v, want unique/duplicate failure", err)
 	}
 }
 
@@ -735,6 +985,60 @@ func TestDeviceRepo_NotesRoundTrip(t *testing.T) {
 	if updated.Notes != nil {
 		t.Fatalf("Notes after clear: got %#v, want nil", updated.Notes)
 	}
+}
+
+type addressExpectation struct {
+	address   string
+	label     string
+	role      domain.DeviceAddressRole
+	isPrimary bool
+	priority  int
+}
+
+func assertDeviceAddresses(t *testing.T, got []domain.DeviceAddress, want []addressExpectation) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("addresses len = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].Address != want[i].address {
+			t.Fatalf("address[%d].Address = %q, want %q", i, got[i].Address, want[i].address)
+		}
+		if got[i].Label != want[i].label {
+			t.Fatalf("address[%d].Label = %q, want %q", i, got[i].Label, want[i].label)
+		}
+		if got[i].Role != want[i].role {
+			t.Fatalf("address[%d].Role = %q, want %q", i, got[i].Role, want[i].role)
+		}
+		if got[i].IsPrimary != want[i].isPrimary {
+			t.Fatalf("address[%d].IsPrimary = %v, want %v", i, got[i].IsPrimary, want[i].isPrimary)
+		}
+		if got[i].Priority != want[i].priority {
+			t.Fatalf("address[%d].Priority = %d, want %d", i, got[i].Priority, want[i].priority)
+		}
+		if got[i].ID == uuid.Nil {
+			t.Fatalf("address[%d].ID is nil", i)
+		}
+		if got[i].DeviceID == uuid.Nil {
+			t.Fatalf("address[%d].DeviceID is nil", i)
+		}
+	}
+}
+
+func assertDeviceFromListHasAddress(t *testing.T, devices []domain.Device, deviceID uuid.UUID, address string) {
+	t.Helper()
+	for _, device := range devices {
+		if device.ID != deviceID {
+			continue
+		}
+		for _, candidate := range device.Addresses {
+			if candidate.Address == address {
+				return
+			}
+		}
+		t.Fatalf("device %s addresses = %#v, want address %q", deviceID, device.Addresses, address)
+	}
+	t.Fatalf("device %s not found in list %#v", deviceID, devices)
 }
 
 func isDeviceIPInvariantError(err error) bool {

@@ -1,7 +1,7 @@
 /**
  * Exercises add device panel component behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addDeviceToCanvasMap,
@@ -324,6 +324,186 @@ describe('virtual mode', () => {
     });
   });
 
+  it('submits legacy physical payload when no additional address rows exist', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    await waitFor(() => {
+      expect(createDevice).toHaveBeenCalledWith(expect.not.objectContaining({ addresses: [] }));
+      const payload = (createDevice as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(payload).not.toHaveProperty('addresses');
+    });
+  });
+
+  it('submits backup address rows for physical devices', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+    fireEvent.change(screen.getByLabelText('Additional address 1'), {
+      target: { value: '192.0.2.10' },
+    });
+    fireEvent.change(screen.getByLabelText('Address role 1'), {
+      target: { value: 'backup' },
+    });
+    fireEvent.change(screen.getByLabelText('Address label 1'), {
+      target: { value: 'OOB' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    await waitFor(() => {
+      expect(createDevice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          addresses: [
+            {
+              address: '10.0.0.1',
+              role: 'primary',
+              is_primary: true,
+              priority: 0,
+            },
+            {
+              address: '192.0.2.10',
+              role: 'backup',
+              label: 'OOB',
+              is_primary: false,
+              priority: 10,
+            },
+          ],
+        }),
+      );
+    });
+  });
+
+  it('stacks additional address controls vertically with compact visible labels', () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+
+    const row = screen.getByTestId('additional-address-row-1');
+    expect(row).toHaveClass('space-y-3');
+    expect(within(row).getByText('Address')).toBeInTheDocument();
+    expect(within(row).getByText('Role')).toBeInTheDocument();
+    expect(within(row).getByText('Label')).toBeInTheDocument();
+    expect(within(row).getByText('Probe ports')).toBeInTheDocument();
+    expect(within(row).queryByText('Address label 1')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Address label 1')).toBeInTheDocument();
+    expect(screen.getByLabelText('Address probe ports 1')).toBeInTheDocument();
+  });
+
+  it('submits physical device and address probe ports', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+        target: { value: '10.0.0.1' },
+      });
+      fireEvent.change(screen.getByLabelText('Probe ports'), {
+        target: { value: '22,8291' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Additional address 1'), {
+        target: { value: '192.0.2.10' },
+      });
+      fireEvent.change(screen.getByLabelText('Address probe ports 1'), {
+        target: { value: '2222' },
+      });
+      fireEvent.click(screen.getByText('Add Device'));
+    });
+
+    await waitFor(() => {
+      expect(createDevice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          probe_ports: [22, 8291],
+          addresses: expect.arrayContaining([
+            expect.objectContaining({
+              address: '192.0.2.10',
+              probe_ports: [2222],
+            }),
+          ]),
+        }),
+      );
+    });
+  });
+
+  it('blocks submit when physical probe ports are invalid', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+        target: { value: '10.0.0.1' },
+      });
+      fireEvent.change(screen.getByLabelText('Probe ports'), {
+        target: { value: '0,443' },
+      });
+      fireEvent.click(screen.getByText('Add Device'));
+    });
+
+    expect(await screen.findByText('Ports must be between 1 and 65535')).toBeInTheDocument();
+    expect(createDevice).not.toHaveBeenCalled();
+  });
+
+  it('blocks submit when a blank additional address row has invalid probe ports', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+        target: { value: '10.0.0.1' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Address probe ports 1'), {
+        target: { value: '0' },
+      });
+      fireEvent.click(screen.getByText('Add Device'));
+    });
+
+    expect(await screen.findByText('Ports must be between 1 and 65535')).toBeInTheDocument();
+    expect(createDevice).not.toHaveBeenCalled();
+  });
+
+  it('blocks submit when an additional address is invalid', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+    fireEvent.change(screen.getByLabelText('Additional address 1'), {
+      target: { value: 'not valid!!' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    expect(await screen.findByText('Invalid IP address or hostname')).toBeInTheDocument();
+    expect(createDevice).not.toHaveBeenCalled();
+  });
+
+  it('blocks submit when additional addresses duplicate the primary address', async () => {
+    render(<AddDevicePanel onDeviceAdded={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+    fireEvent.change(screen.getByLabelText('Additional address 1'), {
+      target: { value: '10.0.0.1' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    expect(await screen.findByText('Duplicate device address')).toBeInTheDocument();
+    expect(createDevice).not.toHaveBeenCalled();
+  });
+
   it('adds a newly created physical device to the selected saved map', async () => {
     const onDeviceAdded = vi.fn();
     render(
@@ -489,6 +669,55 @@ describe('virtual mode', () => {
 
     expect(
       await screen.findByText('a device with IP/host "10.0.0.1" already exists in this map'),
+    ).toBeInTheDocument();
+    expect(createDevice).not.toHaveBeenCalled();
+    expect(addDeviceToCanvasMap).not.toHaveBeenCalled();
+    expect(onDeviceAdded).not.toHaveBeenCalled();
+  });
+
+  it('blocks selected-map add when the new primary address matches an existing secondary address', async () => {
+    const onDeviceAdded = vi.fn();
+    render(
+      <AddDevicePanel
+        devices={[
+          mapDevice({
+            id: 'map-dev',
+            hostname: 'router-01',
+            ip: '10.0.0.1',
+            addresses: [
+              {
+                id: 'addr-primary',
+                device_id: 'map-dev',
+                address: '10.0.0.1',
+                label: '',
+                role: 'primary',
+                is_primary: true,
+                priority: 0,
+              },
+              {
+                id: 'addr-backup',
+                device_id: 'map-dev',
+                address: '192.0.2.10',
+                label: 'OOB',
+                role: 'backup',
+                is_primary: false,
+                priority: 10,
+              },
+            ],
+          }),
+        ]}
+        mapContext={{ mapId: 'map-1' }}
+        onDeviceAdded={onDeviceAdded}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.1'), {
+      target: { value: '192.0.2.10' },
+    });
+    fireEvent.click(screen.getByText('Add Device'));
+
+    expect(
+      await screen.findByText('a device with IP/host "192.0.2.10" already exists in this map'),
     ).toBeInTheDocument();
     expect(createDevice).not.toHaveBeenCalled();
     expect(addDeviceToCanvasMap).not.toHaveBeenCalled();

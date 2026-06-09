@@ -5,6 +5,7 @@ package worker
 import (
 	"context"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -62,7 +63,7 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		}
 
 		profile := r.timeoutProfile(polling.LaneEssential)
-		result := p.essential.Poll(ctx, task.Device, profile.Timeout, profile.Retries)
+		result := p.essential.Poll(ctx, task.Device, profile.Timeout, profile.Retries, r.networkProbePorts(task.Device))
 		finishedAt = completionTime(result.CollectedAt)
 		observability.Default().IncPollResult(domain.VolatilityClassPerformance, result.Err == nil)
 
@@ -257,7 +258,7 @@ func (r *pipelineTaskRunner) runVirtualOperationalTask(ctx context.Context, task
 	}
 
 	profile := r.timeoutProfile(polling.LaneBackground)
-	if err := service.ProbeVirtualReachability(ctx, task.Device.IP, profile.Timeout); err != nil {
+	if err := service.ProbeVirtualReachability(ctx, task.Device.IP, profile.Timeout, r.networkProbePorts(task.Device)); err != nil {
 		result.Err = err
 	} else {
 		result.Reachable = true
@@ -356,6 +357,36 @@ func (r *pipelineTaskRunner) timeoutProfile(lane polling.Lane) polling.TimeoutPr
 		return profile
 	}
 	return polling.TimeoutProfile{Timeout: r.snmpTimeout(), Retries: r.snmpRetries()}
+}
+
+func (r *pipelineTaskRunner) networkProbePorts(device domain.Device) []int {
+	return domain.ResolveProbePorts(r.primaryAddressProbePorts(device), device.ProbePorts, r.globalNetworkProbePorts())
+}
+
+func (r *pipelineTaskRunner) primaryAddressProbePorts(device domain.Device) []int {
+	primary := domain.PrimaryAddress(device)
+	if primary == "" {
+		return nil
+	}
+	normalizedPrimary := domain.NormalizeDeviceAddressValue(primary)
+	for _, address := range device.Addresses {
+		if normalizedPrimary == "" || domain.NormalizeDeviceAddressValue(address.Address) != normalizedPrimary {
+			continue
+		}
+		return address.ProbePorts
+	}
+	return nil
+}
+
+func (r *pipelineTaskRunner) globalNetworkProbePorts() []int {
+	if r == nil || r.pipeline == nil || r.pipeline.settingsRepo == nil {
+		return domain.CoerceNetworkProbePortsCSV("")
+	}
+	value, err := r.pipeline.settingsRepo.Get(domain.SettingNetworkProbePorts)
+	if err != nil {
+		return domain.CoerceNetworkProbePortsCSV("")
+	}
+	return domain.CoerceNetworkProbePortsCSV(strings.TrimSpace(value))
 }
 
 func (r *pipelineTaskRunner) topologyDiscoveryMode(device domain.Device) domain.TopologyDiscoveryMode {

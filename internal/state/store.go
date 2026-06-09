@@ -87,13 +87,14 @@ type DeviceState struct {
 	TempSeverity MetricSeverity
 
 	// Reachability dimension (computed from poll success/failure).
-	Reachability        ReachabilityStatus
-	ConsecutiveFailures int
-	PrimaryHealth       polling.PrimaryHealth
-	NetworkReachable    polling.TriState
-	SNMPReachable       polling.TriState
-	FieldStates         map[string]polling.FieldState
-	RuntimeFlags        map[polling.RuntimeFlag]bool
+	Reachability               ReachabilityStatus
+	ConsecutiveFailures        int
+	PrimaryHealth              polling.PrimaryHealth
+	NetworkReachable           polling.TriState
+	SNMPReachable              polling.TriState
+	NetworkReachabilityResults []polling.NetworkProbeResult
+	FieldStates                map[string]polling.FieldState
+	RuntimeFlags               map[polling.RuntimeFlag]bool
 
 	// Staleness dimension (computed by background tick per D-09).
 	Stale            bool
@@ -119,14 +120,15 @@ type StateUpdate struct {
 
 // EssentialUpdate represents essential update data used by the package.
 type EssentialUpdate struct {
-	PollStatus       polling.PollStatus
-	NetworkReachable polling.TriState
-	SNMPReachable    polling.TriState
-	Uptime           polling.FieldState
-	CPU              polling.FieldState
-	Memory           polling.FieldState
-	DeadlineMissed   bool
-	Overloaded       bool
+	PollStatus                 polling.PollStatus
+	NetworkReachable           polling.TriState
+	NetworkReachabilityResults []polling.NetworkProbeResult
+	SNMPReachable              polling.TriState
+	Uptime                     polling.FieldState
+	CPU                        polling.FieldState
+	Memory                     polling.FieldState
+	DeadlineMissed             bool
+	Overloaded                 bool
 }
 
 // Store is the centralized in-memory state for all devices. Concurrency via
@@ -486,6 +488,7 @@ func cloneDeviceState(ds DeviceState) DeviceState {
 	cp := ds
 	cp.Metrics = cloneMetrics(ds.Metrics)
 	cp.LinkMetrics = cloneLinkMetrics(ds.LinkMetrics)
+	cp.NetworkReachabilityResults = cloneNetworkProbeResults(ds.NetworkReachabilityResults)
 	cp.FieldStates = cloneFieldStates(ds.FieldStates)
 	cp.RuntimeFlags = cloneRuntimeFlags(ds.RuntimeFlags)
 	return cp
@@ -503,6 +506,7 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 	applyFreshnessMetadata(next, update)
 	essential := update.Essential
 	next.NetworkReachable = essential.NetworkReachable
+	next.NetworkReachabilityResults = cloneNetworkProbeResults(essential.NetworkReachabilityResults)
 	next.SNMPReachable = essential.SNMPReachable
 	next.FieldStates = mergeEssentialFieldStates(prev.FieldStates, next.Metrics, essential)
 	next.RuntimeFlags = cloneRuntimeFlags(prev.RuntimeFlags)
@@ -528,15 +532,14 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 	setFlag(next.RuntimeFlags, polling.FlagPartialTelemetry, essential.PollStatus == polling.PollStatusPartial && hasPartialTelemetryFields(next.FieldStates))
 
 	switch {
-	case essential.SNMPReachable == polling.TriStateTrue:
-		next.Reachability = ReachabilityUp
-		next.ConsecutiveFailures = 0
-		next.PrimaryHealth = polling.PrimaryHealthUpFresh
-		evaluateHealth(next, &next.Metrics)
 	case essential.NetworkReachable == polling.TriStateTrue:
 		next.ConsecutiveFailures = 0
 		next.Reachability = ReachabilityUp
-		next.PrimaryHealth = polling.PrimaryHealthSNMPDegraded
+		if essential.SNMPReachable == polling.TriStateFalse {
+			next.PrimaryHealth = polling.PrimaryHealthSNMPDegraded
+		} else {
+			next.PrimaryHealth = polling.PrimaryHealthUpFresh
+		}
 	case essential.NetworkReachable == polling.TriStateFalse:
 		next.ConsecutiveFailures = prev.ConsecutiveFailures + 1
 		if next.ConsecutiveFailures >= 3 {
@@ -546,6 +549,19 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 		}
 		next.PrimaryHealth = polling.PrimaryHealthUnreachable
 	default:
+		next.Reachability = ReachabilityUnknown
+
+		if isNetworkReachabilityMixed(essential.NetworkReachabilityResults) {
+			next.ConsecutiveFailures = prev.ConsecutiveFailures + 1
+			if next.ConsecutiveFailures >= 3 {
+				next.Reachability = ReachabilityHardDown
+			} else {
+				next.Reachability = ReachabilitySoftDown
+			}
+			next.PrimaryHealth = polling.PrimaryHealthSNMPDegraded
+			break
+		}
+
 		if essential.SNMPReachable == polling.TriStateFalse && isDownReachability(prev.Reachability) {
 			next.ConsecutiveFailures = prev.ConsecutiveFailures
 			next.Reachability = prev.Reachability
@@ -555,8 +571,8 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 			next.PrimaryHealth = polling.PrimaryHealthUnreachable
 			return
 		}
+
 		next.ConsecutiveFailures = 0
-		next.Reachability = ReachabilityUnknown
 		if essential.SNMPReachable == polling.TriStateFalse {
 			next.PrimaryHealth = polling.PrimaryHealthSNMPDegraded
 		} else {
@@ -567,6 +583,24 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 
 func isDownReachability(reachability ReachabilityStatus) bool {
 	return reachability == ReachabilitySoftDown || reachability == ReachabilityHardDown
+}
+
+func isNetworkReachabilityMixed(results []polling.NetworkProbeResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+
+	allReachable := true
+	allUnreachable := true
+	for _, result := range results {
+		if result.Reachable {
+			allUnreachable = false
+		} else {
+			allReachable = false
+		}
+	}
+
+	return !allReachable && !allUnreachable
 }
 
 func mergeEssentialFieldStates(prev map[string]polling.FieldState, metrics domain.DeviceMetrics, essential *EssentialUpdate) map[string]polling.FieldState {
@@ -839,6 +873,9 @@ func deviceStateEqual(a, b DeviceState) bool {
 	if a.PrimaryHealth != b.PrimaryHealth || a.NetworkReachable != b.NetworkReachable || a.SNMPReachable != b.SNMPReachable {
 		return false
 	}
+	if !networkProbeResultEqual(a.NetworkReachabilityResults, b.NetworkReachabilityResults) {
+		return false
+	}
 	if !fieldStatesEqual(a.FieldStates, b.FieldStates) || !runtimeFlagsEqual(a.RuntimeFlags, b.RuntimeFlags) {
 		return false
 	}
@@ -904,4 +941,32 @@ func floatPtrEqual(a, b *float64) bool {
 		return false
 	}
 	return *a == *b
+}
+
+func cloneNetworkProbeResults(results []polling.NetworkProbeResult) []polling.NetworkProbeResult {
+	if len(results) == 0 {
+		return nil
+	}
+
+	out := make([]polling.NetworkProbeResult, len(results))
+	copy(out, results)
+	return out
+}
+
+func networkProbeResultEqual(a, b []polling.NetworkProbeResult) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+
+	for i := range a {
+		left, right := a[i], b[i]
+		if left.Port != right.Port || left.Reachable != right.Reachable || left.Error != right.Error {
+			return false
+		}
+	}
+
+	return true
 }

@@ -1,7 +1,7 @@
 /**
  * Exercises device network settings section device configuration behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Device, SNMPProfile } from '../../types/api';
 import { createDeviceConfigFormModel, type DeviceFormModel } from '../forms/deviceFormModels';
@@ -156,6 +156,125 @@ describe('DeviceNetworkSettingsSection', () => {
     });
 
     expect(onFormChange).toHaveBeenCalledWith({ vendor: 'mikrotik' });
+  });
+
+  it('renders additional address rows and reports edits to the parent form', () => {
+    const { onFormChange } = renderSection({
+      initialForm: {
+        ...createDeviceConfigFormModel(mockDevice(), false),
+        additionalAddresses: [{ address: '192.0.2.10', role: 'backup', label: 'OOB' }],
+      },
+    });
+
+    expect(screen.getByText('Additional addresses')).toBeInTheDocument();
+    expect(screen.getByLabelText('Additional address 1')).toHaveValue('192.0.2.10');
+    expect(screen.getByLabelText('Address role 1')).toHaveValue('backup');
+    expect(screen.getByLabelText('Address label 1')).toHaveValue('OOB');
+
+    fireEvent.change(screen.getByLabelText('Additional address 1'), {
+      target: { value: '192.0.2.11' },
+    });
+
+    expect(onFormChange).toHaveBeenCalledWith({
+      additionalAddresses: [{ address: '192.0.2.11', role: 'backup', label: 'OOB' }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
+
+    expect(onFormChange).toHaveBeenCalledWith({
+      additionalAddresses: [
+        { address: '192.0.2.10', role: 'backup', label: 'OOB' },
+        expect.objectContaining({ address: '', role: 'management', label: '' }),
+      ],
+    });
+  });
+
+  it('stacks additional address controls vertically with compact visible labels', () => {
+    renderSection({
+      initialForm: {
+        ...createDeviceConfigFormModel(mockDevice(), false),
+        additionalAddresses: [{ address: '192.0.2.10', role: 'backup', label: 'OOB' }],
+      },
+    });
+
+    const row = screen.getByTestId('device-config-additional-address-row-1');
+    expect(row).toHaveClass('space-y-3');
+    expect(within(row).getByText('Address')).toBeInTheDocument();
+    expect(within(row).getByText('Role')).toBeInTheDocument();
+    expect(within(row).getByText('Label')).toBeInTheDocument();
+    expect(within(row).getByText('Probe ports')).toBeInTheDocument();
+    expect(within(row).queryByText('Address label 1')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Address label 1')).toBeInTheDocument();
+    expect(screen.getByLabelText('Address probe ports 1')).toBeInTheDocument();
+  });
+
+  it('renders device and address probe port fields and reports edits to the parent form', async () => {
+    const { onFormChange } = renderSection({
+      initialForm: {
+        ...createDeviceConfigFormModel(mockDevice(), false),
+        probePorts: '22,8291',
+        additionalAddresses: [
+          {
+            address: '192.0.2.10',
+            role: 'backup',
+            label: 'OOB',
+            probePorts: '2222',
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByLabelText('Probe ports')).toHaveValue('22,8291');
+    expect(screen.getByLabelText('Address probe ports 1')).toHaveValue('2222');
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Probe ports'), {
+        target: { value: '22,443' },
+      });
+    });
+    expect(onFormChange).toHaveBeenCalledWith({ probePorts: '22,443' });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Address probe ports 1'), {
+        target: { value: '8291' },
+      });
+    });
+    expect(onFormChange).toHaveBeenCalledWith({
+      additionalAddresses: [
+        {
+          address: '192.0.2.10',
+          role: 'backup',
+          label: 'OOB',
+          probePorts: '8291',
+        },
+      ],
+    });
+  });
+
+  it('shows probe port field errors and disables them in read-only mode', () => {
+    renderSection({
+      readOnly: true,
+      initialForm: {
+        ...createDeviceConfigFormModel(mockDevice(), false),
+        probePorts: '0,443',
+        additionalAddresses: [
+          {
+            address: '192.0.2.10',
+            role: 'backup',
+            label: 'OOB',
+            probePorts: '0',
+          },
+        ],
+      },
+      fieldErrors: {
+        probePorts: 'Ports must be between 1 and 65535',
+        additionalAddressProbePorts0: 'Ports must be between 1 and 65535',
+      },
+    });
+
+    expect(screen.getByLabelText('Probe ports')).toBeDisabled();
+    expect(screen.getByLabelText('Address probe ports 1')).toBeDisabled();
+    expect(screen.getAllByText('Ports must be between 1 and 65535')).toHaveLength(2);
   });
 
   it('warns and rejects Prometheus modes when Prometheus health is unavailable', async () => {
