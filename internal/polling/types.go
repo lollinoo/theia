@@ -80,3 +80,10 @@ type TimeoutProfile struct {
 	Timeout time.Duration
 	Retries int
 }
+
+// NetworkProbeResult reports one TCP probe outcome used by network reachability.
+type NetworkProbeResult struct {
+	Port      int    `json:"port"`
+	Reachable bool   `json:"reachable"`
+	Error     string `json:"error,omitempty"`
+}

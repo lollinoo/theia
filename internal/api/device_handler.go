@@ -1060,8 +1060,19 @@ func addressReachabilityResultsToResponse(results []service.AddressReachabilityR
 			"label":       result.Label,
 			"is_primary":  result.IsPrimary,
 			"probe_ports": result.ProbePorts,
-			"reachable":   result.Reachable,
-			"error":       result.Error,
+			"reachable_ports": func() []map[string]interface{} {
+				ports := make([]map[string]interface{}, 0, len(result.ReachablePorts))
+				for _, port := range result.ReachablePorts {
+					ports = append(ports, map[string]interface{}{
+						"port":      port.Port,
+						"reachable": port.Reachable,
+						"error":     port.Error,
+					})
+				}
+				return ports
+			}(),
+			"reachable": result.Reachable,
+			"error":     result.Error,
 		})
 	}
 	return response

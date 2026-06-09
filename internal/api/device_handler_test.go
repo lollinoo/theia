@@ -706,14 +706,19 @@ func TestDeviceHandlerAddressReachability_ReturnsPerAddressResults(t *testing.T)
 
 	var resp struct {
 		Data []struct {
-			AddressID  string `json:"address_id"`
-			Address    string `json:"address"`
-			Role       string `json:"role"`
-			Label      string `json:"label"`
-			IsPrimary  bool   `json:"is_primary"`
-			ProbePorts []int  `json:"probe_ports"`
-			Reachable  bool   `json:"reachable"`
-			Error      string `json:"error"`
+			AddressID      string `json:"address_id"`
+			Address        string `json:"address"`
+			Role           string `json:"role"`
+			Label          string `json:"label"`
+			IsPrimary      bool   `json:"is_primary"`
+			ProbePorts     []int  `json:"probe_ports"`
+			ReachablePorts []struct {
+				Port      int    `json:"port"`
+				Reachable bool   `json:"reachable"`
+				Error     string `json:"error"`
+			} `json:"reachable_ports"`
+			Reachable bool   `json:"reachable"`
+			Error     string `json:"error"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -728,12 +733,16 @@ func TestDeviceHandlerAddressReachability_ReturnsPerAddressResults(t *testing.T)
 	if resp.Data[0].Role != "primary" || !resp.Data[0].IsPrimary || !resp.Data[0].Reachable || resp.Data[0].Error != "" {
 		t.Fatalf("primary reachability result = %#v", resp.Data[0])
 	}
+	assertIntSliceEqual(t, []int{resp.Data[0].ReachablePorts[0].Port}, []int{2222})
 	assertIntSliceEqual(t, resp.Data[0].ProbePorts, []int{2222})
 	if resp.Data[1].AddressID != managementID.String() || resp.Data[1].Address != "198.51.100.20" {
 		t.Fatalf("management address result = %#v", resp.Data[1])
 	}
 	if resp.Data[1].Role != "management" || resp.Data[1].Label != "mgmt" || !resp.Data[1].Reachable || resp.Data[1].Error != "" {
 		t.Fatalf("management reachability result = %#v", resp.Data[1])
+	}
+	if len(resp.Data[1].ReachablePorts) != 2 {
+		t.Fatalf("management reachable_ports length = %d, want 2", len(resp.Data[1].ReachablePorts))
 	}
 	assertIntSliceEqual(t, resp.Data[1].ProbePorts, []int{22, 443})
 }

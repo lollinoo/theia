@@ -20,18 +20,19 @@ import (
 
 // EssentialResult represents essential result data used by the collector.
 type EssentialResult struct {
-	DeviceID         uuid.UUID
-	PollStatus       polling.PollStatus
-	NetworkReachable polling.TriState
-	SNMPReachable    polling.TriState
-	Uptime           polling.FieldState
-	CPU              polling.FieldState
-	Memory           polling.FieldState
-	UptimeSecs       *float64
-	CPUPercent       *float64
-	MemPercent       *float64
-	CollectedAt      time.Time
-	Err              error
+	DeviceID                   uuid.UUID
+	PollStatus                 polling.PollStatus
+	NetworkReachable           polling.TriState
+	NetworkReachabilityResults []polling.NetworkProbeResult
+	SNMPReachable              polling.TriState
+	Uptime                     polling.FieldState
+	CPU                        polling.FieldState
+	Memory                     polling.FieldState
+	UptimeSecs                 *float64
+	CPUPercent                 *float64
+	MemPercent                 *float64
+	CollectedAt                time.Time
+	Err                        error
 }
 
 // EssentialCollector represents essential collector data used by the collector.
@@ -139,29 +140,66 @@ func (c *EssentialCollector) Poll(ctx context.Context, device domain.Device, tim
 
 func (c *EssentialCollector) markSNMPFailureNetworkEvidence(ctx context.Context, target string, timeout time.Duration, probePorts []int, result *EssentialResult) {
 	result.SNMPReachable = polling.TriStateFalse
-	if c == nil || c.networkProbe == nil {
-		return
-	}
-	if err := c.networkProbe(ctx, target, timeout, probePorts); err == nil {
-		result.NetworkReachable = polling.TriStateTrue
-		return
-	}
-	result.NetworkReachable = polling.TriStateFalse
+	captureNetworkReachability(ctx, c, target, timeout, probePorts, result)
 }
 
 func (c *EssentialCollector) markNetworkReachable(ctx context.Context, target string, timeout time.Duration, probePorts []int, result *EssentialResult) {
-	if c == nil || result == nil {
+	if c == nil {
 		return
 	}
-	if c.networkProbe == nil {
-		result.NetworkReachable = polling.TriStateUnknown
+	captureNetworkReachability(ctx, c, target, timeout, probePorts, result)
+}
+
+func captureNetworkReachability(ctx context.Context, c *EssentialCollector, target string, timeout time.Duration, probePorts []int, result *EssentialResult) {
+	if result == nil || c == nil {
 		return
 	}
-	if err := c.networkProbe(ctx, target, timeout, probePorts); err == nil {
-		result.NetworkReachable = polling.TriStateTrue
-		return
+	result.NetworkReachabilityResults = probeNetworkPorts(ctx, c.networkProbe, target, timeout, probePorts)
+	result.NetworkReachable = networkReachabilityEvidence(result.NetworkReachabilityResults)
+}
+
+func probeNetworkPorts(ctx context.Context, probe func(context.Context, string, time.Duration, []int) error, target string, timeout time.Duration, probePorts []int) []polling.NetworkProbeResult {
+	if probe == nil {
+		return nil
 	}
-	result.NetworkReachable = polling.TriStateFalse
+
+	ports := domain.ResolveProbePorts(nil, nil, probePorts)
+	results := make([]polling.NetworkProbeResult, 0, len(ports))
+	for _, port := range ports {
+		err := probe(ctx, target, timeout, []int{port})
+		entry := polling.NetworkProbeResult{Port: port, Reachable: err == nil}
+		if err != nil {
+			entry.Error = err.Error()
+		}
+		results = append(results, entry)
+	}
+
+	return results
+}
+
+func networkReachabilityEvidence(results []polling.NetworkProbeResult) polling.TriState {
+	if len(results) == 0 {
+		return polling.TriStateUnknown
+	}
+
+	allReachable := true
+	allUnreachable := true
+	for _, result := range results {
+		if result.Reachable {
+			allUnreachable = false
+		} else {
+			allReachable = false
+		}
+	}
+
+	switch {
+	case allReachable:
+		return polling.TriStateTrue
+	case allUnreachable:
+		return polling.TriStateFalse
+	default:
+		return polling.TriStateUnknown
+	}
 }
 
 func essentialMetricsHaveSuccessfulRead(metrics snmp.EssentialMetricsResult) bool {

@@ -57,6 +57,78 @@ function formatProbePorts(ports: number[] | null | undefined): string {
   return ports && ports.length > 0 ? ports.join(', ') : '-';
 }
 
+function portReachabilityLabel(result: DeviceAddressReachabilityResult | undefined): string {
+  if (!result) {
+    return '';
+  }
+
+  const ports = result.reachable_ports ?? [];
+  if (ports.length === 0) {
+    return result.reachable ? 'reachable' : 'unreachable';
+  }
+
+  const allReachable = ports.every((probe) => probe.reachable);
+  const allUnreachable = ports.every((probe) => !probe.reachable);
+
+  if (allReachable) {
+    return 'reachable';
+  }
+  if (allUnreachable) {
+    return 'unreachable';
+  }
+  return 'partially reachable';
+}
+
+function portReachabilityClass(result: DeviceAddressReachabilityResult | undefined): string {
+  if (!result) {
+    return 'text-on-bg-secondary';
+  }
+
+  const label = portReachabilityLabel(result);
+  if (label === 'reachable') {
+    return 'text-status-up';
+  }
+  if (label === 'unreachable') {
+    return 'text-status-down';
+  }
+  return 'text-warning';
+}
+
+function portReachabilityRows(
+  result: DeviceAddressReachabilityResult | undefined,
+): Array<{ port: number; status: string; reachable: boolean }> {
+  if (!result || result.reachable_ports.length === 0) {
+    return [];
+  }
+
+  return result.reachable_ports.map((probe) => ({
+    port: probe.port,
+    reachable: probe.reachable,
+    status: probe.reachable ? 'up' : 'down',
+  }));
+}
+
+function portStatusClass(reachable: boolean): string {
+  return reachable ? 'text-status-up' : 'text-status-down';
+}
+
+function portRowsForAddress(result: DeviceAddressReachabilityResult | undefined) {
+  const rows = portReachabilityRows(result);
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return rows.map((row) => (
+    <div
+      key={`${row.port}`}
+      className="flex items-center justify-between gap-3 text-xs text-on-bg-secondary"
+    >
+      <span>Port {row.port}</span>
+      <span className={`font-mono ${portStatusClass(row.reachable)}`}>{row.status}</span>
+    </div>
+  ));
+}
+
 function addressResultKey(result: DeviceAddressReachabilityResult): string {
   return result.address_id || result.address;
 }
@@ -68,9 +140,7 @@ function reachabilityStatus(result: DeviceAddressReachabilityResult | undefined)
   if (!result) {
     return { label: 'not checked', className: 'text-on-bg-secondary' };
   }
-  return result.reachable
-    ? { label: 'reachable', className: 'text-status-up' }
-    : { label: 'unreachable', className: 'text-status-down' };
+  return { label: portReachabilityLabel(result), className: portReachabilityClass(result) };
 }
 
 function actionErrorMessage(error: unknown): string {
@@ -265,6 +335,9 @@ export function DeviceDetailsPanel({
                       {formatProbePorts(result?.probe_ports ?? address.probe_ports)}
                     </span>
                   </div>
+                  {portReachabilityRows(result).length > 0 && (
+                    <div className="mt-2 space-y-1 text-xs">{portRowsForAddress(result)}</div>
+                  )}
                   {result?.error && (
                     <p className="mt-2 break-words text-xs text-status-down">{result.error}</p>
                   )}

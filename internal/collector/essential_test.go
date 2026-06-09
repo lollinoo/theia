@@ -71,7 +71,7 @@ func TestEssentialCollectorUsesConfiguredNetworkProbePorts(t *testing.T) {
 	})
 	var capturedPorts []int
 	collector.networkProbe = func(_ context.Context, _ string, _ time.Duration, ports []int) error {
-		capturedPorts = append([]int(nil), ports...)
+		capturedPorts = append(capturedPorts, ports...)
 		return nil
 	}
 
@@ -111,7 +111,7 @@ func TestEssentialCollectorUsesConfiguredMultiPortProbeList(t *testing.T) {
 	})
 	var capturedPorts []int
 	collector.networkProbe = func(_ context.Context, _ string, _ time.Duration, ports []int) error {
-		capturedPorts = append([]int(nil), ports...)
+		capturedPorts = append(capturedPorts, ports...)
 		return nil
 	}
 
@@ -154,7 +154,7 @@ func TestEssentialCollectorConfiguredMultiPortProbeListFailsWhenAllPortsClosed(t
 	})
 	var capturedPorts []int
 	collector.networkProbe = func(_ context.Context, _ string, _ time.Duration, ports []int) error {
-		capturedPorts = append([]int(nil), ports...)
+		capturedPorts = append(capturedPorts, ports...)
 		return assertiveError("tcp probe failed")
 	}
 
@@ -207,8 +207,8 @@ func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 	if result.NetworkReachable != polling.TriStateFalse {
 		t.Fatalf("NetworkReachable = %q, want false", result.NetworkReachable)
 	}
-	if probeCalls != 1 {
-		t.Fatalf("network probe calls = %d, want 1", probeCalls)
+	if probeCalls != 4 {
+		t.Fatalf("network probe calls = %d, want 4", probeCalls)
 	}
 }
 

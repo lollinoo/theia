@@ -48,6 +48,12 @@ export interface DeviceAddressPayload {
 }
 
 /** Describes one address reachability probe result returned by the backend. */
+export interface DeviceAddressProbePortResult {
+  port: number;
+  reachable: boolean;
+  error: string;
+}
+
 export interface DeviceAddressReachabilityResult {
   address_id: string;
   address: string;
@@ -55,6 +61,7 @@ export interface DeviceAddressReachabilityResult {
   label: string;
   is_primary: boolean;
   probe_ports: number[];
+  reachable_ports: DeviceAddressProbePortResult[];
   reachable: boolean;
   error: string;
 }
@@ -96,6 +103,20 @@ function isIntegerArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every((item) => Number.isInteger(item));
 }
 
+function isAddressProbePortResult(value: unknown): value is DeviceAddressProbePortResult {
+  return (
+    isRecord(value) &&
+    typeof value.port === 'number' &&
+    Number.isInteger(value.port) &&
+    typeof value.reachable === 'boolean' &&
+    typeof value.error === 'string'
+  );
+}
+
+function isAddressProbePortResults(value: unknown): value is DeviceAddressProbePortResult[] {
+  return Array.isArray(value) && value.every(isAddressProbePortResult);
+}
+
 function isDeviceAddressReachabilityResult(
   value: unknown,
 ): value is DeviceAddressReachabilityResult {
@@ -107,6 +128,7 @@ function isDeviceAddressReachabilityResult(
     typeof value.label === 'string' &&
     typeof value.is_primary === 'boolean' &&
     isIntegerArray(value.probe_ports) &&
+    isAddressProbePortResults(value.reachable_ports) &&
     typeof value.reachable === 'boolean' &&
     typeof value.error === 'string'
   );

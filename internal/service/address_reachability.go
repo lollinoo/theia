@@ -4,24 +4,27 @@ package service
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 )
 
 // AddressReachabilityResult is the per-address outcome for a reachability probe.
 type AddressReachabilityResult struct {
-	AddressID  uuid.UUID
-	Address    string
-	Role       domain.DeviceAddressRole
-	Label      string
-	IsPrimary  bool
-	ProbePorts []int
-	Reachable  bool
-	Error      string
+	AddressID      uuid.UUID
+	Address        string
+	Role           domain.DeviceAddressRole
+	Label          string
+	IsPrimary      bool
+	ProbePorts     []int
+	ReachablePorts []polling.NetworkProbeResult
+	Reachable      bool
+	Error          string
 }
 
 // CheckDeviceAddressReachability probes each normalized address for a device.
@@ -72,15 +75,64 @@ func (s *DeviceService) CheckDeviceAddressReachability(ctx context.Context, id u
 		go func(index int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := probe(ctx, target, timeout, ports); err != nil {
-				results[index].Error = err.Error()
-				return
+			result := AddressReachabilityResult{
+				AddressID:  address.ID,
+				Address:    target,
+				Role:       domain.NormalizeDeviceAddressRole(address.Role),
+				Label:      strings.TrimSpace(address.Label),
+				IsPrimary:  address.IsPrimary,
+				ProbePorts: ports,
 			}
-			results[index].Reachable = true
+
+			result.ReachablePorts = probeAddressPorts(ctx, probe, target, timeout, ports)
+			if len(result.ReachablePorts) == 0 {
+				result.Error = ""
+			} else {
+				for _, probeResult := range result.ReachablePorts {
+					if !probeResult.Reachable {
+						if result.Error == "" {
+							result.Error = probeResult.Error
+						}
+					}
+				}
+				result.Reachable = true
+				for _, probeResult := range result.ReachablePorts {
+					if !probeResult.Reachable {
+						result.Reachable = false
+						break
+					}
+				}
+			}
+
+			results[index] = result
 		}(i)
 	}
 	wg.Wait()
 	return results, nil
+}
+
+func probeAddressPorts(ctx context.Context, probe func(context.Context, string, time.Duration, []int) error, target string, timeout time.Duration, ports []int) []polling.NetworkProbeResult {
+	if probe == nil {
+		return nil
+	}
+
+	results := make([]polling.NetworkProbeResult, 0, len(ports))
+	for _, port := range ports {
+		err := probe(ctx, target, timeout, []int{port})
+		entry := polling.NetworkProbeResult{Port: port, Reachable: err == nil}
+		if err != nil {
+			entry.Error = err.Error()
+		}
+		results = append(results, entry)
+	}
+
+	if len(results) > 1 {
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].Port < results[j].Port
+		})
+	}
+
+	return results
 }
 
 func (s *DeviceService) globalNetworkProbePorts() []int {

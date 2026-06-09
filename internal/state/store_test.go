@@ -1094,6 +1094,44 @@ func TestEssentialSNMPFailureWithReachableNetworkKeepsDeviceReachable(t *testing
 	}
 }
 
+func TestReachability_MixedPortNetworkEvidenceIsSoftDown(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		ExpectedInterval: time.Second,
+		Timestamp:        time.Now(),
+		PollSuccess:      false,
+		Essential: &EssentialUpdate{
+			PollStatus:       polling.PollStatusFailed,
+			NetworkReachable: polling.TriStateUnknown,
+			SNMPReachable:    polling.TriStateTrue,
+			NetworkReachabilityResults: []polling.NetworkProbeResult{
+				{Port: 22, Reachable: true},
+				{Port: 26, Reachable: false, Error: "closed"},
+			},
+			Uptime: polling.FieldStateError,
+			CPU:    polling.FieldStateMissing,
+			Memory: polling.FieldStateMissing,
+		},
+	})
+
+	ds, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing")
+	}
+	if ds.Reachability != ReachabilitySoftDown {
+		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilitySoftDown)
+	}
+	if ds.PrimaryHealth != polling.PrimaryHealthSNMPDegraded {
+		t.Fatalf("PrimaryHealth = %q, want %q", ds.PrimaryHealth, polling.PrimaryHealthSNMPDegraded)
+	}
+	if ds.ConsecutiveFailures != 1 {
+		t.Fatalf("ConsecutiveFailures = %d, want 1", ds.ConsecutiveFailures)
+	}
+}
+
 func TestOperationalFailureDoesNotOverrideReachableSNMPDegradedEvidence(t *testing.T) {
 	s := NewStore()
 	id := uuid.New()

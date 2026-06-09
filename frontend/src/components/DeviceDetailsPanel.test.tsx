@@ -1,7 +1,7 @@
 /**
  * Exercises device details panel component behavior so refactors preserve the documented contract.
  */
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Device } from '../types/api';
@@ -184,6 +184,7 @@ describe('DeviceDetailsPanel', () => {
         label: 'Primary',
         is_primary: true,
         probe_ports: [22],
+        reachable_ports: [{ port: 22, reachable: true, error: '' }],
         reachable: true,
         error: '',
       },
@@ -194,6 +195,7 @@ describe('DeviceDetailsPanel', () => {
         label: 'Backup',
         is_primary: false,
         probe_ports: [2222],
+        reachable_ports: [{ port: 2222, reachable: false, error: 'connection refused' }],
         reachable: false,
         error: 'connection refused',
       },
@@ -240,7 +242,12 @@ describe('DeviceDetailsPanel', () => {
       expect(screen.getByText('reachable')).toBeInTheDocument();
       expect(screen.getByText('unreachable')).toBeInTheDocument();
     });
-    expect(screen.getByText('2222')).toBeInTheDocument();
+    const port22Row = screen.getByText('Port 22').closest('div');
+    const port2222Row = screen.getByText('Port 2222').closest('div');
+    expect(port22Row).not.toBeNull();
+    expect(port2222Row).not.toBeNull();
+    expect(within(port22Row!).getByText('up')).toBeInTheDocument();
+    expect(within(port2222Row!).getByText('down')).toBeInTheDocument();
     expect(screen.getByText('connection refused')).toBeInTheDocument();
     expect(onCheckAddressReachability).toHaveBeenCalledWith('dev-1');
   });
@@ -371,6 +378,7 @@ describe('DeviceDetailsPanel', () => {
           label: 'Primary',
           is_primary: true,
           probe_ports: [22],
+          reachable_ports: [{ port: 22, reachable: true, error: '' }],
           reachable: true,
           error: '',
         },
