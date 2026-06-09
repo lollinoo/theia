@@ -85,6 +85,49 @@ func TestEssentialCollectorUsesConfiguredNetworkProbePorts(t *testing.T) {
 	}
 }
 
+func TestEssentialCollectorUsesConfiguredMultiPortProbeList(t *testing.T) {
+	client := &scriptedEssentialClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysUpTime: {
+				{Name: snmp.OidSysUpTime, Value: uint32(12000)},
+			},
+			".1.3.6.1.4.1.9999.1.0": {
+				{Name: ".1.3.6.1.4.1.9999.1.0", Value: int(12)},
+			},
+			".1.3.6.1.4.1.9999.2.0": {
+				{Name: ".1.3.6.1.4.1.9999.2.0", Value: int(30)},
+			},
+			".1.3.6.1.4.1.9999.3.0": {
+				{Name: ".1.3.6.1.4.1.9999.3.0", Value: int(60)},
+			},
+		},
+	}
+	collector := NewEssentialCollector(essentialTestRegistry(t, vendor.PerformanceOIDs{
+		CPUOID:         ".1.3.6.1.4.1.9999.1.0",
+		MemoryUsedOID:  ".1.3.6.1.4.1.9999.2.0",
+		MemoryTotalOID: ".1.3.6.1.4.1.9999.3.0",
+	}), func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+	var capturedPorts []int
+	collector.networkProbe = func(_ context.Context, _ string, _ time.Duration, ports []int) error {
+		capturedPorts = append([]int(nil), ports...)
+		return nil
+	}
+
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.2"}, time.Second, 0, []int{22, 8291, 443})
+
+	if result.NetworkReachable != polling.TriStateTrue {
+		t.Fatalf("NetworkReachable = %q, want true", result.NetworkReachable)
+	}
+	if result.SNMPReachable != polling.TriStateTrue {
+		t.Fatalf("SNMPReachable = %q, want true", result.SNMPReachable)
+	}
+	if !reflect.DeepEqual(capturedPorts, []int{22, 8291, 443}) {
+		t.Fatalf("probe ports = %v, want [22, 8291, 443]", capturedPorts)
+	}
+}
+
 func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 	deviceID := uuid.New()
 	registry, err := vendor.LoadRegistryFromEmbedded()
