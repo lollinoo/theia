@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
@@ -581,17 +582,8 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	metricsHandler := observability.Handler()
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{
-		Addr: cfg.ListenAddr,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/metrics" {
-				if !authenticateMetricsRequest(w, r, metricsToken) {
-					return
-				}
-				metricsHandler.ServeHTTP(w, r)
-				return
-			}
-			router.ServeHTTP(w, r)
-		}),
+		Addr:    cfg.ListenAddr,
+		Handler: runtimeHTTPHandler(router, metricsHandler, metricsToken),
 	}
 
 	b.handleShutdown(cancel, server, children)
@@ -642,6 +634,48 @@ func minutesToDuration(minutes int) time.Duration {
 		return 0
 	}
 	return time.Duration(minutes) * time.Minute
+}
+
+func runtimeHTTPHandler(router http.Handler, metricsHandler http.Handler, metricsToken string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			if !authenticateMetricsRequest(w, r, metricsToken) {
+				return
+			}
+			metricsHandler.ServeHTTP(w, r)
+			return
+		}
+		if isPprofPath(r.URL.Path) {
+			if !authenticateMetricsRequest(w, r, metricsToken) {
+				return
+			}
+			servePprof(w, r)
+			return
+		}
+		router.ServeHTTP(w, r)
+	})
+}
+
+func isPprofPath(path string) bool {
+	return path == "/debug/pprof" || strings.HasPrefix(path, "/debug/pprof/")
+}
+
+func servePprof(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/debug/pprof", "/debug/pprof/":
+		pprof.Index(w, r)
+	case "/debug/pprof/cmdline":
+		pprof.Cmdline(w, r)
+	case "/debug/pprof/profile":
+		pprof.Profile(w, r)
+	case "/debug/pprof/symbol":
+		pprof.Symbol(w, r)
+	case "/debug/pprof/trace":
+		pprof.Trace(w, r)
+	default:
+		name := strings.TrimPrefix(r.URL.Path, "/debug/pprof/")
+		pprof.Handler(name).ServeHTTP(w, r)
+	}
 }
 
 func authenticateMetricsRequest(w http.ResponseWriter, r *http.Request, expectedToken string) bool {

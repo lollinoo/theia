@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -415,6 +416,79 @@ func TestProductionMetricsStackUsesComposeNetworkAndMetricsSecret(t *testing.T) 
 	}
 	if !stringSliceContains(snmpExporter.Networks, "theia-net") {
 		t.Fatalf("snmp-exporter networks = %#v, want theia-net", snmpExporter.Networks)
+	}
+}
+
+func TestRuntimeHTTPHandlerServesPprofWithMetricsToken(t *testing.T) {
+	routerHit := false
+	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		routerHit = true
+		http.NotFound(w, r)
+	})
+	metrics := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("metrics-ok"))
+	})
+	handler := runtimeHTTPHandler(router, metrics, "0123456789abcdef0123456789abcdef")
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/goroutine?debug=1", nil)
+	req.Header.Set("Authorization", "Bearer 0123456789abcdef0123456789abcdef")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pprof status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if routerHit {
+		t.Fatal("pprof request reached main API router")
+	}
+	if !strings.Contains(rec.Body.String(), "goroutine profile") {
+		t.Fatalf("pprof body = %q, want goroutine profile", rec.Body.String())
+	}
+}
+
+func TestRuntimeHTTPHandlerRejectsPprofWithoutMetricsToken(t *testing.T) {
+	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("unauthorized pprof request reached main API router")
+	})
+	metrics := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("unauthorized pprof request reached metrics handler")
+	})
+	handler := runtimeHTTPHandler(router, metrics, "0123456789abcdef0123456789abcdef")
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("pprof status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer realm="theia-metrics"` {
+		t.Fatalf("WWW-Authenticate = %q, want metrics bearer challenge", got)
+	}
+}
+
+func TestRuntimeHTTPHandlerStillServesMetricsWithMetricsToken(t *testing.T) {
+	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("metrics request reached main API router")
+	})
+	metrics := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("metrics-ok"))
+	})
+	handler := runtimeHTTPHandler(router, metrics, "0123456789abcdef0123456789abcdef")
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer 0123456789abcdef0123456789abcdef")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.Body.String() != "metrics-ok" {
+		t.Fatalf("metrics body = %q, want metrics-ok", rec.Body.String())
 	}
 }
 
