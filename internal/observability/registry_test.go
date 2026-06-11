@@ -122,6 +122,23 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_state_changes_dropped_total 7`)
 }
 
+func TestHandlerRendersGoAndProcessMetrics(t *testing.T) {
+	registry := ResetDefaultForTest()
+	registry.SetSchedulerInFlight(2)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	assertContainsMetric(t, body, `process_cpu_seconds_total`)
+	assertContainsMetric(t, body, `process_resident_memory_bytes`)
+	assertContainsMetric(t, body, `go_goroutines`)
+	assertContainsMetric(t, body, `go_memstats_heap_alloc_bytes`)
+	assertContainsMetric(t, body, `go_memstats_gc_cpu_fraction`)
+	assertContainsMetric(t, body, `theia_scheduler_in_flight_tasks 2`)
+}
+
 func assertContainsMetric(t *testing.T, body, needle string) {
 	t.Helper()
 	if !strings.Contains(body, needle) {

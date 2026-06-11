@@ -5,6 +5,7 @@ package observability
 import (
 	"fmt"
 	"net/http"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,12 +14,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/expfmt"
 )
+
+const runtimeGCCPUFractionMetricName = "go_memstats_gc_cpu_fraction"
 
 var (
 	defaultRegistryMu sync.RWMutex
 	defaultRegistry   = NewRegistry()
 )
+
+var runtimeMetricsGatherer = newRuntimeMetricsGatherer()
 
 var (
 	durationBucketsSeconds = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
@@ -242,7 +249,67 @@ func ResetDefaultForTest() *Registry {
 }
 
 func Handler() http.Handler {
-	return Default()
+	return metricsHandler{
+		registry:        Default(),
+		runtimeGatherer: runtimeMetricsGatherer,
+	}
+}
+
+type metricsHandler struct {
+	registry        *Registry
+	runtimeGatherer prometheus.Gatherer
+}
+
+func (h metricsHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	runtimeMetrics, err := marshalRuntimeMetrics(h.runtimeGatherer)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = w.Write(runtimeMetrics)
+	_, _ = w.Write(h.registry.MarshalPrometheus())
+}
+
+func newRuntimeMetricsGatherer() prometheus.Gatherer {
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(prometheus.NewGoCollector())
+	registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	return registry
+}
+
+func marshalRuntimeMetrics(gatherer prometheus.Gatherer) ([]byte, error) {
+	families, err := gatherer.Gather()
+	if err != nil {
+		return nil, fmt.Errorf("gather runtime metrics: %w", err)
+	}
+
+	var b strings.Builder
+	hasGCCPUFraction := false
+	for _, family := range families {
+		if family.GetName() == runtimeGCCPUFractionMetricName {
+			hasGCCPUFraction = true
+		}
+		if _, err := expfmt.MetricFamilyToText(&b, family); err != nil {
+			return nil, fmt.Errorf("encode runtime metric %s: %w", family.GetName(), err)
+		}
+	}
+	if !hasGCCPUFraction {
+		writeRuntimeGCCPUFractionMetric(&b)
+	}
+	return []byte(b.String()), nil
+}
+
+func writeRuntimeGCCPUFractionMetric(b *strings.Builder) {
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	writeGaugeSingle(
+		b,
+		runtimeGCCPUFractionMetricName,
+		"The fraction of this program's available CPU time used by the GC since the program started.",
+		stats.GCCPUFraction,
+	)
 }
 
 func (r *Registry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
