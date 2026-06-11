@@ -31,6 +31,7 @@ import (
 	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
+	"github.com/lollinoo/theia/internal/settingscache"
 	"github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/worker"
@@ -409,7 +410,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	positionRepo := postgres.NewPositionRepo(db)
 	canvasMapRepo := postgres.NewCanvasMapRepo(db)
 	canvasMapPositionRepo := postgres.NewCanvasMapPositionRepo(db)
-	settingsRepo := postgres.NewSettingsRepo(db)
+	settingsRepo := settingscache.New(postgres.NewSettingsRepo(db), 5*time.Second)
 	logging.Debugf("runtime effective config %s", runtimeDebugSettingsSummary(cfg, settingsRepo))
 	snmpProfileRepo := postgres.NewSNMPProfileRepo(db, encryptionKeyring)
 	credentialProfileRepo := postgres.NewCredentialProfileRepo(db)
