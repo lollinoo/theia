@@ -5,6 +5,7 @@ package collector
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"strings"
@@ -432,11 +433,51 @@ func TestPerformanceCollectorPoll_RecordsBulkWalkMetricsAfterSysUpTimeSuccess(t 
 	body := string(metrics.MarshalPrometheus())
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="sysuptime_probe",result="success"} 1`)
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="sysuptime_probe",result="success"} 1`)
-	if !strings.Contains(body, `theia_snmp_collector_operations_total{collector="performance",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing successful bulk_walk counter\n%s", body)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="if_hc_in_octets_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="if_hc_in_octets_walk",result="success"} 1`)
+	if strings.Contains(body, `collector="performance",operation="bulk_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped performance walks:\n%s", body)
 	}
-	if !strings.Contains(body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing successful bulk_walk histogram\n%s", body)
+}
+
+func TestPerformanceCollectorPoll_RecordsResolvedCPUWalkOperation(t *testing.T) {
+	const customCPUOID = ".1.3.6.1.4.1.9999.100.1"
+
+	registry := performanceTestRegistry(t, "custom", vendor.PerformanceOIDs{
+		CPUOID: customCPUOID,
+	})
+	metrics := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	client := newMetricsClientForVendor(registry, "custom", false)
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.32",
+		Vendor: "custom",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}, time.Second, 1)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if !containsString(client.bulkWalkCalls, customCPUOID) {
+		t.Fatalf("BulkWalk calls = %v, want custom CPU OID %q", client.bulkWalkCalls, customCPUOID)
+	}
+
+	body := string(metrics.MarshalPrometheus())
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="cpu_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="cpu_walk",result="success"} 1`)
+	if strings.Contains(body, `collector="performance",operation="bulk_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped performance walks:\n%s", body)
 	}
 }
 
@@ -448,7 +489,11 @@ func assertContainsCollectorMetric(t *testing.T, body, needle string) {
 }
 
 func newMetricsClient(registry *vendor.Registry, includeTemperature bool) *scriptedPerformanceClient {
-	perfOIDs := registry.ResolvePerformanceOIDs("default")
+	return newMetricsClientForVendor(registry, "default", includeTemperature)
+}
+
+func newMetricsClientForVendor(registry *vendor.Registry, vendorName string, includeTemperature bool) *scriptedPerformanceClient {
+	perfOIDs := registry.ResolvePerformanceOIDs(vendorName)
 	cpuOID := perfOIDs.CPUOID
 	if cpuOID == "" {
 		cpuOID = snmp.OidHrProcessorLoad
@@ -505,6 +550,50 @@ func newMetricsClient(registry *vendor.Registry, includeTemperature bool) *scrip
 	}
 
 	return client
+}
+
+func performanceTestRegistry(t *testing.T, vendorName string, perfOIDs vendor.PerformanceOIDs) *vendor.Registry {
+	t.Helper()
+
+	defaultConfig := vendor.VendorConfig{
+		Vendor: vendor.VendorInfo{Name: "default", DisplayName: "Default"},
+		SNMP: vendor.SNMPConfig{
+			Performance: vendor.PerformanceOIDs{
+				CPUOID: snmp.OidHrProcessorLoad,
+			},
+		},
+	}
+	vendorConfig := vendor.VendorConfig{
+		Vendor: vendor.VendorInfo{Name: vendorName, DisplayName: "Custom"},
+		SNMP: vendor.SNMPConfig{
+			Performance: perfOIDs,
+		},
+	}
+	defaultJSON, err := json.Marshal(defaultConfig)
+	if err != nil {
+		t.Fatalf("Marshal default registry config error = %v", err)
+	}
+	vendorJSON, err := json.Marshal(vendorConfig)
+	if err != nil {
+		t.Fatalf("Marshal vendor registry config error = %v", err)
+	}
+	registry, err := vendor.LoadRegistryFromDB([]vendor.DBVendorRecord{
+		{Name: "default", ConfigJSON: string(defaultJSON)},
+		{Name: vendorName, ConfigJSON: string(vendorJSON)},
+	})
+	if err != nil {
+		t.Fatalf("LoadRegistryFromDB() error = %v", err)
+	}
+	return registry
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func newPartialMetricsClient(registry *vendor.Registry) *scriptedPerformanceClient {

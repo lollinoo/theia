@@ -116,11 +116,12 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 		return result
 	}
 
-	instrumentedClient := instrumentedSNMPBulkWalkClient{
-		delegate:  client,
-		collector: "performance",
-	}
 	perfOIDs := c.registry.ResolvePerformanceOIDs(vendorName)
+	instrumentedClient := instrumentedSNMPBulkWalkClient{
+		delegate:           client,
+		collector:          "performance",
+		bulkWalkOperations: performanceBulkWalkOperations(perfOIDs),
+	}
 	cpuPercent, memPercent, uptimeSecs, tempCelsius := snmp.PollDeviceMetrics(instrumentedClient, perfOIDs)
 	result.Metrics.CPUPercent = cloneFloat64Ptr(cpuPercent)
 	result.Metrics.MemPercent = cloneFloat64Ptr(memPercent)
@@ -148,11 +149,33 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 	return result
 }
 
+func performanceBulkWalkOperations(perfOIDs vendor.PerformanceOIDs) map[string]string {
+	cpuOID := strings.TrimSpace(perfOIDs.CPUOID)
+	if cpuOID == "" {
+		cpuOID = snmp.OidHrProcessorLoad
+	}
+
+	return map[string]string{
+		cpuOID:                      "cpu_walk",
+		snmp.OidHrStorageType:       "memory_type_walk",
+		snmp.OidHrStorageAllocUnits: "memory_alloc_units_walk",
+		snmp.OidHrStorageSize:       "memory_size_walk",
+		snmp.OidHrStorageUsed:       "memory_used_walk",
+		snmp.OidEntPhySensorType:    "temperature_sensor_type_walk",
+		snmp.OidEntPhySensorValue:   "temperature_sensor_value_walk",
+		snmp.OidIfName:              "if_name_walk",
+		snmp.OidIfDescr:             "if_descr_walk",
+		snmp.OidIfHCInOctets:        "if_hc_in_octets_walk",
+		snmp.OidIfHCOutOctets:       "if_hc_out_octets_walk",
+	}
+}
+
 type instrumentedSNMPBulkWalkClient struct {
-	delegate         snmp.ClientInterface
-	collector        string
-	getOperations    map[string]string
-	earlyExitReasons map[string]string
+	delegate           snmp.ClientInterface
+	collector          string
+	getOperations      map[string]string
+	bulkWalkOperations map[string]string
+	earlyExitReasons   map[string]string
 }
 
 // Get retrieves get data from the collector.
@@ -182,17 +205,18 @@ func (c instrumentedSNMPBulkWalkClient) Get(oids []string) ([]gosnmp.SnmpPDU, er
 }
 
 func (c instrumentedSNMPBulkWalkClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
+	operation := c.bulkWalkOperation(rootOID)
 	startedAt := time.Now()
 	pdus, err := c.delegate.BulkWalk(rootOID)
 	duration := time.Since(startedAt)
 	result := classifySNMPCollectorResult(err)
 	observability.Default().ObserveSNMPCollectorOperation(
 		c.collector,
-		"bulk_walk",
+		operation,
 		result,
 		duration,
 	)
-	logSNMPCollectorDebug(c.collector, "bulk_walk", result, duration, len(pdus), err)
+	logSNMPCollectorDebug(c.collector, operation, result, duration, len(pdus), err)
 	return pdus, err
 }
 
@@ -201,6 +225,13 @@ func (c instrumentedSNMPBulkWalkClient) getOperation(oids []string) string {
 		return ""
 	}
 	return c.getOperations[strings.TrimSpace(oids[0])]
+}
+
+func (c instrumentedSNMPBulkWalkClient) bulkWalkOperation(rootOID string) string {
+	if operation := c.bulkWalkOperations[strings.TrimSpace(rootOID)]; operation != "" {
+		return operation
+	}
+	return "bulk_walk"
 }
 
 func classifySNMPCollectorResult(err error) string {

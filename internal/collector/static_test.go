@@ -430,11 +430,12 @@ func TestStaticCollectorPoll_RecordsBulkWalkMetrics(t *testing.T) {
 	}
 
 	body := string(metrics.MarshalPrometheus())
-	if !strings.Contains(body, `theia_snmp_collector_operations_total{collector="static",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing static bulk_walk counter\n%s", body)
-	}
-	if !strings.Contains(body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing static bulk_walk histogram\n%s", body)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_table_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_table_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_x_table_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_x_table_walk",result="success"} 1`)
+	if strings.Contains(body, `collector="static",operation="bulk_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped static walks:\n%s", body)
 	}
 	if strings.Contains(body, `collector="static",operation="sysuptime_probe"`) {
 		t.Fatalf("metrics output unexpectedly recorded static sysuptime_probe:\n%s", body)

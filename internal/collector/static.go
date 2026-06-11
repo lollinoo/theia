@@ -90,6 +90,10 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 	instrumentedClient := instrumentedSNMPBulkWalkClient{
 		delegate:  client,
 		collector: "static",
+		bulkWalkOperations: map[string]string{
+			snmp.OidIfTable:  "if_table_walk",
+			snmp.OidIfXTable: "if_x_table_walk",
+		},
 	}
 	discovery, err := snmp.DiscoverDeviceWithPolicy(instrumentedClient, c.registry, snmp.NeighborDiscoveryPolicyFromMode(topologyMode))
 	if err != nil {

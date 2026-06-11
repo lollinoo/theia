@@ -102,6 +102,11 @@ func (c *OperationalCollector) Poll(ctx context.Context, device domain.Device, t
 		delegate:      client,
 		collector:     "operational",
 		getOperations: map[string]string{uptimeOID: "sysuptime_probe"},
+		bulkWalkOperations: map[string]string{
+			snmp.OidIfName:       "if_name_walk",
+			snmp.OidIfDescr:      "if_descr_walk",
+			snmp.OidIfOperStatus: "if_oper_status_walk",
+		},
 		earlyExitReasons: map[string]string{
 			"sysuptime_probe": "sysuptime_probe_failed",
 		},

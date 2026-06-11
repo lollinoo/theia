@@ -45,6 +45,11 @@ type schedulerBackpressureKey struct {
 	Reason          string
 }
 
+type schedulerDispatchKey struct {
+	TaskKind        string
+	VolatilityClass string
+}
+
 type bulkOperationRejectionKey struct {
 	Operation string
 	Reason    string
@@ -126,7 +131,7 @@ type Registry struct {
 	schedulerReadyDepth        map[domain.VolatilityClass]float64
 	schedulerQueueLagSeconds   map[domain.VolatilityClass]float64
 	schedulerInFlight          float64
-	schedulerTaskDispatchTotal map[domain.VolatilityClass]uint64
+	schedulerTaskDispatchTotal map[schedulerDispatchKey]uint64
 	schedulerBackpressureTotal map[schedulerBackpressureKey]uint64
 	schedulerTaskDuration      map[domain.VolatilityClass]*histogram
 	bulkOperationInFlight      map[bulkOperationInFlightKey]float64
@@ -177,11 +182,7 @@ func NewRegistry() *Registry {
 			domain.VolatilityClassOperational: 0,
 			domain.VolatilityClassStatic:      0,
 		},
-		schedulerTaskDispatchTotal: map[domain.VolatilityClass]uint64{
-			domain.VolatilityClassPerformance: 0,
-			domain.VolatilityClassOperational: 0,
-			domain.VolatilityClassStatic:      0,
-		},
+		schedulerTaskDispatchTotal: make(map[schedulerDispatchKey]uint64),
 		schedulerBackpressureTotal: make(map[schedulerBackpressureKey]uint64),
 		bulkOperationInFlight:      make(map[bulkOperationInFlightKey]float64),
 		bulkOperationLimits:        make(map[bulkOperationLimitKey]float64),
@@ -272,7 +273,7 @@ func (r *Registry) MarshalPrometheus() []byte {
 	)
 	writeCounterVec(&b,
 		"theia_scheduler_task_dispatch_total",
-		"Total scheduled tasks dispatched by volatility class.",
+		"Total scheduled tasks dispatched by task kind and volatility class.",
 		sortedDispatchRows(r.schedulerTaskDispatchTotal),
 	)
 	writeCounterVec(&b,
@@ -476,9 +477,21 @@ func (r *Registry) SetSchedulerQueueLag(volatility domain.VolatilityClass, lag t
 }
 
 func (r *Registry) IncSchedulerTaskDispatch(volatility domain.VolatilityClass) {
+	r.IncSchedulerTaskDispatchForTask("unknown", volatility)
+}
+
+func (r *Registry) IncSchedulerTaskDispatchForTask(taskKind string, volatility domain.VolatilityClass) {
+	taskKind = strings.TrimSpace(taskKind)
+	if taskKind == "" {
+		taskKind = "unknown"
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.schedulerTaskDispatchTotal[volatility]++
+	r.schedulerTaskDispatchTotal[schedulerDispatchKey{
+		TaskKind:        taskKind,
+		VolatilityClass: string(volatility),
+	}]++
 }
 
 func (r *Registry) IncSchedulerBackpressure(volatility domain.VolatilityClass, reason string) {
@@ -916,17 +929,26 @@ func sortedVolatilityGaugeRows(values map[domain.VolatilityClass]float64) []gaug
 	return rows
 }
 
-func sortedDispatchRows(values map[domain.VolatilityClass]uint64) []counterRow {
-	order := []domain.VolatilityClass{
-		domain.VolatilityClassPerformance,
-		domain.VolatilityClassOperational,
-		domain.VolatilityClassStatic,
+func sortedDispatchRows(values map[schedulerDispatchKey]uint64) []counterRow {
+	keys := make([]schedulerDispatchKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
 	}
-	rows := make([]counterRow, 0, len(order))
-	for _, volatility := range order {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].TaskKind != keys[j].TaskKind {
+			return keys[i].TaskKind < keys[j].TaskKind
+		}
+		return keys[i].VolatilityClass < keys[j].VolatilityClass
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
 		rows = append(rows, counterRow{
-			labels: map[string]string{"volatility_class": string(volatility)},
-			value:  values[volatility],
+			labels: map[string]string{
+				"task_kind":        key.TaskKind,
+				"volatility_class": key.VolatilityClass,
+			},
+			value: values[key],
 		})
 	}
 	return rows
@@ -1542,24 +1564,12 @@ func writeHistogramVec(b *strings.Builder, name, help string, rows []histogramRo
 	fmt.Fprintf(b, "# TYPE %s histogram\n", name)
 	for _, row := range rows {
 		for i, bucket := range row.value.buckets {
-			labels := copyLabels(row.labels)
-			labels["le"] = formatFloat(bucket)
-			fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatLabels(labels), row.value.counts[i])
+			fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatBucketLabels(row.labels, formatFloat(bucket)), row.value.counts[i])
 		}
-		labels := copyLabels(row.labels)
-		labels["le"] = "+Inf"
-		fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatLabels(labels), row.value.count)
+		fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatBucketLabels(row.labels, "+Inf"), row.value.count)
 		fmt.Fprintf(b, "%s_sum%s %s\n", name, formatLabels(row.labels), formatFloat(row.value.sum))
 		fmt.Fprintf(b, "%s_count%s %d\n", name, formatLabels(row.labels), row.value.count)
 	}
-}
-
-func copyLabels(labels map[string]string) map[string]string {
-	cloned := make(map[string]string, len(labels))
-	for key, value := range labels {
-		cloned[key] = value
-	}
-	return cloned
 }
 
 func formatLabels(labels map[string]string) string {
@@ -1578,6 +1588,14 @@ func formatLabels(labels map[string]string) string {
 		parts = append(parts, fmt.Sprintf(`%s="%s"`, key, escapeLabelValue(labels[key])))
 	}
 	return "{" + strings.Join(parts, ",") + "}"
+}
+
+func formatBucketLabels(labels map[string]string, le string) string {
+	if len(labels) == 0 {
+		return fmt.Sprintf(`{le="%s"}`, escapeLabelValue(le))
+	}
+
+	return strings.TrimSuffix(formatLabels(labels), "}") + fmt.Sprintf(`,le="%s"}`, escapeLabelValue(le))
 }
 
 func escapeLabelValue(value string) string {

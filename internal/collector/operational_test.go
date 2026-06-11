@@ -376,10 +376,11 @@ func TestOperationalCollectorPoll_RecordsBulkWalkMetricsAfterSysUpTimeSuccess(t 
 	body := string(metrics.MarshalPrometheus())
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="operational",operation="sysuptime_probe",result="success"} 1`)
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="operational",operation="sysuptime_probe",result="success"} 1`)
-	if !strings.Contains(body, `theia_snmp_collector_operations_total{collector="operational",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing operational bulk_walk counter\n%s", body)
-	}
-	if !strings.Contains(body, `theia_snmp_collector_operation_seconds_count{collector="operational",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing operational bulk_walk histogram\n%s", body)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="operational",operation="if_name_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="operational",operation="if_name_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="operational",operation="if_oper_status_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="operational",operation="if_oper_status_walk",result="success"} 1`)
+	if strings.Contains(body, `collector="operational",operation="bulk_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped operational walks:\n%s", body)
 	}
 }
