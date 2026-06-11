@@ -496,9 +496,10 @@ func TestPrometheusAlertRulesCoverRuntimePerformanceSignals(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	rules := readPrometheusRules(t, filepath.Join(repoRoot, "docker/prometheus/alert_rules.yml"))
 	tests := []struct {
-		alert         string
-		wantSeverity  string
-		wantFragments []string
+		alert                string
+		wantSeverity         string
+		wantFragments        []string
+		wantSummaryFragments []string
 	}{
 		{
 			alert:        "BulkOperationRejections",
@@ -586,7 +587,24 @@ func TestPrometheusAlertRulesCoverRuntimePerformanceSignals(t *testing.T) {
 			wantSeverity: "warning",
 			wantFragments: []string{
 				"theia_snmp_collector_operations_total",
-				`operation="bulk_walk"`,
+				`operation=~".*_walk"`,
+				"collector, operation, result",
+			},
+			wantSummaryFragments: []string{
+				"{{ $labels.operation }}",
+			},
+		},
+		{
+			alert:        "SNMPBulkWalkSlow",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_snmp_collector_operation_seconds_bucket",
+				`operation=~".*_walk"`,
+				"histogram_quantile",
+				"collector, operation, le",
+			},
+			wantSummaryFragments: []string{
+				"{{ $labels.operation }}",
 			},
 		},
 	}
@@ -610,6 +628,11 @@ func TestPrometheusAlertRulesCoverRuntimePerformanceSignals(t *testing.T) {
 			}
 			if rule.Annotations["summary"] == "" {
 				t.Fatalf("%s must define a summary annotation", tt.alert)
+			}
+			for _, fragment := range tt.wantSummaryFragments {
+				if !strings.Contains(rule.Annotations["summary"], fragment) {
+					t.Fatalf("%s summary = %q, want fragment %q", tt.alert, rule.Annotations["summary"], fragment)
+				}
 			}
 		})
 	}
