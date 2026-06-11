@@ -86,7 +86,7 @@ func TestRefreshDevices_SeedsManagedDeviceAcrossAllThreeVolatilityClasses(t *tes
 	for _, tc := range tests {
 		key := NewTaskKey(device.ID, tc.volatility)
 		item := mustSchedulerItem(t, scheduler, key)
-		wantDueAt := now.Add(initialOffset(device.ID, tc.interval))
+		wantDueAt := now.Add(initialOffsetForKey(key, tc.interval))
 
 		if item.task.PollClass != device.PollClass {
 			t.Fatalf("%s poll class = %q, want %q", tc.volatility, item.task.PollClass, device.PollClass)
@@ -292,7 +292,7 @@ func TestRefreshDevices_SchedulesOperationalOnlyForVirtualIPDevices(t *testing.T
 
 	operationalKey := NewTaskKey(virtualWithIP.ID, domain.VolatilityClassOperational)
 	item := mustSchedulerItem(t, scheduler, operationalKey)
-	wantDueAt := now.Add(initialOffset(virtualWithIP.ID, domain.OperationalClassInterval))
+	wantDueAt := now.Add(initialOffsetForKey(operationalKey, domain.OperationalClassInterval))
 	if item.task.ExpectedInterval != domain.OperationalClassInterval {
 		t.Fatalf("operational expected interval = %v, want %v", item.task.ExpectedInterval, domain.OperationalClassInterval)
 	}

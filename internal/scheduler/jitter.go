@@ -21,6 +21,21 @@ func initialOffset(deviceID uuid.UUID, interval time.Duration) time.Duration {
 	return time.Duration(hasher.Sum64() % uint64(interval))
 }
 
+func initialOffsetForKey(key TaskKey, interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+
+	h := fnv.New64a()
+	_, _ = h.Write(key.DeviceID[:])
+	_, _ = h.Write([]byte("|"))
+	_, _ = h.Write([]byte(key.Kind))
+	_, _ = h.Write([]byte("|"))
+	_, _ = h.Write([]byte(key.VolatilityClass))
+
+	return time.Duration(h.Sum64() % uint64(interval))
+}
+
 func jitteredNext(lastFire time.Time, interval time.Duration, rnd *rand.Rand) time.Time {
 	if interval <= 0 {
 		return lastFire

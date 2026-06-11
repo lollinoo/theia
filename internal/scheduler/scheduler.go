@@ -484,7 +484,7 @@ func (s *Scheduler) upsertScheduledItem(device domain.Device, key TaskKey, kind 
 		return
 	}
 
-	dueAt := now.Add(initialOffset(device.ID, interval))
+	dueAt := now.Add(initialOffsetForKey(key, interval))
 	task := PollTask{
 		Key:              key,
 		Kind:             kind,
