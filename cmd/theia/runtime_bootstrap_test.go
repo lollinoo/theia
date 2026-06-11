@@ -284,6 +284,42 @@ func TestSetupRequiredOperatorInputsIncludeMetricsToken(t *testing.T) {
 	}
 }
 
+func TestCIWorkflowPublishesNonMasterBranchImages(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	workflow := readGitHubWorkflow(t, filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
+
+	job := requireWorkflowJob(t, workflow, "branch-images")
+	for _, want := range []string{
+		"always()",
+		"github.event_name == 'push'",
+		"github.ref != 'refs/heads/master'",
+		"!contains(needs.*.result, 'failure')",
+		"!contains(needs.*.result, 'cancelled')",
+	} {
+		if !strings.Contains(job.If, want) {
+			t.Fatalf("branch-images if = %q, want fragment %q", job.If, want)
+		}
+	}
+	for _, want := range []string{"changes", "backend-fast", "frontend-fast", "browser-e2e"} {
+		if !stringSliceContains([]string(job.Needs), want) {
+			t.Fatalf("branch-images needs = %#v, want %q", job.Needs, want)
+		}
+	}
+	if job.Permissions["packages"] != "write" {
+		t.Fatalf("branch-images packages permission = %q, want write", job.Permissions["packages"])
+	}
+
+	backendMeta := requireWorkflowStepByID(t, job, "meta-backend-branch")
+	requireWorkflowDockerMetadataTags(t, backendMeta, "ghcr.io/lollinoo/theia-backend")
+	backendBuild := requireWorkflowStepByName(t, job, "Build and push backend branch image")
+	requireWorkflowBuildPushStep(t, backendBuild, ".", "./Dockerfile", "${{ steps.meta-backend-branch.outputs.tags }}")
+
+	frontendMeta := requireWorkflowStepByID(t, job, "meta-frontend-branch")
+	requireWorkflowDockerMetadataTags(t, frontendMeta, "ghcr.io/lollinoo/theia-frontend")
+	frontendBuild := requireWorkflowStepByName(t, job, "Build and push frontend branch image")
+	requireWorkflowBuildPushStep(t, frontendBuild, "./frontend", "./Dockerfile.frontend", "${{ steps.meta-frontend-branch.outputs.tags }}")
+}
+
 func TestPrometheusConfigsScrapeBackendMetrics(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	tests := []struct {
@@ -630,6 +666,42 @@ type composeConfigFile struct {
 	Secrets  map[string]composeSecret  `yaml:"secrets"`
 }
 
+type githubWorkflowFile struct {
+	Jobs map[string]githubWorkflowJob `yaml:"jobs"`
+}
+
+type githubWorkflowJob struct {
+	If          string               `yaml:"if"`
+	Needs       githubWorkflowNeeds  `yaml:"needs"`
+	Permissions map[string]string    `yaml:"permissions"`
+	Steps       []githubWorkflowStep `yaml:"steps"`
+}
+
+type githubWorkflowNeeds []string
+
+func (n *githubWorkflowNeeds) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		if value.Value != "" {
+			*n = []string{value.Value}
+		}
+	case yaml.SequenceNode:
+		values := make([]string, 0, len(value.Content))
+		for _, item := range value.Content {
+			values = append(values, item.Value)
+		}
+		*n = values
+	}
+	return nil
+}
+
+type githubWorkflowStep struct {
+	Name string            `yaml:"name"`
+	ID   string            `yaml:"id"`
+	Uses string            `yaml:"uses"`
+	With map[string]string `yaml:"with"`
+}
+
 type composeService struct {
 	NetworkMode string   `yaml:"network_mode"`
 	Networks    []string `yaml:"networks"`
@@ -662,6 +734,13 @@ func readComposeConfig(t *testing.T, path string) composeConfigFile {
 	var compose composeConfigFile
 	readYAMLFile(t, path, &compose)
 	return compose
+}
+
+func readGitHubWorkflow(t *testing.T, path string) githubWorkflowFile {
+	t.Helper()
+	var workflow githubWorkflowFile
+	readYAMLFile(t, path, &workflow)
+	return workflow
 }
 
 func readYAMLFile(t *testing.T, path string, target any) {
@@ -706,6 +785,72 @@ func requirePrometheusAlertRule(t *testing.T, rules prometheusRuleFile, alert st
 	}
 	t.Fatalf("missing Prometheus alert %q", alert)
 	return prometheusAlertRule{}
+}
+
+func requireWorkflowJob(t *testing.T, workflow githubWorkflowFile, name string) githubWorkflowJob {
+	t.Helper()
+	job, ok := workflow.Jobs[name]
+	if !ok {
+		t.Fatalf("missing workflow job %q", name)
+	}
+	return job
+}
+
+func requireWorkflowStepByID(t *testing.T, job githubWorkflowJob, id string) githubWorkflowStep {
+	t.Helper()
+	for _, step := range job.Steps {
+		if step.ID == id {
+			return step
+		}
+	}
+	t.Fatalf("missing workflow step id %q", id)
+	return githubWorkflowStep{}
+}
+
+func requireWorkflowStepByName(t *testing.T, job githubWorkflowJob, name string) githubWorkflowStep {
+	t.Helper()
+	for _, step := range job.Steps {
+		if step.Name == name {
+			return step
+		}
+	}
+	t.Fatalf("missing workflow step %q", name)
+	return githubWorkflowStep{}
+}
+
+func requireWorkflowDockerMetadataTags(t *testing.T, step githubWorkflowStep, image string) {
+	t.Helper()
+	if step.Uses != "docker/metadata-action@v6" {
+		t.Fatalf("%s uses = %q, want docker/metadata-action@v6", step.ID, step.Uses)
+	}
+	if step.With["images"] != image {
+		t.Fatalf("%s images = %q, want %q", step.ID, step.With["images"], image)
+	}
+	tags := step.With["tags"]
+	for _, want := range []string{"type=ref,event=branch", "type=sha"} {
+		if !strings.Contains(tags, want) {
+			t.Fatalf("%s tags = %q, want fragment %q", step.ID, tags, want)
+		}
+	}
+}
+
+func requireWorkflowBuildPushStep(t *testing.T, step githubWorkflowStep, contextPath, dockerfile, tags string) {
+	t.Helper()
+	if step.Uses != "docker/build-push-action@v7" {
+		t.Fatalf("%s uses = %q, want docker/build-push-action@v7", step.Name, step.Uses)
+	}
+	want := map[string]string{
+		"context": contextPath,
+		"file":    dockerfile,
+		"target":  "production",
+		"push":    "true",
+		"tags":    tags,
+	}
+	for key, value := range want {
+		if step.With[key] != value {
+			t.Fatalf("%s with.%s = %q, want %q", step.Name, key, step.With[key], value)
+		}
+	}
 }
 
 func stringSliceContains(values []string, want string) bool {
