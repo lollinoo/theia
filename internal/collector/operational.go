@@ -112,7 +112,7 @@ func (c *OperationalCollector) Poll(ctx context.Context, device domain.Device, t
 		},
 	}
 
-	uptimeSecs, statuses, err := snmp.PollOperationalStatus(instrumentedClient, operationalOIDs)
+	uptimeSecs, statuses, err := snmp.PollOperationalStatusWithInterfaces(instrumentedClient, operationalOIDs, device.Interfaces)
 	if err != nil {
 		result.Err = fmt.Errorf("poll operational status: %w", err)
 		return result

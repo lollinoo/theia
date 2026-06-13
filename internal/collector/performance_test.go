@@ -481,6 +481,66 @@ func TestPerformanceCollectorPoll_RecordsResolvedCPUWalkOperation(t *testing.T) 
 	}
 }
 
+func TestPerformanceCollectorPoll_UsesCachedInterfaceNamesForCounters(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := newMetricsClient(registry, false)
+	delete(client.bulkWalkResponses, snmp.OidIfName)
+	delete(client.bulkWalkResponses, snmp.OidIfDescr)
+	client.bulkWalkResponses[snmp.OidIfHCInOctets] = []gosnmp.SnmpPDU{
+		{Name: snmp.OidIfHCInOctets + ".7", Value: uint64(777)},
+		{Name: snmp.OidIfHCInOctets + ".9", Value: uint64(999)},
+	}
+	client.bulkWalkResponses[snmp.OidIfHCOutOctets] = []gosnmp.SnmpPDU{
+		{Name: snmp.OidIfHCOutOctets + ".7", Value: uint64(1777)},
+		{Name: snmp.OidIfHCOutOctets + ".9", Value: uint64(1999)},
+	}
+
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.33",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 7, IfName: "sfp7", Speed: 10_000_000_000},
+			{IfIndex: 9, IfDescr: "ether9", Speed: 1_000_000_000},
+		},
+	}, time.Second, 1)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if containsString(client.bulkWalkCalls, snmp.OidIfName) || containsString(client.bulkWalkCalls, snmp.OidIfDescr) {
+		t.Fatalf("BulkWalk calls = %v, want cached interface names without ifName/ifDescr walks", client.bulkWalkCalls)
+	}
+	if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+		t.Fatalf("BulkWalk calls = %v, want octet counter walks", client.bulkWalkCalls)
+	}
+	if len(result.Counters) != 2 {
+		t.Fatalf("counter count = %d, want 2", len(result.Counters))
+	}
+	countersByName := make(map[string]InterfaceCounterSnapshot, len(result.Counters))
+	for _, counter := range result.Counters {
+		countersByName[counter.IfName] = counter
+	}
+	if countersByName["sfp7"].InOctets != 777 || countersByName["sfp7"].OutOctets != 1777 || countersByName["sfp7"].SpeedBps != 10_000_000_000 {
+		t.Fatalf("sfp7 counter = %#v, want cached name, counters, and speed", countersByName["sfp7"])
+	}
+	if countersByName["ether9"].InOctets != 999 || countersByName["ether9"].OutOctets != 1999 || countersByName["ether9"].SpeedBps != 1_000_000_000 {
+		t.Fatalf("ether9 counter = %#v, want cached descr fallback, counters, and speed", countersByName["ether9"])
+	}
+}
+
 func assertContainsCollectorMetric(t *testing.T, body, needle string) {
 	t.Helper()
 	if !strings.Contains(body, needle) {

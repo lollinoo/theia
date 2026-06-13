@@ -384,3 +384,57 @@ func TestOperationalCollectorPoll_RecordsBulkWalkMetricsAfterSysUpTimeSuccess(t 
 		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped operational walks:\n%s", body)
 	}
 }
+
+func TestOperationalCollectorPoll_UsesCachedInterfaceNamesForStatuses(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := &scriptedCollectorClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysUpTime: {
+				{Name: snmp.OidSysUpTime, Value: uint32(9000)},
+			},
+		},
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfOperStatus: {
+				{Name: snmp.OidIfOperStatus + ".7", Value: int(1)},
+				{Name: snmp.OidIfOperStatus + ".9", Value: int(2)},
+			},
+		},
+	}
+	collector := NewOperationalCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.43",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 7, IfName: "sfp7"},
+			{IfIndex: 9, IfDescr: "ether9"},
+		},
+	}, time.Second, 1)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if containsString(client.bulkWalkCalls, snmp.OidIfName) || containsString(client.bulkWalkCalls, snmp.OidIfDescr) {
+		t.Fatalf("BulkWalk calls = %v, want cached interface names without ifName/ifDescr walks", client.bulkWalkCalls)
+	}
+	if !containsString(client.bulkWalkCalls, snmp.OidIfOperStatus) {
+		t.Fatalf("BulkWalk calls = %v, want ifOperStatus walk", client.bulkWalkCalls)
+	}
+	if result.InterfaceStatuses["sfp7"] != "up" {
+		t.Fatalf("InterfaceStatuses[sfp7] = %q, want up", result.InterfaceStatuses["sfp7"])
+	}
+	if result.InterfaceStatuses["ether9"] != "down" {
+		t.Fatalf("InterfaceStatuses[ether9] = %q, want down", result.InterfaceStatuses["ether9"])
+	}
+}

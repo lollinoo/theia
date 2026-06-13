@@ -129,7 +129,7 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 	result.Metrics.TempCelsius = cloneFloat64Ptr(tempCelsius)
 
 	speedByName, speedByDescr := indexInterfaceSpeeds(device.Interfaces)
-	counters := snmp.PollInterfaceCounters(instrumentedClient)
+	counters := snmp.PollInterfaceCountersWithInterfaces(instrumentedClient, device.Interfaces)
 	result.Counters = make([]InterfaceCounterSnapshot, 0, len(counters))
 	for _, counter := range counters {
 		result.Counters = append(result.Counters, InterfaceCounterSnapshot{

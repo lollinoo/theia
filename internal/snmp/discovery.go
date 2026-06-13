@@ -76,6 +76,12 @@ type InterfaceCounter struct {
 // values using vendor-resolved operational OIDs. Missing fields remain partial;
 // transport/query failures return an error.
 func PollOperationalStatus(client ClientInterface, operationalOIDs vendor.OperationalOIDs) (uptimeSecs *float64, statuses map[string]string, err error) {
+	return PollOperationalStatusWithInterfaces(client, operationalOIDs, nil)
+}
+
+// PollOperationalStatusWithInterfaces collects operational status while using
+// cached ifIndex mappings when static discovery has already populated them.
+func PollOperationalStatusWithInterfaces(client ClientInterface, operationalOIDs vendor.OperationalOIDs, interfaces []domain.Interface) (uptimeSecs *float64, statuses map[string]string, err error) {
 	uptimeOID := operationalOIDs.SysUpTimeOID
 	if uptimeOID == "" {
 		uptimeOID = OidSysUpTime
@@ -101,18 +107,9 @@ func PollOperationalStatus(client ClientInterface, operationalOIDs vendor.Operat
 		}
 	}
 
-	ifNames := make(map[int]string)
-	for _, pdu := range bulkWalkSafe(client, OidIfName) {
-		if idx := lastOIDIndex(pdu.Name, OidIfName); idx >= 0 {
-			ifNames[idx] = stringFromPDU(pdu)
-		}
-	}
+	ifNames := interfaceNamesByIndex(interfaces)
 	if len(ifNames) == 0 {
-		for _, pdu := range bulkWalkSafe(client, OidIfDescr) {
-			if idx := lastOIDIndex(pdu.Name, OidIfDescr); idx >= 0 {
-				ifNames[idx] = stringFromPDU(pdu)
-			}
-		}
+		ifNames = walkInterfaceNames(client)
 	}
 
 	statusPDUs, err := client.BulkWalk(statusOID)
@@ -141,19 +138,15 @@ func PollOperationalStatus(client ClientInterface, operationalOIDs vendor.Operat
 // and returns raw counter values per interface. The caller is responsible for
 // computing rates by comparing two successive polls.
 func PollInterfaceCounters(client ClientInterface) []InterfaceCounter {
-	// Build ifIndex→ifName map from ifXTable (or ifDescr as fallback)
-	ifNames := make(map[int]string)
-	for _, pdu := range bulkWalkSafe(client, OidIfName) {
-		if idx := lastOIDIndex(pdu.Name, OidIfName); idx >= 0 {
-			ifNames[idx] = stringFromPDU(pdu)
-		}
-	}
+	return PollInterfaceCountersWithInterfaces(client, nil)
+}
+
+// PollInterfaceCountersWithInterfaces walks interface counters while using
+// cached ifIndex mappings when static discovery has already populated them.
+func PollInterfaceCountersWithInterfaces(client ClientInterface, interfaces []domain.Interface) []InterfaceCounter {
+	ifNames := interfaceNamesByIndex(interfaces)
 	if len(ifNames) == 0 {
-		for _, pdu := range bulkWalkSafe(client, OidIfDescr) {
-			if idx := lastOIDIndex(pdu.Name, OidIfDescr); idx >= 0 {
-				ifNames[idx] = stringFromPDU(pdu)
-			}
-		}
+		ifNames = walkInterfaceNames(client)
 	}
 
 	inOctets := make(map[int]uint64)
@@ -180,6 +173,44 @@ func PollInterfaceCounters(client ClientInterface) []InterfaceCounter {
 		})
 	}
 	return counters
+}
+
+func walkInterfaceNames(client ClientInterface) map[int]string {
+	ifNames := make(map[int]string)
+	for _, pdu := range bulkWalkSafe(client, OidIfName) {
+		if idx := lastOIDIndex(pdu.Name, OidIfName); idx >= 0 {
+			ifNames[idx] = stringFromPDU(pdu)
+		}
+	}
+	if len(ifNames) == 0 {
+		for _, pdu := range bulkWalkSafe(client, OidIfDescr) {
+			if idx := lastOIDIndex(pdu.Name, OidIfDescr); idx >= 0 {
+				ifNames[idx] = stringFromPDU(pdu)
+			}
+		}
+	}
+	return ifNames
+}
+
+func interfaceNamesByIndex(interfaces []domain.Interface) map[int]string {
+	if len(interfaces) == 0 {
+		return nil
+	}
+	ifNames := make(map[int]string, len(interfaces))
+	for _, iface := range interfaces {
+		if iface.IfIndex <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(iface.IfName)
+		if name == "" {
+			name = strings.TrimSpace(iface.IfDescr)
+		}
+		if name == "" {
+			continue
+		}
+		ifNames[iface.IfIndex] = name
+	}
+	return ifNames
 }
 
 // DiscoveryResult holds the aggregated data from an SNMP discovery walk.
