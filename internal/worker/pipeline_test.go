@@ -1338,6 +1338,80 @@ func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachabilit
 	}
 }
 
+func TestPipelineOrchestratorRunTask_VirtualPrometheusUnreachableDrivesTCPReachability(t *testing.T) {
+	deviceID := uuid.New()
+	task := scheduler.PollTask{
+		RunID:            92,
+		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassOperational),
+		VolatilityClass:  domain.VolatilityClassOperational,
+		ExpectedInterval: domain.OperationalClassInterval,
+		Device: domain.Device{
+			ID:                   deviceID,
+			DeviceType:           domain.DeviceTypeVirtual,
+			IP:                   "192.0.2.91",
+			Status:               domain.DeviceStatusUnknown,
+			PrometheusLabelName:  "instance",
+			PrometheusLabelValue: "192.0.2.91",
+		},
+	}
+
+	sched := newPipelineTestScheduler()
+	store := state.NewStore()
+	promClient := &fakePrometheusClient{
+		probeStatuses: map[string]bool{"192.0.2.91": false},
+	}
+	settingsRepo := newMockWorkerSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingPrometheusURL, "http://prometheus.test"); err != nil {
+		t.Fatalf("set prometheus_url: %v", err)
+	}
+
+	var snmpCalls int
+	operational := collector.NewOperationalCollector(
+		buildEmptyVendorRegistry(),
+		func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+			snmpCalls++
+			return nil, errors.New("virtual operational task should not create an SNMP client")
+		},
+	)
+
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		store,
+		newPipelineTestCache([]domain.Device{task.Device}, nil),
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		newPerformanceTestCollector(t),
+		operational,
+		newStaticTestCollector(t),
+		collector.NewPrometheusCollector(promClient),
+		&fakeTopologyService{},
+		settingsRepo,
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+	pipeline.prometheusMonitor.publishStatus(ws.PrometheusStatusPayload{
+		Enabled:   true,
+		Available: true,
+	})
+
+	pipeline.taskRunner.runTask(context.Background(), task)
+
+	deviceState, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected virtual operational task to update state store")
+	}
+	if deviceState.Reachability != state.ReachabilitySoftDown {
+		t.Fatalf("Reachability = %q, want %q", deviceState.Reachability, state.ReachabilitySoftDown)
+	}
+	if deviceState.ConsecutiveFailures != 1 {
+		t.Fatalf("ConsecutiveFailures = %d, want 1", deviceState.ConsecutiveFailures)
+	}
+	if snmpCalls != 0 {
+		t.Fatalf("expected virtual operational task to bypass SNMP collector, got %d SNMP call(s)", snmpCalls)
+	}
+}
+
 func newBroadcastTestPipeline(t *testing.T) (*PipelineOrchestrator, *ws.Hub, *state.Store, chan struct{}, uuid.UUID) {
 	t.Helper()
 

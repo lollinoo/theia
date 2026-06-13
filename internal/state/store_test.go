@@ -1094,7 +1094,56 @@ func TestEssentialSNMPFailureWithReachableNetworkKeepsDeviceReachable(t *testing
 	}
 }
 
-func TestReachability_MixedPortNetworkEvidenceIsSoftDown(t *testing.T) {
+func TestEssentialSNMPFailureWithUnknownNetworkPreservesExistingReachability(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	now := time.Date(2026, 4, 25, 12, 10, 0, 0, time.UTC)
+
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		ExpectedInterval: time.Second,
+		Timestamp:        now,
+		PollSuccess:      true,
+		Essential: &EssentialUpdate{
+			PollStatus:       polling.PollStatusComplete,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateTrue,
+			Uptime:           polling.FieldStateOK,
+			CPU:              polling.FieldStateOK,
+			Memory:           polling.FieldStateOK,
+		},
+	})
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		ExpectedInterval: time.Second,
+		Timestamp:        now.Add(time.Second),
+		PollSuccess:      false,
+		Essential: &EssentialUpdate{
+			PollStatus:       polling.PollStatusFailed,
+			NetworkReachable: polling.TriStateUnknown,
+			SNMPReachable:    polling.TriStateFalse,
+			Uptime:           polling.FieldStateError,
+			CPU:              polling.FieldStateMissing,
+			Memory:           polling.FieldStateMissing,
+		},
+	})
+
+	ds, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing")
+	}
+	if ds.Reachability != ReachabilityUp {
+		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilityUp)
+	}
+	if ds.PrimaryHealth != polling.PrimaryHealthSNMPDegraded {
+		t.Fatalf("PrimaryHealth = %q, want %q", ds.PrimaryHealth, polling.PrimaryHealthSNMPDegraded)
+	}
+	if ds.ConsecutiveFailures != 0 {
+		t.Fatalf("ConsecutiveFailures = %d, want 0 without TCP-down evidence", ds.ConsecutiveFailures)
+	}
+}
+
+func TestReachability_MixedPortNetworkEvidenceKeepsDeviceReachable(t *testing.T) {
 	s := NewStore()
 	id := uuid.New()
 
@@ -1105,8 +1154,8 @@ func TestReachability_MixedPortNetworkEvidenceIsSoftDown(t *testing.T) {
 		PollSuccess:      false,
 		Essential: &EssentialUpdate{
 			PollStatus:       polling.PollStatusFailed,
-			NetworkReachable: polling.TriStateUnknown,
-			SNMPReachable:    polling.TriStateTrue,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateFalse,
 			NetworkReachabilityResults: []polling.NetworkProbeResult{
 				{Port: 22, Reachable: true},
 				{Port: 26, Reachable: false, Error: "closed"},
@@ -1121,14 +1170,14 @@ func TestReachability_MixedPortNetworkEvidenceIsSoftDown(t *testing.T) {
 	if !ok {
 		t.Fatal("device missing")
 	}
-	if ds.Reachability != ReachabilitySoftDown {
-		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilitySoftDown)
+	if ds.Reachability != ReachabilityUp {
+		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilityUp)
 	}
 	if ds.PrimaryHealth != polling.PrimaryHealthSNMPDegraded {
 		t.Fatalf("PrimaryHealth = %q, want %q", ds.PrimaryHealth, polling.PrimaryHealthSNMPDegraded)
 	}
-	if ds.ConsecutiveFailures != 1 {
-		t.Fatalf("ConsecutiveFailures = %d, want 1", ds.ConsecutiveFailures)
+	if ds.ConsecutiveFailures != 0 {
+		t.Fatalf("ConsecutiveFailures = %d, want 0", ds.ConsecutiveFailures)
 	}
 }
 
@@ -1171,6 +1220,54 @@ func TestOperationalFailureDoesNotOverrideReachableSNMPDegradedEvidence(t *testi
 	}
 	if ds.ConsecutiveFailures != 0 {
 		t.Fatalf("ConsecutiveFailures = %d, want 0 while network is reachable", ds.ConsecutiveFailures)
+	}
+	if ds.PrimaryHealth != polling.PrimaryHealthSNMPDegraded {
+		t.Fatalf("PrimaryHealth = %q, want %q", ds.PrimaryHealth, polling.PrimaryHealthSNMPDegraded)
+	}
+	if ds.NetworkReachable != polling.TriStateTrue || ds.SNMPReachable != polling.TriStateFalse {
+		t.Fatalf("reachability evidence = network %q snmp %q, want true/false", ds.NetworkReachable, ds.SNMPReachable)
+	}
+}
+
+func TestOperationalSNMPFailuresDoNotChangeTCPReachability(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	now := time.Date(2026, 4, 25, 12, 15, 0, 0, time.UTC)
+
+	s.Update(StateUpdate{
+		DeviceID:         id,
+		ExpectedInterval: time.Second,
+		Timestamp:        now,
+		PollSuccess:      true,
+		Essential: &EssentialUpdate{
+			PollStatus:       polling.PollStatusComplete,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateTrue,
+			Uptime:           polling.FieldStateOK,
+			CPU:              polling.FieldStateOK,
+			Memory:           polling.FieldStateOK,
+		},
+	})
+
+	for i := 0; i < 3; i++ {
+		s.Update(StateUpdate{
+			DeviceID:         id,
+			VolatilityClass:  domain.VolatilityClassOperational,
+			ExpectedInterval: time.Second,
+			Timestamp:        now.Add(time.Duration(i+1) * time.Second),
+			PollSuccess:      false,
+		})
+	}
+
+	ds, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing")
+	}
+	if ds.Reachability != ReachabilityUp {
+		t.Fatalf("Reachability = %q, want %q", ds.Reachability, ReachabilityUp)
+	}
+	if ds.ConsecutiveFailures != 0 {
+		t.Fatalf("ConsecutiveFailures = %d, want 0 while TCP remains reachable", ds.ConsecutiveFailures)
 	}
 	if ds.PrimaryHealth != polling.PrimaryHealthSNMPDegraded {
 		t.Fatalf("PrimaryHealth = %q, want %q", ds.PrimaryHealth, polling.PrimaryHealthSNMPDegraded)

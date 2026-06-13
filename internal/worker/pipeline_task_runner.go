@@ -243,7 +243,7 @@ func (r *pipelineTaskRunner) runVirtualOperationalTask(ctx context.Context, task
 			if enrichment.ProbeReachable != nil {
 				result.Reachable = *enrichment.ProbeReachable
 				completedAt := completionTime(result.CollectedAt)
-				p.stateStore.Update(result.ToStoreUpdate(task.ExpectedInterval))
+				p.stateStore.Update(virtualReachabilityStoreUpdate(task, result))
 				p.stateStore.Update(state.StateUpdate{
 					DeviceID:         task.Device.ID,
 					VolatilityClass:  domain.VolatilityClassPerformance,
@@ -266,7 +266,7 @@ func (r *pipelineTaskRunner) runVirtualOperationalTask(ctx context.Context, task
 	observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 
 	completedAt := completionTime(result.CollectedAt)
-	p.stateStore.Update(result.ToStoreUpdate(task.ExpectedInterval))
+	p.stateStore.Update(virtualReachabilityStoreUpdate(task, result))
 	// Virtual nodes only run the operational tier, so stamp freshness metadata
 	// explicitly to keep the UI footer out of the "waiting for first poll" state.
 	p.stateStore.Update(state.StateUpdate{
@@ -278,6 +278,31 @@ func (r *pipelineTaskRunner) runVirtualOperationalTask(ctx context.Context, task
 	})
 	r.publishSubscribedDetailDelta(task.Device)
 	return completedAt
+}
+
+func virtualReachabilityStoreUpdate(task scheduler.PollTask, result collector.OperationalResult) state.StateUpdate {
+	networkReachable := polling.TriStateFalse
+	pollStatus := polling.PollStatusFailed
+	if result.Reachable {
+		networkReachable = polling.TriStateTrue
+		pollStatus = polling.PollStatusComplete
+	}
+
+	return state.StateUpdate{
+		DeviceID:         task.Device.ID,
+		VolatilityClass:  domain.VolatilityClassOperational,
+		PollSuccess:      result.Reachable,
+		ExpectedInterval: task.ExpectedInterval,
+		Timestamp:        completionTime(result.CollectedAt),
+		Essential: &state.EssentialUpdate{
+			PollStatus:       pollStatus,
+			NetworkReachable: networkReachable,
+			SNMPReachable:    polling.TriStateUnknown,
+			Uptime:           polling.FieldStateMissing,
+			CPU:              polling.FieldStateMissing,
+			Memory:           polling.FieldStateMissing,
+		},
+	}
 }
 
 func (r *pipelineTaskRunner) publishSubscribedDetailDelta(device domain.Device) {
