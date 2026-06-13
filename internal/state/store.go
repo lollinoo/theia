@@ -203,12 +203,10 @@ func (s *Store) Update(u StateUpdate) {
 		next.Health = HealthStatusUnknown
 	}
 
-	// Always write next into the map so that fields which advance on every
-	// poll (LastPolledAt and, when metrics are present, Metrics.CollectedAt)
-	// remain fresh in Snapshot() even when the diff equality otherwise
-	// reports no semantic change. The `changed` flag still gates the
-	// Changes channel emission so subscribers do not see spurious no-op
-	// notifications (WR-05).
+	// Always write next into the map so fields which advance on every poll
+	// remain fresh in Snapshot() even when the diff equality reports no
+	// semantic change. The `changed` flag still gates Changes() emission so
+	// subscribers do not rebuild runtime snapshots for timestamp-only updates.
 	changed := !existed || !deviceStateEqual(prev, next)
 	s.devices[u.DeviceID] = next
 	s.mu.Unlock()
@@ -898,9 +896,6 @@ func deviceStateEqual(a, b DeviceState) bool {
 		return false
 	}
 	if a.Stale != b.Stale {
-		return false
-	}
-	if !a.LastPolledAt.Equal(b.LastPolledAt) {
 		return false
 	}
 	if a.ExpectedInterval != b.ExpectedInterval {

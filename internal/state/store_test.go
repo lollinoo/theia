@@ -1477,6 +1477,58 @@ func TestSnapshot_CollectedAtAdvancesOnIdenticalMetricValues(t *testing.T) {
 	}
 }
 
+func TestChanges_TimestampOnlyPerformanceUpdateDoesNotEmit(t *testing.T) {
+	s := NewStore()
+	id := uuid.New()
+	cpu := 50.0
+	t1 := time.Unix(1_700_000_000, 0)
+
+	s.Update(StateUpdate{
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    id,
+			CPUPercent:  &cpu,
+			CollectedAt: t1,
+		},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        t1,
+	})
+	<-s.Changes()
+
+	t2 := t1.Add(30 * time.Second)
+	s.Update(StateUpdate{
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    id,
+			CPUPercent:  &cpu,
+			CollectedAt: t2,
+		},
+		PollSuccess:      true,
+		ExpectedInterval: time.Second,
+		Timestamp:        t2,
+	})
+
+	ds, ok := s.GetDevice(id)
+	if !ok {
+		t.Fatal("device missing from store")
+	}
+	if !ds.LastPolledAt.Equal(t2) {
+		t.Fatalf("LastPolledAt = %v, want latest timestamp %v", ds.LastPolledAt, t2)
+	}
+	if !ds.Metrics.CollectedAt.Equal(t2) {
+		t.Fatalf("CollectedAt = %v, want latest timestamp %v", ds.Metrics.CollectedAt, t2)
+	}
+	select {
+	case batch := <-s.Changes():
+		t.Fatalf("timestamp-only Update unexpectedly emitted: %v", batch)
+	case <-time.After(150 * time.Millisecond):
+		// expected
+	}
+}
+
 func TestChanges_UnchangedDeviceDoesNotEmit(t *testing.T) {
 	s := NewStore()
 	id := uuid.New()
