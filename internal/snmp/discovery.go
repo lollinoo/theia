@@ -346,82 +346,63 @@ func discoverSoftwareVersion(client ClientInterface, staticOIDs vendor.StaticOID
 	return ""
 }
 
-// discoverInterfaces fetches basic ifTable and ifXTable metrics and merges them.
+// discoverInterfaces fetches only the interface table columns Theia consumes
+// and merges them by ifIndex.
 func discoverInterfaces(client ClientInterface) []domain.Interface {
 	ifMap := make(map[int]*domain.Interface)
 
-	// Walk ifTable
-	ifTablePDUs, err := client.BulkWalk(OidIfTable)
-	if err == nil {
-		for _, pdu := range ifTablePDUs {
-			// Extract ifIndex from the last part of the OID
-			parts := strings.Split(pdu.Name, ".")
-			if len(parts) < 2 {
-				continue
-			}
-			indexStr := parts[len(parts)-1]
-			index, err := strconv.Atoi(indexStr)
-			if err != nil {
-				continue
-			}
-
-			if _, ok := ifMap[index]; !ok {
-				ifMap[index] = &domain.Interface{IfIndex: index}
-			}
-
-			if matchOIDColumn(pdu.Name, OidIfDescr) {
-				ifMap[index].IfDescr = stringFromPDU(pdu)
-				ifMap[index].IfName = ifMap[index].IfDescr // default ifName to ifDescr
-			} else if matchOIDColumn(pdu.Name, OidIfSpeed) {
-				if val, ok := pdu.Value.(uint); ok {
-					ifMap[index].Speed = int64(val)
-				} else if val, ok := pdu.Value.(uint32); ok {
-					ifMap[index].Speed = int64(val)
-				}
-			} else if matchOIDColumn(pdu.Name, OidIfAdminStatus) {
-				ifMap[index].AdminStatus = statusString(pdu.Value)
-			} else if matchOIDColumn(pdu.Name, OidIfOperStatus) {
-				ifMap[index].OperStatus = statusString(pdu.Value)
-			}
+	walkInterfaceColumn(client, OidIfDescr, func(index int, pdu gosnmp.SnmpPDU) {
+		iface := ensureDiscoveredInterface(ifMap, index)
+		iface.IfDescr = stringFromPDU(pdu)
+		if iface.IfName == "" {
+			iface.IfName = iface.IfDescr
 		}
-	}
-
-	// Walk ifXTable to get 64-bit ifHighSpeed and the true ifName (often shorter, e.g. "eth0" vs "Ethernet0")
-	ifXTablePDUs, err := client.BulkWalk(OidIfXTable)
-	if err == nil {
-		for _, pdu := range ifXTablePDUs {
-			parts := strings.Split(pdu.Name, ".")
-			if len(parts) < 2 {
-				continue
-			}
-			indexStr := parts[len(parts)-1]
-			index, err := strconv.Atoi(indexStr)
-			if err != nil {
-				continue
-			}
-
-			if _, ok := ifMap[index]; !ok {
-				continue
-			}
-
-			if matchOIDColumn(pdu.Name, OidIfName) {
-				ifMap[index].IfName = stringFromPDU(pdu)
-			} else if matchOIDColumn(pdu.Name, OidIfHighSpeed) {
-				if val, ok := pdu.Value.(uint); ok && val > 0 {
-					// ifHighSpeed is in megabits/sec
-					ifMap[index].Speed = int64(val) * 1_000_000
-				} else if val, ok := pdu.Value.(uint32); ok && val > 0 {
-					ifMap[index].Speed = int64(val) * 1_000_000
-				}
-			}
+	})
+	walkInterfaceColumn(client, OidIfSpeed, func(index int, pdu gosnmp.SnmpPDU) {
+		ensureDiscoveredInterface(ifMap, index).Speed = int64FromPDU(pdu)
+	})
+	walkInterfaceColumn(client, OidIfAdminStatus, func(index int, pdu gosnmp.SnmpPDU) {
+		ensureDiscoveredInterface(ifMap, index).AdminStatus = statusString(pdu.Value)
+	})
+	walkInterfaceColumn(client, OidIfOperStatus, func(index int, pdu gosnmp.SnmpPDU) {
+		ensureDiscoveredInterface(ifMap, index).OperStatus = statusString(pdu.Value)
+	})
+	walkInterfaceColumn(client, OidIfName, func(index int, pdu gosnmp.SnmpPDU) {
+		ensureDiscoveredInterface(ifMap, index).IfName = stringFromPDU(pdu)
+	})
+	walkInterfaceColumn(client, OidIfHighSpeed, func(index int, pdu gosnmp.SnmpPDU) {
+		if val := int64FromPDU(pdu); val > 0 {
+			// ifHighSpeed is in megabits/sec.
+			ensureDiscoveredInterface(ifMap, index).Speed = val * 1_000_000
 		}
-	}
+	})
 
 	var interfaces []domain.Interface
 	for _, intf := range ifMap {
 		interfaces = append(interfaces, *intf)
 	}
 	return interfaces
+}
+
+func walkInterfaceColumn(client ClientInterface, oid string, visit func(index int, pdu gosnmp.SnmpPDU)) {
+	pdus, err := client.BulkWalk(oid)
+	if err != nil {
+		return
+	}
+	for _, pdu := range pdus {
+		if idx := lastOIDIndex(pdu.Name, oid); idx >= 0 {
+			visit(idx, pdu)
+		}
+	}
+}
+
+func ensureDiscoveredInterface(ifMap map[int]*domain.Interface, index int) *domain.Interface {
+	if iface, ok := ifMap[index]; ok {
+		return iface
+	}
+	iface := &domain.Interface{IfIndex: index}
+	ifMap[index] = iface
+	return iface
 }
 
 // discoverNeighbors fetches LLDP and CDP remote parameters.

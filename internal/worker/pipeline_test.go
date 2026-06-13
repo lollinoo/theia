@@ -408,14 +408,22 @@ func newStaticTestCollector(t *testing.T) *collector.StaticCollector {
 			snmp.OidSysObjectID: {{Name: snmp.OidSysObjectID, Value: ".1.3.6.1.4.1.14988.1"}},
 		},
 		walkResponses: map[string][]gosnmp.SnmpPDU{
-			snmp.OidIfTable: {
+			snmp.OidIfDescr: {
 				{Name: snmp.OidIfDescr + ".1", Value: "uplink"},
+			},
+			snmp.OidIfSpeed: {
 				{Name: snmp.OidIfSpeed + ".1", Value: uint32(1_000_000_000)},
+			},
+			snmp.OidIfAdminStatus: {
 				{Name: snmp.OidIfAdminStatus + ".1", Value: 1},
+			},
+			snmp.OidIfOperStatus: {
 				{Name: snmp.OidIfOperStatus + ".1", Value: 1},
 			},
-			snmp.OidIfXTable: {
+			snmp.OidIfName: {
 				{Name: snmp.OidIfName + ".1", Value: "ether1"},
+			},
+			snmp.OidIfHighSpeed: {
 				{Name: snmp.OidIfHighSpeed + ".1", Value: uint32(1_000)},
 			},
 			snmp.OidLLDPLocPortIfIndex: {
@@ -817,14 +825,22 @@ func TestPipelineOrchestratorBootstrapTaskUsesBootstrapLaneAndPersistsTopology(t
 				snmp.OidSysObjectID: {{Name: snmp.OidSysObjectID, Value: ".1.3.6.1.4.1.14988.1"}},
 			},
 			walkResponses: map[string][]gosnmp.SnmpPDU{
-				snmp.OidIfTable: {
+				snmp.OidIfDescr: {
 					{Name: snmp.OidIfDescr + ".1", Value: "uplink"},
+				},
+				snmp.OidIfSpeed: {
 					{Name: snmp.OidIfSpeed + ".1", Value: uint32(1_000_000_000)},
+				},
+				snmp.OidIfAdminStatus: {
 					{Name: snmp.OidIfAdminStatus + ".1", Value: 1},
+				},
+				snmp.OidIfOperStatus: {
 					{Name: snmp.OidIfOperStatus + ".1", Value: 1},
 				},
-				snmp.OidIfXTable: {
+				snmp.OidIfName: {
 					{Name: snmp.OidIfName + ".1", Value: "ether1"},
+				},
+				snmp.OidIfHighSpeed: {
 					{Name: snmp.OidIfHighSpeed + ".1", Value: uint32(1_000)},
 				},
 				snmp.OidLLDPLocPortIfIndex: {

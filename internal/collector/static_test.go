@@ -67,12 +67,16 @@ func TestStaticCollectorPoll(t *testing.T) {
 						},
 					},
 					bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
-						snmp.OidIfTable: {
+						snmp.OidIfDescr: {
 							{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+						},
+						snmp.OidIfOperStatus: {
 							{Name: snmp.OidIfOperStatus + ".1", Type: gosnmp.Integer, Value: 1},
 						},
-						snmp.OidIfXTable: {
+						snmp.OidIfName: {
 							{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("eth1")},
+						},
+						snmp.OidIfHighSpeed: {
 							{Name: snmp.OidIfHighSpeed + ".1", Type: gosnmp.Gauge32, Value: uint(1000)},
 						},
 						snmp.OidLLDPLocPortIfIndex: {
@@ -177,10 +181,10 @@ func TestStaticCollectorPoll(t *testing.T) {
 						},
 					},
 					bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
-						snmp.OidIfTable: {
+						snmp.OidIfDescr: {
 							{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 						},
-						snmp.OidIfXTable: {
+						snmp.OidIfName: {
 							{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 						},
 					},
@@ -304,10 +308,10 @@ func TestStaticCollectorPoll_PropagatesNeighborDiscoveryFailures(t *testing.T) {
 			},
 		},
 		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
-			snmp.OidIfTable: {
+			snmp.OidIfDescr: {
 				{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 			},
-			snmp.OidIfXTable: {
+			snmp.OidIfName: {
 				{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 			},
 		},
@@ -401,10 +405,10 @@ func TestStaticCollectorPoll_RecordsBulkWalkMetrics(t *testing.T) {
 			},
 		},
 		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
-			snmp.OidIfTable: {
+			snmp.OidIfDescr: {
 				{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 			},
-			snmp.OidIfXTable: {
+			snmp.OidIfName: {
 				{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 			},
 		},
@@ -430,10 +434,21 @@ func TestStaticCollectorPoll_RecordsBulkWalkMetrics(t *testing.T) {
 	}
 
 	body := string(metrics.MarshalPrometheus())
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_table_walk",result="success"} 1`)
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_table_walk",result="success"} 1`)
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_x_table_walk",result="success"} 1`)
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_x_table_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_descr_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_descr_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_speed_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_speed_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_admin_status_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_admin_status_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_oper_status_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_oper_status_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_name_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_name_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_high_speed_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_high_speed_walk",result="success"} 1`)
+	if strings.Contains(body, `collector="static",operation="if_table_walk"`) || strings.Contains(body, `collector="static",operation="if_x_table_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded full interface table walks:\n%s", body)
+	}
 	if strings.Contains(body, `collector="static",operation="bulk_walk"`) {
 		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped static walks:\n%s", body)
 	}
