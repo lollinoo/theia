@@ -65,8 +65,27 @@ func TestStaticCollectorPoll(t *testing.T) {
 						".1.3.6.1.4.1.14988.1.1.4.4.0": {
 							{Name: ".1.3.6.1.4.1.14988.1.1.4.4.0", Type: gosnmp.OctetString, Value: []byte("7.22.1")},
 						},
+						".1.3.6.1.4.1.14988.1.1.3.10.0": {
+							{Name: ".1.3.6.1.4.1.14988.1.1.3.10.0", Type: gosnmp.Integer, Value: 481},
+						},
 					},
 					bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+						snmp.OidHrProcessorLoad: {
+							{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 20},
+							{Name: snmp.OidHrProcessorLoad + ".2", Type: gosnmp.Integer, Value: 40},
+						},
+						snmp.OidHrStorageType: {
+							{Name: snmp.OidHrStorageType + ".1", Type: gosnmp.ObjectIdentifier, Value: snmp.OidHrStorageRam},
+						},
+						snmp.OidHrStorageAllocUnits: {
+							{Name: snmp.OidHrStorageAllocUnits + ".1", Type: gosnmp.Integer, Value: 1},
+						},
+						snmp.OidHrStorageSize: {
+							{Name: snmp.OidHrStorageSize + ".1", Type: gosnmp.Integer, Value: 200},
+						},
+						snmp.OidHrStorageUsed: {
+							{Name: snmp.OidHrStorageUsed + ".1", Type: gosnmp.Integer, Value: 100},
+						},
 						snmp.OidIfDescr: {
 							{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 						},
@@ -133,6 +152,9 @@ func TestStaticCollectorPoll(t *testing.T) {
 				if result.DeviceType != domain.DeviceTypeRouter {
 					t.Fatalf("DeviceType = %q, want %q", result.DeviceType, domain.DeviceTypeRouter)
 				}
+				assertFloatPtrEqual(t, result.Metrics.CPUPercent, 30, "CPUPercent")
+				assertFloatPtrEqual(t, result.Metrics.MemPercent, 50, "MemPercent")
+				assertFloatPtrEqual(t, result.Metrics.TempCelsius, 48.1, "TempCelsius")
 				if len(result.Interfaces) != 1 {
 					t.Fatalf("interface count = %d, want 1", len(result.Interfaces))
 				}
@@ -308,6 +330,27 @@ func TestStaticCollectorPoll_PropagatesNeighborDiscoveryFailures(t *testing.T) {
 			},
 		},
 		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 30},
+			},
+			snmp.OidHrStorageType: {
+				{Name: snmp.OidHrStorageType + ".1", Type: gosnmp.ObjectIdentifier, Value: snmp.OidHrStorageRam},
+			},
+			snmp.OidHrStorageAllocUnits: {
+				{Name: snmp.OidHrStorageAllocUnits + ".1", Type: gosnmp.Integer, Value: 1},
+			},
+			snmp.OidHrStorageSize: {
+				{Name: snmp.OidHrStorageSize + ".1", Type: gosnmp.Integer, Value: 200},
+			},
+			snmp.OidHrStorageUsed: {
+				{Name: snmp.OidHrStorageUsed + ".1", Type: gosnmp.Integer, Value: 100},
+			},
+			snmp.OidEntPhySensorType: {
+				{Name: snmp.OidEntPhySensorType + ".1", Type: gosnmp.Integer, Value: 8},
+			},
+			snmp.OidEntPhySensorValue: {
+				{Name: snmp.OidEntPhySensorValue + ".1", Type: gosnmp.Integer, Value: 47},
+			},
 			snmp.OidIfDescr: {
 				{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 			},
@@ -405,6 +448,27 @@ func TestStaticCollectorPoll_RecordsBulkWalkMetrics(t *testing.T) {
 			},
 		},
 		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 30},
+			},
+			snmp.OidHrStorageType: {
+				{Name: snmp.OidHrStorageType + ".1", Type: gosnmp.ObjectIdentifier, Value: snmp.OidHrStorageRam},
+			},
+			snmp.OidHrStorageAllocUnits: {
+				{Name: snmp.OidHrStorageAllocUnits + ".1", Type: gosnmp.Integer, Value: 1},
+			},
+			snmp.OidHrStorageSize: {
+				{Name: snmp.OidHrStorageSize + ".1", Type: gosnmp.Integer, Value: 200},
+			},
+			snmp.OidHrStorageUsed: {
+				{Name: snmp.OidHrStorageUsed + ".1", Type: gosnmp.Integer, Value: 100},
+			},
+			snmp.OidEntPhySensorType: {
+				{Name: snmp.OidEntPhySensorType + ".1", Type: gosnmp.Integer, Value: 8},
+			},
+			snmp.OidEntPhySensorValue: {
+				{Name: snmp.OidEntPhySensorValue + ".1", Type: gosnmp.Integer, Value: 47},
+			},
 			snmp.OidIfDescr: {
 				{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 			},
@@ -446,6 +510,14 @@ func TestStaticCollectorPoll_RecordsBulkWalkMetrics(t *testing.T) {
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_name_walk",result="success"} 1`)
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_high_speed_walk",result="success"} 1`)
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_high_speed_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="cpu_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="cpu_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="memory_type_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="memory_alloc_units_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="memory_size_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="memory_used_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="temperature_sensor_type_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="temperature_sensor_value_walk",result="success"} 1`)
 	if strings.Contains(body, `collector="static",operation="if_table_walk"`) || strings.Contains(body, `collector="static",operation="if_x_table_walk"`) {
 		t.Fatalf("metrics output unexpectedly recorded full interface table walks:\n%s", body)
 	}

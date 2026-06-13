@@ -723,8 +723,27 @@ func applySNMPFailureOnlyUpdate(next *DeviceState, prev DeviceState) {
 }
 
 func applyStaticUpdate(next *DeviceState, update StateUpdate) {
-	_ = next
-	_ = update
+	if !update.PollSuccess || update.Metrics == nil {
+		return
+	}
+
+	merged := cloneMetrics(next.Metrics)
+	merged.DeviceID = update.DeviceID
+	if update.Metrics.CPUPercent != nil {
+		merged.CPUPercent = cloneFloat64Ptr(update.Metrics.CPUPercent)
+	}
+	if update.Metrics.MemPercent != nil {
+		merged.MemPercent = cloneFloat64Ptr(update.Metrics.MemPercent)
+	}
+	if update.Metrics.TempCelsius != nil {
+		merged.TempCelsius = cloneFloat64Ptr(update.Metrics.TempCelsius)
+	}
+	merged.CollectedAt = update.Metrics.CollectedAt
+	next.Metrics = merged
+	markMetricFieldStates(next, update.Metrics)
+	if next.Reachability == ReachabilityUp {
+		evaluateHealth(next, &next.Metrics)
+	}
 }
 
 func applyLegacyUpdate(next *DeviceState, prev DeviceState, existed bool, update StateUpdate) {

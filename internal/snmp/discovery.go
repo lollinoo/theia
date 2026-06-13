@@ -886,6 +886,15 @@ func PollDeviceMetrics(client ClientInterface, perfOIDs vendor.PerformanceOIDs) 
 		}
 	}
 
+	cpuPercent, memPercent, tempCelsius = PollDeviceHealthMetrics(client, perfOIDs)
+
+	return
+}
+
+// PollDeviceHealthMetrics collects low-priority CPU, memory, and temperature
+// metrics. Static polling owns these table walks so the fast performance lane
+// can focus on uptime and interface counters.
+func PollDeviceHealthMetrics(client ClientInterface, perfOIDs vendor.PerformanceOIDs) (cpuPercent, memPercent, tempCelsius *float64) {
 	// CPU — average of all hrProcessorLoad entries (one per CPU core)
 	cpuOID := OidHrProcessorLoad
 	if perfOIDs.CPUOID != "" {
@@ -909,10 +918,8 @@ func PollDeviceMetrics(client ClientInterface, perfOIDs vendor.PerformanceOIDs) 
 		}
 	}
 
-	// Memory — hrStorage table, find the RAM entry
 	memPercent = pollMemoryPercent(client)
 
-	// Temperature — try vendor-specific OID first, fall back to entity sensor MIB
 	tempOID := perfOIDs.TemperatureOID
 	tempScale := perfOIDs.TemperatureScale
 	if tempOID != "" {

@@ -76,11 +76,6 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 		return result
 	}
 
-	vendorName := strings.TrimSpace(device.Vendor)
-	if vendorName == "" {
-		vendorName = "default"
-	}
-
 	client, err := c.newClient(device.IP, device.SNMPCredentials, timeout, retries)
 	if err != nil {
 		result.Err = fmt.Errorf("create SNMP client: %w", err)
@@ -103,7 +98,7 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 		return result
 	}
 	probeStartedAt := time.Now()
-	_, err = client.Get([]string{snmp.OidSysUpTime})
+	uptimePDUs, err := client.Get([]string{snmp.OidSysUpTime})
 	observability.Default().ObserveSNMPCollectorOperation(
 		"performance",
 		"sysuptime_probe",
@@ -115,23 +110,17 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 		result.Err = fmt.Errorf("performance uptime probe: %w", err)
 		return result
 	}
+	result.Metrics.UptimeSecs = sysUpTimeSecondsFromPDUs(uptimePDUs)
 
-	perfOIDs := c.registry.ResolvePerformanceOIDs(vendorName)
 	instrumentedClient := instrumentedSNMPBulkWalkClient{
 		delegate:           client,
 		collector:          "performance",
-		bulkWalkOperations: performanceBulkWalkOperations(perfOIDs),
+		bulkWalkOperations: performanceBulkWalkOperations(),
 	}
-	guardedClient := newPerformanceSNMPWalkGuard(instrumentedClient, perfOIDs)
-	cpuPercent, memPercent, uptimeSecs, tempCelsius := snmp.PollDeviceMetrics(guardedClient, perfOIDs)
-	result.Metrics.CPUPercent = cloneFloat64Ptr(cpuPercent)
-	result.Metrics.MemPercent = cloneFloat64Ptr(memPercent)
-	result.Metrics.UptimeSecs = cloneFloat64Ptr(uptimeSecs)
-	result.Metrics.TempCelsius = cloneFloat64Ptr(tempCelsius)
 
 	if hasCachedInterfaceIndexes(device.Interfaces) {
 		speedByName, speedByDescr := indexInterfaceSpeeds(device.Interfaces)
-		counters := snmp.PollInterfaceCountersWithInterfaces(guardedClient, device.Interfaces)
+		counters := snmp.PollInterfaceCountersWithInterfaces(instrumentedClient, device.Interfaces)
 		result.Counters = make([]InterfaceCounterSnapshot, 0, len(counters))
 		for _, counter := range counters {
 			result.Counters = append(result.Counters, InterfaceCounterSnapshot{
@@ -152,7 +141,14 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 	return result
 }
 
-func performanceBulkWalkOperations(perfOIDs vendor.PerformanceOIDs) map[string]string {
+func performanceBulkWalkOperations() map[string]string {
+	return map[string]string{
+		snmp.OidIfHCInOctets:  "if_hc_in_octets_walk",
+		snmp.OidIfHCOutOctets: "if_hc_out_octets_walk",
+	}
+}
+
+func deviceHealthBulkWalkOperations(perfOIDs vendor.PerformanceOIDs) map[string]string {
 	cpuOID := strings.TrimSpace(perfOIDs.CPUOID)
 	if cpuOID == "" {
 		cpuOID = snmp.OidHrProcessorLoad
@@ -166,48 +162,38 @@ func performanceBulkWalkOperations(perfOIDs vendor.PerformanceOIDs) map[string]s
 		snmp.OidHrStorageUsed:       "memory_used_walk",
 		snmp.OidEntPhySensorType:    "temperature_sensor_type_walk",
 		snmp.OidEntPhySensorValue:   "temperature_sensor_value_walk",
-		snmp.OidIfName:              "if_name_walk",
-		snmp.OidIfDescr:             "if_descr_walk",
-		snmp.OidIfHCInOctets:        "if_hc_in_octets_walk",
-		snmp.OidIfHCOutOctets:       "if_hc_out_octets_walk",
 	}
 }
 
-type performanceSNMPWalkGuard struct {
-	delegate              snmp.ClientInterface
-	stopAfterTimeoutRoots map[string]struct{}
-	stopped               bool
-}
-
-func newPerformanceSNMPWalkGuard(delegate snmp.ClientInterface, perfOIDs vendor.PerformanceOIDs) *performanceSNMPWalkGuard {
-	cpuOID := strings.TrimSpace(perfOIDs.CPUOID)
-	if cpuOID == "" {
-		cpuOID = snmp.OidHrProcessorLoad
-	}
-	return &performanceSNMPWalkGuard{
-		delegate: delegate,
-		stopAfterTimeoutRoots: map[string]struct{}{
-			cpuOID:                {},
-			snmp.OidHrStorageType: {},
-		},
-	}
-}
-
-func (g *performanceSNMPWalkGuard) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
-	return g.delegate.Get(oids)
-}
-
-func (g *performanceSNMPWalkGuard) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
-	if g.stopped {
-		return nil, nil
-	}
-	pdus, err := g.delegate.BulkWalk(rootOID)
-	if err != nil && classifySNMPCollectorResult(err) == "timeout" {
-		if _, ok := g.stopAfterTimeoutRoots[strings.TrimSpace(rootOID)]; ok {
-			g.stopped = true
+func sysUpTimeSecondsFromPDUs(pdus []gosnmp.SnmpPDU) *float64 {
+	for _, pdu := range pdus {
+		if pdu.Name != snmp.OidSysUpTime {
+			continue
+		}
+		if v := uint32FromSNMPPDU(pdu); v > 0 {
+			secs := float64(v) / 100.0
+			return &secs
 		}
 	}
-	return pdus, err
+	return nil
+}
+
+func uint32FromSNMPPDU(pdu gosnmp.SnmpPDU) uint32 {
+	switch v := pdu.Value.(type) {
+	case uint32:
+		return v
+	case uint:
+		return uint32(v)
+	case int:
+		if v >= 0 {
+			return uint32(v)
+		}
+	case int32:
+		if v >= 0 {
+			return uint32(v)
+		}
+	}
+	return 0
 }
 
 type instrumentedSNMPBulkWalkClient struct {

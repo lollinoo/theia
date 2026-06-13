@@ -559,6 +559,9 @@ func TestStoreUpdate_StaticPollDoesNotOverwritePerformanceFreshnessMetadata(t *t
 	staticAt := perfAt.Add(5 * time.Minute)
 
 	cpu := 38.0
+	staticCPU := 41.0
+	staticMem := 57.5
+	staticTemp := 44.0
 	tx := 750.0
 	rx := 1250.0
 	util := 21.0
@@ -588,8 +591,14 @@ func TestStoreUpdate_StaticPollDoesNotOverwritePerformanceFreshnessMetadata(t *t
 	<-s.Changes()
 
 	s.Update(StateUpdate{
-		DeviceID:         id,
-		VolatilityClass:  domain.VolatilityClassStatic,
+		DeviceID:        id,
+		VolatilityClass: domain.VolatilityClassStatic,
+		Metrics: &domain.DeviceMetrics{
+			CPUPercent:  &staticCPU,
+			MemPercent:  &staticMem,
+			TempCelsius: &staticTemp,
+			CollectedAt: staticAt,
+		},
 		PollSuccess:      true,
 		ExpectedInterval: 5 * time.Minute,
 		Timestamp:        staticAt,
@@ -599,7 +608,9 @@ func TestStoreUpdate_StaticPollDoesNotOverwritePerformanceFreshnessMetadata(t *t
 	if !ok {
 		t.Fatal("device missing")
 	}
-	assertFloatPtrEqual(t, ds.Metrics.CPUPercent, cpu, "CPUPercent")
+	assertFloatPtrEqual(t, ds.Metrics.CPUPercent, staticCPU, "CPUPercent")
+	assertFloatPtrEqual(t, ds.Metrics.MemPercent, staticMem, "MemPercent")
+	assertFloatPtrEqual(t, ds.Metrics.TempCelsius, staticTemp, "TempCelsius")
 	if len(ds.LinkMetrics) != 1 {
 		t.Fatalf("LinkMetrics len = %d, want 1", len(ds.LinkMetrics))
 	}

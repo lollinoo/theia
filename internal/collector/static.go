@@ -87,17 +87,18 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 		return result
 	}
 
+	perfOIDs := c.registry.ResolvePerformanceOIDs(device.Vendor)
 	instrumentedClient := instrumentedSNMPBulkWalkClient{
 		delegate:  client,
 		collector: "static",
-		bulkWalkOperations: map[string]string{
+		bulkWalkOperations: mergeBulkWalkOperations(map[string]string{
 			snmp.OidIfDescr:       "if_descr_walk",
 			snmp.OidIfSpeed:       "if_speed_walk",
 			snmp.OidIfAdminStatus: "if_admin_status_walk",
 			snmp.OidIfOperStatus:  "if_oper_status_walk",
 			snmp.OidIfName:        "if_name_walk",
 			snmp.OidIfHighSpeed:   "if_high_speed_walk",
-		},
+		}, deviceHealthBulkWalkOperations(perfOIDs)),
 	}
 	discovery, err := snmp.DiscoverDeviceWithPolicy(instrumentedClient, c.registry, snmp.NeighborDiscoveryPolicyFromMode(topologyMode))
 	if err != nil {
@@ -107,6 +108,17 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 	if discovery == nil {
 		result.Err = errors.New("discover device: nil result")
 		return result
+	}
+
+	perfOIDs = c.registry.ResolvePerformanceOIDs(discovery.Vendor)
+	instrumentedClient.bulkWalkOperations = mergeBulkWalkOperations(instrumentedClient.bulkWalkOperations, deviceHealthBulkWalkOperations(perfOIDs))
+	cpuPercent, memPercent, tempCelsius := snmp.PollDeviceHealthMetrics(instrumentedClient, perfOIDs)
+	result.Metrics = domain.DeviceMetrics{
+		DeviceID:    device.ID,
+		CPUPercent:  cloneFloat64Ptr(cpuPercent),
+		MemPercent:  cloneFloat64Ptr(memPercent),
+		TempCelsius: cloneFloat64Ptr(tempCelsius),
+		CollectedAt: collectedAt,
 	}
 
 	result.SysName = discovery.SysName
@@ -122,4 +134,18 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 	result.NeighborDiscoveryFailures = append([]snmp.NeighborDiscoveryFailure(nil), discovery.NeighborDiscoveryFailures...)
 
 	return result
+}
+
+func mergeBulkWalkOperations(maps ...map[string]string) map[string]string {
+	total := 0
+	for _, operations := range maps {
+		total += len(operations)
+	}
+	merged := make(map[string]string, total)
+	for _, operations := range maps {
+		for oid, operation := range operations {
+			merged[oid] = operation
+		}
+	}
+	return merged
 }

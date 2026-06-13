@@ -88,6 +88,16 @@ func (s *pipelineTestScheduler) PollingHealth() polling.HealthSnapshot {
 	return s.health
 }
 
+func assertPipelineFloatPtrEqual(t *testing.T, got *float64, want float64, label string) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s = nil, want %v", label, want)
+	}
+	if *got != want {
+		t.Fatalf("%s = %v, want %v", label, *got, want)
+	}
+}
+
 type fakeTopologyService struct {
 	mu     sync.Mutex
 	calls  int
@@ -408,6 +418,28 @@ func newStaticTestCollector(t *testing.T) *collector.StaticCollector {
 			snmp.OidSysObjectID: {{Name: snmp.OidSysObjectID, Value: ".1.3.6.1.4.1.14988.1"}},
 		},
 		walkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Value: 40},
+				{Name: snmp.OidHrProcessorLoad + ".2", Value: 50},
+			},
+			snmp.OidHrStorageType: {
+				{Name: snmp.OidHrStorageType + ".1", Value: snmp.OidHrStorageRam},
+			},
+			snmp.OidHrStorageAllocUnits: {
+				{Name: snmp.OidHrStorageAllocUnits + ".1", Value: int64(1)},
+			},
+			snmp.OidHrStorageSize: {
+				{Name: snmp.OidHrStorageSize + ".1", Value: int64(200)},
+			},
+			snmp.OidHrStorageUsed: {
+				{Name: snmp.OidHrStorageUsed + ".1", Value: int64(100)},
+			},
+			snmp.OidEntPhySensorType: {
+				{Name: snmp.OidEntPhySensorType + ".1", Value: int64(8)},
+			},
+			snmp.OidEntPhySensorValue: {
+				{Name: snmp.OidEntPhySensorValue + ".1", Value: int64(47)},
+			},
 			snmp.OidIfDescr: {
 				{Name: snmp.OidIfDescr + ".1", Value: "uplink"},
 			},
@@ -602,8 +634,11 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 	if !ok {
 		t.Fatal("expected state store update for performance task")
 	}
-	if deviceState.Metrics.CPUPercent == nil || *deviceState.Metrics.CPUPercent != 55 {
-		t.Fatalf("expected CPU metric 55, got %#v", deviceState.Metrics.CPUPercent)
+	if deviceState.Metrics.CPUPercent != nil || deviceState.Metrics.MemPercent != nil || deviceState.Metrics.TempCelsius != nil {
+		t.Fatalf("expected performance task to skip device-health metrics, got %#v", deviceState.Metrics)
+	}
+	if deviceState.Metrics.UptimeSecs == nil || *deviceState.Metrics.UptimeSecs != 30 {
+		t.Fatalf("expected uptime metric 30, got %#v", deviceState.Metrics.UptimeSecs)
 	}
 	if len(deviceState.LinkMetrics) != 1 {
 		t.Fatalf("expected 1 computed link metric, got %d", len(deviceState.LinkMetrics))
@@ -911,6 +946,9 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 	if deviceState.ExpectedInterval != 30*time.Second {
 		t.Fatalf("ExpectedInterval = %s, want 30s performance cadence", deviceState.ExpectedInterval)
 	}
+	assertPipelineFloatPtrEqual(t, deviceState.Metrics.CPUPercent, 45, "CPUPercent")
+	assertPipelineFloatPtrEqual(t, deviceState.Metrics.MemPercent, 50, "MemPercent")
+	assertPipelineFloatPtrEqual(t, deviceState.Metrics.TempCelsius, 47, "TempCelsius")
 
 	topologyService.mu.Lock()
 	if topologyService.calls != 1 {

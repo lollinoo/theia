@@ -151,10 +151,20 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 				if result.Err != nil {
 					t.Fatalf("Err = %v, want nil", result.Err)
 				}
-				assertFloatPtrEqual(t, result.Metrics.CPUPercent, 30, "CPUPercent")
-				assertFloatPtrEqual(t, result.Metrics.MemPercent, 50, "MemPercent")
-				assertFloatPtrEqual(t, result.Metrics.TempCelsius, 48, "TempCelsius")
 				assertFloatPtrEqual(t, result.Metrics.UptimeSecs, 1234, "UptimeSecs")
+				for _, oid := range []string{
+					snmp.OidHrProcessorLoad,
+					snmp.OidHrStorageType,
+					snmp.OidHrStorageAllocUnits,
+					snmp.OidHrStorageSize,
+					snmp.OidHrStorageUsed,
+					snmp.OidEntPhySensorType,
+					snmp.OidEntPhySensorValue,
+				} {
+					if containsString(client.bulkWalkCalls, oid) {
+						t.Fatalf("BulkWalk calls = %v, want no performance device-health walk %s", client.bulkWalkCalls, oid)
+					}
+				}
 				if len(result.Counters) != 3 {
 					t.Fatalf("counter count = %d, want 3", len(result.Counters))
 				}
@@ -450,7 +460,7 @@ func TestPerformanceCollectorPoll_RecordsBulkWalkMetricsAfterSysUpTimeSuccess(t 
 	}
 }
 
-func TestPerformanceCollectorPoll_RecordsResolvedCPUWalkOperation(t *testing.T) {
+func TestPerformanceCollectorPoll_SkipsResolvedCPUWalkOperation(t *testing.T) {
 	const customCPUOID = ".1.3.6.1.4.1.9999.100.1"
 
 	registry := performanceTestRegistry(t, "custom", vendor.PerformanceOIDs{
@@ -479,13 +489,17 @@ func TestPerformanceCollectorPoll_RecordsResolvedCPUWalkOperation(t *testing.T) 
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil", result.Err)
 	}
-	if !containsString(client.bulkWalkCalls, customCPUOID) {
-		t.Fatalf("BulkWalk calls = %v, want custom CPU OID %q", client.bulkWalkCalls, customCPUOID)
+	if containsString(client.bulkWalkCalls, customCPUOID) {
+		t.Fatalf("BulkWalk calls = %v, want no custom CPU walk in performance", client.bulkWalkCalls)
+	}
+	if result.Metrics.CPUPercent != nil || result.Metrics.MemPercent != nil || result.Metrics.TempCelsius != nil {
+		t.Fatalf("device-health metrics = %#v, want nil values from performance poll", result.Metrics)
 	}
 
 	body := string(metrics.MarshalPrometheus())
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="cpu_walk",result="success"} 1`)
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="cpu_walk",result="success"} 1`)
+	if strings.Contains(body, `collector="performance",operation="cpu_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded performance cpu_walk:\n%s", body)
+	}
 	if strings.Contains(body, `collector="performance",operation="bulk_walk"`) {
 		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped performance walks:\n%s", body)
 	}
@@ -589,16 +603,13 @@ func TestPerformanceCollectorPoll_SkipsInterfaceCountersWithoutCachedIndexes(t *
 	}
 }
 
-func TestPerformanceCollectorPoll_StopsOptionalWalksAfterCPUTimeout(t *testing.T) {
+func TestPerformanceCollectorPoll_SkipsDeviceHealthWalksWhenCountersAreAvailable(t *testing.T) {
 	registry, err := vendor.LoadRegistryFromEmbedded()
 	if err != nil {
 		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
 	}
 
 	client := newMetricsClient(registry, true)
-	client.bulkWalkErrs = map[string]error{
-		snmp.OidHrProcessorLoad: errors.New("cpu walk timeout"),
-	}
 	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
 		return client, nil
 	})
@@ -619,54 +630,24 @@ func TestPerformanceCollectorPoll_StopsOptionalWalksAfterCPUTimeout(t *testing.T
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil from sysUpTime", result.Err)
 	}
-	if !containsString(client.bulkWalkCalls, snmp.OidHrProcessorLoad) {
-		t.Fatalf("BulkWalk calls = %v, want CPU walk attempt", client.bulkWalkCalls)
+	if result.Metrics.CPUPercent != nil || result.Metrics.MemPercent != nil || result.Metrics.TempCelsius != nil {
+		t.Fatalf("device-health metrics = %#v, want nil values from performance poll", result.Metrics)
 	}
-	for _, oid := range []string{snmp.OidHrStorageType, snmp.OidEntPhySensorType, snmp.OidIfHCInOctets, snmp.OidIfHCOutOctets} {
+	for _, oid := range []string{
+		snmp.OidHrProcessorLoad,
+		snmp.OidHrStorageType,
+		snmp.OidHrStorageAllocUnits,
+		snmp.OidHrStorageSize,
+		snmp.OidHrStorageUsed,
+		snmp.OidEntPhySensorType,
+		snmp.OidEntPhySensorValue,
+	} {
 		if containsString(client.bulkWalkCalls, oid) {
-			t.Fatalf("BulkWalk calls = %v, want no optional walks after CPU timeout", client.bulkWalkCalls)
+			t.Fatalf("BulkWalk calls = %v, want no performance device-health walk %s", client.bulkWalkCalls, oid)
 		}
 	}
-}
-
-func TestPerformanceCollectorPoll_StopsOptionalWalksAfterMemoryTypeTimeout(t *testing.T) {
-	registry, err := vendor.LoadRegistryFromEmbedded()
-	if err != nil {
-		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
-	}
-
-	client := newMetricsClient(registry, true)
-	client.bulkWalkErrs = map[string]error{
-		snmp.OidHrStorageType: errors.New("memory type walk timeout"),
-	}
-	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
-		return client, nil
-	})
-
-	result := collector.Poll(context.Background(), domain.Device{
-		ID:     uuid.New(),
-		IP:     "192.0.2.36",
-		Vendor: "default",
-		SNMPCredentials: domain.SNMPCredentials{
-			Version: domain.SNMPVersionV2c,
-			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
-		},
-		Interfaces: []domain.Interface{
-			{IfIndex: 1, IfName: "ether1", Speed: 1_000_000_000},
-		},
-	}, time.Second, 1)
-
-	if result.Err != nil {
-		t.Fatalf("Err = %v, want nil from CPU/sysUpTime", result.Err)
-	}
-	assertFloatPtrEqual(t, result.Metrics.CPUPercent, 30, "CPUPercent")
-	if !containsString(client.bulkWalkCalls, snmp.OidHrStorageType) {
-		t.Fatalf("BulkWalk calls = %v, want memory type walk attempt", client.bulkWalkCalls)
-	}
-	for _, oid := range []string{snmp.OidHrStorageAllocUnits, snmp.OidHrStorageSize, snmp.OidHrStorageUsed, snmp.OidEntPhySensorType, snmp.OidIfHCInOctets, snmp.OidIfHCOutOctets} {
-		if containsString(client.bulkWalkCalls, oid) {
-			t.Fatalf("BulkWalk calls = %v, want no optional walks after memory type timeout", client.bulkWalkCalls)
-		}
+	if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+		t.Fatalf("BulkWalk calls = %v, want interface counter walks to remain in performance", client.bulkWalkCalls)
 	}
 }
 

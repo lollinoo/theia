@@ -88,6 +88,7 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		p.stateStore.Update(state.StateUpdate{
 			DeviceID:         task.Device.ID,
 			VolatilityClass:  domain.VolatilityClassStatic,
+			Metrics:          staticResultMetrics(result),
 			PollSuccess:      result.Err == nil,
 			ExpectedInterval: task.ExpectedInterval,
 			Timestamp:        finishedAt,
@@ -171,6 +172,7 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		p.stateStore.Update(state.StateUpdate{
 			DeviceID:         task.Device.ID,
 			VolatilityClass:  domain.VolatilityClassStatic,
+			Metrics:          staticResultMetrics(result),
 			PollSuccess:      result.Err == nil,
 			ExpectedInterval: task.ExpectedInterval,
 			Timestamp:        completionTime(result.CollectedAt),
@@ -182,6 +184,14 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 
 		r.persistStaticDiscovery(task.Device, result)
 	}
+}
+
+func staticResultMetrics(result collector.StaticResult) *domain.DeviceMetrics {
+	if result.Err != nil {
+		return nil
+	}
+	metrics := result.Metrics
+	return &metrics
 }
 
 func (r *pipelineTaskRunner) knownSNMPUnreachable(deviceID uuid.UUID) bool {
