@@ -1045,6 +1045,9 @@ func pollMemoryPercent(client ClientInterface) *float64 {
 			types[idx] = stringFromPDU(pdu)
 		}
 	}
+	if !hasRAMStorageType(types) {
+		return nil
+	}
 	for _, pdu := range bulkWalkSafe(client, OidHrStorageAllocUnits) {
 		if idx := lastOIDIndex(pdu.Name, OidHrStorageAllocUnits); idx >= 0 {
 			units[idx] = int64FromPDU(pdu)
@@ -1076,6 +1079,15 @@ func pollMemoryPercent(client ClientInterface) *float64 {
 		return &pct
 	}
 	return nil
+}
+
+func hasRAMStorageType(types map[int]string) bool {
+	for _, typeOID := range types {
+		if typeOID == OidHrStorageRam || typeOID == strings.TrimPrefix(OidHrStorageRam, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 // pollEntitySensorTemp returns the highest Celsius reading from ENTITY-SENSOR-MIB.

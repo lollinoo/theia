@@ -122,22 +122,25 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 		collector:          "performance",
 		bulkWalkOperations: performanceBulkWalkOperations(perfOIDs),
 	}
-	cpuPercent, memPercent, uptimeSecs, tempCelsius := snmp.PollDeviceMetrics(instrumentedClient, perfOIDs)
+	guardedClient := newPerformanceSNMPWalkGuard(instrumentedClient, perfOIDs)
+	cpuPercent, memPercent, uptimeSecs, tempCelsius := snmp.PollDeviceMetrics(guardedClient, perfOIDs)
 	result.Metrics.CPUPercent = cloneFloat64Ptr(cpuPercent)
 	result.Metrics.MemPercent = cloneFloat64Ptr(memPercent)
 	result.Metrics.UptimeSecs = cloneFloat64Ptr(uptimeSecs)
 	result.Metrics.TempCelsius = cloneFloat64Ptr(tempCelsius)
 
-	speedByName, speedByDescr := indexInterfaceSpeeds(device.Interfaces)
-	counters := snmp.PollInterfaceCountersWithInterfaces(instrumentedClient, device.Interfaces)
-	result.Counters = make([]InterfaceCounterSnapshot, 0, len(counters))
-	for _, counter := range counters {
-		result.Counters = append(result.Counters, InterfaceCounterSnapshot{
-			IfName:    counter.IfName,
-			InOctets:  counter.InOctets,
-			OutOctets: counter.OutOctets,
-			SpeedBps:  lookupInterfaceSpeed(counter.IfName, speedByName, speedByDescr),
-		})
+	if hasCachedInterfaceIndexes(device.Interfaces) {
+		speedByName, speedByDescr := indexInterfaceSpeeds(device.Interfaces)
+		counters := snmp.PollInterfaceCountersWithInterfaces(guardedClient, device.Interfaces)
+		result.Counters = make([]InterfaceCounterSnapshot, 0, len(counters))
+		for _, counter := range counters {
+			result.Counters = append(result.Counters, InterfaceCounterSnapshot{
+				IfName:    counter.IfName,
+				InOctets:  counter.InOctets,
+				OutOctets: counter.OutOctets,
+				SpeedBps:  lookupInterfaceSpeed(counter.IfName, speedByName, speedByDescr),
+			})
+		}
 	}
 	sort.Slice(result.Counters, func(i, j int) bool {
 		return result.Counters[i].IfName < result.Counters[j].IfName
@@ -168,6 +171,43 @@ func performanceBulkWalkOperations(perfOIDs vendor.PerformanceOIDs) map[string]s
 		snmp.OidIfHCInOctets:        "if_hc_in_octets_walk",
 		snmp.OidIfHCOutOctets:       "if_hc_out_octets_walk",
 	}
+}
+
+type performanceSNMPWalkGuard struct {
+	delegate              snmp.ClientInterface
+	stopAfterTimeoutRoots map[string]struct{}
+	stopped               bool
+}
+
+func newPerformanceSNMPWalkGuard(delegate snmp.ClientInterface, perfOIDs vendor.PerformanceOIDs) *performanceSNMPWalkGuard {
+	cpuOID := strings.TrimSpace(perfOIDs.CPUOID)
+	if cpuOID == "" {
+		cpuOID = snmp.OidHrProcessorLoad
+	}
+	return &performanceSNMPWalkGuard{
+		delegate: delegate,
+		stopAfterTimeoutRoots: map[string]struct{}{
+			cpuOID:                {},
+			snmp.OidHrStorageType: {},
+		},
+	}
+}
+
+func (g *performanceSNMPWalkGuard) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
+	return g.delegate.Get(oids)
+}
+
+func (g *performanceSNMPWalkGuard) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
+	if g.stopped {
+		return nil, nil
+	}
+	pdus, err := g.delegate.BulkWalk(rootOID)
+	if err != nil && classifySNMPCollectorResult(err) == "timeout" {
+		if _, ok := g.stopAfterTimeoutRoots[strings.TrimSpace(rootOID)]; ok {
+			g.stopped = true
+		}
+	}
+	return pdus, err
 }
 
 type instrumentedSNMPBulkWalkClient struct {
@@ -278,6 +318,18 @@ func indexInterfaceSpeeds(interfaces []domain.Interface) (map[string]int64, map[
 		byDescr[iface.IfDescr] = iface.Speed
 	}
 	return byName, byDescr
+}
+
+func hasCachedInterfaceIndexes(interfaces []domain.Interface) bool {
+	for _, iface := range interfaces {
+		if iface.IfIndex <= 0 {
+			continue
+		}
+		if strings.TrimSpace(iface.IfName) != "" || strings.TrimSpace(iface.IfDescr) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func lookupInterfaceSpeed(ifName string, speedByName map[string]int64, speedByDescr map[string]int64) int64 {

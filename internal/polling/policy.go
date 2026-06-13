@@ -62,7 +62,7 @@ func PolicyFromSettings(repo SettingsGetter, deviceCount int, observedP95 time.D
 				Timeout: durationMSSetting(repo, domain.SettingPollingEssentialTimeoutMillis, 1200*time.Millisecond),
 				Retries: nonNegativeIntSetting(repo, domain.SettingPollingEssentialRetries, 1),
 			},
-			LaneBackground: {Timeout: 5 * time.Second, Retries: 1},
+			LaneBackground: {Timeout: 5 * time.Second, Retries: 0},
 			LaneBootstrap:  {Timeout: 10 * time.Second, Retries: 1},
 			LaneQuarantine: {Timeout: time.Second, Retries: 0},
 		},

@@ -185,6 +185,42 @@ func TestPollEssentialMetricsMemoryGetErrorIsPreserved(t *testing.T) {
 	}
 }
 
+func TestPollDeviceMetricsSkipsMemoryValueWalksWhenNoRAMType(t *testing.T) {
+	var walkedRoots []string
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			return []gosnmp.SnmpPDU{
+				{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(12300)},
+			}, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			walkedRoots = append(walkedRoots, rootOid)
+			if rootOid == OidHrProcessorLoad {
+				return []gosnmp.SnmpPDU{
+					{Name: OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 25},
+				}, nil
+			}
+			if rootOid == OidHrStorageType {
+				return nil, nil
+			}
+			return nil, nil
+		},
+	}
+
+	_, memPercent, _, _ := PollDeviceMetrics(client, vendor.PerformanceOIDs{
+		CPUOID: OidHrProcessorLoad,
+	})
+
+	if memPercent != nil {
+		t.Fatalf("memPercent = %v, want nil without RAM storage type", *memPercent)
+	}
+	for _, root := range []string{OidHrStorageAllocUnits, OidHrStorageSize, OidHrStorageUsed} {
+		if walkedRoot(walkedRoots, root) {
+			t.Fatalf("BulkWalk roots = %v, want no memory value walks without RAM storage type", walkedRoots)
+		}
+	}
+}
+
 func assertEssentialField(t *testing.T, field *EssentialMetricField, wantState string, wantValue float64) {
 	t.Helper()
 	if field == nil {
@@ -202,6 +238,15 @@ func assertEssentialField(t *testing.T, field *EssentialMetricField, wantState s
 	if field.Value == nil || *field.Value != wantValue {
 		t.Fatalf("field value = %v, want %v", field.Value, wantValue)
 	}
+}
+
+func walkedRoot(roots []string, needle string) bool {
+	for _, root := range roots {
+		if root == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPollOperationalStatus_Success(t *testing.T) {

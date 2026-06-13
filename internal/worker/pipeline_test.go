@@ -530,8 +530,8 @@ func TestPipelineRunsPerformanceTaskWithBackgroundTimeoutProfile(t *testing.T) {
 	if gotTimeout != 5*time.Second {
 		t.Fatalf("performance timeout = %v, want 5s background profile", gotTimeout)
 	}
-	if gotRetries != 1 {
-		t.Fatalf("performance retries = %d, want 1 background retry", gotRetries)
+	if gotRetries != 0 {
+		t.Fatalf("performance retries = %d, want 0 background retries", gotRetries)
 	}
 }
 
@@ -551,7 +551,7 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 			PrometheusLabelName:  "instance",
 			PrometheusLabelValue: "192.0.2.10",
 			Interfaces: []domain.Interface{
-				{IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000},
+				{IfIndex: 1, IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000},
 			},
 		},
 	}
@@ -1776,7 +1776,7 @@ func newDetailSubscriptionTestDevice() domain.Device {
 		Status: domain.DeviceStatusUnknown,
 		Vendor: "default",
 		Interfaces: []domain.Interface{
-			{IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000},
+			{IfIndex: 1, IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000},
 		},
 	}
 }
