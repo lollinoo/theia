@@ -6,28 +6,38 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/gosnmp/gosnmp"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
-// StaticCollector polls low-volatility inventory and topology data for a
-// single device by wrapping the existing discovery flow.
+const (
+	staticOptionalHealthMaxBudget = 2 * time.Second
+	staticOptionalHealthCooldown  = 30 * time.Minute
+)
+
+// StaticCollector polls low-volatility inventory, topology, and optional
+// health data for a single device by wrapping the existing discovery flow.
 type StaticCollector struct {
-	registry  *vendor.Registry
-	newClient NewSNMPClientFunc
-	now       func() time.Time
+	registry    *vendor.Registry
+	newClient   NewSNMPClientFunc
+	now         func() time.Time
+	healthWalks *staticHealthWalkState
 }
 
-// NewStaticCollector constructs a stateless static collector that reuses the
-// shared discovery path and vendor registry.
+// NewStaticCollector constructs a static collector that reuses the shared
+// discovery path and vendor registry.
 func NewStaticCollector(registry *vendor.Registry, newClient NewSNMPClientFunc) *StaticCollector {
 	return &StaticCollector{
-		registry:  registry,
-		newClient: newClient,
-		now:       time.Now,
+		registry:    registry,
+		newClient:   newClient,
+		now:         time.Now,
+		healthWalks: newStaticHealthWalkState(),
 	}
 }
 
@@ -38,6 +48,7 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 		ctx = context.Background()
 	}
 
+	startedAt := time.Now()
 	collectedAt := time.Now().UTC()
 	if c != nil && c.now != nil {
 		collectedAt = c.now().UTC()
@@ -112,7 +123,8 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 
 	perfOIDs = c.registry.ResolvePerformanceOIDs(discovery.Vendor)
 	instrumentedClient.bulkWalkOperations = mergeBulkWalkOperations(instrumentedClient.bulkWalkOperations, deviceHealthBulkWalkOperations(perfOIDs))
-	cpuPercent, memPercent, tempCelsius := snmp.PollDeviceHealthMetrics(instrumentedClient, perfOIDs)
+	healthClient := c.optionalHealthSNMPClient(device, instrumentedClient, perfOIDs, startedAt, timeout)
+	cpuPercent, memPercent, tempCelsius := snmp.PollDeviceHealthMetrics(healthClient, perfOIDs)
 	result.Metrics = domain.DeviceMetrics{
 		DeviceID:    device.ID,
 		CPUPercent:  cloneFloat64Ptr(cpuPercent),
@@ -136,6 +148,42 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 	return result
 }
 
+func (c *StaticCollector) optionalHealthSNMPClient(device domain.Device, delegate snmp.ClientInterface, perfOIDs vendor.PerformanceOIDs, startedAt time.Time, timeout time.Duration) snmp.ClientInterface {
+	state := c.healthWalks
+	if state == nil {
+		state = newStaticHealthWalkState()
+		c.healthWalks = state
+	}
+	cpuOID := strings.TrimSpace(perfOIDs.CPUOID)
+	if cpuOID == "" {
+		cpuOID = snmp.OidHrProcessorLoad
+	}
+	return optionalStaticHealthClient{
+		delegate:   delegate,
+		state:      state,
+		deviceKey:  device.ID.String(),
+		startedAt:  startedAt,
+		budget:     staticOptionalHealthBudget(timeout),
+		cooldown:   staticOptionalHealthCooldown,
+		cpuOID:     cpuOID,
+		tempScalar: strings.TrimSpace(perfOIDs.TemperatureOID),
+	}
+}
+
+func staticOptionalHealthBudget(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return staticOptionalHealthMaxBudget
+	}
+	half := timeout / 2
+	if half <= 0 {
+		return timeout
+	}
+	if half < staticOptionalHealthMaxBudget {
+		return half
+	}
+	return staticOptionalHealthMaxBudget
+}
+
 func mergeBulkWalkOperations(maps ...map[string]string) map[string]string {
 	total := 0
 	for _, operations := range maps {
@@ -148,4 +196,119 @@ func mergeBulkWalkOperations(maps ...map[string]string) map[string]string {
 		}
 	}
 	return merged
+}
+
+type optionalStaticHealthClient struct {
+	delegate   snmp.ClientInterface
+	state      *staticHealthWalkState
+	deviceKey  string
+	startedAt  time.Time
+	budget     time.Duration
+	cooldown   time.Duration
+	cpuOID     string
+	tempScalar string
+}
+
+func (c optionalStaticHealthClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
+	if len(oids) == 1 && c.healthGroupForGet(oids[0]) != "" {
+		group := c.healthGroupForGet(oids[0])
+		if c.skip(group, time.Now()) {
+			return nil, nil
+		}
+		pdus, err := c.delegate.Get(oids)
+		if err != nil {
+			c.cooldownGroup(group, time.Now())
+		}
+		return pdus, err
+	}
+	return c.delegate.Get(oids)
+}
+
+func (c optionalStaticHealthClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
+	group := c.healthGroupForBulkWalk(rootOID)
+	if group == "" {
+		return c.delegate.BulkWalk(rootOID)
+	}
+	if c.skip(group, time.Now()) {
+		return nil, nil
+	}
+	pdus, err := c.delegate.BulkWalk(rootOID)
+	if err != nil {
+		c.cooldownGroup(group, time.Now())
+	}
+	return pdus, err
+}
+
+func (c optionalStaticHealthClient) skip(group string, now time.Time) bool {
+	if c.budget > 0 && !c.startedAt.IsZero() && !now.Before(c.startedAt.Add(c.budget)) {
+		return true
+	}
+	return c.state != nil && c.state.coolingDown(c.deviceKey, group, now)
+}
+
+func (c optionalStaticHealthClient) cooldownGroup(group string, now time.Time) {
+	if c.state == nil || c.cooldown <= 0 {
+		return
+	}
+	c.state.cooldown(c.deviceKey, group, now.Add(c.cooldown))
+}
+
+func (c optionalStaticHealthClient) healthGroupForGet(oid string) string {
+	if strings.TrimSpace(oid) == c.tempScalar && c.tempScalar != "" {
+		return "temperature"
+	}
+	return ""
+}
+
+func (c optionalStaticHealthClient) healthGroupForBulkWalk(rootOID string) string {
+	switch strings.TrimSpace(rootOID) {
+	case c.cpuOID:
+		return "cpu"
+	case snmp.OidHrStorageType, snmp.OidHrStorageAllocUnits, snmp.OidHrStorageSize, snmp.OidHrStorageUsed:
+		return "memory"
+	case snmp.OidEntPhySensorType, snmp.OidEntPhySensorValue:
+		return "temperature"
+	default:
+		return ""
+	}
+}
+
+type staticHealthWalkState struct {
+	mu        sync.Mutex
+	cooldowns map[string]time.Time
+}
+
+func newStaticHealthWalkState() *staticHealthWalkState {
+	return &staticHealthWalkState{cooldowns: make(map[string]time.Time)}
+}
+
+func (s *staticHealthWalkState) coolingDown(deviceKey string, group string, now time.Time) bool {
+	if s == nil || deviceKey == "" || group == "" {
+		return false
+	}
+	key := staticHealthCooldownKey(deviceKey, group)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	until, ok := s.cooldowns[key]
+	if !ok {
+		return false
+	}
+	if now.Before(until) {
+		return true
+	}
+	delete(s.cooldowns, key)
+	return false
+}
+
+func (s *staticHealthWalkState) cooldown(deviceKey string, group string, until time.Time) {
+	if s == nil || deviceKey == "" || group == "" || until.IsZero() {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cooldowns[staticHealthCooldownKey(deviceKey, group)] = until
+}
+
+func staticHealthCooldownKey(deviceKey string, group string) string {
+	return deviceKey + "|" + group
 }

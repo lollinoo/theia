@@ -23,6 +23,7 @@ type scriptedCollectorClient struct {
 	getErrs           map[string]error
 	bulkWalkResponses map[string][]gosnmp.SnmpPDU
 	bulkWalkErrs      map[string]error
+	bulkWalkDelays    map[string]time.Duration
 	bulkWalkCalls     []string
 	connectErr        error
 	connectCalls      int
@@ -42,6 +43,9 @@ func (c *scriptedCollectorClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
 
 func (c *scriptedCollectorClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
 	c.bulkWalkCalls = append(c.bulkWalkCalls, rootOID)
+	if delay := c.bulkWalkDelays[rootOID]; delay > 0 {
+		time.Sleep(delay)
+	}
 	if err := c.bulkWalkErrs[rootOID]; err != nil {
 		return nil, err
 	}

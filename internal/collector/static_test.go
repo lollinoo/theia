@@ -305,6 +305,162 @@ func TestStaticCollectorPoll(t *testing.T) {
 	}
 }
 
+func TestStaticCollectorPoll_SkipsOptionalHealthWalksWhenDiscoveryConsumesBudget(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := &scriptedCollectorClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysName: {
+				{Name: snmp.OidSysName, Type: gosnmp.OctetString, Value: []byte("slow-static")},
+			},
+			snmp.OidSysDescr: {
+				{Name: snmp.OidSysDescr, Type: gosnmp.OctetString, Value: []byte("Generic switch")},
+			},
+			snmp.OidSysObjectID: {
+				{Name: snmp.OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.99999.1"},
+			},
+		},
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfDescr: {
+				{Name: snmp.OidIfDescr + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7-descr")},
+			},
+			snmp.OidIfName: {
+				{Name: snmp.OidIfName + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")},
+			},
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 64},
+			},
+			snmp.OidHrStorageType: {
+				{Name: snmp.OidHrStorageType + ".1", Type: gosnmp.ObjectIdentifier, Value: snmp.OidHrStorageRam},
+			},
+		},
+		bulkWalkDelays: map[string]time.Duration{
+			snmp.OidIfDescr: 25 * time.Millisecond,
+		},
+	}
+	collector := NewStaticCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID: uuid.New(),
+		IP: "192.0.2.61",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}, 10*time.Millisecond, 0, domain.TopologyDiscoveryModeOff)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil because optional health walks are skippable", result.Err)
+	}
+	if len(result.Interfaces) != 1 || result.Interfaces[0].IfName != "sfp7" {
+		t.Fatalf("Interfaces = %#v, want core static discovery to complete", result.Interfaces)
+	}
+	for _, oid := range []string{
+		snmp.OidHrProcessorLoad,
+		snmp.OidHrStorageType,
+		snmp.OidHrStorageAllocUnits,
+		snmp.OidHrStorageSize,
+		snmp.OidHrStorageUsed,
+		snmp.OidEntPhySensorType,
+		snmp.OidEntPhySensorValue,
+	} {
+		if slices.Contains(client.bulkWalkCalls, oid) {
+			t.Fatalf("BulkWalk calls = %v, want optional health walk %s skipped after slow discovery", client.bulkWalkCalls, oid)
+		}
+	}
+	if result.Metrics.CPUPercent != nil || result.Metrics.MemPercent != nil || result.Metrics.TempCelsius != nil {
+		t.Fatalf("Metrics = %#v, want no optional health metrics when health walks are skipped", result.Metrics)
+	}
+}
+
+func TestStaticCollectorPoll_CooldownsTimedOutOptionalHealthWalks(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	clients := []*scriptedCollectorClient{
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+			bulkWalkErrs: map[string]error{
+				snmp.OidHrProcessorLoad: errors.New("request timeout"),
+			},
+		},
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+		},
+	}
+	clients[1].bulkWalkResponses[snmp.OidHrProcessorLoad] = []gosnmp.SnmpPDU{
+		{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 77},
+	}
+	call := 0
+	collector := NewStaticCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		client := clients[call]
+		call++
+		return client, nil
+	})
+	device := domain.Device{
+		ID: deviceID,
+		IP: "192.0.2.62",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	first := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeOff)
+	if first.Err != nil {
+		t.Fatalf("first Err = %v, want nil because optional health timeout is non-fatal", first.Err)
+	}
+	if !slices.Contains(clients[0].bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("first BulkWalk calls = %v, want initial CPU health attempt", clients[0].bulkWalkCalls)
+	}
+
+	second := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeOff)
+	if second.Err != nil {
+		t.Fatalf("second Err = %v, want nil", second.Err)
+	}
+	if slices.Contains(clients[1].bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("second BulkWalk calls = %v, want CPU health walk skipped during cooldown", clients[1].bulkWalkCalls)
+	}
+	if second.Metrics.CPUPercent != nil {
+		t.Fatalf("second CPUPercent = %v, want nil while CPU health walk is cooling down", *second.Metrics.CPUPercent)
+	}
+}
+
+func staticDiscoveryGetResponses() map[string][]gosnmp.SnmpPDU {
+	return map[string][]gosnmp.SnmpPDU{
+		snmp.OidSysName: {
+			{Name: snmp.OidSysName, Type: gosnmp.OctetString, Value: []byte("cooldown-static")},
+		},
+		snmp.OidSysDescr: {
+			{Name: snmp.OidSysDescr, Type: gosnmp.OctetString, Value: []byte("Generic switch")},
+		},
+		snmp.OidSysObjectID: {
+			{Name: snmp.OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.99999.1"},
+		},
+	}
+}
+
+func staticDiscoveryWalkResponses() map[string][]gosnmp.SnmpPDU {
+	return map[string][]gosnmp.SnmpPDU{
+		snmp.OidIfDescr: {
+			{Name: snmp.OidIfDescr + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7-descr")},
+		},
+		snmp.OidIfName: {
+			{Name: snmp.OidIfName + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")},
+		},
+	}
+}
+
 func TestStaticResultImplementsStateUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -400,11 +556,11 @@ func TestStaticCollectorHasNoServiceOrRepositoryCollaborators(t *testing.T) {
 	t.Parallel()
 
 	typ := reflect.TypeOf(StaticCollector{})
-	if typ.NumField() != 3 {
-		t.Fatalf("field count = %d, want 3", typ.NumField())
+	if typ.NumField() != 4 {
+		t.Fatalf("field count = %d, want 4", typ.NumField())
 	}
 
-	wantFields := []string{"registry", "newClient", "now"}
+	wantFields := []string{"registry", "newClient", "now", "healthWalks"}
 	for i, want := range wantFields {
 		if typ.Field(i).Name != want {
 			t.Fatalf("field %d = %q, want %q", i, typ.Field(i).Name, want)
