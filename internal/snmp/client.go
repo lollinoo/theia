@@ -3,7 +3,10 @@ package snmp
 // This file defines client SNMP collection and device-detection behavior.
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
@@ -139,6 +142,9 @@ func (c *Client) BulkWalk(rootOid string) ([]gosnmp.SnmpPDU, error) {
 		return nil
 	})
 	if err != nil {
+		if isSNMPTimeoutError(err) {
+			return variables, err
+		}
 		// Fallback to normal walk
 		variables = []gosnmp.SnmpPDU{}
 		err = c.snmp.Walk(rootOid, func(pdu gosnmp.SnmpPDU) error {
@@ -147,4 +153,21 @@ func (c *Client) BulkWalk(rootOid string) ([]gosnmp.SnmpPDU, error) {
 		})
 	}
 	return variables, err
+}
+
+func isSNMPTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return true
+	}
+
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded")
 }

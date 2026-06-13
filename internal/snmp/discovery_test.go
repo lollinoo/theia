@@ -346,7 +346,7 @@ func TestPollOperationalStatus_MissingFieldsStayPartial(t *testing.T) {
 	}
 }
 
-func TestPollOperationalStatus_QueryError(t *testing.T) {
+func TestPollOperationalStatus_StatusWalkErrorReturnsPartialUptime(t *testing.T) {
 	t.Parallel()
 
 	client := &MockClient{
@@ -372,11 +372,11 @@ func TestPollOperationalStatus_QueryError(t *testing.T) {
 	}
 
 	uptimeSecs, statuses, err := PollOperationalStatus(client, vendor.OperationalOIDs{})
-	if err == nil {
-		t.Fatal("expected error")
+	if err != nil {
+		t.Fatalf("PollOperationalStatus() error = %v, want partial success", err)
 	}
-	if uptimeSecs != nil {
-		t.Fatalf("uptimeSecs = %v, want nil", *uptimeSecs)
+	if uptimeSecs == nil || *uptimeSecs != 1 {
+		t.Fatalf("uptimeSecs = %v, want 1", uptimeSecs)
 	}
 	if statuses != nil {
 		t.Fatalf("statuses = %#v, want nil", statuses)
@@ -558,6 +558,85 @@ func TestDiscoverDeviceWalksInterfaceColumnsInsteadOfWholeTables(t *testing.T) {
 	got := res.Interfaces[0]
 	if got.IfIndex != 7 || got.IfName != "sfp7" || got.IfDescr != "sfp7-descr" || got.Speed != 1_000_000_000 || got.AdminStatus != "up" || got.OperStatus != "up" {
 		t.Fatalf("interface = %#v, want column-derived interface", got)
+	}
+}
+
+func TestDiscoverDeviceUsesPartialInterfaceColumnDataAfterTimeout(t *testing.T) {
+	reg := testDiscoveryRegistry(t)
+	mock := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysName:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("switch-partial")})
+				case OidSysDescr:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS CRS")})
+				case OidSysObjectID:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfDescr:
+				return []gosnmp.SnmpPDU{{Name: OidIfDescr + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7-descr")}}, assertiveError("request timeout")
+			case OidIfSpeed:
+				return []gosnmp.SnmpPDU{{Name: OidIfSpeed + ".7", Type: gosnmp.Gauge32, Value: uint(100_000_000)}}, nil
+			case OidIfAdminStatus:
+				return []gosnmp.SnmpPDU{{Name: OidIfAdminStatus + ".7", Type: gosnmp.Integer, Value: 1}}, nil
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{{Name: OidIfOperStatus + ".7", Type: gosnmp.Integer, Value: 1}}, nil
+			case OidIfName:
+				return []gosnmp.SnmpPDU{{Name: OidIfName + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")}}, nil
+			case OidIfHighSpeed:
+				return []gosnmp.SnmpPDU{{Name: OidIfHighSpeed + ".7", Type: gosnmp.Gauge32, Value: uint(1000)}}, assertiveError("request timeout")
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	res, err := DiscoverDeviceWithPolicy(mock, reg, NeighborDiscoveryPolicy{})
+	if err != nil {
+		t.Fatalf("DiscoverDeviceWithPolicy returned error: %v", err)
+	}
+	if len(res.Interfaces) != 1 {
+		t.Fatalf("interfaces = %#v, want one interface from partial column walks", res.Interfaces)
+	}
+	got := res.Interfaces[0]
+	if got.IfIndex != 7 || got.IfName != "sfp7" || got.IfDescr != "sfp7-descr" || got.Speed != 1_000_000_000 {
+		t.Fatalf("interface = %#v, want partial timeout rows applied", got)
+	}
+}
+
+func TestPollOperationalStatusUsesPartialStatusesAfterTimeout(t *testing.T) {
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			return []gosnmp.SnmpPDU{{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(9000)}}, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfName:
+				return []gosnmp.SnmpPDU{{Name: OidIfName + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")}}, nil
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{{Name: OidIfOperStatus + ".7", Type: gosnmp.Integer, Value: 1}}, assertiveError("request timeout")
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	uptimeSecs, statuses, err := PollOperationalStatus(client, vendor.OperationalOIDs{})
+	if err != nil {
+		t.Fatalf("PollOperationalStatus() error = %v, want partial success", err)
+	}
+	if uptimeSecs == nil || *uptimeSecs != 90 {
+		t.Fatalf("uptimeSecs = %v, want 90", uptimeSecs)
+	}
+	if statuses["sfp7"] != "up" {
+		t.Fatalf("statuses[sfp7] = %q, want up from partial timeout data", statuses["sfp7"])
 	}
 }
 

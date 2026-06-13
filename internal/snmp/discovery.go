@@ -73,8 +73,8 @@ type InterfaceCounter struct {
 }
 
 // PollOperationalStatus collects sysUpTime and per-interface ifOperStatus
-// values using vendor-resolved operational OIDs. Missing fields remain partial;
-// transport/query failures return an error.
+// values using vendor-resolved operational OIDs. Missing interface status
+// fields remain partial; sysUpTime transport/query failures return an error.
 func PollOperationalStatus(client ClientInterface, operationalOIDs vendor.OperationalOIDs) (uptimeSecs *float64, statuses map[string]string, err error) {
 	return PollOperationalStatusWithInterfaces(client, operationalOIDs, nil)
 }
@@ -112,10 +112,7 @@ func PollOperationalStatusWithInterfaces(client ClientInterface, operationalOIDs
 		ifNames = walkInterfaceNames(client)
 	}
 
-	statusPDUs, err := client.BulkWalk(statusOID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("walking ifOperStatus: %w", err)
-	}
+	statusPDUs, _ := client.BulkWalk(statusOID)
 	for _, pdu := range statusPDUs {
 		idx := lastOIDIndex(pdu.Name, statusOID)
 		if idx < 0 {
@@ -416,10 +413,7 @@ func discoverInterfaces(client ClientInterface) []domain.Interface {
 }
 
 func walkInterfaceColumn(client ClientInterface, oid string, visit func(index int, pdu gosnmp.SnmpPDU)) {
-	pdus, err := client.BulkWalk(oid)
-	if err != nil {
-		return
-	}
+	pdus, _ := client.BulkWalk(oid)
 	for _, pdu := range pdus {
 		if idx := lastOIDIndex(pdu.Name, oid); idx >= 0 {
 			visit(idx, pdu)
@@ -897,7 +891,7 @@ func PollDeviceMetrics(client ClientInterface, perfOIDs vendor.PerformanceOIDs) 
 	if perfOIDs.CPUOID != "" {
 		cpuOID = perfOIDs.CPUOID
 	}
-	if pdus, err := client.BulkWalk(cpuOID); err == nil && len(pdus) > 0 {
+	if pdus, _ := client.BulkWalk(cpuOID); len(pdus) > 0 {
 		var sum float64
 		count := 0
 		for _, pdu := range pdus {

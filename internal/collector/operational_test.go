@@ -199,7 +199,7 @@ func TestOperationalCollectorPoll(t *testing.T) {
 			},
 		},
 		{
-			name: "query error returns error without fabricated fields",
+			name: "status walk error keeps uptime partial result",
 			device: domain.Device{
 				ID:     uuid.New(),
 				IP:     "192.0.2.23",
@@ -224,14 +224,14 @@ func TestOperationalCollectorPoll(t *testing.T) {
 			assert: func(t *testing.T, result OperationalResult, client *scriptedCollectorClient, _ []collectorCtorCall) {
 				t.Helper()
 
-				if result.Err == nil {
-					t.Fatal("expected error")
+				if result.Err != nil {
+					t.Fatalf("Err = %v, want nil", result.Err)
 				}
-				if result.Reachable {
-					t.Fatal("Reachable = true, want false")
+				if !result.Reachable {
+					t.Fatal("Reachable = false, want true")
 				}
-				if result.UptimeSecs != nil {
-					t.Fatalf("UptimeSecs = %v, want nil", *result.UptimeSecs)
+				if result.UptimeSecs == nil || *result.UptimeSecs != 12 {
+					t.Fatalf("UptimeSecs = %v, want 12", result.UptimeSecs)
 				}
 				if result.InterfaceStatuses != nil {
 					t.Fatalf("InterfaceStatuses = %#v, want nil", result.InterfaceStatuses)
