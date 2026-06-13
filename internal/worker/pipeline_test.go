@@ -698,6 +698,156 @@ func TestPipelineOrchestratorPerformanceTaskCompletionUsesWallClockFinish(t *tes
 	}
 }
 
+func TestPipelineOrchestratorPerformanceTaskSkipsSNMPWhenEssentialMarkedSNMPUnreachable(t *testing.T) {
+	deviceID := uuid.New()
+	essentialAt := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	store := state.NewStore()
+	store.Update(state.StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        essentialAt,
+		Essential: &state.EssentialUpdate{
+			PollStatus:       polling.PollStatusFailed,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateFalse,
+			Uptime:           polling.FieldStateError,
+			CPU:              polling.FieldStateError,
+			Memory:           polling.FieldStateError,
+		},
+	})
+
+	var snmpCalls int
+	performance := collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		snmpCalls++
+		return nil, errors.New("background performance SNMP should be skipped")
+	})
+	sched := newPipelineTestScheduler()
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		store,
+		nil,
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		performance,
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		nil,
+		nil,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            83,
+		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassPerformance),
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Device: domain.Device{
+			ID:            deviceID,
+			IP:            "192.0.2.83",
+			MetricsSource: domain.MetricsSourceSNMP,
+			Vendor:        "default",
+			SNMPCredentials: domain.SNMPCredentials{
+				Version: domain.SNMPVersionV2c,
+				V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+			},
+		},
+	})
+
+	if snmpCalls != 0 {
+		t.Fatalf("performance SNMP calls = %d, want 0 while essential SNMP state is unreachable", snmpCalls)
+	}
+	deviceState, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected existing essential state")
+	}
+	if !deviceState.LastPolledAt.Equal(essentialAt) {
+		t.Fatalf("LastPolledAt = %s, want unchanged essential timestamp %s", deviceState.LastPolledAt, essentialAt)
+	}
+	sched.mu.Lock()
+	defer sched.mu.Unlock()
+	if len(sched.completions) != 1 {
+		t.Fatalf("expected one scheduler completion for skipped task, got %d", len(sched.completions))
+	}
+}
+
+func TestPipelineOrchestratorOperationalTaskSkipsSNMPWhenEssentialMarkedSNMPUnreachable(t *testing.T) {
+	deviceID := uuid.New()
+	essentialAt := time.Date(2026, 4, 28, 12, 5, 0, 0, time.UTC)
+	store := state.NewStore()
+	store.Update(state.StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        essentialAt,
+		Essential: &state.EssentialUpdate{
+			PollStatus:       polling.PollStatusFailed,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateFalse,
+			Uptime:           polling.FieldStateError,
+			CPU:              polling.FieldStateError,
+			Memory:           polling.FieldStateError,
+		},
+	})
+
+	var snmpCalls int
+	operational := collector.NewOperationalCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		snmpCalls++
+		return nil, errors.New("background operational SNMP should be skipped")
+	})
+	sched := newPipelineTestScheduler()
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		store,
+		nil,
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		newPerformanceTestCollector(t),
+		operational,
+		newStaticTestCollector(t),
+		nil,
+		nil,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            84,
+		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassOperational),
+		VolatilityClass:  domain.VolatilityClassOperational,
+		ExpectedInterval: domain.OperationalClassInterval,
+		Device: domain.Device{
+			ID:            deviceID,
+			IP:            "192.0.2.84",
+			MetricsSource: domain.MetricsSourceSNMP,
+			Vendor:        "default",
+			SNMPCredentials: domain.SNMPCredentials{
+				Version: domain.SNMPVersionV2c,
+				V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+			},
+		},
+	})
+
+	if snmpCalls != 0 {
+		t.Fatalf("operational SNMP calls = %d, want 0 while essential SNMP state is unreachable", snmpCalls)
+	}
+	deviceState, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected existing essential state")
+	}
+	if !deviceState.LastPolledAt.Equal(essentialAt) {
+		t.Fatalf("LastPolledAt = %s, want unchanged essential timestamp %s", deviceState.LastPolledAt, essentialAt)
+	}
+	sched.mu.Lock()
+	defer sched.mu.Unlock()
+	if len(sched.completions) != 1 {
+		t.Fatalf("expected one scheduler completion for skipped task, got %d", len(sched.completions))
+	}
+}
+
 func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNotify(t *testing.T) {
 	deviceID := uuid.New()
 	performanceAt := time.Date(2026, 4, 13, 12, 30, 0, 0, time.UTC)

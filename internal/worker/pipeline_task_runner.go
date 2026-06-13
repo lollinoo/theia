@@ -111,6 +111,9 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		if p.performance == nil || p.stateStore == nil {
 			return
 		}
+		if r.knownSNMPUnreachable(task.Device.ID) {
+			return
+		}
 
 		profile := r.timeoutProfile(polling.LaneBackground)
 		result := p.performance.Poll(ctx, task.Device, profile.Timeout, profile.Retries)
@@ -145,6 +148,9 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		if p.operational == nil || p.stateStore == nil {
 			return
 		}
+		if r.knownSNMPUnreachable(task.Device.ID) {
+			return
+		}
 
 		profile := r.timeoutProfile(polling.LaneBackground)
 		result := p.operational.Poll(ctx, task.Device, profile.Timeout, profile.Retries)
@@ -176,6 +182,15 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 
 		r.persistStaticDiscovery(task.Device, result)
 	}
+}
+
+func (r *pipelineTaskRunner) knownSNMPUnreachable(deviceID uuid.UUID) bool {
+	p := r.pipeline
+	if p == nil || p.stateStore == nil || deviceID == uuid.Nil {
+		return false
+	}
+	deviceState, ok := p.stateStore.GetDevice(deviceID)
+	return ok && deviceState.SNMPReachable == polling.TriStateFalse
 }
 
 func (r *pipelineTaskRunner) persistStaticDiscovery(device domain.Device, result collector.StaticResult) {
