@@ -436,6 +436,136 @@ func TestStaticCollectorPoll_CooldownsTimedOutOptionalHealthWalks(t *testing.T) 
 	}
 }
 
+func TestOptionalStaticHealthClient_BulkWalkEachSkipsExpiredOptionalHealthBudget(t *testing.T) {
+	delegate := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 70}},
+		},
+	}
+	client := optionalStaticHealthClient{
+		delegate:  delegate,
+		state:     newStaticHealthWalkState(),
+		deviceKey: "device-1",
+		startedAt: time.Now().Add(-time.Second),
+		budget:    time.Millisecond,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	visited := 0
+	if err := client.BulkWalkEach(snmp.OidHrProcessorLoad, func(gosnmp.SnmpPDU) error {
+		visited++
+		return nil
+	}); err != nil {
+		t.Fatalf("BulkWalkEach() error = %v", err)
+	}
+	if visited != 0 {
+		t.Fatalf("visited PDUs = %d, want none after optional health budget expires", visited)
+	}
+	if len(delegate.bulkWalkCalls) != 0 {
+		t.Fatalf("BulkWalk calls = %v, want skipped optional health walk", delegate.bulkWalkCalls)
+	}
+}
+
+func TestOptionalStaticHealthClient_BulkWalkEachHonorsCooldown(t *testing.T) {
+	state := newStaticHealthWalkState()
+	firstDelegate := &scriptedCollectorClient{
+		bulkWalkErrs: map[string]error{snmp.OidHrProcessorLoad: errors.New("request timeout")},
+	}
+	first := optionalStaticHealthClient{
+		delegate:  firstDelegate,
+		state:     state,
+		deviceKey: "device-1",
+		cooldown:  time.Minute,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	if err := first.BulkWalkEach(snmp.OidHrProcessorLoad, func(gosnmp.SnmpPDU) error {
+		return nil
+	}); err == nil {
+		t.Fatal("first BulkWalkEach error = nil, want timeout")
+	}
+	if !slices.Contains(firstDelegate.bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("first BulkWalk calls = %v, want initial CPU health attempt", firstDelegate.bulkWalkCalls)
+	}
+
+	secondDelegate := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 70}},
+		},
+	}
+	second := optionalStaticHealthClient{
+		delegate:  secondDelegate,
+		state:     state,
+		deviceKey: "device-1",
+		cooldown:  time.Minute,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	visited := 0
+	if err := second.BulkWalkEach(snmp.OidHrProcessorLoad, func(gosnmp.SnmpPDU) error {
+		visited++
+		return nil
+	}); err != nil {
+		t.Fatalf("second BulkWalkEach() error = %v", err)
+	}
+	if visited != 0 {
+		t.Fatalf("visited PDUs = %d, want none while CPU health walk is cooling down", visited)
+	}
+	if slices.Contains(secondDelegate.bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("second BulkWalk calls = %v, want CPU health walk skipped during cooldown", secondDelegate.bulkWalkCalls)
+	}
+}
+
+func TestOptionalStaticHealthClient_BulkWalkEachCallbackErrorDoesNotStartCooldown(t *testing.T) {
+	state := newStaticHealthWalkState()
+	firstDelegate := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 70}},
+		},
+	}
+	first := optionalStaticHealthClient{
+		delegate:  firstDelegate,
+		state:     state,
+		deviceKey: "device-1",
+		cooldown:  time.Minute,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	sentinel := errors.New("stop visiting")
+	if err := first.BulkWalkEach(snmp.OidHrProcessorLoad, func(gosnmp.SnmpPDU) error {
+		return sentinel
+	}); !errors.Is(err, sentinel) {
+		t.Fatalf("first BulkWalkEach error = %v, want sentinel", err)
+	}
+
+	secondDelegate := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 71}},
+		},
+	}
+	second := optionalStaticHealthClient{
+		delegate:  secondDelegate,
+		state:     state,
+		deviceKey: "device-1",
+		cooldown:  time.Minute,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	visited := 0
+	if err := second.BulkWalkEach(snmp.OidHrProcessorLoad, func(gosnmp.SnmpPDU) error {
+		visited++
+		return nil
+	}); err != nil {
+		t.Fatalf("second BulkWalkEach() error = %v", err)
+	}
+	if visited != 1 {
+		t.Fatalf("visited PDUs = %d, want health walk to run after callback error", visited)
+	}
+	if !slices.Contains(secondDelegate.bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("second BulkWalk calls = %v, want CPU health walk not cooling down", secondDelegate.bulkWalkCalls)
+	}
+}
+
 func staticDiscoveryGetResponses() map[string][]gosnmp.SnmpPDU {
 	return map[string][]gosnmp.SnmpPDU{
 		snmp.OidSysName: {

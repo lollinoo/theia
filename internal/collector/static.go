@@ -240,6 +240,28 @@ func (c optionalStaticHealthClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, 
 	return pdus, err
 }
 
+func (c optionalStaticHealthClient) BulkWalkEach(rootOID string, visit func(gosnmp.SnmpPDU) error) error {
+	group := c.healthGroupForBulkWalk(rootOID)
+	if group == "" {
+		return snmp.VisitBulkWalk(c.delegate, rootOID, visit)
+	}
+	if c.skip(group, time.Now()) {
+		return nil
+	}
+	var visitErr error
+	err := snmp.VisitBulkWalk(c.delegate, rootOID, func(pdu gosnmp.SnmpPDU) error {
+		if err := visit(pdu); err != nil {
+			visitErr = err
+			return err
+		}
+		return nil
+	})
+	if err != nil && visitErr == nil {
+		c.cooldownGroup(group, time.Now())
+	}
+	return err
+}
+
 func (c optionalStaticHealthClient) skip(group string, now time.Time) bool {
 	if c.budget > 0 && !c.startedAt.IsZero() && !now.Before(c.startedAt.Add(c.budget)) {
 		return true

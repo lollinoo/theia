@@ -237,6 +237,21 @@ func (c instrumentedSNMPBulkWalkClient) BulkWalk(rootOID string) ([]gosnmp.SnmpP
 	return pdus, err
 }
 
+func (c instrumentedSNMPBulkWalkClient) BulkWalkEach(rootOID string, visit func(gosnmp.SnmpPDU) error) error {
+	operation := c.bulkWalkOperation(rootOID)
+	startedAt := time.Now()
+	pduCount := 0
+	err := snmp.VisitBulkWalk(c.delegate, rootOID, func(pdu gosnmp.SnmpPDU) error {
+		pduCount++
+		return visit(pdu)
+	})
+	duration := time.Since(startedAt)
+	result := classifySNMPCollectorResult(err)
+	observeSNMPCollectorOperation(c.deviceLabels, c.collector, operation, result, duration, c.slowThreshold)
+	logSNMPCollectorDebug(c.collector, operation, result, duration, pduCount, err)
+	return err
+}
+
 type snmpCollectorDeviceLabels struct {
 	ID     string
 	Name   string

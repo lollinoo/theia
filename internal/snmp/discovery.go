@@ -112,21 +112,21 @@ func PollOperationalStatusWithInterfaces(client ClientInterface, operationalOIDs
 		ifNames = walkInterfaceNames(client)
 	}
 
-	statusPDUs, _ := client.BulkWalk(statusOID)
-	for _, pdu := range statusPDUs {
+	_ = VisitBulkWalk(client, statusOID, func(pdu gosnmp.SnmpPDU) error {
 		idx := lastOIDIndex(pdu.Name, statusOID)
 		if idx < 0 {
-			continue
+			return nil
 		}
 		ifName := ifNames[idx]
 		if ifName == "" {
-			continue
+			return nil
 		}
 		if statuses == nil {
 			statuses = make(map[string]string)
 		}
 		statuses[ifName] = statusString(pdu.Value)
-	}
+		return nil
+	})
 
 	return uptimeSecs, statuses, nil
 }
@@ -147,18 +147,20 @@ func PollInterfaceCountersWithInterfaces(client ClientInterface, interfaces []do
 	}
 
 	inOctets := make(map[int]uint64)
-	for _, pdu := range bulkWalkSafe(client, OidIfHCInOctets) {
+	_ = VisitBulkWalk(client, OidIfHCInOctets, func(pdu gosnmp.SnmpPDU) error {
 		if idx := lastOIDIndex(pdu.Name, OidIfHCInOctets); idx >= 0 {
 			inOctets[idx] = uint64FromPDU(pdu)
 		}
-	}
+		return nil
+	})
 
 	outOctets := make(map[int]uint64)
-	for _, pdu := range bulkWalkSafe(client, OidIfHCOutOctets) {
+	_ = VisitBulkWalk(client, OidIfHCOutOctets, func(pdu gosnmp.SnmpPDU) error {
 		if idx := lastOIDIndex(pdu.Name, OidIfHCOutOctets); idx >= 0 {
 			outOctets[idx] = uint64FromPDU(pdu)
 		}
-	}
+		return nil
+	})
 
 	var counters []InterfaceCounter
 	for idx, name := range ifNames {
@@ -282,6 +284,26 @@ func NeighborDiscoveryPolicyFromMode(mode domain.TopologyDiscoveryMode) Neighbor
 type ClientInterface interface {
 	Get(oids []string) ([]gosnmp.SnmpPDU, error)
 	BulkWalk(rootOid string) ([]gosnmp.SnmpPDU, error)
+}
+
+// BulkWalkVisitor streams SNMP BULKWALK results without retaining all PDUs.
+type BulkWalkVisitor interface {
+	BulkWalkEach(rootOID string, visit func(gosnmp.SnmpPDU) error) error
+}
+
+// VisitBulkWalk uses a streaming walk when available and otherwise preserves
+// the ClientInterface BulkWalk contract.
+func VisitBulkWalk(client ClientInterface, rootOID string, visit func(gosnmp.SnmpPDU) error) error {
+	if walker, ok := client.(BulkWalkVisitor); ok {
+		return walker.BulkWalkEach(rootOID, visit)
+	}
+	pdus, err := client.BulkWalk(rootOID)
+	for _, pdu := range pdus {
+		if visitErr := visit(pdu); visitErr != nil {
+			return visitErr
+		}
+	}
+	return err
 }
 
 // DiscoverDevice gathers all required details from a network device via SNMP.
@@ -413,12 +435,12 @@ func discoverInterfaces(client ClientInterface) []domain.Interface {
 }
 
 func walkInterfaceColumn(client ClientInterface, oid string, visit func(index int, pdu gosnmp.SnmpPDU)) {
-	pdus, _ := client.BulkWalk(oid)
-	for _, pdu := range pdus {
+	_ = VisitBulkWalk(client, oid, func(pdu gosnmp.SnmpPDU) error {
 		if idx := lastOIDIndex(pdu.Name, oid); idx >= 0 {
 			visit(idx, pdu)
 		}
-	}
+		return nil
+	})
 }
 
 func ensureDiscoveredInterface(ifMap map[int]*domain.Interface, index int) *domain.Interface {

@@ -3,6 +3,7 @@ package snmp
 // This file exercises client behavior so refactors preserve the documented contract.
 
 import (
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -134,6 +135,141 @@ func TestClientBulkWalkDoesNotFallbackToWalkAfterTimeout(t *testing.T) {
 	if got := drainUDPPackets(t, listener); got != 1 {
 		t.Fatalf("SNMP request packets = %d, want 1 without Walk fallback after timeout", got)
 	}
+}
+
+func TestClientBulkWalkEachDoesNotFallbackToWalkAfterTimeout(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer listener.Close()
+
+	creds := domain.SNMPCredentials{
+		Version: domain.SNMPVersionV2c,
+		V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+	}
+	client, err := NewClient("127.0.0.1", creds, 20*time.Millisecond, 0)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	client.snmp.Port = uint16(listener.LocalAddr().(*net.UDPAddr).Port)
+	if err := client.Connect(); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer client.Close()
+
+	responded := respondToFirstSNMPRequest(t, listener, []gosnmp.SnmpPDU{
+		{Name: OidIfTable + ".1.1", Type: gosnmp.Integer, Value: 1},
+	})
+
+	var visited []gosnmp.SnmpPDU
+	err = client.BulkWalkEach(OidIfTable, func(pdu gosnmp.SnmpPDU) error {
+		visited = append(visited, pdu)
+		return nil
+	})
+
+	if err == nil {
+		t.Fatal("BulkWalkEach error = nil, want timeout")
+	}
+	if len(visited) != 1 {
+		t.Fatalf("visited PDUs = %d, want partial PDU before timeout", len(visited))
+	}
+	if err := <-responded; err != nil {
+		t.Fatalf("SNMP response helper: %v", err)
+	}
+	if got := 1 + drainUDPPackets(t, listener); got != 2 {
+		t.Fatalf("SNMP request packets = %d, want 2 without Walk fallback after partial timeout", got)
+	}
+}
+
+func TestClientBulkWalkEachCallbackErrorStopsWithoutFallback(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer listener.Close()
+
+	creds := domain.SNMPCredentials{
+		Version: domain.SNMPVersionV2c,
+		V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+	}
+	client, err := NewClient("127.0.0.1", creds, 20*time.Millisecond, 0)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	client.snmp.Port = uint16(listener.LocalAddr().(*net.UDPAddr).Port)
+	if err := client.Connect(); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer client.Close()
+
+	responded := respondToFirstSNMPRequest(t, listener, []gosnmp.SnmpPDU{
+		{Name: OidIfTable + ".1.1", Type: gosnmp.Integer, Value: 1},
+	})
+
+	sentinel := errors.New("stop walking")
+	var visited int
+	err = client.BulkWalkEach(OidIfTable, func(pdu gosnmp.SnmpPDU) error {
+		visited++
+		return sentinel
+	})
+
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("BulkWalkEach error = %v, want sentinel", err)
+	}
+	if visited != 1 {
+		t.Fatalf("visited PDUs = %d, want 1", visited)
+	}
+	if err := <-responded; err != nil {
+		t.Fatalf("SNMP response helper: %v", err)
+	}
+	if got := 1 + drainUDPPackets(t, listener); got != 1 {
+		t.Fatalf("SNMP request packets = %d, want 1 without Walk fallback after callback error", got)
+	}
+}
+
+func respondToFirstSNMPRequest(t *testing.T, listener *net.UDPConn, pdus []gosnmp.SnmpPDU) <-chan error {
+	t.Helper()
+
+	done := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 2048)
+		if err := listener.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+			done <- err
+			return
+		}
+		n, addr, err := listener.ReadFromUDP(buf)
+		if err != nil {
+			done <- err
+			return
+		}
+		request, err := gosnmp.Default.UnmarshalTrap(buf[:n], false)
+		if err != nil {
+			done <- err
+			return
+		}
+
+		packet := &gosnmp.SnmpPacket{
+			Version:   gosnmp.Version2c,
+			Community: "public",
+			PDUType:   gosnmp.GetResponse,
+			RequestID: request.RequestID,
+			Error:     gosnmp.NoError,
+			Variables: pdus,
+		}
+		response, err := packet.MarshalMsg()
+		if err != nil {
+			done <- err
+			return
+		}
+		_, err = listener.WriteToUDP(response, addr)
+		done <- err
+	}()
+	return done
 }
 
 func drainUDPPackets(t *testing.T, listener *net.UDPConn) int {

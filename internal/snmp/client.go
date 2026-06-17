@@ -155,6 +155,28 @@ func (c *Client) BulkWalk(rootOid string) ([]gosnmp.SnmpPDU, error) {
 	return variables, err
 }
 
+// BulkWalkEach streams SNMP BULKWALK results to visit without retaining the
+// full result slice.
+func (c *Client) BulkWalkEach(rootOid string, visit func(gosnmp.SnmpPDU) error) error {
+	delivered := false
+	var visitErr error
+	err := c.snmp.BulkWalk(rootOid, func(pdu gosnmp.SnmpPDU) error {
+		delivered = true
+		if err := visit(pdu); err != nil {
+			visitErr = err
+			return err
+		}
+		return nil
+	})
+	if err == nil {
+		return nil
+	}
+	if isSNMPTimeoutError(err) || visitErr != nil || delivered {
+		return err
+	}
+	return c.snmp.Walk(rootOid, visit)
+}
+
 func isSNMPTimeoutError(err error) bool {
 	if err == nil {
 		return false

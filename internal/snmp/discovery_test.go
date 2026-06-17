@@ -3,6 +3,7 @@ package snmp
 // This file exercises discovery behavior so refactors preserve the documented contract.
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/gosnmp/gosnmp"
@@ -1460,5 +1461,117 @@ func TestDiscoverDevice_LLDPPartialNeighborData(t *testing.T) {
 	}
 	if !malformedFound {
 		t.Error("malformed neighbor (BB:BB:BB:BB:BB:02) not found in results")
+	}
+}
+
+type streamingBenchmarkClient struct {
+	walks map[string][]gosnmp.SnmpPDU
+}
+
+func newStreamingBenchmarkClient(rows int) *streamingBenchmarkClient {
+	client := &streamingBenchmarkClient{walks: make(map[string][]gosnmp.SnmpPDU)}
+	for _, oid := range []string{
+		OidIfDescr,
+		OidIfSpeed,
+		OidIfAdminStatus,
+		OidIfOperStatus,
+		OidIfName,
+		OidIfHighSpeed,
+		OidIfHCInOctets,
+		OidIfHCOutOctets,
+	} {
+		client.walks[oid] = make([]gosnmp.SnmpPDU, 0, rows)
+	}
+
+	for i := 1; i <= rows; i++ {
+		suffix := "." + strconv.Itoa(i)
+		ifName := "if" + strconv.Itoa(i)
+		client.walks[OidIfDescr] = append(client.walks[OidIfDescr], gosnmp.SnmpPDU{Name: OidIfDescr + suffix, Type: gosnmp.OctetString, Value: []byte(ifName)})
+		client.walks[OidIfSpeed] = append(client.walks[OidIfSpeed], gosnmp.SnmpPDU{Name: OidIfSpeed + suffix, Type: gosnmp.Gauge32, Value: uint32(1_000_000_000)})
+		client.walks[OidIfAdminStatus] = append(client.walks[OidIfAdminStatus], gosnmp.SnmpPDU{Name: OidIfAdminStatus + suffix, Type: gosnmp.Integer, Value: 1})
+		client.walks[OidIfOperStatus] = append(client.walks[OidIfOperStatus], gosnmp.SnmpPDU{Name: OidIfOperStatus + suffix, Type: gosnmp.Integer, Value: 1})
+		client.walks[OidIfName] = append(client.walks[OidIfName], gosnmp.SnmpPDU{Name: OidIfName + suffix, Type: gosnmp.OctetString, Value: []byte(ifName)})
+		client.walks[OidIfHighSpeed] = append(client.walks[OidIfHighSpeed], gosnmp.SnmpPDU{Name: OidIfHighSpeed + suffix, Type: gosnmp.Gauge32, Value: uint32(1000)})
+		client.walks[OidIfHCInOctets] = append(client.walks[OidIfHCInOctets], gosnmp.SnmpPDU{Name: OidIfHCInOctets + suffix, Type: gosnmp.Counter64, Value: uint64(i * 1000)})
+		client.walks[OidIfHCOutOctets] = append(client.walks[OidIfHCOutOctets], gosnmp.SnmpPDU{Name: OidIfHCOutOctets + suffix, Type: gosnmp.Counter64, Value: uint64(i * 2000)})
+	}
+	return client
+}
+
+func (c *streamingBenchmarkClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
+	pdus := make([]gosnmp.SnmpPDU, 0, len(oids))
+	for _, oid := range oids {
+		if oid == OidSysUpTime {
+			pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(123456)})
+		}
+	}
+	return pdus, nil
+}
+
+func (c *streamingBenchmarkClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
+	return c.walks[rootOID], nil
+}
+
+func (c *streamingBenchmarkClient) BulkWalkEach(rootOID string, visit func(gosnmp.SnmpPDU) error) error {
+	for _, pdu := range c.walks[rootOID] {
+		if err := visit(pdu); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func benchmarkInterfaces(rows int) []domain.Interface {
+	interfaces := make([]domain.Interface, 0, rows)
+	for i := 1; i <= rows; i++ {
+		interfaces = append(interfaces, domain.Interface{
+			IfIndex: i,
+			IfName:  "if" + strconv.Itoa(i),
+		})
+	}
+	return interfaces
+}
+
+func BenchmarkPollInterfaceCountersWithInterfacesStreaming(b *testing.B) {
+	client := newStreamingBenchmarkClient(5000)
+	interfaces := benchmarkInterfaces(5000)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		counters := PollInterfaceCountersWithInterfaces(client, interfaces)
+		if len(counters) != len(interfaces) {
+			b.Fatalf("counters = %d, want %d", len(counters), len(interfaces))
+		}
+	}
+}
+
+func BenchmarkPollOperationalStatusStreaming(b *testing.B) {
+	client := newStreamingBenchmarkClient(5000)
+	interfaces := benchmarkInterfaces(5000)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, statuses, err := PollOperationalStatusWithInterfaces(client, vendor.OperationalOIDs{}, interfaces)
+		if err != nil {
+			b.Fatalf("PollOperationalStatusWithInterfaces() error = %v", err)
+		}
+		if len(statuses) != len(interfaces) {
+			b.Fatalf("statuses = %d, want %d", len(statuses), len(interfaces))
+		}
+	}
+}
+
+func BenchmarkDiscoverInterfacesStreamingLargeTable(b *testing.B) {
+	client := newStreamingBenchmarkClient(5000)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		interfaces := discoverInterfaces(client)
+		if len(interfaces) != 5000 {
+			b.Fatalf("interfaces = %d, want 5000", len(interfaces))
+		}
 	}
 }
