@@ -82,6 +82,11 @@ type Client struct {
 	needsResync              bool
 	overviewEpoch            uint64
 	usesHTTPRuntimeBootstrap bool
+	bootstrapping            bool
+	bootstrapRuntimeKnown    bool
+	bootstrapRuntimeVersion  uint64
+	bootstrapRuntimeIdentity string
+	bootstrapHelloPreserved  bool
 	detailDeviceID           uuid.UUID
 }
 
@@ -121,6 +126,11 @@ func (h *Hub) addClient(client *Client) {
 	}
 	observability.Default().SetWSConnectedClients(clientCount)
 	logging.Debugf("websocket client registered clients=%d", clientCount)
+}
+
+// HasOverviewClients reports whether any client can receive overview broadcasts.
+func (h *Hub) HasOverviewClients() bool {
+	return len(h.copyOverviewClients()) > 0
 }
 
 // Broadcast serializes a message and sends it to all connected clients.
@@ -166,6 +176,11 @@ func (h *Hub) WriteTo(client *Client, msg Message) bool {
 
 // BroadcastOverviewSnapshot broadcasts a versioned full overview snapshot.
 func (h *Hub) BroadcastOverviewSnapshot(snapshot *SnapshotPayload, version uint64) {
+	clients := h.copyOverviewClients()
+	if len(clients) == 0 {
+		return
+	}
+
 	msg := NewSnapshotMessage(snapshot, version)
 	payload, err := json.Marshal(msg)
 	if err != nil {
@@ -179,7 +194,6 @@ func (h *Hub) BroadcastOverviewSnapshot(snapshot *SnapshotPayload, version uint6
 	}
 	observability.Default().ObserveWSMessage("broadcast", msg.Type, len(payload))
 	h.recordBroadcast(payload)
-	clients := h.copyClients()
 	logging.Debugf("websocket message queued scope=overview_broadcast type=%s version=%d bytes=%d clients=%d", msg.Type, version, len(payload), len(clients))
 	for _, client := range clients {
 		if client.usesHTTPBootstrap() {
@@ -194,13 +208,17 @@ func (h *Hub) BroadcastOverviewSnapshot(snapshot *SnapshotPayload, version uint6
 // If a client cannot keep up, it receives resync_required plus the supplied
 // fallback full snapshot instead of blocking the producer.
 func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, version uint64, fallbackSnapshot *SnapshotPayload) {
+	clients := h.copyOverviewClients()
+	if len(clients) == 0 {
+		return
+	}
+
 	deltaMessage := NewRuntimeDeltaMessage(delta, baseVersion, version)
 	deltaPayload, err := json.Marshal(deltaMessage)
 	if err != nil {
 		log.Printf("WebSocket hub: failed to marshal overview delta: %v", err)
 		return
 	}
-	clients := h.copyClients()
 	var fallbackPayload []byte
 	fallbackPayloadReady := false
 	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
@@ -265,6 +283,11 @@ func (h *Hub) SendOverviewSnapshot(client *Client, snapshot *SnapshotPayload, ve
 // BroadcastOverviewResync broadcasts an explicit overview resync marker followed
 // by a full versioned snapshot to all connected clients.
 func (h *Hub) BroadcastOverviewResync(reason string, snapshot *SnapshotPayload, version uint64) {
+	clients := h.copyOverviewClients()
+	if len(clients) == 0 {
+		return
+	}
+
 	resyncPayload, err := marshalOverviewResyncPayload(reason)
 	if err != nil {
 		log.Printf("WebSocket hub: failed to marshal overview resync marker: %v", err)
@@ -280,7 +303,6 @@ func (h *Hub) BroadcastOverviewResync(reason string, snapshot *SnapshotPayload, 
 	observability.Default().ObserveWSMessage("broadcast", snapshotMessage.Type, len(snapshotPayload))
 	h.recordBroadcast(resyncPayload)
 	h.recordBroadcast(snapshotPayload)
-	clients := h.copyClients()
 	logging.Debugf(
 		"websocket message queued scope=overview_broadcast type=%s reason=%s snapshot_version=%d snapshot_bytes=%d clients=%d",
 		MessageTypeResyncRequired,
@@ -566,9 +588,17 @@ func (c *Client) markDisconnected() {
 func (c *Client) acceptHello(cmd clientControlMessage) {
 	c.mu.Lock()
 	c.usesHTTPRuntimeBootstrap = true
-	c.needsResync = false
-	c.hub.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientHello, clearQueuedMessages(c.overviewSend))
-	c.overviewEpoch++
+	preserveInitialHello := !c.bootstrapHelloPreserved &&
+		c.bootstrapRuntimeKnown &&
+		((cmd.RuntimeVersion != nil && *cmd.RuntimeVersion == c.bootstrapRuntimeVersion) ||
+			(cmd.RuntimeIdentity != "" && cmd.RuntimeIdentity == c.bootstrapRuntimeIdentity))
+	if preserveInitialHello {
+		c.bootstrapHelloPreserved = true
+	} else {
+		c.needsResync = false
+		c.hub.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientHello, clearQueuedMessages(c.overviewSend))
+		c.overviewEpoch++
+	}
 	c.mu.Unlock()
 
 	if c.hello == nil {
@@ -579,6 +609,22 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	case c.hello <- cmd:
 	default:
 	}
+}
+
+func (c *Client) markBootstrapSnapshotSelected(version uint64, runtimeIdentity string) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.bootstrapping = false
+	c.bootstrapRuntimeKnown = true
+	c.bootstrapRuntimeVersion = version
+	c.bootstrapRuntimeIdentity = runtimeIdentity
+	return c.overviewEpoch
+}
+
+func (c *Client) overviewEpochChangedSince(observed uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.overviewEpoch != observed
 }
 
 func (c *Client) markHTTPRuntimeResyncPending() {
@@ -594,6 +640,12 @@ func (c *Client) usesHTTPBootstrap() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.usesHTTPRuntimeBootstrap
+}
+
+func (c *Client) canReceiveOverviewBroadcast() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.closed && !c.bootstrapping
 }
 
 func (c *Client) writePump() {
@@ -692,6 +744,18 @@ func (h *Hub) copyClients() []*Client {
 	clients := make([]*Client, 0, len(h.clients))
 	for client := range h.clients {
 		clients = append(clients, client)
+	}
+	return clients
+}
+
+func (h *Hub) copyOverviewClients() []*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	clients := make([]*Client, 0, len(h.clients))
+	for client := range h.clients {
+		if client.canReceiveOverviewBroadcast() {
+			clients = append(clients, client)
+		}
 	}
 	return clients
 }

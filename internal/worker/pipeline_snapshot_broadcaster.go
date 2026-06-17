@@ -153,6 +153,9 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 		links = nil
 	}
 
+	p.overviewBuildMu.Lock()
+	defer p.overviewBuildMu.Unlock()
+
 	p.runtime.mu.RLock()
 	alerts := cloneAlertGroups(p.runtime.alerts)
 	promStatus := p.runtime.promStatus
@@ -197,7 +200,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 	}
 
 	if drainedTopology {
-		b.broadcastTopologyInvalidation(refreshReloadReasonTopologyDrainFallback)
+		b.broadcastTopologyInvalidationLocked(refreshReloadReasonTopologyDrainFallback)
 	}
 }
 
@@ -208,9 +211,21 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 	}
 
 	if resyncReason, ok := p.consumeResyncRequired(); ok {
-		if err := b.broadcastFullSnapshotWithResync(ctx, reloadReasonForResync(resyncReason), resyncReason, topologyDirty); err != nil {
+		p.overviewBuildMu.Lock()
+		if b.skipOverviewWorkWithoutClientsLocked() {
+			if topologyDirty {
+				observability.Default().IncRefreshTopologyReload(refreshReloadReasonTopologyDirty)
+				b.broadcastTopologyInvalidationLocked(refreshReloadReasonTopologyDirty)
+			}
+			p.overviewBuildMu.Unlock()
+			b.broadcastAlertsIfDirty(alertsDirty)
+			return nil
+		}
+		if err := b.broadcastFullSnapshotWithResyncLocked(ctx, reloadReasonForResync(resyncReason), resyncReason, topologyDirty); err != nil {
+			p.overviewBuildMu.Unlock()
 			return err
 		}
+		p.overviewBuildMu.Unlock()
 		b.broadcastAlertsIfDirty(alertsDirty)
 		return nil
 	}
@@ -221,9 +236,17 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 		return nil
 	}
 	if forceFull {
-		if err := b.broadcastFullSnapshot(ctx, refreshReloadReasonFullResync, false); err != nil {
+		p.overviewBuildMu.Lock()
+		if b.skipOverviewWorkWithoutClientsLocked() {
+			p.overviewBuildMu.Unlock()
+			b.broadcastAlertsIfDirty(alertsDirty)
+			return nil
+		}
+		if err := b.broadcastFullSnapshotLocked(ctx, refreshReloadReasonFullResync, false); err != nil {
+			p.overviewBuildMu.Unlock()
 			return err
 		}
+		p.overviewBuildMu.Unlock()
 		b.broadcastAlertsIfDirty(alertsDirty)
 		return nil
 	}
@@ -231,13 +254,22 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 		return nil
 	}
 
+	p.overviewBuildMu.Lock()
+	if b.skipOverviewWorkWithoutClientsLocked() {
+		p.overviewBuildMu.Unlock()
+		b.broadcastAlertsIfDirty(alertsDirty)
+		return nil
+	}
+
 	p.runtime.mu.RLock()
-	missingDirtyDeviceRuntimeBase := len(dirtyDevices) > 0 && snapshotPayloadEmpty(p.runtime.lastSnapshot)
+	missingOverviewRuntimeBase := p.runtime.prevHashes == nil || snapshotPayloadEmpty(p.runtime.lastSnapshot)
 	p.runtime.mu.RUnlock()
-	if missingDirtyDeviceRuntimeBase {
-		if err := b.broadcastFullSnapshot(ctx, refreshReloadReasonDirtyDeltaFallback, false); err != nil {
+	if missingOverviewRuntimeBase {
+		if err := b.broadcastFullSnapshotLocked(ctx, refreshReloadReasonDirtyDeltaFallback, false); err != nil {
+			p.overviewBuildMu.Unlock()
 			return err
 		}
+		p.overviewBuildMu.Unlock()
 		b.broadcastAlertsIfDirty(alertsDirty)
 		return nil
 	}
@@ -246,16 +278,20 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 	delta, requireFullSnapshot, err := b.buildDirtyOverviewDelta(dirtyDevices, alertsDirty)
 	observability.Default().ObserveRefreshSnapshotBuild(refreshSnapshotModeDirty, time.Since(startedAt), err == nil)
 	if err != nil {
+		p.overviewBuildMu.Unlock()
 		return err
 	}
 	if requireFullSnapshot {
-		if err := b.broadcastFullSnapshot(ctx, refreshReloadReasonDirtyDeltaFallback, false); err != nil {
+		if err := b.broadcastFullSnapshotLocked(ctx, refreshReloadReasonDirtyDeltaFallback, false); err != nil {
+			p.overviewBuildMu.Unlock()
 			return err
 		}
+		p.overviewBuildMu.Unlock()
 		b.broadcastAlertsIfDirty(alertsDirty)
 		return nil
 	}
 	if delta == nil {
+		p.overviewBuildMu.Unlock()
 		b.broadcastAlertsIfDirty(alertsDirty)
 		return nil
 	}
@@ -268,6 +304,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 	patch := buildRuntimeDeltaPatch(delta, previousSnapshotForPatch)
 	if patch == nil {
 		p.runtime.mu.Unlock()
+		p.overviewBuildMu.Unlock()
 		b.broadcastAlertsIfDirty(alertsDirty)
 		return nil
 	}
@@ -281,9 +318,43 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 	p.runtime.mu.Unlock()
 
 	p.hub.BroadcastOverviewDelta(patch, baseVersion, version, merged)
+	p.overviewBuildMu.Unlock()
 	b.broadcastAlertsIfDirty(alertsDirty)
 
 	return nil
+}
+
+func (b *pipelineSnapshotBroadcaster) hasOverviewClients() bool {
+	if b == nil || b.pipeline == nil || b.pipeline.hub == nil {
+		return false
+	}
+	return b.pipeline.hub.HasOverviewClients()
+}
+
+func (b *pipelineSnapshotBroadcaster) skipOverviewWorkWithoutClients() bool {
+	if b == nil || b.pipeline == nil {
+		return true
+	}
+	b.pipeline.overviewBuildMu.Lock()
+	defer b.pipeline.overviewBuildMu.Unlock()
+	return b.skipOverviewWorkWithoutClientsLocked()
+}
+
+func (b *pipelineSnapshotBroadcaster) skipOverviewWorkWithoutClientsLocked() bool {
+	if b.hasOverviewClients() {
+		return false
+	}
+	b.markOverviewRuntimeBaseStale()
+	return true
+}
+
+func (b *pipelineSnapshotBroadcaster) markOverviewRuntimeBaseStale() {
+	if b == nil || b.pipeline == nil || b.pipeline.runtime == nil {
+		return
+	}
+	b.pipeline.runtime.mu.Lock()
+	b.pipeline.runtime.prevHashes = nil
+	b.pipeline.runtime.mu.Unlock()
 }
 
 func (b *pipelineSnapshotBroadcaster) broadcastAlertsIfDirty(alertsDirty bool) {
@@ -429,6 +500,16 @@ func clonePollingHealth(health polling.HealthSnapshot) polling.HealthSnapshot {
 
 func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshot(_ context.Context, reason string, topologyChanged bool) error {
 	p := b.pipeline
+	if p == nil {
+		return nil
+	}
+	p.overviewBuildMu.Lock()
+	defer p.overviewBuildMu.Unlock()
+	return b.broadcastFullSnapshotLocked(context.Background(), reason, topologyChanged)
+}
+
+func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotLocked(_ context.Context, reason string, topologyChanged bool) error {
+	p := b.pipeline
 	observability.Default().IncRefreshTopologyReload(reason)
 	snapshot, err := b.buildFullOverviewSnapshot()
 	if err != nil {
@@ -446,13 +527,23 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshot(_ context.Context, r
 	p.hub.BroadcastOverviewSnapshot(snapshot, version)
 
 	if topologyChanged {
-		b.broadcastTopologyInvalidation(refreshReloadReasonTopologyDirty)
+		b.broadcastTopologyInvalidationLocked(refreshReloadReasonTopologyDirty)
 	}
 
 	return nil
 }
 
 func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotWithResync(_ context.Context, reason string, resyncReason string, topologyChanged bool) error {
+	p := b.pipeline
+	if p == nil {
+		return nil
+	}
+	p.overviewBuildMu.Lock()
+	defer p.overviewBuildMu.Unlock()
+	return b.broadcastFullSnapshotWithResyncLocked(context.Background(), reason, resyncReason, topologyChanged)
+}
+
+func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotWithResyncLocked(_ context.Context, reason string, resyncReason string, topologyChanged bool) error {
 	p := b.pipeline
 	observability.Default().IncRefreshTopologyReload(reason)
 	snapshot, err := b.buildFullOverviewSnapshot()
@@ -471,7 +562,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotWithResync(_ context.
 	p.hub.BroadcastOverviewResync(resyncReason, snapshot, version)
 
 	if topologyChanged {
-		b.broadcastTopologyInvalidation(refreshReloadReasonTopologyDirty)
+		b.broadcastTopologyInvalidationLocked(refreshReloadReasonTopologyDirty)
 	}
 
 	return nil
@@ -482,8 +573,19 @@ func (b *pipelineSnapshotBroadcaster) broadcastTopologyInvalidation(reason strin
 	if p == nil || p.runtime == nil || p.hub == nil {
 		return
 	}
+	p.overviewBuildMu.Lock()
+	defer p.overviewBuildMu.Unlock()
+	b.broadcastTopologyInvalidationLocked(reason)
+}
+
+func (b *pipelineSnapshotBroadcaster) broadcastTopologyInvalidationLocked(reason string) {
+	p := b.pipeline
+	if p == nil || p.runtime == nil || p.hub == nil {
+		return
+	}
 
 	p.runtime.mu.Lock()
+	p.runtime.prevHashes = nil
 	p.runtime.topologyVersion++
 	version := p.runtime.topologyVersion
 	p.runtime.mu.Unlock()

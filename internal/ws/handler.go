@@ -86,6 +86,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		overviewSend: make(chan []byte, overviewBufferSize),
 		hello:        make(chan clientControlMessage, clientHelloBuffer),
 		disconnected: make(chan struct{}),
+		bootstrapping: true,
 	}
 
 	hello, hasHello := clientHelloFromRequest(r)
@@ -109,6 +110,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	runtimeIdentity := RuntimeIdentityForSnapshot(snapshot)
+	selectedOverviewEpoch := client.markBootstrapSnapshotSelected(version, runtimeIdentity)
 
 	alerts := AlertMessagePayload{Alerts: []AlertDTO{}}
 	if h.alertsFunc != nil {
@@ -177,12 +179,45 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if !h.writeRuntimeCatchUp(client, version, runtimeIdentity, selectedOverviewEpoch, hasHello) {
+		return
+	}
+
 	select {
 	case <-client.disconnected:
 		return
 	default:
 	}
 	go client.writePump()
+}
+
+func (h *Handler) writeRuntimeCatchUp(client *Client, selectedVersion uint64, selectedIdentity string, selectedOverviewEpoch uint64, hasHello bool) bool {
+	if h.snapshotFunc == nil {
+		return true
+	}
+	snapshot, version := h.snapshotFunc()
+	snapshot = CloneSnapshot(snapshot)
+	identity := RuntimeIdentityForSnapshot(snapshot)
+	if version == selectedVersion && identity == selectedIdentity {
+		return true
+	}
+	if client.overviewEpochChangedSince(selectedOverviewEpoch) {
+		return true
+	}
+
+	if hasHello {
+		reason := ResyncReasonClientResync
+		client.markHTTPRuntimeResyncPending()
+		h.hub.recordOverviewResyncRequired(reason, true)
+		return h.hub.WriteTo(client, Message{
+			Type: MessageTypeResyncRequired,
+			Payload: ResyncRequiredPayload{
+				Scope:  ResyncScopeOverview,
+				Reason: reason,
+			},
+		})
+	}
+	return h.hub.WriteTo(client, NewSnapshotMessage(snapshot, version))
 }
 
 func clientRuntimeCurrent(hello clientControlMessage, runtimeVersion uint64, runtimeIdentity string) bool {

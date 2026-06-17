@@ -547,7 +547,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	wsHandler := ws.NewHandler(
 		hub,
-		pipeline.GetOverviewSnapshot,
+		pipeline.GetOrBuildOverviewSnapshot,
 		pipeline.GetAlerts,
 		pipeline.GetPrometheusStatus,
 		ws.WithAllowedOrigins(cfg.AllowedOrigins),

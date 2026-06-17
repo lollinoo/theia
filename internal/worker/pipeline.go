@@ -90,6 +90,7 @@ type PipelineOrchestrator struct {
 	done                    chan struct{}
 	healthDone              chan struct{}
 	runtime                 *pipelineRuntimeState
+	overviewBuildMu         sync.Mutex
 }
 
 // NewPipelineOrchestrator constructs pipeline orchestrator state for the background worker lifecycle.
@@ -242,12 +243,17 @@ func (p *PipelineOrchestrator) GetOverviewSnapshot() (*ws.SnapshotPayload, uint6
 
 // GetOrBuildOverviewSnapshot retrieves or build overview snapshot data from the background worker lifecycle.
 func (p *PipelineOrchestrator) GetOrBuildOverviewSnapshot() (*ws.SnapshotPayload, uint64) {
+	p.overviewBuildMu.Lock()
+	defer p.overviewBuildMu.Unlock()
+
 	p.runtime.mu.RLock()
-	hasRuntimeBase := p.runtime.prevHashes != nil
-	p.runtime.mu.RUnlock()
-	if hasRuntimeBase {
-		return p.runtime.getOverviewSnapshot()
+	if p.runtime.prevHashes != nil {
+		snapshot := ws.CloneSnapshot(p.runtime.lastSnapshot)
+		version := p.runtime.overviewVersion
+		p.runtime.mu.RUnlock()
+		return snapshot, version
 	}
+	p.runtime.mu.RUnlock()
 
 	snapshot, err := p.buildFullOverviewSnapshot()
 	if err != nil {
@@ -256,11 +262,21 @@ func (p *PipelineOrchestrator) GetOrBuildOverviewSnapshot() (*ws.SnapshotPayload
 	hashes := computeSnapshotHashes(snapshot)
 
 	p.runtime.mu.Lock()
+	if p.runtime.prevHashes != nil {
+		snapshot := ws.CloneSnapshot(p.runtime.lastSnapshot)
+		version := p.runtime.overviewVersion
+		p.runtime.mu.Unlock()
+		return snapshot, version
+	}
 	p.runtime.lastSnapshot = snapshot
 	p.runtime.prevHashes = hashes
 	p.runtime.overviewVersion++
 	version := p.runtime.overviewVersion
 	p.runtime.mu.Unlock()
+
+	if p.hub != nil && p.hub.HasOverviewClients() {
+		p.hub.BroadcastOverviewSnapshot(snapshot, version)
+	}
 
 	return ws.CloneSnapshot(snapshot), version
 }
