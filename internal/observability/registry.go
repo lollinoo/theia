@@ -170,6 +170,7 @@ type Registry struct {
 	bulkOperationBytes               map[bulkOperationCompletionKey]uint64
 	pollingEssentialOverloaded       float64
 	pollingDeadlineMissTotal         uint64
+	runtimeWorkerSettings            map[string]float64
 	pollResultsTotal                 map[taskResultKey]uint64
 	discoveryNeighbors               map[deviceProtocolKey]float64
 	linkUpsertsTotal                 map[linkUpsertKey]uint64
@@ -226,6 +227,7 @@ func NewRegistry() *Registry {
 			domain.VolatilityClassOperational: newHistogram(durationBucketsSeconds),
 			domain.VolatilityClassStatic:      newHistogram(durationBucketsSeconds),
 		},
+		runtimeWorkerSettings:   make(map[string]float64),
 		pollResultsTotal:        make(map[taskResultKey]uint64),
 		discoveryNeighbors:      make(map[deviceProtocolKey]float64),
 		linkUpsertsTotal:        make(map[linkUpsertKey]uint64),
@@ -376,6 +378,11 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_scheduler_scoped_backpressure_total",
 		"Scheduler backpressure events by task kind, volatility class, reason, and isolation scope.",
 		sortedSchedulerScopedBackpressureRows(r.schedulerScopedBackpressureTotal),
+	)
+	writeGaugeVec(&b,
+		"theia_runtime_worker_setting_effective",
+		"Effective runtime worker and polling tuning settings after defaults and bounds are applied.",
+		sortedRuntimeWorkerSettingRows(r.runtimeWorkerSettings),
 	)
 	writeCounterVec(&b,
 		"theia_bulk_operation_rejections_total",
@@ -747,6 +754,27 @@ func (r *Registry) SetPollingEssentialOverloaded(overloaded bool) {
 	r.pollingEssentialOverloaded = 0
 }
 
+func (r *Registry) SetRuntimeWorkerSettingEffective(setting string, value float64) {
+	if !runtimeWorkerSettingAllowed(setting) {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.runtimeWorkerSettings[setting] = value
+}
+
+func (r *Registry) SetRuntimeWorkerSettingsEffective(settings []RuntimeWorkerSettingEffective) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, setting := range settings {
+		if !runtimeWorkerSettingAllowed(setting.Setting) {
+			continue
+		}
+		r.runtimeWorkerSettings[setting.Setting] = setting.Value
+	}
+}
+
 func (r *Registry) IncPollingDeadlineMiss() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1068,6 +1096,27 @@ func (h *histogram) snapshot() histogramSnapshot {
 	}
 }
 
+// RuntimeWorkerSettingEffective is one fixed worker or polling tuning value after runtime coercion.
+type RuntimeWorkerSettingEffective struct {
+	Setting string
+	Value   float64
+}
+
+var runtimeWorkerSettingOrder = []string{
+	domain.SettingPollingEssentialWorkers,
+	domain.SettingSNMPWorkerPoolPerformance,
+	domain.SettingSNMPWorkerPoolOperational,
+	domain.SettingSNMPWorkerPoolStatic,
+	domain.SettingPollingMaxWorkersPerDevice,
+	domain.SettingPollingMaxWorkersPerSite,
+	domain.SettingPollingMaxWorkersPerSubnet,
+	domain.SettingPollingMaxInflightPerProfile,
+	domain.SettingPollingWebSocketCoalesceMS,
+	domain.SettingPollingPersistenceBatchMS,
+	domain.SettingPollingEssentialTimeoutMillis,
+	domain.SettingPollingEssentialRetries,
+}
+
 type gaugeRow struct {
 	labels map[string]string
 	value  float64
@@ -1097,6 +1146,30 @@ func sortedVolatilityGaugeRows(values map[domain.VolatilityClass]float64) []gaug
 		})
 	}
 	return rows
+}
+
+func sortedRuntimeWorkerSettingRows(values map[string]float64) []gaugeRow {
+	rows := make([]gaugeRow, 0, len(values))
+	for _, setting := range runtimeWorkerSettingOrder {
+		value, ok := values[setting]
+		if !ok {
+			continue
+		}
+		rows = append(rows, gaugeRow{
+			labels: map[string]string{"setting": setting},
+			value:  value,
+		})
+	}
+	return rows
+}
+
+func runtimeWorkerSettingAllowed(setting string) bool {
+	for _, allowed := range runtimeWorkerSettingOrder {
+		if setting == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedDispatchRows(values map[schedulerDispatchKey]uint64) []counterRow {

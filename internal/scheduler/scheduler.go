@@ -1626,6 +1626,7 @@ func (s *Scheduler) recordMetrics() {
 func (s *Scheduler) recordMetricsLocked(now time.Time) {
 	observability.Default().SetSchedulerInFlight(s.inFlight)
 	observability.Default().SetPollingEssentialOverloaded(s.pollingEssentialOverloadedLocked(now))
+	s.recordEffectiveRuntimeWorkerSettingsLocked()
 	for _, volatility := range scheduledVolatilityClasses() {
 		priority := VolatilityPriority(volatility)
 		depth := 0
@@ -1635,6 +1636,66 @@ func (s *Scheduler) recordMetricsLocked(now time.Time) {
 		observability.Default().SetSchedulerReadyDepth(volatility, depth)
 		observability.Default().SetSchedulerQueueLag(volatility, s.queueLag(volatility, now))
 	}
+}
+
+func (s *Scheduler) recordEffectiveRuntimeWorkerSettingsLocked() {
+	budgets := s.classBudgets()
+	policy, _ := polling.PolicyFromSettings(s.settingsRepo, 0, 0, 0)
+	essentialTimeout := policy.Timeouts[polling.LaneEssential]
+	bufferLimit := s.bufferLimit()
+
+	settings := []observability.RuntimeWorkerSettingEffective{
+		{
+			Setting: domain.SettingPollingEssentialWorkers,
+			Value:   float64(clampEssentialLimit(policy.EssentialWorkers, bufferLimit)),
+		},
+		{
+			Setting: domain.SettingSNMPWorkerPoolPerformance,
+			Value:   float64(budgets[domain.VolatilityClassPerformance]),
+		},
+		{
+			Setting: domain.SettingSNMPWorkerPoolOperational,
+			Value:   float64(budgets[domain.VolatilityClassOperational]),
+		},
+		{
+			Setting: domain.SettingSNMPWorkerPoolStatic,
+			Value:   float64(budgets[domain.VolatilityClassStatic]),
+		},
+		{
+			Setting: domain.SettingPollingMaxWorkersPerDevice,
+			Value:   float64(policy.MaxWorkersPerDevice),
+		},
+		{
+			Setting: domain.SettingPollingMaxWorkersPerSite,
+			Value:   float64(policy.MaxWorkersPerSite),
+		},
+		{
+			Setting: domain.SettingPollingMaxWorkersPerSubnet,
+			Value:   float64(policy.MaxWorkersPerSubnet),
+		},
+		{
+			Setting: domain.SettingPollingMaxInflightPerProfile,
+			Value:   float64(policy.MaxInflightPerProfile),
+		},
+		{
+			Setting: domain.SettingPollingWebSocketCoalesceMS,
+			Value:   float64(policy.WebSocketCoalesce / time.Millisecond),
+		},
+		{
+			Setting: domain.SettingPollingPersistenceBatchMS,
+			Value:   float64(policy.PersistenceBatch / time.Millisecond),
+		},
+		{
+			Setting: domain.SettingPollingEssentialTimeoutMillis,
+			Value:   float64(essentialTimeout.Timeout / time.Millisecond),
+		},
+		{
+			Setting: domain.SettingPollingEssentialRetries,
+			Value:   float64(essentialTimeout.Retries),
+		},
+	}
+
+	observability.Default().SetRuntimeWorkerSettingsEffective(settings)
 }
 
 func (s *Scheduler) queueSnapshotsLocked(now time.Time, budgets map[domain.VolatilityClass]int) map[string]polling.QueueSnapshot {

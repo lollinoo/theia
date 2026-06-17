@@ -7,6 +7,7 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
 	"strings"
@@ -1152,6 +1153,80 @@ func TestSchedulerRecordMetricsLocked_UpdatesEssentialOverloadGaugeAfterDispatch
 	if !strings.Contains(metrics, `theia_polling_essential_overloaded 1`) {
 		t.Fatalf("expected essential overload gauge after recordMetricsLocked, got:\n%s", metrics)
 	}
+}
+
+func TestSchedulerRecordMetricsLocked_ExportsEffectiveWorkerSettings(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	scheduler := NewScheduler(&fakeDeviceSource{}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers:       "42",
+			domain.SettingSNMPWorkerPoolPerformance:     "11",
+			domain.SettingSNMPWorkerPoolOperational:     "7",
+			domain.SettingSNMPWorkerPoolStatic:          "5",
+			domain.SettingPollingMaxWorkersPerDevice:    "3",
+			domain.SettingPollingMaxWorkersPerSite:      "21",
+			domain.SettingPollingMaxWorkersPerSubnet:    "13",
+			domain.SettingPollingMaxInflightPerProfile:  "17",
+			domain.SettingPollingWebSocketCoalesceMS:    "750",
+			domain.SettingPollingPersistenceBatchMS:     "1500",
+			domain.SettingPollingEssentialTimeoutMillis: "900",
+			domain.SettingPollingEssentialRetries:       "2",
+		},
+	})
+
+	scheduler.recordMetricsLocked(time.Date(2026, 4, 24, 10, 5, 0, 0, time.UTC))
+
+	metrics := string(registry.MarshalPrometheus())
+	for _, want := range []string{
+		`theia_runtime_worker_setting_effective{setting="polling_essential_workers"} 42`,
+		`theia_runtime_worker_setting_effective{setting="snmp_worker_pool_performance_size"} 11`,
+		`theia_runtime_worker_setting_effective{setting="snmp_worker_pool_operational_size"} 7`,
+		`theia_runtime_worker_setting_effective{setting="snmp_worker_pool_static_size"} 5`,
+		`theia_runtime_worker_setting_effective{setting="polling_max_workers_per_device"} 3`,
+		`theia_runtime_worker_setting_effective{setting="polling_max_workers_per_site"} 21`,
+		`theia_runtime_worker_setting_effective{setting="polling_max_workers_per_subnet"} 13`,
+		`theia_runtime_worker_setting_effective{setting="polling_max_inflight_per_snmp_profile"} 17`,
+		`theia_runtime_worker_setting_effective{setting="polling_websocket_coalesce_ms"} 750`,
+		`theia_runtime_worker_setting_effective{setting="polling_persistence_batch_ms"} 1500`,
+		`theia_runtime_worker_setting_effective{setting="polling_essential_timeout_ms"} 900`,
+		`theia_runtime_worker_setting_effective{setting="polling_essential_retries"} 2`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics output missing %q\n%s", want, metrics)
+		}
+	}
+}
+
+func TestSchedulerRecordMetricsLocked_ExportsEffectiveWorkerSettingsClampedByBuffer(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	scheduler := NewScheduler(&fakeDeviceSource{}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers:   "256",
+			domain.SettingSNMPWorkerPoolPerformance: "128",
+			domain.SettingSNMPWorkerPoolOperational: "128",
+			domain.SettingSNMPWorkerPoolStatic:      "128",
+		},
+	})
+	clampedBudgets := scheduler.classBudgets()
+	essentialWorkers := clampEssentialLimit(256, scheduler.bufferLimit())
+
+	scheduler.recordMetricsLocked(time.Date(2026, 4, 24, 10, 5, 0, 0, time.UTC))
+
+	metrics := string(registry.MarshalPrometheus())
+	for _, want := range []string{
+		runtimeWorkerSettingMetricLine(domain.SettingPollingEssentialWorkers, essentialWorkers),
+		runtimeWorkerSettingMetricLine(domain.SettingSNMPWorkerPoolPerformance, clampedBudgets[domain.VolatilityClassPerformance]),
+		runtimeWorkerSettingMetricLine(domain.SettingSNMPWorkerPoolOperational, clampedBudgets[domain.VolatilityClassOperational]),
+		runtimeWorkerSettingMetricLine(domain.SettingSNMPWorkerPoolStatic, clampedBudgets[domain.VolatilityClassStatic]),
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics output missing %q\n%s", want, metrics)
+		}
+	}
+}
+
+func runtimeWorkerSettingMetricLine(setting string, value int) string {
+	return fmt.Sprintf(`theia_runtime_worker_setting_effective{setting="%s"} %d`, setting, value)
 }
 
 func TestSchedulerPollingHealthIsSafeDuringRuntimeMutations(t *testing.T) {

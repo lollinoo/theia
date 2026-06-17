@@ -683,13 +683,20 @@ describe('SettingsPanel — Polling Workers settings', () => {
     const essentialWorkers = screen.getByLabelText('Essential Workers') as HTMLInputElement;
     const performancePool = screen.getByLabelText('Performance Pool') as HTMLInputElement;
     const maxWorkersPerDevice = screen.getByLabelText('Max Workers Per Device') as HTMLInputElement;
+    const maxInflightPerSNMPProfile = screen.getByLabelText(
+      'Max Inflight Per SNMP Profile',
+    ) as HTMLInputElement;
 
+    expect(essentialWorkers.value).toBe('64');
     expect(essentialWorkers.min).toBe('1');
     expect(essentialWorkers.max).toBe('256');
     expect(performancePool.min).toBe('1');
     expect(performancePool.max).toBe('128');
     expect(maxWorkersPerDevice.min).toBe('1');
     expect(maxWorkersPerDevice.max).toBe('32');
+    expect(maxInflightPerSNMPProfile.value).toBe('16');
+    expect(maxInflightPerSNMPProfile.min).toBe('1');
+    expect(maxInflightPerSNMPProfile.max).toBe('256');
   });
 
   it('rejects out-of-range worker settings and does not save them', async () => {

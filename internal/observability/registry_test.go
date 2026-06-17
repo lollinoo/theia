@@ -31,6 +31,7 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 		deviceID.String(),
 		"edge-router-01",
 	)
+	registry.SetRuntimeWorkerSettingEffective("polling_essential_workers", 72)
 	registry.ObserveSchedulerTaskDuration(domain.VolatilityClassStatic, 250*time.Millisecond)
 	registry.SetPollingEssentialOverloaded(true)
 	registry.IncPollingDeadlineMiss()
@@ -87,6 +88,8 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_scheduler_backpressure_total{reason="class_limit",volatility_class="static"} 1`)
 	assertContainsMetric(t, body, `# HELP theia_scheduler_scoped_backpressure_total Scheduler backpressure events by task kind, volatility class, reason, and isolation scope.`)
 	assertContainsMetric(t, body, `theia_scheduler_scoped_backpressure_total{reason="device_limit",scope="device",scope_id="`+deviceID.String()+`",scope_name="edge-router-01",task_kind="background",volatility_class="operational"} 1`)
+	assertContainsMetric(t, body, `# HELP theia_runtime_worker_setting_effective Effective runtime worker and polling tuning settings after defaults and bounds are applied.`)
+	assertContainsMetric(t, body, `theia_runtime_worker_setting_effective{setting="polling_essential_workers"} 72`)
 	assertContainsMetric(t, body, `theia_polling_essential_overloaded 1`)
 	assertContainsMetric(t, body, `theia_polling_deadline_miss_total 1`)
 	assertContainsMetric(t, body, `theia_poll_results_total{outcome="success",volatility_class="static"} 1`)
