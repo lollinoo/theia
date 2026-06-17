@@ -112,6 +112,15 @@ type snmpCollectorOperationKey struct {
 	Result    string
 }
 
+type snmpCollectorDeviceOperationKey struct {
+	DeviceID  string
+	Device    string
+	Target    string
+	Collector string
+	Operation string
+	Result    string
+}
+
 type snmpCollectorEarlyExitKey struct {
 	Collector string
 	Reason    string
@@ -163,6 +172,8 @@ type Registry struct {
 	prometheusRuntimeDuration  map[prometheusRuntimeRequestKey]*histogram
 	snmpCollectorOperations    map[snmpCollectorOperationKey]uint64
 	snmpCollectorDuration      map[snmpCollectorOperationKey]*histogram
+	snmpCollectorDeviceLast    map[snmpCollectorDeviceOperationKey]float64
+	snmpCollectorDeviceSlow    map[snmpCollectorDeviceOperationKey]uint64
 	snmpCollectorEarlyExit     map[snmpCollectorEarlyExitKey]uint64
 	wsConnectedClients         float64
 	wsConnectionsTotal         map[string]uint64
@@ -223,6 +234,8 @@ func NewRegistry() *Registry {
 		prometheusRuntimeDuration:  make(map[prometheusRuntimeRequestKey]*histogram),
 		snmpCollectorOperations:    make(map[snmpCollectorOperationKey]uint64),
 		snmpCollectorDuration:      make(map[snmpCollectorOperationKey]*histogram),
+		snmpCollectorDeviceLast:    make(map[snmpCollectorDeviceOperationKey]float64),
+		snmpCollectorDeviceSlow:    make(map[snmpCollectorDeviceOperationKey]uint64),
 		snmpCollectorEarlyExit:     make(map[snmpCollectorEarlyExitKey]uint64),
 		wsConnectionsTotal:         make(map[string]uint64),
 		wsMessagesTotal:            make(map[wsMetricKey]uint64),
@@ -462,6 +475,16 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_snmp_collector_operation_seconds",
 		"SNMP collector operation latency by collector, operation, and result.",
 		sortedSNMPCollectorOperationHistogramRows(r.snmpCollectorDuration),
+	)
+	writeGaugeVec(&b,
+		"theia_snmp_collector_device_operation_last_duration_seconds",
+		"Most recent SNMP collector operation latency by device, collector, operation, and result.",
+		sortedSNMPCollectorDeviceOperationGaugeRows(r.snmpCollectorDeviceLast),
+	)
+	writeCounterVec(&b,
+		"theia_snmp_collector_device_slow_operations_total",
+		"Slow SNMP collector operation totals by device, collector, operation, and result.",
+		sortedSNMPCollectorDeviceOperationCounterRows(r.snmpCollectorDeviceSlow),
 	)
 	writeCounterVec(&b,
 		"theia_snmp_collector_early_exit_total",
@@ -823,6 +846,42 @@ func (r *Registry) ObserveSNMPCollectorOperation(collector, operation, result st
 		r.snmpCollectorDuration[key] = h
 	}
 	h.observe(duration.Seconds())
+}
+
+// ObserveSNMPCollectorDeviceOperation records the latest per-device SNMP
+// operation latency and optionally increments the slow-operation counter.
+func (r *Registry) ObserveSNMPCollectorDeviceOperation(deviceID, device, target, collector, operation, result string, duration time.Duration, slow bool) {
+	if collector == "" || operation == "" || result == "" {
+		return
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	if deviceID == "" {
+		deviceID = "unknown"
+	}
+	if device == "" {
+		device = "unknown"
+	}
+	if target == "" {
+		target = "unknown"
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	key := snmpCollectorDeviceOperationKey{
+		DeviceID:  deviceID,
+		Device:    device,
+		Target:    target,
+		Collector: collector,
+		Operation: operation,
+		Result:    result,
+	}
+	r.snmpCollectorDeviceLast[key] = duration.Seconds()
+	if slow {
+		r.snmpCollectorDeviceSlow[key]++
+	}
 }
 
 func (r *Registry) IncSNMPCollectorEarlyExit(collector, reason string) {
@@ -1432,6 +1491,40 @@ func sortedSNMPCollectorOperationHistogramRows(values map[snmpCollectorOperation
 	return rows
 }
 
+func sortedSNMPCollectorDeviceOperationGaugeRows(values map[snmpCollectorDeviceOperationKey]float64) []gaugeRow {
+	keys := make([]snmpCollectorDeviceOperationKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sortSNMPCollectorDeviceOperationKeys(keys)
+
+	rows := make([]gaugeRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, gaugeRow{
+			labels: snmpCollectorDeviceOperationLabels(key),
+			value:  values[key],
+		})
+	}
+	return rows
+}
+
+func sortedSNMPCollectorDeviceOperationCounterRows(values map[snmpCollectorDeviceOperationKey]uint64) []counterRow {
+	keys := make([]snmpCollectorDeviceOperationKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sortSNMPCollectorDeviceOperationKeys(keys)
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: snmpCollectorDeviceOperationLabels(key),
+			value:  values[key],
+		})
+	}
+	return rows
+}
+
 func sortSNMPCollectorOperationKeys(keys []snmpCollectorOperationKey) {
 	sort.Slice(keys, func(i, j int) bool {
 		if keys[i].Collector != keys[j].Collector {
@@ -1442,6 +1535,38 @@ func sortSNMPCollectorOperationKeys(keys []snmpCollectorOperationKey) {
 		}
 		return keys[i].Result < keys[j].Result
 	})
+}
+
+func sortSNMPCollectorDeviceOperationKeys(keys []snmpCollectorDeviceOperationKey) {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Device != keys[j].Device {
+			return keys[i].Device < keys[j].Device
+		}
+		if keys[i].Target != keys[j].Target {
+			return keys[i].Target < keys[j].Target
+		}
+		if keys[i].Collector != keys[j].Collector {
+			return keys[i].Collector < keys[j].Collector
+		}
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		if keys[i].Result != keys[j].Result {
+			return keys[i].Result < keys[j].Result
+		}
+		return keys[i].DeviceID < keys[j].DeviceID
+	})
+}
+
+func snmpCollectorDeviceOperationLabels(key snmpCollectorDeviceOperationKey) map[string]string {
+	return map[string]string{
+		"device_id": key.DeviceID,
+		"device":    key.Device,
+		"target":    key.Target,
+		"collector": key.Collector,
+		"operation": key.Operation,
+		"result":    key.Result,
+	}
 }
 
 func sortedSNMPCollectorEarlyExitRows(values map[snmpCollectorEarlyExitKey]uint64) []counterRow {

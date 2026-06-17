@@ -370,6 +370,38 @@ func TestInstrumentedSNMPBulkWalkClient_DebugLogsFailedOperation(t *testing.T) {
 	}
 }
 
+func TestInstrumentedSNMPBulkWalkClient_RecordsDeviceOperationMetrics(t *testing.T) {
+	metrics := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	client := instrumentedSNMPBulkWalkClient{
+		delegate: &scriptedPerformanceClient{
+			bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+				".1.3.6.1.2.1.2.2.1.10": {{Name: ".1.3.6.1.2.1.2.2.1.10.1", Value: uint64(42)}},
+			},
+		},
+		collector:          "performance",
+		bulkWalkOperations: map[string]string{".1.3.6.1.2.1.2.2.1.10": "if_hc_in_octets_walk"},
+		deviceLabels: snmpCollectorDeviceLabels{
+			ID:     "4f1eedbe-fd7d-4de4-ab30-68f2cf4c78c9",
+			Name:   "edge-router-01",
+			Target: "192.0.2.31",
+		},
+		slowThreshold: time.Nanosecond,
+	}
+
+	if _, err := client.BulkWalk(".1.3.6.1.2.1.2.2.1.10"); err != nil {
+		t.Fatalf("BulkWalk() error = %v", err)
+	}
+
+	body := string(metrics.MarshalPrometheus())
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_device_operation_last_duration_seconds{collector="performance",device="edge-router-01",device_id="4f1eedbe-fd7d-4de4-ab30-68f2cf4c78c9",operation="if_hc_in_octets_walk",result="success",target="192.0.2.31"}`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_device_slow_operations_total{collector="performance",device="edge-router-01",device_id="4f1eedbe-fd7d-4de4-ab30-68f2cf4c78c9",operation="if_hc_in_octets_walk",result="success",target="192.0.2.31"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="if_hc_in_octets_walk",result="success"} 1`)
+}
+
 func TestPerformanceCollectorPoll_RecordsSysUpTimeEarlyExitMetrics(t *testing.T) {
 	registry, err := vendor.LoadRegistryFromEmbedded()
 	if err != nil {

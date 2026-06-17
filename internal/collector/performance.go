@@ -58,6 +58,7 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 			CollectedAt: collectedAt,
 		},
 	}
+	deviceLabels := snmpCollectorDeviceMetricLabels(device)
 
 	if err := ctx.Err(); err != nil {
 		result.Err = err
@@ -99,12 +100,9 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 	}
 	probeStartedAt := time.Now()
 	uptimePDUs, err := client.Get([]string{snmp.OidSysUpTime})
-	observability.Default().ObserveSNMPCollectorOperation(
-		"performance",
-		"sysuptime_probe",
-		classifySNMPCollectorResult(err),
-		time.Since(probeStartedAt),
-	)
+	probeDuration := time.Since(probeStartedAt)
+	probeResult := classifySNMPCollectorResult(err)
+	observeSNMPCollectorOperation(deviceLabels, "performance", "sysuptime_probe", probeResult, probeDuration, 0)
 	if err != nil {
 		observability.Default().IncSNMPCollectorEarlyExit("performance", "sysuptime_probe_failed")
 		result.Err = fmt.Errorf("performance uptime probe: %w", err)
@@ -116,6 +114,7 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 		delegate:           client,
 		collector:          "performance",
 		bulkWalkOperations: performanceBulkWalkOperations(),
+		deviceLabels:       deviceLabels,
 	}
 
 	if hasCachedInterfaceIndexes(device.Interfaces) {
@@ -202,6 +201,8 @@ type instrumentedSNMPBulkWalkClient struct {
 	getOperations      map[string]string
 	bulkWalkOperations map[string]string
 	earlyExitReasons   map[string]string
+	deviceLabels       snmpCollectorDeviceLabels
+	slowThreshold      time.Duration
 }
 
 // Get retrieves get data from the collector.
@@ -215,12 +216,7 @@ func (c instrumentedSNMPBulkWalkClient) Get(oids []string) ([]gosnmp.SnmpPDU, er
 	pdus, err := c.delegate.Get(oids)
 	duration := time.Since(startedAt)
 	result := classifySNMPCollectorResult(err)
-	observability.Default().ObserveSNMPCollectorOperation(
-		c.collector,
-		operation,
-		result,
-		duration,
-	)
+	observeSNMPCollectorOperation(c.deviceLabels, c.collector, operation, result, duration, c.slowThreshold)
 	logSNMPCollectorDebug(c.collector, operation, result, duration, len(pdus), err)
 	if err != nil {
 		if reason := c.earlyExitReasons[operation]; reason != "" {
@@ -236,14 +232,52 @@ func (c instrumentedSNMPBulkWalkClient) BulkWalk(rootOID string) ([]gosnmp.SnmpP
 	pdus, err := c.delegate.BulkWalk(rootOID)
 	duration := time.Since(startedAt)
 	result := classifySNMPCollectorResult(err)
-	observability.Default().ObserveSNMPCollectorOperation(
-		c.collector,
+	observeSNMPCollectorOperation(c.deviceLabels, c.collector, operation, result, duration, c.slowThreshold)
+	logSNMPCollectorDebug(c.collector, operation, result, duration, len(pdus), err)
+	return pdus, err
+}
+
+type snmpCollectorDeviceLabels struct {
+	ID     string
+	Name   string
+	Target string
+}
+
+func snmpCollectorDeviceMetricLabels(device domain.Device) snmpCollectorDeviceLabels {
+	id := strings.TrimSpace(device.ID.String())
+	name := firstNonEmptyString(device.Hostname, device.SysName, device.IP, id)
+	target := firstNonEmptyString(device.IP, device.PrometheusLabelValue, name, id)
+	return snmpCollectorDeviceLabels{
+		ID:     id,
+		Name:   name,
+		Target: target,
+	}
+}
+
+func observeSNMPCollectorOperation(labels snmpCollectorDeviceLabels, collector, operation, result string, duration time.Duration, slowThreshold time.Duration) {
+	observability.Default().ObserveSNMPCollectorOperation(collector, operation, result, duration)
+	if slowThreshold <= 0 {
+		slowThreshold = snmpCollectorDebugSlowThreshold
+	}
+	observability.Default().ObserveSNMPCollectorDeviceOperation(
+		labels.ID,
+		labels.Name,
+		labels.Target,
+		collector,
 		operation,
 		result,
 		duration,
+		duration >= slowThreshold,
 	)
-	logSNMPCollectorDebug(c.collector, operation, result, duration, len(pdus), err)
-	return pdus, err
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return "unknown"
 }
 
 func (c instrumentedSNMPBulkWalkClient) getOperation(oids []string) string {

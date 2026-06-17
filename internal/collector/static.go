@@ -110,6 +110,7 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 			snmp.OidIfName:        "if_name_walk",
 			snmp.OidIfHighSpeed:   "if_high_speed_walk",
 		}, deviceHealthBulkWalkOperations(perfOIDs)),
+		deviceLabels: snmpCollectorDeviceMetricLabels(device),
 	}
 	discovery, err := snmp.DiscoverDeviceWithPolicy(instrumentedClient, c.registry, snmp.NeighborDiscoveryPolicyFromMode(topologyMode))
 	if err != nil {

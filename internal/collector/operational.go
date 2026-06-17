@@ -110,6 +110,7 @@ func (c *OperationalCollector) Poll(ctx context.Context, device domain.Device, t
 		earlyExitReasons: map[string]string{
 			"sysuptime_probe": "sysuptime_probe_failed",
 		},
+		deviceLabels: snmpCollectorDeviceMetricLabels(device),
 	}
 
 	uptimeSecs, statuses, err := snmp.PollOperationalStatusWithInterfaces(instrumentedClient, operationalOIDs, device.Interfaces)
