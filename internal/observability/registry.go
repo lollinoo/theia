@@ -52,6 +52,15 @@ type schedulerBackpressureKey struct {
 	Reason          string
 }
 
+type schedulerScopedBackpressureKey struct {
+	TaskKind        string
+	VolatilityClass string
+	Reason          string
+	Scope           string
+	ScopeID         string
+	ScopeName       string
+}
+
 type schedulerDispatchKey struct {
 	TaskKind        string
 	VolatilityClass string
@@ -144,47 +153,48 @@ type histogramSnapshot struct {
 type Registry struct {
 	mu sync.RWMutex
 
-	schedulerReadyDepth        map[domain.VolatilityClass]float64
-	schedulerQueueLagSeconds   map[domain.VolatilityClass]float64
-	schedulerInFlight          float64
-	schedulerTaskDispatchTotal map[schedulerDispatchKey]uint64
-	schedulerBackpressureTotal map[schedulerBackpressureKey]uint64
-	schedulerTaskDuration      map[domain.VolatilityClass]*histogram
-	bulkOperationInFlight      map[bulkOperationInFlightKey]float64
-	bulkOperationLimits        map[bulkOperationLimitKey]float64
-	bulkOperationRejections    map[bulkOperationRejectionKey]uint64
-	bulkOperationCompletions   map[bulkOperationCompletionKey]uint64
-	bulkOperationDuration      map[bulkOperationCompletionKey]*histogram
-	bulkOperationDevices       map[bulkOperationCompletionKey]uint64
-	bulkOperationFiles         map[bulkOperationCompletionKey]uint64
-	bulkOperationBytes         map[bulkOperationCompletionKey]uint64
-	pollingEssentialOverloaded float64
-	pollingDeadlineMissTotal   uint64
-	pollResultsTotal           map[taskResultKey]uint64
-	discoveryNeighbors         map[deviceProtocolKey]float64
-	linkUpsertsTotal           map[linkUpsertKey]uint64
-	cacheInvalidationsTotal    map[string]uint64
-	cacheReloadTotal           uint64
-	topologyMaterialization    map[string]*histogram
-	refreshSnapshotBuild       map[refreshSnapshotBuildKey]*histogram
-	refreshTopologyReloadTotal map[string]uint64
-	prometheusRuntimeRequests  map[prometheusRuntimeRequestKey]uint64
-	prometheusRuntimeDuration  map[prometheusRuntimeRequestKey]*histogram
-	snmpCollectorOperations    map[snmpCollectorOperationKey]uint64
-	snmpCollectorDuration      map[snmpCollectorOperationKey]*histogram
-	snmpCollectorDeviceLast    map[snmpCollectorDeviceOperationKey]float64
-	snmpCollectorDeviceSlow    map[snmpCollectorDeviceOperationKey]uint64
-	snmpCollectorEarlyExit     map[snmpCollectorEarlyExitKey]uint64
-	wsConnectedClients         float64
-	wsConnectionsTotal         map[string]uint64
-	wsMessagesTotal            map[wsMetricKey]uint64
-	wsBackpressureTotal        map[wsBackpressureKey]uint64
-	wsClientResyncTotal        map[wsClientResyncKey]uint64
-	wsOverviewMailboxClear     map[string]uint64
-	wsOverviewResyncSuppressed map[string]uint64
-	wsPayloadBytes             map[wsMetricKey]*histogram
-	unknownNeighborsTotal      map[deviceProtocolKey]uint64
-	stateChangesDroppedTotal   uint64
+	schedulerReadyDepth              map[domain.VolatilityClass]float64
+	schedulerQueueLagSeconds         map[domain.VolatilityClass]float64
+	schedulerInFlight                float64
+	schedulerTaskDispatchTotal       map[schedulerDispatchKey]uint64
+	schedulerBackpressureTotal       map[schedulerBackpressureKey]uint64
+	schedulerScopedBackpressureTotal map[schedulerScopedBackpressureKey]uint64
+	schedulerTaskDuration            map[domain.VolatilityClass]*histogram
+	bulkOperationInFlight            map[bulkOperationInFlightKey]float64
+	bulkOperationLimits              map[bulkOperationLimitKey]float64
+	bulkOperationRejections          map[bulkOperationRejectionKey]uint64
+	bulkOperationCompletions         map[bulkOperationCompletionKey]uint64
+	bulkOperationDuration            map[bulkOperationCompletionKey]*histogram
+	bulkOperationDevices             map[bulkOperationCompletionKey]uint64
+	bulkOperationFiles               map[bulkOperationCompletionKey]uint64
+	bulkOperationBytes               map[bulkOperationCompletionKey]uint64
+	pollingEssentialOverloaded       float64
+	pollingDeadlineMissTotal         uint64
+	pollResultsTotal                 map[taskResultKey]uint64
+	discoveryNeighbors               map[deviceProtocolKey]float64
+	linkUpsertsTotal                 map[linkUpsertKey]uint64
+	cacheInvalidationsTotal          map[string]uint64
+	cacheReloadTotal                 uint64
+	topologyMaterialization          map[string]*histogram
+	refreshSnapshotBuild             map[refreshSnapshotBuildKey]*histogram
+	refreshTopologyReloadTotal       map[string]uint64
+	prometheusRuntimeRequests        map[prometheusRuntimeRequestKey]uint64
+	prometheusRuntimeDuration        map[prometheusRuntimeRequestKey]*histogram
+	snmpCollectorOperations          map[snmpCollectorOperationKey]uint64
+	snmpCollectorDuration            map[snmpCollectorOperationKey]*histogram
+	snmpCollectorDeviceLast          map[snmpCollectorDeviceOperationKey]float64
+	snmpCollectorDeviceSlow          map[snmpCollectorDeviceOperationKey]uint64
+	snmpCollectorEarlyExit           map[snmpCollectorEarlyExitKey]uint64
+	wsConnectedClients               float64
+	wsConnectionsTotal               map[string]uint64
+	wsMessagesTotal                  map[wsMetricKey]uint64
+	wsBackpressureTotal              map[wsBackpressureKey]uint64
+	wsClientResyncTotal              map[wsClientResyncKey]uint64
+	wsOverviewMailboxClear           map[string]uint64
+	wsOverviewResyncSuppressed       map[string]uint64
+	wsPayloadBytes                   map[wsMetricKey]*histogram
+	unknownNeighborsTotal            map[deviceProtocolKey]uint64
+	stateChangesDroppedTotal         uint64
 }
 
 // NewRegistry constructs registry state for the package.
@@ -200,16 +210,17 @@ func NewRegistry() *Registry {
 			domain.VolatilityClassOperational: 0,
 			domain.VolatilityClassStatic:      0,
 		},
-		schedulerTaskDispatchTotal: make(map[schedulerDispatchKey]uint64),
-		schedulerBackpressureTotal: make(map[schedulerBackpressureKey]uint64),
-		bulkOperationInFlight:      make(map[bulkOperationInFlightKey]float64),
-		bulkOperationLimits:        make(map[bulkOperationLimitKey]float64),
-		bulkOperationRejections:    make(map[bulkOperationRejectionKey]uint64),
-		bulkOperationCompletions:   make(map[bulkOperationCompletionKey]uint64),
-		bulkOperationDuration:      make(map[bulkOperationCompletionKey]*histogram),
-		bulkOperationDevices:       make(map[bulkOperationCompletionKey]uint64),
-		bulkOperationFiles:         make(map[bulkOperationCompletionKey]uint64),
-		bulkOperationBytes:         make(map[bulkOperationCompletionKey]uint64),
+		schedulerTaskDispatchTotal:       make(map[schedulerDispatchKey]uint64),
+		schedulerBackpressureTotal:       make(map[schedulerBackpressureKey]uint64),
+		schedulerScopedBackpressureTotal: make(map[schedulerScopedBackpressureKey]uint64),
+		bulkOperationInFlight:            make(map[bulkOperationInFlightKey]float64),
+		bulkOperationLimits:              make(map[bulkOperationLimitKey]float64),
+		bulkOperationRejections:          make(map[bulkOperationRejectionKey]uint64),
+		bulkOperationCompletions:         make(map[bulkOperationCompletionKey]uint64),
+		bulkOperationDuration:            make(map[bulkOperationCompletionKey]*histogram),
+		bulkOperationDevices:             make(map[bulkOperationCompletionKey]uint64),
+		bulkOperationFiles:               make(map[bulkOperationCompletionKey]uint64),
+		bulkOperationBytes:               make(map[bulkOperationCompletionKey]uint64),
 		schedulerTaskDuration: map[domain.VolatilityClass]*histogram{
 			domain.VolatilityClassPerformance: newHistogram(durationBucketsSeconds),
 			domain.VolatilityClassOperational: newHistogram(durationBucketsSeconds),
@@ -360,6 +371,11 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_scheduler_backpressure_total",
 		"Scheduler backpressure events by volatility class and reason.",
 		sortedSchedulerBackpressureRows(r.schedulerBackpressureTotal),
+	)
+	writeCounterVec(&b,
+		"theia_scheduler_scoped_backpressure_total",
+		"Scheduler backpressure events by task kind, volatility class, reason, and isolation scope.",
+		sortedSchedulerScopedBackpressureRows(r.schedulerScopedBackpressureTotal),
 	)
 	writeCounterVec(&b,
 		"theia_bulk_operation_rejections_total",
@@ -590,6 +606,34 @@ func (r *Registry) IncSchedulerBackpressure(volatility domain.VolatilityClass, r
 	r.schedulerBackpressureTotal[schedulerBackpressureKey{
 		VolatilityClass: string(volatility),
 		Reason:          reason,
+	}]++
+}
+
+func (r *Registry) IncSchedulerScopedBackpressure(taskKind string, volatility domain.VolatilityClass, reason, scope, scopeID, scopeName string) {
+	taskKind = strings.TrimSpace(taskKind)
+	if taskKind == "" {
+		taskKind = "unknown"
+	}
+	reason = strings.TrimSpace(reason)
+	scope = strings.TrimSpace(scope)
+	scopeID = strings.TrimSpace(scopeID)
+	scopeName = strings.TrimSpace(scopeName)
+	if reason == "" || scope == "" || scopeID == "" {
+		return
+	}
+	if scopeName == "" {
+		scopeName = scopeID
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.schedulerScopedBackpressureTotal[schedulerScopedBackpressureKey{
+		TaskKind:        taskKind,
+		VolatilityClass: string(volatility),
+		Reason:          reason,
+		Scope:           scope,
+		ScopeID:         scopeID,
+		ScopeName:       scopeName,
 	}]++
 }
 
@@ -1098,6 +1142,47 @@ func sortedSchedulerBackpressureRows(values map[schedulerBackpressureKey]uint64)
 			labels: map[string]string{
 				"volatility_class": key.VolatilityClass,
 				"reason":           key.Reason,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedSchedulerScopedBackpressureRows(values map[schedulerScopedBackpressureKey]uint64) []counterRow {
+	keys := make([]schedulerScopedBackpressureKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].TaskKind != keys[j].TaskKind {
+			return keys[i].TaskKind < keys[j].TaskKind
+		}
+		if keys[i].VolatilityClass != keys[j].VolatilityClass {
+			return keys[i].VolatilityClass < keys[j].VolatilityClass
+		}
+		if keys[i].Reason != keys[j].Reason {
+			return keys[i].Reason < keys[j].Reason
+		}
+		if keys[i].Scope != keys[j].Scope {
+			return keys[i].Scope < keys[j].Scope
+		}
+		if keys[i].ScopeID != keys[j].ScopeID {
+			return keys[i].ScopeID < keys[j].ScopeID
+		}
+		return keys[i].ScopeName < keys[j].ScopeName
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"task_kind":        key.TaskKind,
+				"volatility_class": key.VolatilityClass,
+				"reason":           key.Reason,
+				"scope":            key.Scope,
+				"scope_id":         key.ScopeID,
+				"scope_name":       key.ScopeName,
 			},
 			value: values[key],
 		})

@@ -5,6 +5,8 @@ package scheduler
 import (
 	"container/heap"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -84,10 +86,27 @@ type blockedDispatchMetric struct {
 	reason     string
 }
 
+type scopedBlockedDispatchMetric struct {
+	taskKind   string
+	volatility domain.VolatilityClass
+	reason     string
+	scope      string
+	scopeID    string
+	scopeName  string
+}
+
+type isolationBlock struct {
+	reason    string
+	scope     string
+	scopeID   string
+	scopeName string
+}
+
 type dispatchScanState struct {
 	classLimited     [3]bool
 	essentialLimited bool
 	blockedMetrics   map[blockedDispatchMetric]struct{}
+	scopedMetrics    map[scopedBlockedDispatchMetric]struct{}
 }
 
 type reduePerformanceTaskRequest struct {
@@ -689,8 +708,8 @@ func (s *Scheduler) popReadyEligible(limits dispatchLimits, scanState *dispatchS
 			if scanState.isKnownBlocked(item.task) {
 				continue
 			}
-			if reason := s.dispatchBlockReasonWithLimits(item.task, limits); reason != "" {
-				scanState.recordBlocked(item.task, reason)
+			if block := s.dispatchBlockWithLimits(item.task, limits); block.reason != "" {
+				scanState.recordBlocked(item.task, block)
 				continue
 			}
 
@@ -717,17 +736,18 @@ func (state *dispatchScanState) isKnownBlocked(task PollTask) bool {
 	return priority >= 0 && priority < len(state.classLimited) && state.classLimited[priority]
 }
 
-func (state *dispatchScanState) recordBlocked(task PollTask, reason string) {
-	recordBlockedDispatchMetrics(&state.blockedMetrics, task, reason)
+func (state *dispatchScanState) recordBlocked(task PollTask, block isolationBlock) {
+	recordBlockedDispatchMetrics(&state.blockedMetrics, task, block.reason)
+	recordScopedBlockedDispatchMetrics(&state.scopedMetrics, task, block)
 
 	task = normalizeTask(task)
 	if task.Kind == polling.TaskKindEssential {
-		if reason == "essential_limit" {
+		if block.reason == "essential_limit" {
 			state.essentialLimited = true
 		}
 		return
 	}
-	if reason != "class_limit" {
+	if block.reason != "class_limit" {
 		return
 	}
 
@@ -742,6 +762,17 @@ func (state *dispatchScanState) flushBlockedMetrics() {
 		observability.Default().IncSchedulerBackpressure(metric.volatility, metric.reason)
 	}
 	state.blockedMetrics = nil
+	for metric := range state.scopedMetrics {
+		observability.Default().IncSchedulerScopedBackpressure(
+			metric.taskKind,
+			metric.volatility,
+			metric.reason,
+			metric.scope,
+			metric.scopeID,
+			metric.scopeName,
+		)
+	}
+	state.scopedMetrics = nil
 }
 
 func (s *Scheduler) readyQueuesEmpty() bool {
@@ -1087,17 +1118,21 @@ func (s *Scheduler) dispatchBlockReason(task PollTask, budgets map[domain.Volati
 }
 
 func (s *Scheduler) dispatchBlockReasonWithLimits(task PollTask, limits dispatchLimits) string {
+	return s.dispatchBlockWithLimits(task, limits).reason
+}
+
+func (s *Scheduler) dispatchBlockWithLimits(task PollTask, limits dispatchLimits) isolationBlock {
 	task = normalizeTask(task)
 	if task.Kind == polling.TaskKindEssential {
 		if s.inFlightByKind[polling.TaskKindEssential] >= limits.essentialLimit {
-			return "essential_limit"
+			return isolationBlock{reason: "essential_limit"}
 		}
-		return s.isolationBlockReason(task, limits.policy)
+		return s.isolationBlock(task, limits.policy)
 	}
 	if s.inFlightByClass[task.VolatilityClass] >= limits.budgets[task.VolatilityClass] {
-		return "class_limit"
+		return isolationBlock{reason: "class_limit"}
 	}
-	return s.isolationBlockReason(task, limits.policy)
+	return s.isolationBlock(task, limits.policy)
 }
 
 func (s *Scheduler) incrementInFlight(task PollTask) {
@@ -1125,6 +1160,10 @@ func (s *Scheduler) withinIsolationBudgets(task PollTask, policy polling.Policy)
 }
 
 func (s *Scheduler) isolationBlockReason(task PollTask, policy polling.Policy) string {
+	return s.isolationBlock(task, policy).reason
+}
+
+func (s *Scheduler) isolationBlock(task PollTask, policy polling.Policy) isolationBlock {
 	task = normalizeTask(task)
 	deviceCounts := s.inFlightByDevice
 	siteCounts := s.inFlightBySite
@@ -1140,7 +1179,12 @@ func (s *Scheduler) isolationBlockReason(task PollTask, policy polling.Policy) s
 	if policy.MaxWorkersPerDevice > 0 {
 		deviceKey := task.Device.ID.String()
 		if deviceKey != "" && deviceCounts[deviceKey] >= policy.MaxWorkersPerDevice {
-			return "device_limit"
+			return isolationBlock{
+				reason:    "device_limit",
+				scope:     "device",
+				scopeID:   deviceKey,
+				scopeName: taskDeviceScopeName(task.Device),
+			}
 		}
 	}
 	if policy.MaxWorkersPerSite > 0 {
@@ -1150,21 +1194,37 @@ func (s *Scheduler) isolationBlockReason(task PollTask, policy polling.Policy) s
 				continue
 			}
 			if siteCounts[siteKey] >= policy.MaxWorkersPerSite {
-				return "site_limit"
+				return isolationBlock{
+					reason:    "site_limit",
+					scope:     "site",
+					scopeID:   siteKey,
+					scopeName: siteKey,
+				}
 			}
 		}
 	}
 	if policy.MaxWorkersPerSubnet > 0 {
 		if subnetKey := taskSubnetKey(task); subnetKey != "" && subnetCounts[subnetKey] >= policy.MaxWorkersPerSubnet {
-			return "subnet_limit"
+			return isolationBlock{
+				reason:    "subnet_limit",
+				scope:     "subnet",
+				scopeID:   subnetKey,
+				scopeName: subnetKey,
+			}
 		}
 	}
 	if policy.MaxInflightPerProfile > 0 {
 		if profileKey := taskProfileKey(task); profileKey != "" && profileCounts[profileKey] >= policy.MaxInflightPerProfile {
-			return "profile_limit"
+			scopeID := taskProfileScopeID(profileKey)
+			return isolationBlock{
+				reason:    "profile_limit",
+				scope:     "snmp_profile",
+				scopeID:   scopeID,
+				scopeName: scopeID,
+			}
 		}
 	}
-	return ""
+	return isolationBlock{}
 }
 
 func recordBlockedDispatchMetrics(blocked *map[blockedDispatchMetric]struct{}, task PollTask, reason string) {
@@ -1181,6 +1241,28 @@ func recordBlockedDispatchMetrics(blocked *map[blockedDispatchMetric]struct{}, t
 	if reason != "essential_limit" {
 		(*blocked)[blockedDispatchMetric{volatility: domain.VolatilityClassPerformance, reason: "essential_" + reason}] = struct{}{}
 	}
+}
+
+func recordScopedBlockedDispatchMetrics(blocked *map[scopedBlockedDispatchMetric]struct{}, task PollTask, block isolationBlock) {
+	if block.scope == "" || block.scopeID == "" {
+		return
+	}
+	task = normalizeTask(task)
+	reason := block.reason
+	if task.Kind == polling.TaskKindEssential {
+		reason = "essential_" + reason
+	}
+	if *blocked == nil {
+		*blocked = make(map[scopedBlockedDispatchMetric]struct{}, 2)
+	}
+	(*blocked)[scopedBlockedDispatchMetric{
+		taskKind:   string(task.Kind),
+		volatility: taskVolatilityForMetrics(task),
+		reason:     reason,
+		scope:      block.scope,
+		scopeID:    block.scopeID,
+		scopeName:  block.scopeName,
+	}] = struct{}{}
 }
 
 func (s *Scheduler) incrementIsolationCounts(task PollTask) {
@@ -1406,6 +1488,16 @@ func taskSubnetKey(task PollTask) string {
 	return netip.PrefixFrom(addr, bits).Masked().String()
 }
 
+func taskDeviceScopeName(device domain.Device) string {
+	if hostname := strings.TrimSpace(device.Hostname); hostname != "" {
+		return hostname
+	}
+	if ip := strings.TrimSpace(device.IP); ip != "" {
+		return ip
+	}
+	return device.ID.String()
+}
+
 func taskProfileKey(task PollTask) string {
 	creds := task.Device.SNMPCredentials
 	switch creds.Version {
@@ -1428,6 +1520,11 @@ func taskProfileKey(task PollTask) string {
 	default:
 		return ""
 	}
+}
+
+func taskProfileScopeID(profileKey string) string {
+	sum := sha256.Sum256([]byte(profileKey))
+	return hex.EncodeToString(sum[:8])
 }
 
 func shouldScheduleBootstrapTask(device domain.Device) bool {

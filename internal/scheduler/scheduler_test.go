@@ -1279,6 +1279,156 @@ func TestSchedulerDispatchReady_RespectsPollingIsolationBudgets(t *testing.T) {
 	}
 }
 
+func TestSchedulerDispatchReady_RecordsScopedDeviceAndSiteBackpressure(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	siteID := uuid.MustParse("53100000-0000-0000-0000-000000000101")
+	deviceBlockedID := uuid.MustParse("53100000-0000-0000-0000-000000000102")
+	siteHolderID := uuid.MustParse("53100000-0000-0000-0000-000000000103")
+	siteBlockedID := uuid.MustParse("53100000-0000-0000-0000-000000000104")
+	scheduler := NewScheduler(
+		&fakeDeviceSource{},
+		fakeSettingsRepo{values: map[string]string{
+			domain.SettingSNMPWorkerPoolPerformance:    "8",
+			domain.SettingSNMPWorkerPoolOperational:    "8",
+			domain.SettingSNMPWorkerPoolStatic:         "8",
+			domain.SettingPollingEssentialWorkers:      "8",
+			domain.SettingPollingMaxWorkersPerDevice:   "1",
+			domain.SettingPollingMaxWorkersPerSite:     "1",
+			domain.SettingPollingMaxWorkersPerSubnet:   "16",
+			domain.SettingPollingMaxInflightPerProfile: "16",
+		}},
+	)
+	now := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
+	scheduler.tasks = make(chan PollTask, 64)
+	scheduler.inFlight = 2
+	scheduler.incrementInFlight(PollTask{
+		Key: NewTaskKey(deviceBlockedID, domain.VolatilityClassPerformance),
+		Device: domain.Device{
+			ID:       deviceBlockedID,
+			Hostname: "edge-device-holder",
+			IP:       "10.80.1.10",
+		},
+		VolatilityClass: domain.VolatilityClassPerformance,
+	})
+	scheduler.incrementInFlight(PollTask{
+		Key: NewTaskKey(siteHolderID, domain.VolatilityClassPerformance),
+		Device: domain.Device{
+			ID:      siteHolderID,
+			IP:      "10.81.1.10",
+			AreaIDs: []uuid.UUID{siteID},
+		},
+		VolatilityClass: domain.VolatilityClassPerformance,
+	})
+	deviceBlocked := &heapItem{
+		task: PollTask{
+			Key: NewTaskKey(deviceBlockedID, domain.VolatilityClassPerformance),
+			Device: domain.Device{
+				ID:       deviceBlockedID,
+				Hostname: "edge-device-blocked",
+				IP:       "10.80.1.10",
+			},
+			VolatilityClass: domain.VolatilityClassPerformance,
+		},
+		dueAt:  now.Add(-time.Minute),
+		queued: true,
+		index:  -1,
+	}
+	siteBlocked := &heapItem{
+		task: PollTask{
+			Key: NewTaskKey(siteBlockedID, domain.VolatilityClassPerformance),
+			Device: domain.Device{
+				ID:      siteBlockedID,
+				IP:      "10.81.2.10",
+				AreaIDs: []uuid.UUID{siteID},
+			},
+			VolatilityClass: domain.VolatilityClassPerformance,
+		},
+		dueAt:  now.Add(-30 * time.Second),
+		queued: true,
+		index:  -1,
+	}
+	scheduler.ready[readyPriority(deviceBlocked.task)] = []*heapItem{deviceBlocked, siteBlocked}
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	metrics := string(registry.MarshalPrometheus())
+	for _, line := range []string{
+		`theia_scheduler_backpressure_total{reason="device_limit",volatility_class="performance"} 1`,
+		`theia_scheduler_backpressure_total{reason="site_limit",volatility_class="performance"} 1`,
+		`theia_scheduler_scoped_backpressure_total{reason="device_limit",scope="device",scope_id="` + deviceBlockedID.String() + `",scope_name="edge-device-blocked",task_kind="background",volatility_class="performance"} 1`,
+		`theia_scheduler_scoped_backpressure_total{reason="site_limit",scope="site",scope_id="` + siteID.String() + `",scope_name="` + siteID.String() + `",task_kind="background",volatility_class="performance"} 1`,
+	} {
+		if !strings.Contains(metrics, line+"\n") {
+			t.Fatalf("missing backpressure metric %q, got:\n%s", line, metrics)
+		}
+	}
+}
+
+func TestSchedulerDispatchReady_ProfileScopedBackpressureDoesNotExposeCommunity(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	const secretCommunity = "secret-profile-community"
+	sharedProfile := domain.SNMPCredentials{
+		Version: domain.SNMPVersionV2c,
+		V2c:     &domain.SNMPv2cCredentials{Community: secretCommunity},
+	}
+	inFlightID := uuid.MustParse("53100000-0000-0000-0000-000000000201")
+	blockedID := uuid.MustParse("53100000-0000-0000-0000-000000000202")
+	scheduler := NewScheduler(
+		&fakeDeviceSource{},
+		fakeSettingsRepo{values: map[string]string{
+			domain.SettingSNMPWorkerPoolPerformance:    "8",
+			domain.SettingSNMPWorkerPoolOperational:    "8",
+			domain.SettingSNMPWorkerPoolStatic:         "8",
+			domain.SettingPollingEssentialWorkers:      "8",
+			domain.SettingPollingMaxWorkersPerDevice:   "16",
+			domain.SettingPollingMaxWorkersPerSite:     "16",
+			domain.SettingPollingMaxWorkersPerSubnet:   "16",
+			domain.SettingPollingMaxInflightPerProfile: "1",
+		}},
+	)
+	now := time.Date(2026, 5, 4, 10, 5, 0, 0, time.UTC)
+	scheduler.tasks = make(chan PollTask, 64)
+	scheduler.inFlight = 1
+	scheduler.incrementInFlight(PollTask{
+		Key: NewTaskKey(inFlightID, domain.VolatilityClassOperational),
+		Device: domain.Device{
+			ID:              inFlightID,
+			IP:              "10.82.1.10",
+			SNMPCredentials: sharedProfile,
+		},
+		VolatilityClass: domain.VolatilityClassOperational,
+	})
+	blocked := &heapItem{
+		task: PollTask{
+			Key: NewTaskKey(blockedID, domain.VolatilityClassOperational),
+			Device: domain.Device{
+				ID:              blockedID,
+				IP:              "10.82.2.10",
+				SNMPCredentials: sharedProfile,
+			},
+			VolatilityClass: domain.VolatilityClassOperational,
+		},
+		dueAt:  now.Add(-time.Minute),
+		queued: true,
+		index:  -1,
+	}
+	scheduler.ready[readyPriority(blocked.task)] = []*heapItem{blocked}
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	metrics := string(registry.MarshalPrometheus())
+	if strings.Contains(metrics, secretCommunity) {
+		t.Fatalf("scoped profile metrics exposed raw community %q:\n%s", secretCommunity, metrics)
+	}
+	if !strings.Contains(metrics, `theia_scheduler_backpressure_total{reason="profile_limit",volatility_class="operational"} 1`) {
+		t.Fatalf("expected aggregate profile_limit metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_scheduler_scoped_backpressure_total{reason="profile_limit",scope="snmp_profile",`) ||
+		!strings.Contains(metrics, `task_kind="background",volatility_class="operational"} 1`) {
+		t.Fatalf("expected scoped profile_limit metric with fingerprinted scope, got:\n%s", metrics)
+	}
+}
+
 func TestSchedulerDispatchReady_RecordsEssentialProfileBackpressureReason(t *testing.T) {
 	observability.ResetDefaultForTest()
 
@@ -1338,6 +1488,10 @@ func TestSchedulerDispatchReady_RecordsEssentialProfileBackpressureReason(t *tes
 	}
 	if !strings.Contains(metrics, `theia_scheduler_backpressure_total{reason="essential_profile_limit",volatility_class="performance"} 1`) {
 		t.Fatalf("expected detailed essential_profile_limit backpressure metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_scheduler_scoped_backpressure_total{reason="essential_profile_limit",scope="snmp_profile",`) ||
+		!strings.Contains(metrics, `task_kind="essential",volatility_class="performance"} 1`) {
+		t.Fatalf("expected scoped essential_profile_limit backpressure metric, got:\n%s", metrics)
 	}
 }
 
