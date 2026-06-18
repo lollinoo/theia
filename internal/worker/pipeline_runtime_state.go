@@ -150,10 +150,20 @@ func (p *PipelineOrchestrator) ResetDeviceRuntime(deviceID uuid.UUID) {
 	if p == nil || deviceID == uuid.Nil {
 		return
 	}
+	p.clearStaticPersistenceDedupe(deviceID)
 	if p.runtime != nil {
 		p.runtime.resetDeviceRuntime(deviceID)
 	}
 	if p.stateStore != nil {
 		p.stateStore.Remove(deviceID)
 	}
+}
+
+func (p *PipelineOrchestrator) clearStaticPersistenceDedupe(deviceID uuid.UUID) {
+	if p == nil || deviceID == uuid.Nil {
+		return
+	}
+	p.staticPersistenceMu.Lock()
+	defer p.staticPersistenceMu.Unlock()
+	delete(p.staticPersistenceCache, deviceID)
 }

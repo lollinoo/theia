@@ -436,6 +436,156 @@ func TestStaticCollectorPoll_CooldownsTimedOutOptionalHealthWalks(t *testing.T) 
 	}
 }
 
+func TestStaticCollectorPoll_CooldownsTimedOutStaticInterfaceWalks(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+	metrics := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	deviceID := uuid.New()
+	clients := []*scriptedCollectorClient{
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+			bulkWalkErrs: map[string]error{
+				snmp.OidIfDescr: errors.New("request timeout"),
+			},
+		},
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+		},
+	}
+	call := 0
+	collector := NewStaticCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		client := clients[call]
+		call++
+		return client, nil
+	})
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	collector.now = func() time.Time { return now }
+	device := domain.Device{
+		ID: deviceID,
+		IP: "192.0.2.63",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	first := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeOff)
+	if first.Err != nil {
+		t.Fatalf("first Err = %v, want nil because interface column timeout is non-fatal", first.Err)
+	}
+	if !slices.Contains(clients[0].bulkWalkCalls, snmp.OidIfDescr) {
+		t.Fatalf("first BulkWalk calls = %v, want initial ifDescr attempt", clients[0].bulkWalkCalls)
+	}
+
+	now = now.Add(time.Minute)
+	second := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeOff)
+	if second.Err != nil {
+		t.Fatalf("second Err = %v, want nil", second.Err)
+	}
+	if slices.Contains(clients[1].bulkWalkCalls, snmp.OidIfDescr) {
+		t.Fatalf("second BulkWalk calls = %v, want ifDescr skipped during cooldown", clients[1].bulkWalkCalls)
+	}
+	body := string(metrics.MarshalPrometheus())
+	if !strings.Contains(body, `theia_static_collection_skips_total{operation="if_descr_walk",reason="cooldown"} 1`) {
+		t.Fatalf("expected static collection cooldown skip metric, got:\n%s", body)
+	}
+}
+
+func TestStaticCollectorPoll_StaticInterfaceCooldownDoesNotSuppressBootstrapDiscovery(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	clients := []*scriptedCollectorClient{
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+			bulkWalkErrs: map[string]error{
+				snmp.OidIfDescr: errors.New("request timeout"),
+			},
+		},
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+		},
+	}
+	call := 0
+	collector := NewStaticCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		client := clients[call]
+		call++
+		return client, nil
+	})
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	collector.now = func() time.Time { return now }
+	device := domain.Device{
+		ID: deviceID,
+		IP: "192.0.2.64",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	first := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeOff)
+	if first.Err != nil {
+		t.Fatalf("first Err = %v, want nil", first.Err)
+	}
+
+	now = now.Add(time.Minute)
+	second := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeBootstrapOnce)
+	if second.Err != nil {
+		t.Fatalf("bootstrap Err = %v, want nil", second.Err)
+	}
+	if !slices.Contains(clients[1].bulkWalkCalls, snmp.OidIfDescr) {
+		t.Fatalf("bootstrap BulkWalk calls = %v, want ifDescr attempted despite regular cooldown", clients[1].bulkWalkCalls)
+	}
+}
+
+func TestOptionalStaticHealthClient_NonTimeoutErrorDoesNotStartCooldown(t *testing.T) {
+	state := newStaticHealthWalkState()
+	first := &scriptedCollectorClient{
+		bulkWalkErrs: map[string]error{
+			snmp.OidHrProcessorLoad: errors.New("no such name"),
+		},
+	}
+	client := optionalStaticHealthClient{
+		delegate:  first,
+		state:     state,
+		deviceKey: "device-1",
+		startedAt: time.Now(),
+		budget:    time.Second,
+		cooldown:  staticOptionalHealthCooldown,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	if _, err := client.BulkWalk(snmp.OidHrProcessorLoad); err == nil {
+		t.Fatal("first BulkWalk error = nil, want non-timeout error")
+	}
+
+	second := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 60}},
+		},
+	}
+	client.delegate = second
+	if _, err := client.BulkWalk(snmp.OidHrProcessorLoad); err != nil {
+		t.Fatalf("second BulkWalk error = %v, want nil because non-timeout must not cool down", err)
+	}
+	if !slices.Contains(second.bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("second BulkWalk calls = %v, want retry after non-timeout error", second.bulkWalkCalls)
+	}
+}
+
 func TestOptionalStaticHealthClient_BulkWalkEachSkipsExpiredOptionalHealthBudget(t *testing.T) {
 	delegate := &scriptedCollectorClient{
 		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
@@ -686,11 +836,11 @@ func TestStaticCollectorHasNoServiceOrRepositoryCollaborators(t *testing.T) {
 	t.Parallel()
 
 	typ := reflect.TypeOf(StaticCollector{})
-	if typ.NumField() != 4 {
-		t.Fatalf("field count = %d, want 4", typ.NumField())
+	if typ.NumField() != 5 {
+		t.Fatalf("field count = %d, want 5", typ.NumField())
 	}
 
-	wantFields := []string{"registry", "newClient", "now", "healthWalks"}
+	wantFields := []string{"registry", "newClient", "now", "healthWalks", "staticWalks"}
 	for i, want := range wantFields {
 		if typ.Field(i).Name != want {
 			t.Fatalf("field %d = %q, want %q", i, typ.Field(i).Name, want)

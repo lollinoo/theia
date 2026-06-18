@@ -1058,11 +1058,18 @@ func (s *Scheduler) handleCompletion(c Completion) {
 	}
 
 	next := jitteredNext(finishedAt, item.interval, s.rnd)
+	if taskIsBackground(item.task) {
+		next = nextPhaseAfter(item.dueAt, item.interval, finishedAt)
+	}
 	item.dueAt = next
 	item.task.DueAt = next
 	item.task.DeadlineAt = next.Add(item.interval)
 	item.skippedWindows = 0
 	heap.Push(&s.heap, item)
+}
+
+func taskIsBackground(task PollTask) bool {
+	return task.Kind == polling.TaskKindBackground || task.Key.Kind == polling.TaskKindBackground
 }
 
 func (s *Scheduler) maxInFlight() int {

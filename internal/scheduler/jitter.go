@@ -48,3 +48,20 @@ func jitteredNext(lastFire time.Time, interval time.Duration, rnd *rand.Rand) ti
 	sampledDelta := (rnd.Float64()*2 - 1) * jitterSpan
 	return lastFire.Add(interval + time.Duration(sampledDelta))
 }
+
+func nextPhaseAfter(previousDue time.Time, interval time.Duration, after time.Time) time.Time {
+	if interval <= 0 {
+		return after
+	}
+	if previousDue.IsZero() {
+		return after.Add(interval)
+	}
+
+	next := previousDue.Add(interval)
+	if next.After(after) {
+		return next
+	}
+
+	windows := after.Sub(previousDue)/interval + 1
+	return previousDue.Add(windows * interval)
+}

@@ -158,3 +158,23 @@ func TestPipelineOrchestratorResetDeviceRuntimeClearsVolatileDeviceState(t *test
 		t.Fatal("expected reset to emit a state change")
 	}
 }
+
+func TestPipelineOrchestratorResetDeviceRuntimeClearsStaticPersistenceDedupe(t *testing.T) {
+	deviceID := uuid.New()
+	pipeline := &PipelineOrchestrator{
+		runtime:                newPipelineRuntimeState(ws.PrometheusStatusPayload{}),
+		staticPersistenceCache: make(map[uuid.UUID]staticPersistenceCacheEntry),
+	}
+	pipeline.staticPersistenceCache[deviceID] = staticPersistenceCacheEntry{
+		fingerprint: "old-fingerprint",
+		persistedAt: time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
+	}
+
+	pipeline.ResetDeviceRuntime(deviceID)
+
+	pipeline.staticPersistenceMu.Lock()
+	defer pipeline.staticPersistenceMu.Unlock()
+	if _, ok := pipeline.staticPersistenceCache[deviceID]; ok {
+		t.Fatal("expected reset to clear static persistence dedupe entry")
+	}
+}

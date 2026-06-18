@@ -158,6 +158,170 @@ func TestPipelineTaskRunnerPersistStaticDiscoveryPropagatesNeighborDiscoveryFail
 	}
 }
 
+func TestPipelineTaskRunnerPersistStaticDiscoverySkipsUnchangedRegularResult(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	result := staticDiscoveryDedupeResult()
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 1 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 1 for unchanged regular static result", topologyService.calls)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_static_persistence_skips_total{reason="unchanged"} 1`) {
+		t.Fatalf("expected unchanged static persistence skip metric, got:\n%s", metrics)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoverySkipsCooldownSuppressedInterfaceFields(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	full := staticDiscoveryDedupeResult()
+	suppressed := staticDiscoveryDedupeResult()
+	suppressed.Interfaces[0].IfDescr = ""
+	suppressed.Interfaces[0].IfName = ""
+	device := domain.Device{
+		ID:         deviceID,
+		Interfaces: append([]domain.Interface(nil), full.Interfaces...),
+	}
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, full)
+	runner.persistStaticDiscovery(device, suppressed)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 1 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 1 when current device already has cooldown-suppressed interface fields", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryPersistsChangedRegularResult(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	first := staticDiscoveryDedupeResult()
+	second := staticDiscoveryDedupeResult()
+	second.Interfaces[0].Speed = 10_000_000_000
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, second)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 after interface speed changes", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoverySelfHealsUnchangedResultAfterMaxAge(t *testing.T) {
+	deviceID := uuid.New()
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{
+		topologyService:         topologyService,
+		staticPersistenceNow:    func() time.Time { return now },
+		staticPersistenceMaxAge: time.Minute,
+	}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	result := staticDiscoveryDedupeResult()
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+	now = now.Add(30 * time.Second)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+	now = now.Add(31 * time.Second)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 with periodic unchanged self-heal", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryDoesNotCachePersistenceFailure(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{err: errors.New("database unavailable")}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	result := staticDiscoveryDedupeResult()
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 because failed persistence must retry", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryPersistsUnchangedBootstrapFollowup(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	device := domain.Device{
+		ID:                     deviceID,
+		TopologyBootstrapState: domain.TopologyBootstrapStateFollowupScheduled,
+	}
+	result := staticDiscoveryDedupeResult()
+
+	runner.persistStaticDiscovery(device, result)
+	runner.persistStaticDiscovery(device, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 while bootstrap follow-up is pending", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryForcedPersistsUnchangedResult(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	result := staticDiscoveryDedupeResult()
+
+	runner.persistStaticDiscoveryForced(domain.Device{ID: deviceID}, result)
+	runner.persistStaticDiscoveryForced(domain.Device{ID: deviceID}, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 for forced static persistence", topologyService.calls)
+	}
+}
+
+func staticDiscoveryDedupeResult() collector.StaticResult {
+	return collector.StaticResult{
+		SysName:       "edge-sw",
+		SysDescr:      "SwitchOS",
+		SysObjectID:   ".1.3.6.1.4.1.14988.1",
+		HardwareModel: "CCR",
+		OSVersion:     "7.15",
+		Vendor:        "mikrotik",
+		DeviceType:    domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+		Neighbors: []snmp.NeighborInfo{
+			{LocalIfIndex: 1, LocalIfName: "ether1", RemoteSysName: "core", RemotePortID: "ether2", Protocol: domain.DiscoveryProtocolLLDP},
+		},
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+	}
+}
+
 func TestPipelineTaskRunnerNetworkProbePortsResolvesInheritance(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1147,6 +1311,65 @@ func TestPipelineOrchestratorTopologyDiscoveryMode_TreatsBootstrapOnceAsOffForRe
 		t.Run(tt.name, func(t *testing.T) {
 			if got := pipeline.taskRunner.topologyDiscoveryMode(tt.device); got != tt.want {
 				t.Fatalf("topologyDiscoveryMode() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPipelineOrchestratorBootstrapTopologyDiscoveryMode_UsesBootstrapState(t *testing.T) {
+	settingsRepo := newMockWorkerSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeLLDPCDP)); err != nil {
+		t.Fatalf("Set setting failed: %v", err)
+	}
+	pipeline := NewPipelineOrchestrator(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, settingsRepo, nil, nil, nil)
+
+	tests := []struct {
+		name   string
+		device domain.Device
+		want   domain.TopologyDiscoveryMode
+	}{
+		{
+			name: "pending inherit forces bootstrap once",
+			device: domain.Device{
+				TopologyDiscoveryMode:  domain.TopologyDiscoveryModeInherit,
+				TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+			},
+			want: domain.TopologyDiscoveryModeBootstrapOnce,
+		},
+		{
+			name: "followup scheduled overrides continuous mode",
+			device: domain.Device{
+				TopologyDiscoveryMode:  domain.TopologyDiscoveryModeLLDPCDP,
+				TopologyBootstrapState: domain.TopologyBootstrapStateFollowupScheduled,
+			},
+			want: domain.TopologyDiscoveryModeBootstrapOnce,
+		},
+		{
+			name: "idle inherit uses default continuous mode",
+			device: domain.Device{
+				TopologyDiscoveryMode:  domain.TopologyDiscoveryModeInherit,
+				TopologyBootstrapState: domain.TopologyBootstrapStateIdle,
+			},
+			want: domain.TopologyDiscoveryModeLLDPCDP,
+		},
+		{
+			name: "completed bootstrap once becomes off",
+			device: domain.Device{
+				TopologyDiscoveryMode:  domain.TopologyDiscoveryModeBootstrapOnce,
+				TopologyBootstrapState: domain.TopologyBootstrapStateCompleted,
+			},
+			want: domain.TopologyDiscoveryModeOff,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner, ok := pipeline.taskRunner.(*pipelineTaskRunner)
+			if !ok {
+				t.Fatal("expected pipeline task runner to use pipelineTaskRunner")
+			}
+			if got := runner.bootstrapTopologyDiscoveryMode(tt.device); got != tt.want {
+				t.Fatalf("bootstrapTopologyDiscoveryMode() = %s, want %s", got, tt.want)
 			}
 		})
 	}

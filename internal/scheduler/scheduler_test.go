@@ -2401,7 +2401,7 @@ func TestSchedulerComplete_RequeuesImmediatePendingRerun(t *testing.T) {
 	}
 }
 
-func TestSchedulerComplete_ReinsertsFromFinishedAt(t *testing.T) {
+func TestSchedulerComplete_ReinsertsFromPreviousDuePhase(t *testing.T) {
 	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
 	scheduler.rnd = rand.New(rand.NewSource(7))
 
@@ -2422,8 +2422,8 @@ func TestSchedulerComplete_ReinsertsFromFinishedAt(t *testing.T) {
 	scheduler.items[item.task.Key] = item
 	scheduler.inFlight = 1
 
-	want := jitteredNext(finishedAt, item.interval, rand.New(rand.NewSource(7)))
-	notWant := jitteredNext(previousDue, item.interval, rand.New(rand.NewSource(7)))
+	want := previousDue.Add(10 * time.Minute)
+	notWant := jitteredNext(finishedAt, item.interval, rand.New(rand.NewSource(7)))
 
 	scheduler.handleCompletion(Completion{Key: item.task.Key, FinishedAt: finishedAt})
 
@@ -2437,7 +2437,7 @@ func TestSchedulerComplete_ReinsertsFromFinishedAt(t *testing.T) {
 		t.Fatalf("task dueAt = %v, want %v", item.task.DueAt, want)
 	}
 	if item.dueAt.Equal(notWant) {
-		t.Fatalf("dueAt = %v, matched previous-due reinsertion %v", item.dueAt, notWant)
+		t.Fatalf("dueAt = %v, matched finished-at reinsertion %v", item.dueAt, notWant)
 	}
 	if got := scheduler.heap.Len(); got != 1 {
 		t.Fatalf("heap.Len() = %d, want 1", got)
@@ -2519,12 +2519,66 @@ func TestSchedulerComplete_CoalescesSkippedBackgroundWindowsToNextInterval(t *te
 	if got := len(scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)]); got != 0 {
 		t.Fatalf("ready queue length = %d, want 0", got)
 	}
-	want := jitteredNext(finishedAt, item.interval, rand.New(rand.NewSource(7)))
+	want := dueAt.Add(120 * time.Second)
 	if !item.dueAt.Equal(want) {
-		t.Fatalf("dueAt = %v, want next interval %v", item.dueAt, want)
+		t.Fatalf("dueAt = %v, want preserved phase %v", item.dueAt, want)
 	}
 	if item.skippedWindows != 0 {
 		t.Fatalf("skippedWindows = %d, want 0 after coalescing", item.skippedWindows)
+	}
+}
+
+func TestSchedulerComplete_PreservesBackgroundPhaseForSameCompletionWave(t *testing.T) {
+	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
+	finishedAt := time.Unix(1_700_000_075, 0).UTC()
+	firstDue := time.Unix(1_700_000_000, 0).UTC()
+	secondDue := firstDue.Add(10 * time.Second)
+	firstKey := NewTaskKey(uuid.MustParse("60000000-0000-0000-0000-000000000101"), domain.VolatilityClassPerformance)
+	secondKey := NewTaskKey(uuid.MustParse("60000000-0000-0000-0000-000000000102"), domain.VolatilityClassPerformance)
+	first := &heapItem{
+		task: PollTask{
+			Key:              firstKey,
+			VolatilityClass:  domain.VolatilityClassPerformance,
+			ExpectedInterval: 30 * time.Second,
+			DueAt:            firstDue,
+		},
+		dueAt:        firstDue,
+		dispatchedAt: firstDue,
+		interval:     30 * time.Second,
+		inFlight:     true,
+		index:        -1,
+	}
+	second := &heapItem{
+		task: PollTask{
+			Key:              secondKey,
+			VolatilityClass:  domain.VolatilityClassPerformance,
+			ExpectedInterval: 30 * time.Second,
+			DueAt:            secondDue,
+		},
+		dueAt:        secondDue,
+		dispatchedAt: secondDue,
+		interval:     30 * time.Second,
+		inFlight:     true,
+		index:        -1,
+	}
+
+	scheduler.items[firstKey] = first
+	scheduler.items[secondKey] = second
+	scheduler.inFlight = 2
+
+	scheduler.handleCompletion(Completion{Key: firstKey, FinishedAt: finishedAt})
+	scheduler.handleCompletion(Completion{Key: secondKey, FinishedAt: finishedAt})
+
+	wantFirst := firstDue.Add(90 * time.Second)
+	wantSecond := secondDue.Add(90 * time.Second)
+	if !first.dueAt.Equal(wantFirst) {
+		t.Fatalf("first dueAt = %v, want %v", first.dueAt, wantFirst)
+	}
+	if !second.dueAt.Equal(wantSecond) {
+		t.Fatalf("second dueAt = %v, want %v", second.dueAt, wantSecond)
+	}
+	if first.dueAt.Equal(second.dueAt) {
+		t.Fatalf("completion wave collapsed to one dueAt: first=%v second=%v", first.dueAt, second.dueAt)
 	}
 }
 

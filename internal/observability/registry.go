@@ -47,6 +47,11 @@ type linkUpsertKey struct {
 	Result   string
 }
 
+type staticCollectionSkipKey struct {
+	Operation string
+	Reason    string
+}
+
 type schedulerBackpressureKey struct {
 	VolatilityClass string
 	Reason          string
@@ -177,6 +182,8 @@ type Registry struct {
 	cacheInvalidationsTotal          map[string]uint64
 	cacheReloadTotal                 uint64
 	topologyMaterialization          map[string]*histogram
+	staticPersistenceSkipsTotal      map[string]uint64
+	staticCollectionSkipsTotal       map[staticCollectionSkipKey]uint64
 	refreshSnapshotBuild             map[refreshSnapshotBuildKey]*histogram
 	refreshTopologyReloadTotal       map[string]uint64
 	prometheusRuntimeRequests        map[prometheusRuntimeRequestKey]uint64
@@ -227,11 +234,13 @@ func NewRegistry() *Registry {
 			domain.VolatilityClassOperational: newHistogram(durationBucketsSeconds),
 			domain.VolatilityClassStatic:      newHistogram(durationBucketsSeconds),
 		},
-		runtimeWorkerSettings:   make(map[string]float64),
-		pollResultsTotal:        make(map[taskResultKey]uint64),
-		discoveryNeighbors:      make(map[deviceProtocolKey]float64),
-		linkUpsertsTotal:        make(map[linkUpsertKey]uint64),
-		cacheInvalidationsTotal: make(map[string]uint64),
+		runtimeWorkerSettings:       make(map[string]float64),
+		pollResultsTotal:            make(map[taskResultKey]uint64),
+		discoveryNeighbors:          make(map[deviceProtocolKey]float64),
+		linkUpsertsTotal:            make(map[linkUpsertKey]uint64),
+		cacheInvalidationsTotal:     make(map[string]uint64),
+		staticPersistenceSkipsTotal: make(map[string]uint64),
+		staticCollectionSkipsTotal:  make(map[staticCollectionSkipKey]uint64),
 		topologyMaterialization: map[string]*histogram{
 			"success": newHistogram(durationBucketsSeconds),
 			"error":   newHistogram(durationBucketsSeconds),
@@ -468,6 +477,16 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_topology_materialization_seconds",
 		"Static discovery materialization latency.",
 		sortedStringHistogramRows("result", r.topologyMaterialization),
+	)
+	writeCounterVec(&b,
+		"theia_static_persistence_skips_total",
+		"Static discovery persistence skips by reason.",
+		sortedStringCounterRows("reason", r.staticPersistenceSkipsTotal),
+	)
+	writeCounterVec(&b,
+		"theia_static_collection_skips_total",
+		"Static discovery collection skips by operation and reason.",
+		sortedStaticCollectionSkipRows(r.staticCollectionSkipsTotal),
 	)
 	writeHistogramVec(&b,
 		"theia_refresh_snapshot_build_seconds",
@@ -833,6 +852,33 @@ func (r *Registry) IncCacheReload() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cacheReloadTotal++
+}
+
+func (r *Registry) IncStaticPersistenceSkip(reason string) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "unknown"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.staticPersistenceSkipsTotal[reason]++
+}
+
+func (r *Registry) IncStaticCollectionSkip(operation, reason string) {
+	operation = strings.TrimSpace(operation)
+	if operation == "" {
+		operation = "unknown"
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "unknown"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.staticCollectionSkipsTotal[staticCollectionSkipKey{
+		Operation: operation,
+		Reason:    reason,
+	}]++
 }
 
 func (r *Registry) ObserveTopologyMaterialization(duration time.Duration, success bool) {
@@ -1510,6 +1556,30 @@ func sortedStringCounterRows(label string, values map[string]uint64) []counterRo
 		rows = append(rows, counterRow{
 			labels: map[string]string{label: key},
 			value:  values[key],
+		})
+	}
+	return rows
+}
+
+func sortedStaticCollectionSkipRows(values map[staticCollectionSkipKey]uint64) []counterRow {
+	keys := make([]staticCollectionSkipKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		return keys[i].Reason < keys[j].Reason
+	})
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"reason":    key.Reason,
+			},
+			value: values[key],
 		})
 	}
 	return rows

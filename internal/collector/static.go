@@ -12,6 +12,7 @@ import (
 
 	"github.com/gosnmp/gosnmp"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/lollinoo/theia/internal/vendor"
 )
@@ -19,6 +20,7 @@ import (
 const (
 	staticOptionalHealthMaxBudget = 2 * time.Second
 	staticOptionalHealthCooldown  = 30 * time.Minute
+	staticInterfaceWalkCooldown   = 30 * time.Minute
 )
 
 // StaticCollector polls low-volatility inventory, topology, and optional
@@ -28,6 +30,7 @@ type StaticCollector struct {
 	newClient   NewSNMPClientFunc
 	now         func() time.Time
 	healthWalks *staticHealthWalkState
+	staticWalks *staticHealthWalkState
 }
 
 // NewStaticCollector constructs a static collector that reuses the shared
@@ -38,6 +41,7 @@ func NewStaticCollector(registry *vendor.Registry, newClient NewSNMPClientFunc) 
 		newClient:   newClient,
 		now:         time.Now,
 		healthWalks: newStaticHealthWalkState(),
+		staticWalks: newStaticHealthWalkState(),
 	}
 }
 
@@ -112,7 +116,8 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 		}, deviceHealthBulkWalkOperations(perfOIDs)),
 		deviceLabels: snmpCollectorDeviceMetricLabels(device),
 	}
-	discovery, err := snmp.DiscoverDeviceWithPolicy(instrumentedClient, c.registry, snmp.NeighborDiscoveryPolicyFromMode(topologyMode))
+	discoveryClient := c.staticDiscoverySNMPClient(device, instrumentedClient, topologyMode)
+	discovery, err := snmp.DiscoverDeviceWithPolicy(discoveryClient, c.registry, snmp.NeighborDiscoveryPolicyFromMode(topologyMode))
 	if err != nil {
 		result.Err = fmt.Errorf("discover device: %w", err)
 		return result
@@ -147,6 +152,24 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 	result.NeighborDiscoveryFailures = append([]snmp.NeighborDiscoveryFailure(nil), discovery.NeighborDiscoveryFailures...)
 
 	return result
+}
+
+func (c *StaticCollector) staticDiscoverySNMPClient(device domain.Device, delegate snmp.ClientInterface, topologyMode domain.TopologyDiscoveryMode) snmp.ClientInterface {
+	if domain.NormalizeTopologyDiscoveryMode(topologyMode, domain.TopologyDiscoveryModeInherit) == domain.TopologyDiscoveryModeBootstrapOnce {
+		return delegate
+	}
+	state := c.staticWalks
+	if state == nil {
+		state = newStaticHealthWalkState()
+		c.staticWalks = state
+	}
+	return staticInterfaceCooldownClient{
+		delegate:  delegate,
+		state:     state,
+		deviceKey: device.ID.String(),
+		now:       c.now,
+		cooldown:  staticInterfaceWalkCooldown,
+	}
 }
 
 func (c *StaticCollector) optionalHealthSNMPClient(device domain.Device, delegate snmp.ClientInterface, perfOIDs vendor.PerformanceOIDs, startedAt time.Time, timeout time.Duration) snmp.ClientInterface {
@@ -199,6 +222,94 @@ func mergeBulkWalkOperations(maps ...map[string]string) map[string]string {
 	return merged
 }
 
+type staticInterfaceCooldownClient struct {
+	delegate  snmp.ClientInterface
+	state     *staticHealthWalkState
+	deviceKey string
+	now       func() time.Time
+	cooldown  time.Duration
+}
+
+func (c staticInterfaceCooldownClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
+	return c.delegate.Get(oids)
+}
+
+func (c staticInterfaceCooldownClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
+	operation := staticInterfaceCooldownOperation(rootOID)
+	if operation == "" {
+		return c.delegate.BulkWalk(rootOID)
+	}
+	if c.coolingDown(operation) {
+		observability.Default().IncStaticCollectionSkip(operation, "cooldown")
+		return nil, nil
+	}
+	pdus, err := c.delegate.BulkWalk(rootOID)
+	if classifySNMPCollectorResult(err) == "timeout" {
+		c.cooldownOperation(operation)
+	}
+	return pdus, err
+}
+
+func (c staticInterfaceCooldownClient) BulkWalkEach(rootOID string, visit func(gosnmp.SnmpPDU) error) error {
+	operation := staticInterfaceCooldownOperation(rootOID)
+	if operation == "" {
+		return snmp.VisitBulkWalk(c.delegate, rootOID, visit)
+	}
+	if c.coolingDown(operation) {
+		observability.Default().IncStaticCollectionSkip(operation, "cooldown")
+		return nil
+	}
+	var visitErr error
+	err := snmp.VisitBulkWalk(c.delegate, rootOID, func(pdu gosnmp.SnmpPDU) error {
+		if err := visit(pdu); err != nil {
+			visitErr = err
+			return err
+		}
+		return nil
+	})
+	if visitErr == nil && classifySNMPCollectorResult(err) == "timeout" {
+		c.cooldownOperation(operation)
+	}
+	return err
+}
+
+func (c staticInterfaceCooldownClient) coolingDown(operation string) bool {
+	return c.state != nil && c.state.coolingDown(c.deviceKey, operation, c.clockNow())
+}
+
+func (c staticInterfaceCooldownClient) cooldownOperation(operation string) {
+	if c.state == nil || c.cooldown <= 0 {
+		return
+	}
+	c.state.cooldown(c.deviceKey, operation, c.clockNow().Add(c.cooldown))
+}
+
+func (c staticInterfaceCooldownClient) clockNow() time.Time {
+	if c.now != nil {
+		return c.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func staticInterfaceCooldownOperation(rootOID string) string {
+	switch strings.TrimSpace(rootOID) {
+	case snmp.OidIfDescr:
+		return "if_descr_walk"
+	case snmp.OidIfSpeed:
+		return "if_speed_walk"
+	case snmp.OidIfAdminStatus:
+		return "if_admin_status_walk"
+	case snmp.OidIfOperStatus:
+		return "if_oper_status_walk"
+	case snmp.OidIfName:
+		return "if_name_walk"
+	case snmp.OidIfHighSpeed:
+		return "if_high_speed_walk"
+	default:
+		return ""
+	}
+}
+
 type optionalStaticHealthClient struct {
 	delegate   snmp.ClientInterface
 	state      *staticHealthWalkState
@@ -217,7 +328,7 @@ func (c optionalStaticHealthClient) Get(oids []string) ([]gosnmp.SnmpPDU, error)
 			return nil, nil
 		}
 		pdus, err := c.delegate.Get(oids)
-		if err != nil {
+		if classifySNMPCollectorResult(err) == "timeout" {
 			c.cooldownGroup(group, time.Now())
 		}
 		return pdus, err
@@ -234,7 +345,7 @@ func (c optionalStaticHealthClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, 
 		return nil, nil
 	}
 	pdus, err := c.delegate.BulkWalk(rootOID)
-	if err != nil {
+	if classifySNMPCollectorResult(err) == "timeout" {
 		c.cooldownGroup(group, time.Now())
 	}
 	return pdus, err
@@ -257,7 +368,9 @@ func (c optionalStaticHealthClient) BulkWalkEach(rootOID string, visit func(gosn
 		return nil
 	})
 	if err != nil && visitErr == nil {
-		c.cooldownGroup(group, time.Now())
+		if classifySNMPCollectorResult(err) == "timeout" {
+			c.cooldownGroup(group, time.Now())
+		}
 	}
 	return err
 }

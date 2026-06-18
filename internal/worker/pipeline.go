@@ -32,6 +32,8 @@ const (
 	refreshSnapshotModeDirty = "dirty"
 	refreshSnapshotModeFull  = "full"
 
+	staticPersistenceSelfHealInterval = 30 * time.Minute
+
 	refreshReloadReasonStartup               = "startup"
 	refreshReloadReasonTopologyDirty         = "topology_dirty"
 	refreshReloadReasonFullResync            = "full_resync"
@@ -91,6 +93,15 @@ type PipelineOrchestrator struct {
 	healthDone              chan struct{}
 	runtime                 *pipelineRuntimeState
 	overviewBuildMu         sync.Mutex
+	staticPersistenceMu     sync.Mutex
+	staticPersistenceCache  map[uuid.UUID]staticPersistenceCacheEntry
+	staticPersistenceNow    func() time.Time
+	staticPersistenceMaxAge time.Duration
+}
+
+type staticPersistenceCacheEntry struct {
+	fingerprint string
+	persistedAt time.Time
 }
 
 // NewPipelineOrchestrator constructs pipeline orchestrator state for the background worker lifecycle.
@@ -133,6 +144,8 @@ func NewPipelineOrchestrator(
 		done:                    make(chan struct{}),
 		healthDone:              make(chan struct{}),
 		runtime:                 newPipelineRuntimeState(initialPrometheusStatus(settingsRepo)),
+		staticPersistenceNow:    time.Now,
+		staticPersistenceMaxAge: staticPersistenceSelfHealInterval,
 	}
 	p.taskRunner = &pipelineTaskRunner{pipeline: p}
 	p.broadcaster = &pipelineSnapshotBroadcaster{pipeline: p}
