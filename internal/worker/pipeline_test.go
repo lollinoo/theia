@@ -103,6 +103,7 @@ type fakeTopologyService struct {
 	calls  int
 	lastID uuid.UUID
 	lastIn service.StaticDiscoveryInput
+	inputs []service.StaticDiscoveryInput
 	result service.StaticPersistenceResult
 	err    error
 }
@@ -113,7 +114,12 @@ func (s *fakeTopologyService) ApplyStaticDiscovery(deviceID uuid.UUID, input ser
 	s.calls++
 	s.lastID = deviceID
 	s.lastIn = input
-	return s.result, s.err
+	s.inputs = append(s.inputs, input)
+	result := s.result
+	if !input.SkipTopologyMaterialization {
+		result.TopologyMaterialized = true
+	}
+	return result, s.err
 }
 
 func TestPipelineTaskRunnerPersistStaticDiscoveryPropagatesNeighborDiscoveryFailures(t *testing.T) {
@@ -223,6 +229,86 @@ func TestPipelineTaskRunnerPersistStaticDiscoveryPersistsChangedRegularResult(t 
 	}
 }
 
+func TestPipelineTaskRunnerPersistStaticDiscoverySkipsUnchangedTopologyMaterialization(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	first := staticDiscoveryDedupeResult()
+	changedInterface := staticDiscoveryDedupeResult()
+	changedInterface.Interfaces[0].Speed = 10_000_000_000
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, changedInterface)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 after interface speed changes", topologyService.calls)
+	}
+	if len(topologyService.inputs) != 2 {
+		t.Fatalf("captured inputs = %d, want 2", len(topologyService.inputs))
+	}
+	if topologyService.inputs[0].SkipTopologyMaterialization {
+		t.Fatal("first static persistence skipped topology materialization, want initial materialization")
+	}
+	if !topologyService.inputs[1].SkipTopologyMaterialization {
+		t.Fatal("interface-only static change did not skip unchanged topology materialization")
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryMaterializesChangedTopology(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	first := staticDiscoveryDedupeResult()
+	changedTopology := staticDiscoveryDedupeResult()
+	changedTopology.Neighbors[0].RemotePortID = "ether3"
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, changedTopology)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 after neighbor changes", topologyService.calls)
+	}
+	if len(topologyService.inputs) != 2 {
+		t.Fatalf("captured inputs = %d, want 2", len(topologyService.inputs))
+	}
+	if topologyService.inputs[1].SkipTopologyMaterialization {
+		t.Fatal("changed topology skipped topology materialization")
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryMaterializesWhenPreviousTopologyHadUnresolvedNeighbors(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{
+		result: service.StaticPersistenceResult{UnresolvedNeighbors: 1},
+	}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	first := staticDiscoveryDedupeResult()
+	changedInterface := staticDiscoveryDedupeResult()
+	changedInterface.Interfaces[0].Speed = 10_000_000_000
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, changedInterface)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 after interface speed changes", topologyService.calls)
+	}
+	if len(topologyService.inputs) != 2 {
+		t.Fatalf("captured inputs = %d, want 2", len(topologyService.inputs))
+	}
+	if topologyService.inputs[1].SkipTopologyMaterialization {
+		t.Fatal("previous unresolved topology allowed topology materialization skip")
+	}
+}
+
 func TestPipelineTaskRunnerPersistStaticDiscoverySelfHealsUnchangedResultAfterMaxAge(t *testing.T) {
 	spread := 10 * time.Second
 	deviceID := staticPersistenceTestDeviceWithJitter(t, spread)
@@ -248,6 +334,12 @@ func TestPipelineTaskRunnerPersistStaticDiscoverySelfHealsUnchangedResultAfterMa
 	defer topologyService.mu.Unlock()
 	if topologyService.calls != 2 {
 		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 with periodic unchanged self-heal", topologyService.calls)
+	}
+	if len(topologyService.inputs) != 2 {
+		t.Fatalf("captured inputs = %d, want 2", len(topologyService.inputs))
+	}
+	if topologyService.inputs[1].SkipTopologyMaterialization {
+		t.Fatal("unchanged self-heal skipped topology materialization")
 	}
 }
 
@@ -363,6 +455,12 @@ func TestPipelineTaskRunnerPersistStaticDiscoveryForcedPersistsUnchangedResult(t
 	defer topologyService.mu.Unlock()
 	if topologyService.calls != 2 {
 		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 for forced static persistence", topologyService.calls)
+	}
+	if len(topologyService.inputs) != 2 {
+		t.Fatalf("captured inputs = %d, want 2", len(topologyService.inputs))
+	}
+	if topologyService.inputs[1].SkipTopologyMaterialization {
+		t.Fatal("forced static persistence skipped topology materialization")
 	}
 }
 

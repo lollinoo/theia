@@ -18,23 +18,26 @@ import (
 
 // StaticDiscoveryInput represents static discovery input data used by the service orchestration.
 type StaticDiscoveryInput struct {
-	SysName                    string
-	SysDescr                   string
-	SysObjectID                string
-	HardwareModel              string
-	OSVersion                  string
-	Vendor                     string
-	DeviceType                 domain.DeviceType
-	Interfaces                 []domain.Interface
-	Neighbors                  []snmp.NeighborInfo
-	NeighborDiscoveryProtocols []domain.DiscoveryProtocol
-	NeighborDiscoveryFailures  []snmp.NeighborDiscoveryFailure
+	SysName                     string
+	SysDescr                    string
+	SysObjectID                 string
+	HardwareModel               string
+	OSVersion                   string
+	Vendor                      string
+	DeviceType                  domain.DeviceType
+	Interfaces                  []domain.Interface
+	Neighbors                   []snmp.NeighborInfo
+	NeighborDiscoveryProtocols  []domain.DiscoveryProtocol
+	NeighborDiscoveryFailures   []snmp.NeighborDiscoveryFailure
+	SkipTopologyMaterialization bool
 }
 
 // StaticPersistenceResult represents static persistence result data used by the service orchestration.
 type StaticPersistenceResult struct {
-	TopologyChanged bool
-	LinksCreated    int
+	TopologyChanged      bool
+	TopologyMaterialized bool
+	LinksCreated         int
+	UnresolvedNeighbors  int
 }
 
 type linkUpsertReporter interface {
@@ -42,11 +45,6 @@ type linkUpsertReporter interface {
 }
 
 func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDiscoveryInput) (result StaticPersistenceResult, err error) {
-	startedAt := time.Now()
-	defer func() {
-		observability.Default().ObserveTopologyMaterialization(time.Since(startedAt), err == nil)
-	}()
-
 	fresh, err := s.deviceRepo.GetByID(deviceID)
 	if err != nil {
 		return StaticPersistenceResult{}, fmt.Errorf("re-fetch device: %w", err)
@@ -85,20 +83,28 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	unknownNeighbors := make(map[unknownNeighborKey]int)
 	unknownByProtocol := make(map[domain.DiscoveryProtocol]int)
 	if s.topologyStore != nil {
-		materialized, currentUnknowns, currentTotals, materializeErr := s.applyDiscoveryViaObservationStore(
-			*fresh,
-			neighbors,
-			input.NeighborDiscoveryProtocols,
-			input.NeighborDiscoveryFailures,
-		)
-		if materializeErr != nil {
-			return StaticPersistenceResult{}, materializeErr
+		if !input.SkipTopologyMaterialization {
+			startedAt := time.Now()
+			materialized, currentUnknowns, currentTotals, materializeErr := s.applyDiscoveryViaObservationStore(
+				*fresh,
+				neighbors,
+				input.NeighborDiscoveryProtocols,
+				input.NeighborDiscoveryFailures,
+			)
+			observability.Default().ObserveTopologyMaterialization(time.Since(startedAt), materializeErr == nil)
+			if materializeErr != nil {
+				return StaticPersistenceResult{}, materializeErr
+			}
+			result.TopologyChanged = result.TopologyChanged || materialized.TopologyChanged
+			result.TopologyMaterialized = true
+			result.LinksCreated += materialized.LinksCreated
+			result.UnresolvedNeighbors = materialized.UnresolvedNeighbors
+			unknownNeighbors = currentUnknowns
+			unknownByProtocol = currentTotals
 		}
-		result.TopologyChanged = result.TopologyChanged || materialized.TopologyChanged
-		result.LinksCreated += materialized.LinksCreated
-		unknownNeighbors = currentUnknowns
-		unknownByProtocol = currentTotals
 	} else {
+		startedAt := time.Now()
+		result.TopologyMaterialized = true
 		for _, neighbor := range neighbors {
 			normalizedIdentity := discoveredNeighborRemoteIdentity(neighbor)
 			if normalizedIdentity == "" {
@@ -150,8 +156,12 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 					string(neighbor.Protocol), upsertResult.Kind)
 			}
 		}
+		observability.Default().ObserveTopologyMaterialization(time.Since(startedAt), true)
 	}
 	logUnknownNeighborSummary(fresh.ID, fresh.SysName, unknownNeighbors, unknownByProtocol)
+	if result.UnresolvedNeighbors == 0 {
+		result.UnresolvedNeighbors = countUnknownNeighbors(unknownNeighbors)
+	}
 	s.syncTopologyDiscoveryMetadata(fresh.ID, len(neighbors), false, snmp.HasCriticalNeighborDiscoveryFailure(input.NeighborDiscoveryFailures))
 	s.reconcileResolvedBootstrapPeers(fresh.ID)
 
@@ -305,8 +315,10 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 	}
 
 	return StaticPersistenceResult{
-		TopologyChanged: applied.TopologyChanged || prunedObservations > 0 || deletedStaleLinks > 0,
-		LinksCreated:    applied.LinksCreated,
+		TopologyChanged:      applied.TopologyChanged || prunedObservations > 0 || deletedStaleLinks > 0,
+		TopologyMaterialized: true,
+		LinksCreated:         applied.LinksCreated,
+		UnresolvedNeighbors:  countUnknownNeighbors(unknownNeighbors),
 	}, unknownNeighbors, unknownByProtocol, nil
 }
 
@@ -581,6 +593,14 @@ func countNeighborsByProtocol(neighbors []snmp.NeighborInfo) map[domain.Discover
 		counts[neighbor.Protocol]++
 	}
 	return counts
+}
+
+func countUnknownNeighbors(unknowns map[unknownNeighborKey]int) int {
+	total := 0
+	for _, count := range unknowns {
+		total += count
+	}
+	return total
 }
 
 func discoveredNeighborRemoteIdentity(neighbor snmp.NeighborInfo) string {

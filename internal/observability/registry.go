@@ -158,51 +158,52 @@ type histogramSnapshot struct {
 type Registry struct {
 	mu sync.RWMutex
 
-	schedulerReadyDepth              map[domain.VolatilityClass]float64
-	schedulerQueueLagSeconds         map[domain.VolatilityClass]float64
-	schedulerInFlight                float64
-	schedulerTaskDispatchTotal       map[schedulerDispatchKey]uint64
-	schedulerBackpressureTotal       map[schedulerBackpressureKey]uint64
-	schedulerScopedBackpressureTotal map[schedulerScopedBackpressureKey]uint64
-	schedulerTaskDuration            map[domain.VolatilityClass]*histogram
-	bulkOperationInFlight            map[bulkOperationInFlightKey]float64
-	bulkOperationLimits              map[bulkOperationLimitKey]float64
-	bulkOperationRejections          map[bulkOperationRejectionKey]uint64
-	bulkOperationCompletions         map[bulkOperationCompletionKey]uint64
-	bulkOperationDuration            map[bulkOperationCompletionKey]*histogram
-	bulkOperationDevices             map[bulkOperationCompletionKey]uint64
-	bulkOperationFiles               map[bulkOperationCompletionKey]uint64
-	bulkOperationBytes               map[bulkOperationCompletionKey]uint64
-	pollingEssentialOverloaded       float64
-	pollingDeadlineMissTotal         uint64
-	runtimeWorkerSettings            map[string]float64
-	pollResultsTotal                 map[taskResultKey]uint64
-	discoveryNeighbors               map[deviceProtocolKey]float64
-	linkUpsertsTotal                 map[linkUpsertKey]uint64
-	cacheInvalidationsTotal          map[string]uint64
-	cacheReloadTotal                 uint64
-	topologyMaterialization          map[string]*histogram
-	staticPersistenceSkipsTotal      map[string]uint64
-	staticCollectionSkipsTotal       map[staticCollectionSkipKey]uint64
-	refreshSnapshotBuild             map[refreshSnapshotBuildKey]*histogram
-	refreshTopologyReloadTotal       map[string]uint64
-	prometheusRuntimeRequests        map[prometheusRuntimeRequestKey]uint64
-	prometheusRuntimeDuration        map[prometheusRuntimeRequestKey]*histogram
-	snmpCollectorOperations          map[snmpCollectorOperationKey]uint64
-	snmpCollectorDuration            map[snmpCollectorOperationKey]*histogram
-	snmpCollectorDeviceLast          map[snmpCollectorDeviceOperationKey]float64
-	snmpCollectorDeviceSlow          map[snmpCollectorDeviceOperationKey]uint64
-	snmpCollectorEarlyExit           map[snmpCollectorEarlyExitKey]uint64
-	wsConnectedClients               float64
-	wsConnectionsTotal               map[string]uint64
-	wsMessagesTotal                  map[wsMetricKey]uint64
-	wsBackpressureTotal              map[wsBackpressureKey]uint64
-	wsClientResyncTotal              map[wsClientResyncKey]uint64
-	wsOverviewMailboxClear           map[string]uint64
-	wsOverviewResyncSuppressed       map[string]uint64
-	wsPayloadBytes                   map[wsMetricKey]*histogram
-	unknownNeighborsTotal            map[deviceProtocolKey]uint64
-	stateChangesDroppedTotal         uint64
+	schedulerReadyDepth               map[domain.VolatilityClass]float64
+	schedulerQueueLagSeconds          map[domain.VolatilityClass]float64
+	schedulerInFlight                 float64
+	schedulerTaskDispatchTotal        map[schedulerDispatchKey]uint64
+	schedulerBackpressureTotal        map[schedulerBackpressureKey]uint64
+	schedulerScopedBackpressureTotal  map[schedulerScopedBackpressureKey]uint64
+	schedulerTaskDuration             map[domain.VolatilityClass]*histogram
+	bulkOperationInFlight             map[bulkOperationInFlightKey]float64
+	bulkOperationLimits               map[bulkOperationLimitKey]float64
+	bulkOperationRejections           map[bulkOperationRejectionKey]uint64
+	bulkOperationCompletions          map[bulkOperationCompletionKey]uint64
+	bulkOperationDuration             map[bulkOperationCompletionKey]*histogram
+	bulkOperationDevices              map[bulkOperationCompletionKey]uint64
+	bulkOperationFiles                map[bulkOperationCompletionKey]uint64
+	bulkOperationBytes                map[bulkOperationCompletionKey]uint64
+	pollingEssentialOverloaded        float64
+	pollingDeadlineMissTotal          uint64
+	runtimeWorkerSettings             map[string]float64
+	pollResultsTotal                  map[taskResultKey]uint64
+	discoveryNeighbors                map[deviceProtocolKey]float64
+	linkUpsertsTotal                  map[linkUpsertKey]uint64
+	cacheInvalidationsTotal           map[string]uint64
+	cacheReloadTotal                  uint64
+	topologyMaterialization           map[string]*histogram
+	topologyMaterializationSkipsTotal map[string]uint64
+	staticPersistenceSkipsTotal       map[string]uint64
+	staticCollectionSkipsTotal        map[staticCollectionSkipKey]uint64
+	refreshSnapshotBuild              map[refreshSnapshotBuildKey]*histogram
+	refreshTopologyReloadTotal        map[string]uint64
+	prometheusRuntimeRequests         map[prometheusRuntimeRequestKey]uint64
+	prometheusRuntimeDuration         map[prometheusRuntimeRequestKey]*histogram
+	snmpCollectorOperations           map[snmpCollectorOperationKey]uint64
+	snmpCollectorDuration             map[snmpCollectorOperationKey]*histogram
+	snmpCollectorDeviceLast           map[snmpCollectorDeviceOperationKey]float64
+	snmpCollectorDeviceSlow           map[snmpCollectorDeviceOperationKey]uint64
+	snmpCollectorEarlyExit            map[snmpCollectorEarlyExitKey]uint64
+	wsConnectedClients                float64
+	wsConnectionsTotal                map[string]uint64
+	wsMessagesTotal                   map[wsMetricKey]uint64
+	wsBackpressureTotal               map[wsBackpressureKey]uint64
+	wsClientResyncTotal               map[wsClientResyncKey]uint64
+	wsOverviewMailboxClear            map[string]uint64
+	wsOverviewResyncSuppressed        map[string]uint64
+	wsPayloadBytes                    map[wsMetricKey]*histogram
+	unknownNeighborsTotal             map[deviceProtocolKey]uint64
+	stateChangesDroppedTotal          uint64
 }
 
 // NewRegistry constructs registry state for the package.
@@ -234,13 +235,14 @@ func NewRegistry() *Registry {
 			domain.VolatilityClassOperational: newHistogram(durationBucketsSeconds),
 			domain.VolatilityClassStatic:      newHistogram(durationBucketsSeconds),
 		},
-		runtimeWorkerSettings:       make(map[string]float64),
-		pollResultsTotal:            make(map[taskResultKey]uint64),
-		discoveryNeighbors:          make(map[deviceProtocolKey]float64),
-		linkUpsertsTotal:            make(map[linkUpsertKey]uint64),
-		cacheInvalidationsTotal:     make(map[string]uint64),
-		staticPersistenceSkipsTotal: make(map[string]uint64),
-		staticCollectionSkipsTotal:  make(map[staticCollectionSkipKey]uint64),
+		runtimeWorkerSettings:             make(map[string]float64),
+		pollResultsTotal:                  make(map[taskResultKey]uint64),
+		discoveryNeighbors:                make(map[deviceProtocolKey]float64),
+		linkUpsertsTotal:                  make(map[linkUpsertKey]uint64),
+		cacheInvalidationsTotal:           make(map[string]uint64),
+		staticPersistenceSkipsTotal:       make(map[string]uint64),
+		topologyMaterializationSkipsTotal: make(map[string]uint64),
+		staticCollectionSkipsTotal:        make(map[staticCollectionSkipKey]uint64),
 		topologyMaterialization: map[string]*histogram{
 			"success": newHistogram(durationBucketsSeconds),
 			"error":   newHistogram(durationBucketsSeconds),
@@ -477,6 +479,11 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_topology_materialization_seconds",
 		"Static discovery materialization latency.",
 		sortedStringHistogramRows("result", r.topologyMaterialization),
+	)
+	writeCounterVec(&b,
+		"theia_topology_materialization_skips_total",
+		"Topology materialization skips by reason.",
+		sortedStringCounterRows("reason", r.topologyMaterializationSkipsTotal),
 	)
 	writeCounterVec(&b,
 		"theia_static_persistence_skips_total",
@@ -862,6 +869,16 @@ func (r *Registry) IncStaticPersistenceSkip(reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.staticPersistenceSkipsTotal[reason]++
+}
+
+func (r *Registry) IncTopologyMaterializationSkip(reason string) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "unknown"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.topologyMaterializationSkipsTotal[reason]++
 }
 
 func (r *Registry) IncStaticCollectionSkip(operation, reason string) {

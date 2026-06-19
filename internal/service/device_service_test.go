@@ -17,6 +17,7 @@ import (
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/snmp"
+	"github.com/lollinoo/theia/internal/topology"
 )
 
 // --- Mock Device Repository ---
@@ -409,6 +410,66 @@ func (r *mockLinkRepo) UpsertDetailed(link *domain.Link) (domain.LinkUpsertResul
 	result := domain.LinkUpsertResult{Created: true, Changed: true, Kind: domain.LinkUpsertKindCreated}
 	observability.Default().IncLinkUpsert(link.DiscoveryProtocol, result.Kind)
 	return result, nil
+}
+
+type recordingTopologyObservationStore struct {
+	mu                  sync.Mutex
+	upsertObservations  int
+	pruneObservations   int
+	listObservations    int
+	upsertUnresolved    int
+	resolveUnresolved   int
+	unresolvedLookups   int
+	observations        []topology.Observation
+	unresolvedNeighbors []topology.UnresolvedNeighbor
+}
+
+func (s *recordingTopologyObservationStore) UpsertObservation(observation *topology.Observation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.upsertObservations++
+	if observation != nil {
+		s.observations = append(s.observations, *observation)
+	}
+	return nil
+}
+
+func (s *recordingTopologyObservationStore) PruneLocalObservations(uuid.UUID, []domain.DiscoveryProtocol, []topology.Observation) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneObservations++
+	return 0, nil
+}
+
+func (s *recordingTopologyObservationStore) ListObservationsForDevices([]uuid.UUID) ([]topology.Observation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listObservations++
+	return append([]topology.Observation(nil), s.observations...), nil
+}
+
+func (s *recordingTopologyObservationStore) UpsertUnresolvedNeighbor(neighbor *topology.UnresolvedNeighbor) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.upsertUnresolved++
+	if neighbor != nil {
+		s.unresolvedNeighbors = append(s.unresolvedNeighbors, *neighbor)
+	}
+	return nil
+}
+
+func (s *recordingTopologyObservationStore) ResolveUnresolvedNeighbor(uuid.UUID, string, domain.DiscoveryProtocol, time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolveUnresolved++
+	return nil
+}
+
+func (s *recordingTopologyObservationStore) GetUnresolvedNeighborsByDeviceID(uuid.UUID) ([]topology.UnresolvedNeighbor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unresolvedLookups++
+	return append([]topology.UnresolvedNeighbor(nil), s.unresolvedNeighbors...), nil
 }
 
 func mockEquivalentManualLink(existing, candidate *domain.Link, browserLocalStorageMigration bool) bool {
@@ -1973,6 +2034,82 @@ func TestApplyStaticDiscovery_CompletesBootstrapOnceDuringRegularStaticPersisten
 	}
 	if updated.LastTopologyDiscoveryResult != "neighbors_found" {
 		t.Fatalf("expected last_topology_discovery_result neighbors_found, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
+func TestApplyStaticDiscovery_SkipsTopologyObservationStoreWhenRequested(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	topologyStore := &recordingTopologyObservationStore{}
+
+	deviceID := uuid.New()
+	device := &domain.Device{
+		ID:            deviceID,
+		Hostname:      "edge-01",
+		IP:            "192.0.2.51",
+		SysName:       "edge-01",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil, WithTopologyObservationStore(topologyStore))
+	result, err := svc.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:    "edge-01",
+		DeviceType: domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 10_000_000_000, OperStatus: "up"},
+		},
+		Neighbors: []snmp.NeighborInfo{
+			{
+				RemoteSysName: "core-01",
+				LocalIfName:   "ether1",
+				RemotePortID:  "ether48",
+				Protocol:      domain.DiscoveryProtocolLLDP,
+			},
+		},
+		NeighborDiscoveryProtocols:  []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		SkipTopologyMaterialization: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+	if !result.TopologyChanged {
+		t.Fatal("TopologyChanged = false, want true because interface speed changed")
+	}
+	if result.TopologyMaterialized {
+		t.Fatal("TopologyMaterialized = true, want false when materialization is skipped")
+	}
+
+	updated, err := deviceRepo.GetByID(deviceID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if got := updated.Interfaces[0].Speed; got != 10_000_000_000 {
+		t.Fatalf("interface speed = %d, want updated static speed", got)
+	}
+
+	topologyStore.mu.Lock()
+	defer topologyStore.mu.Unlock()
+	if topologyStore.upsertObservations != 0 || topologyStore.pruneObservations != 0 ||
+		topologyStore.listObservations != 0 || topologyStore.upsertUnresolved != 0 ||
+		topologyStore.resolveUnresolved != 0 || topologyStore.unresolvedLookups != 0 {
+		t.Fatalf("topology store calls = upsert:%d prune:%d list:%d unresolved:%d resolve:%d lookup:%d, want all zero",
+			topologyStore.upsertObservations,
+			topologyStore.pruneObservations,
+			topologyStore.listObservations,
+			topologyStore.upsertUnresolved,
+			topologyStore.resolveUnresolved,
+			topologyStore.unresolvedLookups,
+		)
 	}
 }
 

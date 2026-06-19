@@ -102,8 +102,11 @@ type PipelineOrchestrator struct {
 }
 
 type staticPersistenceCacheEntry struct {
-	fingerprint string
-	persistedAt time.Time
+	fingerprint                 string
+	topologyFingerprint         string
+	persistedAt                 time.Time
+	topologyMaterializedAt      time.Time
+	topologyUnresolvedNeighbors int
 }
 
 // NewPipelineOrchestrator constructs pipeline orchestrator state for the background worker lifecycle.

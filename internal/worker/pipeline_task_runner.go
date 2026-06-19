@@ -221,6 +221,7 @@ func (r *pipelineTaskRunner) persistStaticDiscoveryWithPolicy(device domain.Devi
 	p := r.pipeline
 	force = force || staticPersistenceRequiresBootstrapFollowup(device)
 	fingerprint := staticDiscoveryFingerprint(device, result)
+	topologyFingerprint := staticDiscoveryTopologyFingerprint(result)
 	if !force {
 		shouldPersist, skipReason := p.shouldPersistStaticDiscovery(device.ID, fingerprint)
 		if !shouldPersist {
@@ -231,25 +232,30 @@ func (r *pipelineTaskRunner) persistStaticDiscoveryWithPolicy(device domain.Devi
 			return
 		}
 	}
+	skipTopologyMaterialization := !force && p.staticTopologyFingerprintUnchanged(device.ID, topologyFingerprint)
 
 	persisted, err := p.topologyService.ApplyStaticDiscovery(device.ID, service.StaticDiscoveryInput{
-		SysName:                    result.SysName,
-		SysDescr:                   result.SysDescr,
-		SysObjectID:                result.SysObjectID,
-		HardwareModel:              result.HardwareModel,
-		OSVersion:                  result.OSVersion,
-		Vendor:                     result.Vendor,
-		DeviceType:                 result.DeviceType,
-		Interfaces:                 append([]domain.Interface(nil), result.Interfaces...),
-		Neighbors:                  append([]snmp.NeighborInfo(nil), result.Neighbors...),
-		NeighborDiscoveryProtocols: append([]domain.DiscoveryProtocol(nil), result.NeighborDiscoveryProtocols...),
-		NeighborDiscoveryFailures:  append([]snmp.NeighborDiscoveryFailure(nil), result.NeighborDiscoveryFailures...),
+		SysName:                     result.SysName,
+		SysDescr:                    result.SysDescr,
+		SysObjectID:                 result.SysObjectID,
+		HardwareModel:               result.HardwareModel,
+		OSVersion:                   result.OSVersion,
+		Vendor:                      result.Vendor,
+		DeviceType:                  result.DeviceType,
+		Interfaces:                  append([]domain.Interface(nil), result.Interfaces...),
+		Neighbors:                   append([]snmp.NeighborInfo(nil), result.Neighbors...),
+		NeighborDiscoveryProtocols:  append([]domain.DiscoveryProtocol(nil), result.NeighborDiscoveryProtocols...),
+		NeighborDiscoveryFailures:   append([]snmp.NeighborDiscoveryFailure(nil), result.NeighborDiscoveryFailures...),
+		SkipTopologyMaterialization: skipTopologyMaterialization,
 	})
 	if err != nil {
 		log.Printf("pipeline: static persistence failed for %s: %v", device.ID, err)
 		return
 	}
-	p.rememberStaticDiscoveryPersistence(device.ID, fingerprint)
+	if skipTopologyMaterialization {
+		observability.Default().IncTopologyMaterializationSkip("unchanged")
+	}
+	p.rememberStaticDiscoveryPersistence(device.ID, fingerprint, topologyFingerprint, persisted)
 	if persisted.TopologyChanged && p.topologyNotify != nil {
 		select {
 		case p.topologyNotify <- struct{}{}:
@@ -298,6 +304,35 @@ func (p *PipelineOrchestrator) shouldPersistStaticDiscovery(deviceID uuid.UUID, 
 	return true, ""
 }
 
+func (p *PipelineOrchestrator) staticTopologyFingerprintUnchanged(deviceID uuid.UUID, topologyFingerprint string) bool {
+	if p == nil || deviceID == uuid.Nil || topologyFingerprint == "" {
+		return false
+	}
+	now := p.staticPersistenceClock().UTC()
+	maxAge := p.staticPersistenceMaxAge
+	if maxAge <= 0 {
+		maxAge = staticPersistenceSelfHealInterval
+	}
+	spread := p.staticPersistenceSelfHealSpread
+	if spread <= 0 {
+		spread = staticPersistenceSelfHealSpread
+	}
+
+	p.staticPersistenceMu.Lock()
+	defer p.staticPersistenceMu.Unlock()
+	entry, ok := p.staticPersistenceCache[deviceID]
+	if !ok ||
+		entry.topologyFingerprint != topologyFingerprint ||
+		entry.topologyMaterializedAt.IsZero() ||
+		entry.topologyUnresolvedNeighbors > 0 {
+		return false
+	}
+	selfHealDeadline := entry.topologyMaterializedAt.
+		Add(maxAge).
+		Add(staticPersistenceSelfHealJitter(deviceID, spread))
+	return now.Before(selfHealDeadline)
+}
+
 func staticPersistenceSelfHealJitter(deviceID uuid.UUID, spread time.Duration) time.Duration {
 	if deviceID == uuid.Nil || spread <= 0 {
 		return 0
@@ -306,7 +341,12 @@ func staticPersistenceSelfHealJitter(deviceID uuid.UUID, spread time.Duration) t
 	return time.Duration(binary.BigEndian.Uint64(sum[:8]) % uint64(spread))
 }
 
-func (p *PipelineOrchestrator) rememberStaticDiscoveryPersistence(deviceID uuid.UUID, fingerprint string) {
+func (p *PipelineOrchestrator) rememberStaticDiscoveryPersistence(
+	deviceID uuid.UUID,
+	fingerprint string,
+	topologyFingerprint string,
+	result service.StaticPersistenceResult,
+) {
 	if p == nil || deviceID == uuid.Nil || fingerprint == "" {
 		return
 	}
@@ -316,10 +356,19 @@ func (p *PipelineOrchestrator) rememberStaticDiscoveryPersistence(deviceID uuid.
 	if p.staticPersistenceCache == nil {
 		p.staticPersistenceCache = make(map[uuid.UUID]staticPersistenceCacheEntry)
 	}
-	p.staticPersistenceCache[deviceID] = staticPersistenceCacheEntry{
-		fingerprint: fingerprint,
-		persistedAt: now,
+	entry := p.staticPersistenceCache[deviceID]
+	if result.TopologyMaterialized {
+		entry.topologyFingerprint = topologyFingerprint
+		entry.topologyMaterializedAt = now
+		entry.topologyUnresolvedNeighbors = result.UnresolvedNeighbors
+	} else if entry.topologyFingerprint != topologyFingerprint {
+		entry.topologyFingerprint = topologyFingerprint
+		entry.topologyMaterializedAt = time.Time{}
+		entry.topologyUnresolvedNeighbors = 0
 	}
+	entry.fingerprint = fingerprint
+	entry.persistedAt = now
+	p.staticPersistenceCache[deviceID] = entry
 }
 
 func (p *PipelineOrchestrator) staticPersistenceClock() time.Time {
@@ -343,6 +392,12 @@ type staticDiscoveryFingerprintPayload struct {
 	NeighborDiscoveryFailures  []snmp.NeighborDiscoveryFailure
 }
 
+type staticDiscoveryTopologyFingerprintPayload struct {
+	Neighbors                  []staticDiscoveryNeighborFingerprint
+	NeighborDiscoveryProtocols []domain.DiscoveryProtocol
+	NeighborDiscoveryFailures  []staticDiscoveryNeighborFailureFingerprint
+}
+
 type staticDiscoveryInterfaceFingerprint struct {
 	IfIndex     int
 	IfName      string
@@ -359,6 +414,12 @@ type staticDiscoveryNeighborFingerprint struct {
 	LocalIfIndex    int
 	LocalIfName     string
 	Protocol        domain.DiscoveryProtocol
+}
+
+type staticDiscoveryNeighborFailureFingerprint struct {
+	Protocol domain.DiscoveryProtocol
+	OID      string
+	Critical bool
 }
 
 func staticDiscoveryFingerprint(device domain.Device, result collector.StaticResult) string {
@@ -391,6 +452,24 @@ func staticDiscoveryFingerprint(device domain.Device, result collector.StaticRes
 			return !left.Critical && right.Critical
 		}
 		return left.Error < right.Error
+	})
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func staticDiscoveryTopologyFingerprint(result collector.StaticResult) string {
+	payload := staticDiscoveryTopologyFingerprintPayload{
+		Neighbors:                  staticDiscoveryNeighborFingerprints(result.Neighbors),
+		NeighborDiscoveryProtocols: append([]domain.DiscoveryProtocol(nil), result.NeighborDiscoveryProtocols...),
+		NeighborDiscoveryFailures:  staticDiscoveryNeighborFailureFingerprints(result.NeighborDiscoveryFailures),
+	}
+	sort.Slice(payload.NeighborDiscoveryProtocols, func(i, j int) bool {
+		return payload.NeighborDiscoveryProtocols[i] < payload.NeighborDiscoveryProtocols[j]
 	})
 
 	encoded, err := json.Marshal(payload)
@@ -552,6 +631,35 @@ func staticDiscoveryNeighborFingerprints(neighbors []snmp.NeighborInfo) []static
 			return left.RemoteChassisID < right.RemoteChassisID
 		}
 		return left.RemotePortID < right.RemotePortID
+	})
+	return fingerprints
+}
+
+func staticDiscoveryNeighborFailureFingerprints(failures []snmp.NeighborDiscoveryFailure) []staticDiscoveryNeighborFailureFingerprint {
+	if len(failures) == 0 {
+		return nil
+	}
+	fingerprints := make([]staticDiscoveryNeighborFailureFingerprint, 0, len(failures))
+	for _, failure := range failures {
+		fingerprints = append(fingerprints, staticDiscoveryNeighborFailureFingerprint{
+			Protocol: failure.Protocol,
+			OID:      strings.TrimSpace(failure.OID),
+			Critical: failure.Critical,
+		})
+	}
+	sort.Slice(fingerprints, func(i, j int) bool {
+		left := fingerprints[i]
+		right := fingerprints[j]
+		if left.Protocol != right.Protocol {
+			return left.Protocol < right.Protocol
+		}
+		if left.OID != right.OID {
+			return left.OID < right.OID
+		}
+		if left.Critical != right.Critical {
+			return !left.Critical && right.Critical
+		}
+		return false
 	})
 	return fingerprints
 }
