@@ -29,8 +29,18 @@ type pipelineRuntimeState struct {
 	lastPollingHealth    polling.HealthSnapshot
 	lastPollingHealthAt  time.Time
 	prevCounters         map[uuid.UUID]map[string]collector.CounterBaseline
+	counterWalkCooldowns map[uuid.UUID]map[string]counterWalkCooldownState
 	prevHashes           *sectionHashes
 	now                  func() time.Time
+}
+
+type counterWalkCooldownState struct {
+	ConsecutiveTimeouts int
+	BackoffLevel        int
+	CooldownUntil       time.Time
+	LastAttemptAt       time.Time
+	LastSuccessAt       time.Time
+	LastResult          string
 }
 
 func newPipelineRuntimeState(initialPromStatus ws.PrometheusStatusPayload) *pipelineRuntimeState {
@@ -42,6 +52,7 @@ func newPipelineRuntimeState(initialPromStatus ws.PrometheusStatusPayload) *pipe
 		alerts:               make(map[uuid.UUID][]domain.AlertState),
 		previousAlertRuntime: make(map[uuid.UUID]ws.DeviceRuntimeDTO),
 		prevCounters:         make(map[uuid.UUID]map[string]collector.CounterBaseline),
+		counterWalkCooldowns: make(map[uuid.UUID]map[string]counterWalkCooldownState),
 		now:                  time.Now,
 	}
 }
@@ -121,8 +132,105 @@ func (s *pipelineRuntimeState) resetDeviceRuntime(deviceID uuid.UUID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.prevCounters, deviceID)
+	delete(s.counterWalkCooldowns, deviceID)
 	delete(s.hostnames, deviceID)
 	delete(s.hostnameObservedAt, deviceID)
+}
+
+func (s *pipelineRuntimeState) ShouldSkipCounterWalk(deviceID uuid.UUID, operation string, now time.Time) bool {
+	if s == nil || deviceID == uuid.Nil || operation == "" {
+		return false
+	}
+	if now.IsZero() {
+		now = s.clockNow()
+	}
+	now = now.UTC()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operations := s.counterWalkCooldowns[deviceID]
+	if len(operations) == 0 {
+		return false
+	}
+	state := operations[operation]
+	return !state.CooldownUntil.IsZero() && now.Before(state.CooldownUntil)
+}
+
+func (s *pipelineRuntimeState) RecordCounterWalkResult(deviceID uuid.UUID, operation string, result string, now time.Time, expectedInterval time.Duration) {
+	if s == nil || deviceID == uuid.Nil || operation == "" {
+		return
+	}
+	if result == "skipped_cooldown" {
+		return
+	}
+	if now.IsZero() {
+		now = s.clockNow()
+	}
+	now = now.UTC()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch result {
+	case "success":
+		s.clearCounterWalkCooldownLocked(deviceID, operation)
+	case "timeout":
+		if s.counterWalkCooldowns == nil {
+			s.counterWalkCooldowns = make(map[uuid.UUID]map[string]counterWalkCooldownState)
+		}
+		operations := s.counterWalkCooldowns[deviceID]
+		if operations == nil {
+			operations = make(map[string]counterWalkCooldownState)
+			s.counterWalkCooldowns[deviceID] = operations
+		}
+		state := operations[operation]
+		state.ConsecutiveTimeouts++
+		state.LastAttemptAt = now
+		state.LastResult = result
+		if state.ConsecutiveTimeouts >= 2 {
+			duration := counterWalkCooldownDuration(expectedInterval, state.BackoffLevel)
+			state.CooldownUntil = now.Add(duration)
+			state.BackoffLevel++
+		}
+		operations[operation] = state
+	default:
+		s.clearCounterWalkCooldownLocked(deviceID, operation)
+	}
+}
+
+func (s *pipelineRuntimeState) clearCounterWalkCooldownLocked(deviceID uuid.UUID, operation string) {
+	operations := s.counterWalkCooldowns[deviceID]
+	if len(operations) == 0 {
+		return
+	}
+	delete(operations, operation)
+	if len(operations) == 0 {
+		delete(s.counterWalkCooldowns, deviceID)
+	}
+}
+
+func counterWalkCooldownDuration(expectedInterval time.Duration, backoffLevel int) time.Duration {
+	const (
+		minCooldown = time.Minute
+		maxCooldown = 30 * time.Minute
+	)
+	if expectedInterval <= 0 {
+		expectedInterval = minCooldown
+	}
+	duration := expectedInterval
+	for i := 0; i < backoffLevel; i++ {
+		if duration >= maxCooldown/2 {
+			duration = maxCooldown
+			break
+		}
+		duration *= 2
+	}
+	if duration < minCooldown {
+		return minCooldown
+	}
+	if duration > maxCooldown {
+		return maxCooldown
+	}
+	return duration
 }
 
 func (s *pipelineRuntimeState) prunePrometheusHostnames() {

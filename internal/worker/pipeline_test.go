@@ -645,6 +645,7 @@ type fakeSNMPClient struct {
 	walkResponses map[string][]gosnmp.SnmpPDU
 	getErr        map[string]error
 	walkErr       map[string]error
+	walkCalls     []string
 	connectDelay  time.Duration
 }
 
@@ -685,6 +686,7 @@ func (c *fakeSNMPClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
 }
 
 func (c *fakeSNMPClient) BulkWalk(rootOid string) ([]gosnmp.SnmpPDU, error) {
+	c.walkCalls = append(c.walkCalls, rootOid)
 	if err := c.walkErr[rootOid]; err != nil {
 		return nil, err
 	}
@@ -724,6 +726,36 @@ func newPerformanceTestCollector(t *testing.T) *collector.PerformanceCollector {
 	return collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
 		return client, nil
 	})
+}
+
+const (
+	testIfHCInOctetsWalkOperation  = "if_hc_in_octets_walk"
+	testIfHCOutOctetsWalkOperation = "if_hc_out_octets_walk"
+)
+
+func pipelineCounterCooldownTestDevice(deviceID uuid.UUID) domain.Device {
+	return domain.Device{
+		ID:            deviceID,
+		Hostname:      "edge-cooldown",
+		IP:            "192.0.2.85",
+		Managed:       true,
+		MetricsSource: domain.MetricsSourceSNMP,
+		Vendor:        "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", Speed: 1_000_000_000},
+		},
+	}
+}
+
+func armPipelineCounterCooldown(runtime *pipelineRuntimeState, deviceID uuid.UUID, now time.Time, expectedInterval time.Duration) {
+	for _, operation := range []string{testIfHCInOctetsWalkOperation, testIfHCOutOctetsWalkOperation} {
+		runtime.RecordCounterWalkResult(deviceID, operation, "timeout", now, expectedInterval)
+		runtime.RecordCounterWalkResult(deviceID, operation, "timeout", now.Add(time.Second), expectedInterval)
+	}
 }
 
 func newOperationalTestCollector(t *testing.T) *collector.OperationalCollector {
@@ -1143,6 +1175,190 @@ func TestPipelineOrchestratorPerformanceTaskSkipsSNMPWhenEssentialMarkedSNMPUnre
 	defer sched.mu.Unlock()
 	if len(sched.completions) != 1 {
 		t.Fatalf("expected one scheduler completion for skipped task, got %d", len(sched.completions))
+	}
+}
+
+func TestPipelineCounterCooldownResetDeviceRuntimeClearsState(t *testing.T) {
+	deviceID := uuid.New()
+	runtime := newPipelineRuntimeState(ws.PrometheusStatusPayload{})
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+
+	armPipelineCounterCooldown(runtime, deviceID, now, 30*time.Second)
+	if !runtime.ShouldSkipCounterWalk(deviceID, testIfHCInOctetsWalkOperation, now.Add(time.Second)) {
+		t.Fatal("expected armed counter cooldown to skip in-octets walk")
+	}
+
+	runtime.resetDeviceRuntime(deviceID)
+	if runtime.ShouldSkipCounterWalk(deviceID, testIfHCInOctetsWalkOperation, now.Add(time.Second)) {
+		t.Fatal("counter cooldown state was not cleared by resetDeviceRuntime")
+	}
+}
+
+func TestPipelineCounterCooldownSkipKeepsPerformanceFreshnessAndSNMPReachability(t *testing.T) {
+	device := pipelineCounterCooldownTestDevice(uuid.New())
+	store := state.NewStore()
+	var snmpCalls int
+	fakeClient := &fakeSNMPClient{
+		walkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfHCInOctets: {
+				{Name: snmp.OidIfHCInOctets + ".1", Value: uint64(10_000)},
+			},
+			snmp.OidIfHCOutOctets: {
+				{Name: snmp.OidIfHCOutOctets + ".1", Value: uint64(20_000)},
+			},
+		},
+	}
+	performance := collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		snmpCalls++
+		return fakeClient, nil
+	})
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		store,
+		newPipelineTestCache([]domain.Device{device}, nil),
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		performance,
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		nil,
+		nil,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+	armPipelineCounterCooldown(pipeline.runtime, device.ID, time.Now().UTC(), 30*time.Second)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            85,
+		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassPerformance),
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Device:           device,
+	})
+
+	if snmpCalls != 1 {
+		t.Fatalf("performance SNMP factory calls = %d, want 1 for cooldown-aware poll", snmpCalls)
+	}
+	if len(fakeClient.walkCalls) != 0 {
+		t.Fatalf("BulkWalk calls = %v, want no HC counter walks during cooldown", fakeClient.walkCalls)
+	}
+	deviceState, ok := store.GetDevice(device.ID)
+	if !ok {
+		t.Fatal("expected performance cooldown skip to update device freshness")
+	}
+	if deviceState.LastPolledAt.IsZero() {
+		t.Fatal("LastPolledAt was not updated by cooldown skip")
+	}
+	if deviceState.Stale {
+		t.Fatal("device remains stale after successful cooldown skip")
+	}
+	if deviceState.SNMPReachable == polling.TriStateFalse {
+		t.Fatalf("SNMPReachable = %q, want not false after cooldown skip", deviceState.SNMPReachable)
+	}
+	if len(deviceState.LinkMetrics) != 0 {
+		t.Fatalf("link metrics = %d, want none during cooldown skip", len(deviceState.LinkMetrics))
+	}
+}
+
+func TestPipelinePrevCountersCounterCooldownSkipDoesNotInstallEmptyBaseline(t *testing.T) {
+	device := pipelineCounterCooldownTestDevice(uuid.New())
+	performance := collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		return &fakeSNMPClient{}, nil
+	})
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		state.NewStore(),
+		newPipelineTestCache([]domain.Device{device}, nil),
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		performance,
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		nil,
+		nil,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+	armPipelineCounterCooldown(pipeline.runtime, device.ID, time.Now().UTC(), 30*time.Second)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            86,
+		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassPerformance),
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Device:           device,
+	})
+
+	pipeline.runtime.mu.RLock()
+	_, ok := pipeline.runtime.prevCounters[device.ID]
+	pipeline.runtime.mu.RUnlock()
+	if ok {
+		t.Fatal("cooldown skip installed an empty prevCounters baseline")
+	}
+}
+
+func TestPipelineCounterCooldownKnownSNMPUnreachableSkipRemainsStronger(t *testing.T) {
+	device := pipelineCounterCooldownTestDevice(uuid.New())
+	essentialAt := time.Date(2026, 6, 19, 12, 30, 0, 0, time.UTC)
+	store := state.NewStore()
+	store.Update(state.StateUpdate{
+		DeviceID:         device.ID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        essentialAt,
+		Essential: &state.EssentialUpdate{
+			PollStatus:       polling.PollStatusFailed,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateFalse,
+			Uptime:           polling.FieldStateError,
+			CPU:              polling.FieldStateError,
+			Memory:           polling.FieldStateError,
+		},
+	})
+
+	var snmpCalls int
+	performance := collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		snmpCalls++
+		return nil, errors.New("background performance SNMP should be skipped before cooldown policy")
+	})
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		store,
+		newPipelineTestCache([]domain.Device{device}, nil),
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		performance,
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		nil,
+		nil,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+	armPipelineCounterCooldown(pipeline.runtime, device.ID, time.Now().UTC(), 30*time.Second)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            87,
+		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassPerformance),
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Device:           device,
+	})
+
+	if snmpCalls != 0 {
+		t.Fatalf("performance SNMP calls = %d, want 0 while known SNMP unreachable", snmpCalls)
+	}
+	deviceState, ok := store.GetDevice(device.ID)
+	if !ok {
+		t.Fatal("expected existing essential state")
+	}
+	if !deviceState.LastPolledAt.Equal(essentialAt) {
+		t.Fatalf("LastPolledAt = %s, want unchanged essential timestamp %s", deviceState.LastPolledAt, essentialAt)
 	}
 }
 

@@ -123,7 +123,10 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		}
 
 		profile := r.timeoutProfile(polling.LaneBackground)
-		result := p.performance.Poll(ctx, task.Device, profile.Timeout, profile.Retries)
+		result := p.performance.PollWithOptions(ctx, task.Device, profile.Timeout, profile.Retries, collector.PerformancePollOptions{
+			ExpectedInterval: task.ExpectedInterval,
+			CounterCooldown:  p.runtime,
+		})
 		finishedAt = completionTime(result.CollectedAt)
 		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 
@@ -136,16 +139,18 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 				}
 			}
 
-			p.runtime.mu.Lock()
-			linkMetrics, next := collector.ComputeCounterRates(
-				result.Counters,
-				p.runtime.prevCounters[task.Device.ID],
-				completionTime(result.CollectedAt),
-				task.ExpectedInterval,
-			)
-			p.runtime.prevCounters[task.Device.ID] = next
-			p.runtime.mu.Unlock()
-			update.LinkMetrics = linkMetrics
+			if len(result.Counters) > 0 {
+				p.runtime.mu.Lock()
+				linkMetrics, next := collector.ComputeCounterRates(
+					result.Counters,
+					p.runtime.prevCounters[task.Device.ID],
+					completionTime(result.CollectedAt),
+					task.ExpectedInterval,
+				)
+				p.runtime.prevCounters[task.Device.ID] = next
+				p.runtime.mu.Unlock()
+				update.LinkMetrics = linkMetrics
+			}
 		}
 
 		p.stateStore.Update(update)

@@ -739,10 +739,262 @@ func TestPerformanceCollectorPoll_SkipsDeviceHealthWalksWhenCountersAreAvailable
 	}
 }
 
+type scriptedCounterCooldownPolicy struct {
+	skipOperations map[string]bool
+	shouldSkipOps  []string
+	records        []counterCooldownRecord
+}
+
+type counterCooldownRecord struct {
+	deviceID         uuid.UUID
+	operation        string
+	result           string
+	expectedInterval time.Duration
+}
+
+func (p *scriptedCounterCooldownPolicy) ShouldSkipCounterWalk(_ uuid.UUID, operation string, _ time.Time) bool {
+	p.shouldSkipOps = append(p.shouldSkipOps, operation)
+	return p.skipOperations[operation]
+}
+
+func (p *scriptedCounterCooldownPolicy) RecordCounterWalkResult(deviceID uuid.UUID, operation string, result string, _ time.Time, expectedInterval time.Duration) {
+	p.records = append(p.records, counterCooldownRecord{
+		deviceID:         deviceID,
+		operation:        operation,
+		result:           result,
+		expectedInterval: expectedInterval,
+	})
+}
+
+func TestPerformanceCollectorPollWithOptions_CounterTimeoutArmsCooldown(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	client := newMetricsClient(registry, false)
+	client.bulkWalkErrs = map[string]error{
+		snmp.OidIfHCInOctets:  errors.New("timeout waiting for ifHCInOctets"),
+		snmp.OidIfHCOutOctets: errors.New("timeout waiting for ifHCOutOctets"),
+	}
+	policy := &scriptedCounterCooldownPolicy{}
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.PollWithOptions(context.Background(), counterCooldownTestDevice(deviceID), time.Second, 1, PerformancePollOptions{
+		ExpectedInterval: 30 * time.Second,
+		CounterCooldown:  policy,
+	})
+
+	if result.Err == nil {
+		t.Fatal("Err = nil, want timeout error")
+	}
+	if len(result.Counters) != 0 {
+		t.Fatalf("counter count = %d, want 0 after failed counter walks", len(result.Counters))
+	}
+	if len(client.getCalls) != 0 {
+		t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
+	}
+	if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+		t.Fatalf("BulkWalk calls = %v, want both HC counter walks attempted", client.bulkWalkCalls)
+	}
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_in_octets_walk", "timeout", 30*time.Second)
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_out_octets_walk", "timeout", 30*time.Second)
+}
+
+func TestPerformanceCollectorPollWithOptions_CooldownSkipReturnsSuccessWithoutReads(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+	metrics := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	deviceID := uuid.New()
+	client := newMetricsClient(registry, false)
+	policy := &scriptedCounterCooldownPolicy{
+		skipOperations: map[string]bool{
+			"if_hc_in_octets_walk": true,
+		},
+	}
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.PollWithOptions(context.Background(), counterCooldownTestDevice(deviceID), time.Second, 1, PerformancePollOptions{
+		ExpectedInterval: 30 * time.Second,
+		CounterCooldown:  policy,
+	})
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil during cooldown skip", result.Err)
+	}
+	if len(result.Counters) != 0 {
+		t.Fatalf("counter count = %d, want 0 during cooldown skip", len(result.Counters))
+	}
+	if len(client.getCalls) != 0 {
+		t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
+	}
+	if len(client.bulkWalkCalls) != 0 {
+		t.Fatalf("BulkWalk calls = %v, want no HC walks during cooldown", client.bulkWalkCalls)
+	}
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_in_octets_walk", "skipped_cooldown", 30*time.Second)
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_out_octets_walk", "skipped_cooldown", 30*time.Second)
+
+	body := string(metrics.MarshalPrometheus())
+	if strings.Contains(body, `collector="performance",operation="sysuptime_probe"`) {
+		t.Fatalf("metrics output unexpectedly recorded performance sysuptime_probe:\n%s", body)
+	}
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="if_hc_in_octets_walk",result="skipped_cooldown"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="if_hc_out_octets_walk",result="skipped_cooldown"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_early_exit_total{collector="performance",reason="if_hc_counter_walk_cooldown"} 1`)
+}
+
+func TestPerformanceCollectorPollWithOptions_CounterSuccessClearsCooldown(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	client := newMetricsClient(registry, false)
+	policy := &scriptedCounterCooldownPolicy{}
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.PollWithOptions(context.Background(), counterCooldownTestDevice(deviceID), time.Second, 1, PerformancePollOptions{
+		ExpectedInterval: 30 * time.Second,
+		CounterCooldown:  policy,
+	})
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if len(result.Counters) != 1 {
+		t.Fatalf("counter count = %d, want 1", len(result.Counters))
+	}
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_in_octets_walk", "success", 30*time.Second)
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_out_octets_walk", "success", 30*time.Second)
+}
+
+func TestPerformanceCollectorPollWithOptions_NonTimeoutErrorDoesNotArmCooldown(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	client := newMetricsClient(registry, false)
+	client.bulkWalkErrs = map[string]error{
+		snmp.OidIfHCInOctets: errors.New("authorization failed"),
+	}
+	policy := &scriptedCounterCooldownPolicy{}
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.PollWithOptions(context.Background(), counterCooldownTestDevice(deviceID), time.Second, 1, PerformancePollOptions{
+		ExpectedInterval: 30 * time.Second,
+		CounterCooldown:  policy,
+	})
+
+	if result.Err == nil {
+		t.Fatal("Err = nil, want non-timeout walk error")
+	}
+	if len(result.Counters) != 0 {
+		t.Fatalf("counter count = %d, want 0 after failed counter walk", len(result.Counters))
+	}
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_in_octets_walk", "error", 30*time.Second)
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_out_octets_walk", "success", 30*time.Second)
+}
+
+func TestPerformanceCollectorPollWithOptions_NoCachedIndexesDoesNotUseCooldown(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := newMetricsClient(registry, false)
+	policy := &scriptedCounterCooldownPolicy{
+		skipOperations: map[string]bool{
+			"if_hc_in_octets_walk":  true,
+			"if_hc_out_octets_walk": true,
+		},
+	}
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.PollWithOptions(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.41",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfName: "ether1", Speed: 1_000_000_000},
+		},
+	}, time.Second, 1, PerformancePollOptions{
+		ExpectedInterval: 30 * time.Second,
+		CounterCooldown:  policy,
+	})
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil from counter-only no-op", result.Err)
+	}
+	if len(result.Counters) != 0 {
+		t.Fatalf("counter count = %d, want 0 without cached indexes", len(result.Counters))
+	}
+	if len(policy.shouldSkipOps) != 0 || len(policy.records) != 0 {
+		t.Fatalf("cooldown policy used without cached indexes: shouldSkip=%v records=%v", policy.shouldSkipOps, policy.records)
+	}
+	if len(client.getCalls) != 0 {
+		t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
+	}
+	if len(client.bulkWalkCalls) != 0 {
+		t.Fatalf("BulkWalk calls = %v, want no interface walks without cached indexes", client.bulkWalkCalls)
+	}
+}
+
 func assertContainsCollectorMetric(t *testing.T, body, needle string) {
 	t.Helper()
 	if !strings.Contains(body, needle) {
 		t.Fatalf("metrics output missing %q\n%s", needle, body)
+	}
+}
+
+func assertCounterCooldownRecord(t *testing.T, records []counterCooldownRecord, deviceID uuid.UUID, operation string, result string, expectedInterval time.Duration) {
+	t.Helper()
+	for _, record := range records {
+		if record.deviceID == deviceID &&
+			record.operation == operation &&
+			record.result == result &&
+			record.expectedInterval == expectedInterval {
+			return
+		}
+	}
+	t.Fatalf("cooldown records = %#v, want device=%s operation=%s result=%s expectedInterval=%s", records, deviceID, operation, result, expectedInterval)
+}
+
+func counterCooldownTestDevice(deviceID uuid.UUID) domain.Device {
+	return domain.Device{
+		ID:     deviceID,
+		IP:     "192.0.2.40",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", Speed: 1_000_000_000},
+		},
 	}
 }
 

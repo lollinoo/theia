@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gosnmp/gosnmp"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/logging"
@@ -19,6 +21,26 @@ import (
 )
 
 const snmpCollectorDebugSlowThreshold = 2 * time.Second
+
+const (
+	performanceIfHCInOctetsWalkOperation  = "if_hc_in_octets_walk"
+	performanceIfHCOutOctetsWalkOperation = "if_hc_out_octets_walk"
+	performanceCounterCooldownEarlyExit   = "if_hc_counter_walk_cooldown"
+)
+
+// CounterWalkCooldownPolicy stores volatile backoff state for expensive
+// high-capacity interface counter walks.
+type CounterWalkCooldownPolicy interface {
+	ShouldSkipCounterWalk(deviceID uuid.UUID, operation string, now time.Time) bool
+	RecordCounterWalkResult(deviceID uuid.UUID, operation string, result string, now time.Time, expectedInterval time.Duration)
+}
+
+// PerformancePollOptions carries runtime policies that are intentionally kept
+// outside the stateless performance collector.
+type PerformancePollOptions struct {
+	ExpectedInterval time.Duration
+	CounterCooldown  CounterWalkCooldownPolicy
+}
 
 // PerformanceCollector polls SNMP performance metrics and raw interface
 // counters for a single device without retaining collector-side state.
@@ -41,6 +63,12 @@ func NewPerformanceCollector(registry *vendor.Registry, newClient NewSNMPClientF
 // Poll collects performance metrics and raw counters for a device using a
 // single SNMP client for the entire poll cycle.
 func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, timeout time.Duration, retries int) PerformanceResult {
+	return c.PollWithOptions(ctx, device, timeout, retries, PerformancePollOptions{})
+}
+
+// PollWithOptions collects performance metrics and raw counters for a device
+// while applying optional runtime policies around expensive counter walks.
+func (c *PerformanceCollector) PollWithOptions(ctx context.Context, device domain.Device, timeout time.Duration, retries int, options PerformancePollOptions) PerformanceResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -106,9 +134,14 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 	}
 
 	hasInterfaceCounters := hasCachedInterfaceIndexes(device.Interfaces)
+	counterWalkSkipped := false
 	if hasInterfaceCounters {
 		speedByName, speedByDescr := indexInterfaceSpeeds(device.Interfaces)
-		counters := snmp.PollInterfaceCountersWithInterfaces(instrumentedClient, device.Interfaces)
+		counters, skipped, counterErr := c.pollInterfaceCountersWithOptions(instrumentedClient, device, options, deviceLabels, collectedAt)
+		counterWalkSkipped = skipped
+		if counterErr != nil {
+			result.Err = counterErr
+		}
 		result.Counters = make([]InterfaceCounterSnapshot, 0, len(counters))
 		for _, counter := range counters {
 			result.Counters = append(result.Counters, InterfaceCounterSnapshot{
@@ -122,7 +155,7 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 	sort.Slice(result.Counters, func(i, j int) bool {
 		return result.Counters[i].IfName < result.Counters[j].IfName
 	})
-	if hasInterfaceCounters && performanceResultHasNoSNMPData(result) {
+	if hasInterfaceCounters && !counterWalkSkipped && result.Err == nil && performanceResultHasNoSNMPData(result) {
 		result.Err = errors.New("performance poll returned no SNMP data")
 	}
 
@@ -131,9 +164,149 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 
 func performanceBulkWalkOperations() map[string]string {
 	return map[string]string{
-		snmp.OidIfHCInOctets:  "if_hc_in_octets_walk",
-		snmp.OidIfHCOutOctets: "if_hc_out_octets_walk",
+		snmp.OidIfHCInOctets:  performanceIfHCInOctetsWalkOperation,
+		snmp.OidIfHCOutOctets: performanceIfHCOutOctetsWalkOperation,
 	}
+}
+
+type performanceCounterWalk struct {
+	oid       string
+	operation string
+}
+
+func performanceCounterWalks() []performanceCounterWalk {
+	return []performanceCounterWalk{
+		{oid: snmp.OidIfHCInOctets, operation: performanceIfHCInOctetsWalkOperation},
+		{oid: snmp.OidIfHCOutOctets, operation: performanceIfHCOutOctetsWalkOperation},
+	}
+}
+
+func (c *PerformanceCollector) pollInterfaceCountersWithOptions(
+	client snmp.ClientInterface,
+	device domain.Device,
+	options PerformancePollOptions,
+	deviceLabels snmpCollectorDeviceLabels,
+	now time.Time,
+) ([]snmp.InterfaceCounter, bool, error) {
+	walks := performanceCounterWalks()
+	if shouldSkipPerformanceCounterWalks(options.CounterCooldown, device.ID, walks, now) {
+		observability.Default().IncSNMPCollectorEarlyExit("performance", performanceCounterCooldownEarlyExit)
+		for _, walk := range walks {
+			observeSNMPCollectorOperation(deviceLabels, "performance", walk.operation, "skipped_cooldown", 0, snmpCollectorDebugSlowThreshold)
+			options.CounterCooldown.RecordCounterWalkResult(device.ID, walk.operation, "skipped_cooldown", now, options.ExpectedInterval)
+		}
+		return nil, true, nil
+	}
+
+	ifNames := performanceInterfaceNamesByIndex(device.Interfaces)
+	inOctets := make(map[int]uint64)
+	outOctets := make(map[int]uint64)
+	var firstErr error
+
+	for _, walk := range walks {
+		target := inOctets
+		if walk.operation == performanceIfHCOutOctetsWalkOperation {
+			target = outOctets
+		}
+		err := snmp.VisitBulkWalk(client, walk.oid, func(pdu gosnmp.SnmpPDU) error {
+			if idx := performanceLastOIDIndex(pdu.Name, walk.oid); idx >= 0 {
+				target[idx] = performanceUint64FromPDU(pdu)
+			}
+			return nil
+		})
+		result := classifySNMPCollectorResult(err)
+		if options.CounterCooldown != nil {
+			options.CounterCooldown.RecordCounterWalkResult(device.ID, walk.operation, result, now, options.ExpectedInterval)
+		}
+		if err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("walking %s: %w", walk.operation, err)
+		}
+	}
+
+	if firstErr != nil {
+		return nil, false, firstErr
+	}
+
+	counters := make([]snmp.InterfaceCounter, 0, len(ifNames))
+	for idx, name := range ifNames {
+		_, hasInOctets := inOctets[idx]
+		_, hasOutOctets := outOctets[idx]
+		if !hasInOctets && !hasOutOctets {
+			continue
+		}
+		counters = append(counters, snmp.InterfaceCounter{
+			IfIndex:   idx,
+			IfName:    name,
+			InOctets:  inOctets[idx],
+			OutOctets: outOctets[idx],
+		})
+	}
+	return counters, false, nil
+}
+
+func shouldSkipPerformanceCounterWalks(policy CounterWalkCooldownPolicy, deviceID uuid.UUID, walks []performanceCounterWalk, now time.Time) bool {
+	if policy == nil {
+		return false
+	}
+	for _, walk := range walks {
+		if policy.ShouldSkipCounterWalk(deviceID, walk.operation, now) {
+			return true
+		}
+	}
+	return false
+}
+
+func performanceInterfaceNamesByIndex(interfaces []domain.Interface) map[int]string {
+	if len(interfaces) == 0 {
+		return nil
+	}
+	ifNames := make(map[int]string, len(interfaces))
+	for _, iface := range interfaces {
+		if iface.IfIndex <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(iface.IfName)
+		if name == "" {
+			name = strings.TrimSpace(iface.IfDescr)
+		}
+		if name == "" {
+			continue
+		}
+		ifNames[iface.IfIndex] = name
+	}
+	return ifNames
+}
+
+func performanceLastOIDIndex(oid, prefix string) int {
+	suffix := strings.TrimPrefix(oid, prefix+".")
+	if suffix == oid || strings.Contains(suffix, ".") {
+		return -1
+	}
+	idx, err := strconv.Atoi(suffix)
+	if err != nil {
+		return -1
+	}
+	return idx
+}
+
+func performanceUint64FromPDU(pdu gosnmp.SnmpPDU) uint64 {
+	switch v := pdu.Value.(type) {
+	case uint64:
+		return v
+	case uint:
+		return uint64(v)
+	case uint32:
+		return uint64(v)
+	case int:
+		if v >= 0 {
+			return uint64(v)
+		}
+	case int64:
+		if v >= 0 {
+			return uint64(v)
+		}
+	}
+	return 0
 }
 
 func deviceHealthBulkWalkOperations(perfOIDs vendor.PerformanceOIDs) map[string]string {
