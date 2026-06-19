@@ -40,6 +40,9 @@ func TestNewClient_V2c(t *testing.T) {
 	if c.snmp.Retries != 1 {
 		t.Errorf("expected retries 1, got %d", c.snmp.Retries)
 	}
+	if c.snmp.MaxRepetitions != defaultMaxRepetitions {
+		t.Errorf("expected max repetitions %d, got %d", defaultMaxRepetitions, c.snmp.MaxRepetitions)
+	}
 }
 
 func TestNewClient_V3(t *testing.T) {

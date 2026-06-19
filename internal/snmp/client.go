@@ -22,6 +22,8 @@ type Client struct {
 	snmp    *gosnmp.GoSNMP
 }
 
+const defaultMaxRepetitions uint32 = 25
+
 // NewClient creates a new SNMP client configured with the given credentials.
 func NewClient(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (*Client, error) {
 	if timeout <= 0 {
@@ -34,6 +36,9 @@ func NewClient(target string, creds domain.SNMPCredentials, timeout time.Duratio
 		Timeout: timeout,
 		Retries: retries,
 		MaxOids: gosnmp.MaxOids,
+		// Keep GETBULK packet sizing aligned with the production snmp-exporter
+		// module. Larger packets have shown higher timeout rates on MikroTik.
+		MaxRepetitions: defaultMaxRepetitions,
 	}
 
 	if creds.Version == domain.SNMPVersionV2c {
