@@ -62,7 +62,10 @@ func PolicyFromSettings(repo SettingsGetter, deviceCount int, observedP95 time.D
 				Timeout: durationMSSetting(repo, domain.SettingPollingEssentialTimeoutMillis, 1200*time.Millisecond),
 				Retries: nonNegativeIntSetting(repo, domain.SettingPollingEssentialRetries, 1),
 			},
-			LaneBackground: {Timeout: 5 * time.Second, Retries: 0},
+			LaneBackground: {
+				Timeout: durationSecondsSetting(repo, domain.SettingSNMPTimeout, 5*time.Second),
+				Retries: nonNegativeIntSetting(repo, domain.SettingSNMPRetries, 0),
+			},
 			LaneBootstrap:  {Timeout: 10 * time.Second, Retries: 1},
 			LaneQuarantine: {Timeout: time.Second, Retries: 0},
 		},
@@ -146,6 +149,11 @@ func nonNegativeIntSetting(repo SettingsGetter, key string, fallback int) int {
 func durationMSSetting(repo SettingsGetter, key string, fallback time.Duration) time.Duration {
 	ms := intSetting(repo, key, int(fallback/time.Millisecond))
 	return time.Duration(ms) * time.Millisecond
+}
+
+func durationSecondsSetting(repo SettingsGetter, key string, fallback time.Duration) time.Duration {
+	seconds := intSetting(repo, key, int(fallback/time.Second))
+	return time.Duration(seconds) * time.Second
 }
 
 func floatSetting(repo SettingsGetter, key string, fallback float64) float64 {

@@ -723,11 +723,11 @@ func TestPipelineRunsPerformanceTaskWithBackgroundTimeoutProfile(t *testing.T) {
 	}
 
 	pipeline.runTask(context.Background(), task)
-	if gotTimeout != 5*time.Second {
-		t.Fatalf("performance timeout = %v, want 5s background profile", gotTimeout)
+	if gotTimeout != 10*time.Second {
+		t.Fatalf("performance timeout = %v, want configured 10s background profile", gotTimeout)
 	}
-	if gotRetries != 0 {
-		t.Fatalf("performance retries = %d, want 0 background retries", gotRetries)
+	if gotRetries != 2 {
+		t.Fatalf("performance retries = %d, want configured 2 background retries", gotRetries)
 	}
 }
 

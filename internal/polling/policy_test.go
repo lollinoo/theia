@@ -35,6 +35,12 @@ func TestPolicyFromSettingsUsesDefaults(t *testing.T) {
 	if policy.Timeouts[LaneEssential].Retries != 1 {
 		t.Fatalf("essential retries = %d, want 1", policy.Timeouts[LaneEssential].Retries)
 	}
+	if policy.Timeouts[LaneBackground].Timeout != 5*time.Second {
+		t.Fatalf("background timeout = %v, want 5s fallback", policy.Timeouts[LaneBackground].Timeout)
+	}
+	if policy.Timeouts[LaneBackground].Retries != 0 {
+		t.Fatalf("background retries = %d, want 0 fallback", policy.Timeouts[LaneBackground].Retries)
+	}
 }
 
 func TestPolicyFromSettingsAllowsZeroEssentialRetries(t *testing.T) {
@@ -46,6 +52,22 @@ func TestPolicyFromSettingsAllowsZeroEssentialRetries(t *testing.T) {
 
 	if policy.Timeouts[LaneEssential].Retries != 0 {
 		t.Fatalf("essential retries = %d, want 0", policy.Timeouts[LaneEssential].Retries)
+	}
+}
+
+func TestPolicyFromSettingsUsesConfiguredBackgroundSNMPProfile(t *testing.T) {
+	settings := fakeSettings{
+		domain.SettingSNMPTimeout: "10",
+		domain.SettingSNMPRetries: "2",
+	}
+
+	policy, _ := PolicyFromSettings(settings, 0, 300*time.Millisecond, 30*time.Second)
+
+	if policy.Timeouts[LaneBackground].Timeout != 10*time.Second {
+		t.Fatalf("background timeout = %v, want configured 10s", policy.Timeouts[LaneBackground].Timeout)
+	}
+	if policy.Timeouts[LaneBackground].Retries != 2 {
+		t.Fatalf("background retries = %d, want configured 2", policy.Timeouts[LaneBackground].Retries)
 	}
 }
 
