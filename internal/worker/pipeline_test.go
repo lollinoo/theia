@@ -851,6 +851,41 @@ func newStaticTestCollector(t *testing.T) *collector.StaticCollector {
 	})
 }
 
+func newStaticCachedContextTestCollector(t *testing.T) *collector.StaticCollector {
+	t.Helper()
+	client := &fakeSNMPClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysName:     {{Name: snmp.OidSysName, Value: "edge-cached-context"}},
+			snmp.OidSysDescr:    {{Name: snmp.OidSysDescr, Value: "SwitchOS edge"}},
+			snmp.OidSysObjectID: {{Name: snmp.OidSysObjectID, Value: ".1.3.6.1.4.1.14988.1"}},
+		},
+		walkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Value: 40},
+			},
+			snmp.OidIfOperStatus: {
+				{Name: snmp.OidIfOperStatus + ".7", Value: 1},
+			},
+			snmp.OidLLDPLocPortIfIndex: {
+				{Name: snmp.OidLLDPLocPortIfIndex + ".1", Value: int(7)},
+			},
+			snmp.OidLLDPRemChassisId: {
+				{Name: snmp.OidLLDPRemChassisId + ".1000.1.1", Value: "aa:bb:cc:dd:ee:ff"},
+			},
+			snmp.OidLLDPRemPortId: {
+				{Name: snmp.OidLLDPRemPortId + ".1000.1.1", Value: "ether48"},
+			},
+			snmp.OidLLDPRemSysName: {
+				{Name: snmp.OidLLDPRemSysName + ".1000.1.1", Value: "remote-switch"},
+			},
+		},
+	}
+
+	return collector.NewStaticCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		return client, nil
+	})
+}
+
 func TestPipelineRunsEssentialTaskWithEssentialTimeoutProfile(t *testing.T) {
 	device := domain.Device{
 		ID:        uuid.New(),
@@ -1530,6 +1565,64 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 		t.Fatalf("expected one scheduler completion, got %d", len(sched.completions))
 	}
 	sched.mu.Unlock()
+}
+
+func TestPipelineStaticTaskUsesCachedInterfacesForDiscoveryContext(t *testing.T) {
+	deviceID := uuid.New()
+	taskDevice := domain.Device{
+		ID:                    deviceID,
+		IP:                    "192.0.2.21",
+		Status:                domain.DeviceStatusProbing,
+		Vendor:                "default",
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeLLDP,
+	}
+	cachedDevice := taskDevice
+	cachedDevice.Interfaces = []domain.Interface{
+		{IfIndex: 7, IfName: "cached-uplink", Speed: 1_000_000_000},
+	}
+	topologyService := &fakeTopologyService{}
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		state.NewStore(),
+		newPipelineTestCache([]domain.Device{cachedDevice}, nil),
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		newPerformanceTestCollector(t),
+		newOperationalTestCollector(t),
+		newStaticCachedContextTestCollector(t),
+		nil,
+		topologyService,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            78,
+		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassStatic),
+		VolatilityClass:  domain.VolatilityClassStatic,
+		ExpectedInterval: 5 * time.Minute,
+		Device:           taskDevice,
+	})
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 1 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 1", topologyService.calls)
+	}
+	if len(topologyService.lastIn.Neighbors) != 1 {
+		t.Fatalf("neighbors = %#v, want one cached-context neighbor", topologyService.lastIn.Neighbors)
+	}
+	if topologyService.lastIn.Neighbors[0].LocalIfName != "cached-uplink" {
+		t.Fatalf("neighbor LocalIfName = %q, want cached-uplink", topologyService.lastIn.Neighbors[0].LocalIfName)
+	}
+	if len(topologyService.lastIn.Interfaces) != 1 {
+		t.Fatalf("interfaces = %#v, want only one live-observed interface", topologyService.lastIn.Interfaces)
+	}
+	if topologyService.lastIn.Interfaces[0].IfName == "cached-uplink" {
+		t.Fatalf("cached interface name was persisted as fresh interface data: %#v", topologyService.lastIn.Interfaces[0])
+	}
 }
 
 func TestPipelineOrchestratorBootstrapTaskUsesBootstrapLaneAndPersistsTopology(t *testing.T) {

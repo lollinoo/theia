@@ -493,9 +493,44 @@ func TestStaticCollectorPoll_CooldownsTimedOutStaticInterfaceWalks(t *testing.T)
 	if slices.Contains(clients[1].bulkWalkCalls, snmp.OidIfDescr) {
 		t.Fatalf("second BulkWalk calls = %v, want ifDescr skipped during cooldown", clients[1].bulkWalkCalls)
 	}
+	for _, oid := range []string{snmp.OidIfSpeed, snmp.OidIfAdminStatus, snmp.OidIfOperStatus, snmp.OidIfName, snmp.OidIfHighSpeed} {
+		if !slices.Contains(clients[1].bulkWalkCalls, oid) {
+			t.Fatalf("second BulkWalk calls = %v, want non-cooled interface column %s attempted", clients[1].bulkWalkCalls, oid)
+		}
+	}
 	body := string(metrics.MarshalPrometheus())
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_descr_walk",result="skipped_cooldown"} 1`)
 	if !strings.Contains(body, `theia_static_collection_skips_total{operation="if_descr_walk",reason="cooldown"} 1`) {
 		t.Fatalf("expected static collection cooldown skip metric, got:\n%s", body)
+	}
+}
+
+func TestStaticInterfaceCooldownClient_ExpiredCooldownAllowsWalk(t *testing.T) {
+	state := newStaticHealthWalkState()
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	state.cooldown("device-1", "if_descr_walk", now.Add(time.Minute))
+	delegate := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfDescr: {{Name: snmp.OidIfDescr + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")}},
+		},
+	}
+	client := staticInterfaceCooldownClient{
+		delegate:  delegate,
+		state:     state,
+		deviceKey: "device-1",
+		now:       func() time.Time { return now.Add(2 * time.Minute) },
+		cooldown:  time.Minute,
+	}
+
+	pdus, err := client.BulkWalk(snmp.OidIfDescr)
+	if err != nil {
+		t.Fatalf("BulkWalk() error = %v", err)
+	}
+	if len(pdus) != 1 {
+		t.Fatalf("pdus = %d, want 1", len(pdus))
+	}
+	if state.coolingDown("device-1", "if_descr_walk", now.Add(2*time.Minute)) {
+		t.Fatal("successful interface walk did not clear cooldown state")
 	}
 }
 

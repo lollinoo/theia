@@ -177,23 +177,24 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		}
 
 		profile := r.timeoutProfile(polling.LaneBackground)
-		result := p.staticCollector.Poll(ctx, task.Device, profile.Timeout, profile.Retries, r.topologyDiscoveryMode(task.Device))
+		staticDevice := r.staticPollDevice(task.Device)
+		result := p.staticCollector.Poll(ctx, staticDevice, profile.Timeout, profile.Retries, r.topologyDiscoveryMode(staticDevice))
 		finishedAt = completionTime(result.CollectedAt)
 		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 		p.stateStore.Update(state.StateUpdate{
-			DeviceID:         task.Device.ID,
+			DeviceID:         staticDevice.ID,
 			VolatilityClass:  domain.VolatilityClassStatic,
 			Metrics:          staticResultMetrics(result),
 			PollSuccess:      result.Err == nil,
 			ExpectedInterval: task.ExpectedInterval,
 			Timestamp:        completionTime(result.CollectedAt),
 		})
-		r.publishSubscribedDetailDelta(task.Device)
+		r.publishSubscribedDetailDelta(staticDevice)
 		if result.Err != nil || p.topologyService == nil {
 			return
 		}
 
-		r.persistStaticDiscovery(task.Device, result)
+		r.persistStaticDiscovery(staticDevice, result)
 	}
 }
 
@@ -212,6 +213,31 @@ func (r *pipelineTaskRunner) knownSNMPUnreachable(deviceID uuid.UUID) bool {
 	}
 	deviceState, ok := p.stateStore.GetDevice(deviceID)
 	return ok && deviceState.SNMPReachable == polling.TriStateFalse
+}
+
+func (r *pipelineTaskRunner) staticPollDevice(device domain.Device) domain.Device {
+	p := r.pipeline
+	if p == nil || p.cache == nil || device.ID == uuid.Nil || len(device.Interfaces) > 0 {
+		return device
+	}
+	cached, ok, err := p.cache.GetDeviceByID(device.ID)
+	if err != nil || !ok || len(cached.Interfaces) == 0 || !sameStaticPollIdentity(device, cached) {
+		return device
+	}
+	device.Interfaces = append([]domain.Interface(nil), cached.Interfaces...)
+	return device
+}
+
+func sameStaticPollIdentity(taskDevice domain.Device, cached domain.Device) bool {
+	if taskDevice.ID != cached.ID {
+		return false
+	}
+	taskIP := strings.TrimSpace(taskDevice.IP)
+	cachedIP := strings.TrimSpace(cached.IP)
+	if taskIP != "" && cachedIP != "" && taskIP != cachedIP {
+		return false
+	}
+	return true
 }
 
 func (r *pipelineTaskRunner) persistStaticDiscovery(device domain.Device, result collector.StaticResult) {

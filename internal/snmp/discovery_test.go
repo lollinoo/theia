@@ -657,6 +657,65 @@ func TestDiscoverDeviceUsesPartialInterfaceColumnDataAfterTimeout(t *testing.T) 
 	}
 }
 
+func TestDiscoverDeviceWithOptions_UsesCachedInterfaceNamesForNeighborContextOnly(t *testing.T) {
+	reg := testDiscoveryRegistry(t)
+	mock := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysName:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("switch-cached-context")})
+				case OidSysDescr:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS CRS")})
+				case OidSysObjectID:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{{Name: OidIfOperStatus + ".7", Type: gosnmp.Integer, Value: 1}}, nil
+			case OidLLDPLocPortIfIndex:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPLocPortIfIndex + ".1", Type: gosnmp.Integer, Value: 7}}, nil
+			case OidLLDPRemChassisId:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPRemChassisId + ".1000.1.1", Type: gosnmp.OctetString, Value: []byte("00:aa:bb:cc:dd:ee")}}, nil
+			case OidLLDPRemPortId:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPRemPortId + ".1000.1.1", Type: gosnmp.OctetString, Value: []byte("ether48")}}, nil
+			case OidLLDPRemSysName:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPRemSysName + ".1000.1.1", Type: gosnmp.OctetString, Value: []byte("dist-01")}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	res, err := DiscoverDeviceWithOptions(mock, reg, DiscoveryOptions{
+		NeighborPolicy: NeighborDiscoveryPolicy{LLDP: true},
+		CachedInterfaces: []domain.Interface{
+			{IfIndex: 7, IfName: "cached-sfp7"},
+			{IfIndex: 9, IfName: "cached-extra"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DiscoverDeviceWithOptions returned error: %v", err)
+	}
+	if len(res.Interfaces) != 1 {
+		t.Fatalf("interfaces = %#v, want only one live-observed interface", res.Interfaces)
+	}
+	if got := res.Interfaces[0]; got.IfIndex != 7 || got.IfName != "" || got.OperStatus != "up" {
+		t.Fatalf("live interface = %#v, want partial live data without cached name", got)
+	}
+	if len(res.Neighbors) != 1 {
+		t.Fatalf("neighbors = %#v, want one LLDP neighbor", res.Neighbors)
+	}
+	if res.Neighbors[0].LocalIfName != "cached-sfp7" {
+		t.Fatalf("neighbor LocalIfName = %q, want cached-sfp7", res.Neighbors[0].LocalIfName)
+	}
+}
+
 func TestPollOperationalStatusUsesPartialStatusesAfterTimeout(t *testing.T) {
 	client := &MockClient{
 		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {

@@ -117,7 +117,10 @@ func (c *StaticCollector) Poll(ctx context.Context, device domain.Device, timeou
 		deviceLabels: snmpCollectorDeviceMetricLabels(device),
 	}
 	discoveryClient := c.staticDiscoverySNMPClient(device, instrumentedClient, topologyMode)
-	discovery, err := snmp.DiscoverDeviceWithPolicy(discoveryClient, c.registry, snmp.NeighborDiscoveryPolicyFromMode(topologyMode))
+	discovery, err := snmp.DiscoverDeviceWithOptions(discoveryClient, c.registry, snmp.DiscoveryOptions{
+		NeighborPolicy:   snmp.NeighborDiscoveryPolicyFromMode(topologyMode),
+		CachedInterfaces: append([]domain.Interface(nil), device.Interfaces...),
+	})
 	if err != nil {
 		result.Err = fmt.Errorf("discover device: %w", err)
 		return result
@@ -164,11 +167,12 @@ func (c *StaticCollector) staticDiscoverySNMPClient(device domain.Device, delega
 		c.staticWalks = state
 	}
 	return staticInterfaceCooldownClient{
-		delegate:  delegate,
-		state:     state,
-		deviceKey: device.ID.String(),
-		now:       c.now,
-		cooldown:  staticInterfaceWalkCooldown,
+		delegate:     delegate,
+		state:        state,
+		deviceKey:    device.ID.String(),
+		now:          c.now,
+		cooldown:     staticInterfaceWalkCooldown,
+		deviceLabels: snmpCollectorDeviceMetricLabels(device),
 	}
 }
 
@@ -223,11 +227,12 @@ func mergeBulkWalkOperations(maps ...map[string]string) map[string]string {
 }
 
 type staticInterfaceCooldownClient struct {
-	delegate  snmp.ClientInterface
-	state     *staticHealthWalkState
-	deviceKey string
-	now       func() time.Time
-	cooldown  time.Duration
+	delegate     snmp.ClientInterface
+	state        *staticHealthWalkState
+	deviceKey    string
+	now          func() time.Time
+	cooldown     time.Duration
+	deviceLabels snmpCollectorDeviceLabels
 }
 
 func (c staticInterfaceCooldownClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
@@ -240,12 +245,15 @@ func (c staticInterfaceCooldownClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPD
 		return c.delegate.BulkWalk(rootOID)
 	}
 	if c.coolingDown(operation) {
-		observability.Default().IncStaticCollectionSkip(operation, "cooldown")
+		c.observeCooldownSkip(operation)
 		return nil, nil
 	}
 	pdus, err := c.delegate.BulkWalk(rootOID)
-	if classifySNMPCollectorResult(err) == "timeout" {
+	switch classifySNMPCollectorResult(err) {
+	case "timeout":
 		c.cooldownOperation(operation)
+	case "success":
+		c.clearCooldown(operation)
 	}
 	return pdus, err
 }
@@ -256,7 +264,7 @@ func (c staticInterfaceCooldownClient) BulkWalkEach(rootOID string, visit func(g
 		return snmp.VisitBulkWalk(c.delegate, rootOID, visit)
 	}
 	if c.coolingDown(operation) {
-		observability.Default().IncStaticCollectionSkip(operation, "cooldown")
+		c.observeCooldownSkip(operation)
 		return nil
 	}
 	var visitErr error
@@ -269,8 +277,15 @@ func (c staticInterfaceCooldownClient) BulkWalkEach(rootOID string, visit func(g
 	})
 	if visitErr == nil && classifySNMPCollectorResult(err) == "timeout" {
 		c.cooldownOperation(operation)
+	} else if visitErr == nil && err == nil {
+		c.clearCooldown(operation)
 	}
 	return err
+}
+
+func (c staticInterfaceCooldownClient) observeCooldownSkip(operation string) {
+	observability.Default().IncStaticCollectionSkip(operation, "cooldown")
+	observeSNMPCollectorOperation(c.deviceLabels, "static", operation, "skipped_cooldown", 0, snmpCollectorDebugSlowThreshold)
 }
 
 func (c staticInterfaceCooldownClient) coolingDown(operation string) bool {
@@ -282,6 +297,13 @@ func (c staticInterfaceCooldownClient) cooldownOperation(operation string) {
 		return
 	}
 	c.state.cooldown(c.deviceKey, operation, c.clockNow().Add(c.cooldown))
+}
+
+func (c staticInterfaceCooldownClient) clearCooldown(operation string) {
+	if c.state == nil {
+		return
+	}
+	c.state.clear(c.deviceKey, operation)
 }
 
 func (c staticInterfaceCooldownClient) clockNow() time.Time {
@@ -443,6 +465,15 @@ func (s *staticHealthWalkState) cooldown(deviceKey string, group string, until t
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cooldowns[staticHealthCooldownKey(deviceKey, group)] = until
+}
+
+func (s *staticHealthWalkState) clear(deviceKey string, group string) {
+	if s == nil || deviceKey == "" || group == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.cooldowns, staticHealthCooldownKey(deviceKey, group))
 }
 
 func staticHealthCooldownKey(deviceKey string, group string) string {

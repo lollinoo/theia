@@ -213,16 +213,20 @@ func interfaceNamesByIndex(interfaces []domain.Interface) map[int]string {
 		if iface.IfIndex <= 0 {
 			continue
 		}
-		name := strings.TrimSpace(iface.IfName)
-		if name == "" {
-			name = strings.TrimSpace(iface.IfDescr)
-		}
+		name := firstInterfaceName(iface)
 		if name == "" {
 			continue
 		}
 		ifNames[iface.IfIndex] = name
 	}
 	return ifNames
+}
+
+func firstInterfaceName(iface domain.Interface) string {
+	if name := strings.TrimSpace(iface.IfName); name != "" {
+		return name
+	}
+	return strings.TrimSpace(iface.IfDescr)
 }
 
 // DiscoveryResult holds the aggregated data from an SNMP discovery walk.
@@ -277,6 +281,14 @@ type NeighborDiscoveryPolicy struct {
 	CDP  bool
 }
 
+// DiscoveryOptions controls optional discovery behavior while keeping cached
+// data read-only. CachedInterfaces may help name neighbor local interfaces, but
+// they are never appended to DiscoveryResult.Interfaces.
+type DiscoveryOptions struct {
+	NeighborPolicy   NeighborDiscoveryPolicy
+	CachedInterfaces []domain.Interface
+}
+
 func NeighborDiscoveryPolicyFromMode(mode domain.TopologyDiscoveryMode) NeighborDiscoveryPolicy {
 	switch mode {
 	case domain.TopologyDiscoveryModeOff:
@@ -322,12 +334,21 @@ func VisitBulkWalk(client ClientInterface, rootOID string, visit func(gosnmp.Snm
 // DiscoverDevice gathers all required details from a network device via SNMP.
 // The vendor registry is used for device type detection, model extraction, and vendor identification.
 func DiscoverDevice(client ClientInterface, registry *vendor.Registry) (*DiscoveryResult, error) {
-	return DiscoverDeviceWithPolicy(client, registry, NeighborDiscoveryPolicy{LLDP: true, CDP: true})
+	return DiscoverDeviceWithOptions(client, registry, DiscoveryOptions{
+		NeighborPolicy: NeighborDiscoveryPolicy{LLDP: true, CDP: true},
+	})
 }
 
 // DiscoverDeviceWithPolicy gathers device details while allowing neighbor walks
 // to be disabled or protocol-limited.
 func DiscoverDeviceWithPolicy(client ClientInterface, registry *vendor.Registry, policy NeighborDiscoveryPolicy) (*DiscoveryResult, error) {
+	return DiscoverDeviceWithOptions(client, registry, DiscoveryOptions{NeighborPolicy: policy})
+}
+
+// DiscoverDeviceWithOptions gathers device details while allowing optional
+// cached interface context for neighbor naming.
+func DiscoverDeviceWithOptions(client ClientInterface, registry *vendor.Registry, options DiscoveryOptions) (*DiscoveryResult, error) {
+	policy := options.NeighborPolicy
 	res := &DiscoveryResult{
 		NeighborDiscoveryProtocols: attemptedNeighborDiscoveryProtocols(policy),
 	}
@@ -357,9 +378,14 @@ func DiscoverDeviceWithPolicy(client ClientInterface, registry *vendor.Registry,
 	res.Interfaces = discoverInterfaces(client)
 
 	// Map interface index to interface name for neighbor association
-	ifIndexToName := make(map[int]string)
+	ifIndexToName := interfaceNamesByIndex(options.CachedInterfaces)
+	if ifIndexToName == nil {
+		ifIndexToName = make(map[int]string)
+	}
 	for _, intf := range res.Interfaces {
-		ifIndexToName[intf.IfIndex] = intf.IfName
+		if name := firstInterfaceName(intf); name != "" {
+			ifIndexToName[intf.IfIndex] = name
+		}
 	}
 
 	// 3. Walk LLDP & CDP to discover neighbors
