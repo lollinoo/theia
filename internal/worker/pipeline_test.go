@@ -224,27 +224,90 @@ func TestPipelineTaskRunnerPersistStaticDiscoveryPersistsChangedRegularResult(t 
 }
 
 func TestPipelineTaskRunnerPersistStaticDiscoverySelfHealsUnchangedResultAfterMaxAge(t *testing.T) {
-	deviceID := uuid.New()
+	spread := 10 * time.Second
+	deviceID := staticPersistenceTestDeviceWithJitter(t, spread)
 	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
 	topologyService := &fakeTopologyService{}
 	pipeline := &PipelineOrchestrator{
-		topologyService:         topologyService,
-		staticPersistenceNow:    func() time.Time { return now },
-		staticPersistenceMaxAge: time.Minute,
+		topologyService:                 topologyService,
+		staticPersistenceNow:            func() time.Time { return now },
+		staticPersistenceMaxAge:         time.Minute,
+		staticPersistenceSelfHealSpread: spread,
 	}
 	runner := &pipelineTaskRunner{pipeline: pipeline}
 	result := staticDiscoveryDedupeResult()
+	selfHealDeadline := now.Add(pipeline.staticPersistenceMaxAge).Add(staticPersistenceSelfHealJitter(deviceID, spread))
 
 	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
-	now = now.Add(30 * time.Second)
+	now = selfHealDeadline.Add(-time.Nanosecond)
 	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
-	now = now.Add(31 * time.Second)
+	now = selfHealDeadline
 	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
 
 	topologyService.mu.Lock()
 	defer topologyService.mu.Unlock()
 	if topologyService.calls != 2 {
 		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 with periodic unchanged self-heal", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryDefersUnchangedSelfHealUntilJitterDeadline(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	spread := 10 * time.Second
+	deviceID := staticPersistenceTestDeviceWithJitter(t, spread)
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{
+		topologyService:                 topologyService,
+		staticPersistenceNow:            func() time.Time { return now },
+		staticPersistenceMaxAge:         time.Minute,
+		staticPersistenceSelfHealSpread: spread,
+	}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	result := staticDiscoveryDedupeResult()
+	selfHealDeadline := now.Add(pipeline.staticPersistenceMaxAge).Add(staticPersistenceSelfHealJitter(deviceID, spread))
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+	now = selfHealDeadline.Add(-time.Nanosecond)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 1 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 1 while unchanged self-heal is jitter-deferred", topologyService.calls)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_static_persistence_skips_total{reason="self_heal_deferred"} 1`) {
+		t.Fatalf("expected self-heal deferred static persistence skip metric, got:\n%s", metrics)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryPersistsChangedResultDuringDeferredSelfHeal(t *testing.T) {
+	spread := 10 * time.Second
+	deviceID := staticPersistenceTestDeviceWithJitter(t, spread)
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{
+		topologyService:                 topologyService,
+		staticPersistenceNow:            func() time.Time { return now },
+		staticPersistenceMaxAge:         time.Minute,
+		staticPersistenceSelfHealSpread: spread,
+	}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	first := staticDiscoveryDedupeResult()
+	changed := staticDiscoveryDedupeResult()
+	changed.Interfaces[0].Speed = 10_000_000_000
+	selfHealDeadline := now.Add(pipeline.staticPersistenceMaxAge).Add(staticPersistenceSelfHealJitter(deviceID, spread))
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	now = selfHealDeadline.Add(-time.Nanosecond)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, changed)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 because changed fingerprints persist during deferred self-heal", topologyService.calls)
 	}
 }
 
@@ -320,6 +383,19 @@ func staticDiscoveryDedupeResult() collector.StaticResult {
 		},
 		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
 	}
+}
+
+func staticPersistenceTestDeviceWithJitter(t *testing.T, spread time.Duration) uuid.UUID {
+	t.Helper()
+	for i := 1; i < 256; i++ {
+		var deviceID uuid.UUID
+		deviceID[15] = byte(i)
+		if staticPersistenceSelfHealJitter(deviceID, spread) > 0 {
+			return deviceID
+		}
+	}
+	t.Fatalf("expected a deterministic test device with non-zero self-heal jitter for spread %s", spread)
+	return uuid.Nil
 }
 
 func TestPipelineTaskRunnerNetworkProbePortsResolvesInheritance(t *testing.T) {

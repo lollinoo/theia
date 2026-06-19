@@ -5,6 +5,7 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -220,9 +221,15 @@ func (r *pipelineTaskRunner) persistStaticDiscoveryWithPolicy(device domain.Devi
 	p := r.pipeline
 	force = force || staticPersistenceRequiresBootstrapFollowup(device)
 	fingerprint := staticDiscoveryFingerprint(device, result)
-	if !force && !p.shouldPersistStaticDiscovery(device.ID, fingerprint) {
-		observability.Default().IncStaticPersistenceSkip("unchanged")
-		return
+	if !force {
+		shouldPersist, skipReason := p.shouldPersistStaticDiscovery(device.ID, fingerprint)
+		if !shouldPersist {
+			if skipReason == "" {
+				skipReason = "unchanged"
+			}
+			observability.Default().IncStaticPersistenceSkip(skipReason)
+			return
+		}
 	}
 
 	persisted, err := p.topologyService.ApplyStaticDiscovery(device.ID, service.StaticDiscoveryInput{
@@ -260,23 +267,43 @@ func staticPersistenceRequiresBootstrapFollowup(device domain.Device) bool {
 	}
 }
 
-func (p *PipelineOrchestrator) shouldPersistStaticDiscovery(deviceID uuid.UUID, fingerprint string) bool {
+func (p *PipelineOrchestrator) shouldPersistStaticDiscovery(deviceID uuid.UUID, fingerprint string) (bool, string) {
 	if p == nil || deviceID == uuid.Nil || fingerprint == "" {
-		return true
+		return true, ""
 	}
 	now := p.staticPersistenceClock().UTC()
 	maxAge := p.staticPersistenceMaxAge
 	if maxAge <= 0 {
 		maxAge = staticPersistenceSelfHealInterval
 	}
+	spread := p.staticPersistenceSelfHealSpread
+	if spread <= 0 {
+		spread = staticPersistenceSelfHealSpread
+	}
 
 	p.staticPersistenceMu.Lock()
 	defer p.staticPersistenceMu.Unlock()
 	entry, ok := p.staticPersistenceCache[deviceID]
 	if !ok || entry.fingerprint != fingerprint || entry.persistedAt.IsZero() {
-		return true
+		return true, ""
 	}
-	return !now.Before(entry.persistedAt.Add(maxAge))
+	selfHealEligibleAt := entry.persistedAt.Add(maxAge)
+	if now.Before(selfHealEligibleAt) {
+		return false, "unchanged"
+	}
+	selfHealDeadline := selfHealEligibleAt.Add(staticPersistenceSelfHealJitter(deviceID, spread))
+	if now.Before(selfHealDeadline) {
+		return false, "self_heal_deferred"
+	}
+	return true, ""
+}
+
+func staticPersistenceSelfHealJitter(deviceID uuid.UUID, spread time.Duration) time.Duration {
+	if deviceID == uuid.Nil || spread <= 0 {
+		return 0
+	}
+	sum := sha256.Sum256(deviceID[:])
+	return time.Duration(binary.BigEndian.Uint64(sum[:8]) % uint64(spread))
 }
 
 func (p *PipelineOrchestrator) rememberStaticDiscoveryPersistence(deviceID uuid.UUID, fingerprint string) {

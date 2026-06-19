@@ -33,6 +33,7 @@ const (
 	refreshSnapshotModeFull  = "full"
 
 	staticPersistenceSelfHealInterval = 30 * time.Minute
+	staticPersistenceSelfHealSpread   = 30 * time.Minute
 
 	refreshReloadReasonStartup               = "startup"
 	refreshReloadReasonTopologyDirty         = "topology_dirty"
@@ -79,24 +80,25 @@ type PipelineOrchestrator struct {
 	topologyService   interface {
 		ApplyStaticDiscovery(uuid.UUID, service.StaticDiscoveryInput) (service.StaticPersistenceResult, error)
 	}
-	settingsRepo            domain.SettingsRepository
-	topologyNotify          chan struct{}
-	deviceChangeNotify      <-chan domain.DeviceChangeEvent
-	linkChangeNotify        <-chan domain.LinkChangeEvent
-	alertNotify             chan struct{}
-	broadcastCoalesceWindow time.Duration
-	fullResyncInterval      time.Duration
-	lifecycleMu             sync.Mutex
-	running                 atomic.Bool
-	cancel                  context.CancelFunc
-	done                    chan struct{}
-	healthDone              chan struct{}
-	runtime                 *pipelineRuntimeState
-	overviewBuildMu         sync.Mutex
-	staticPersistenceMu     sync.Mutex
-	staticPersistenceCache  map[uuid.UUID]staticPersistenceCacheEntry
-	staticPersistenceNow    func() time.Time
-	staticPersistenceMaxAge time.Duration
+	settingsRepo                    domain.SettingsRepository
+	topologyNotify                  chan struct{}
+	deviceChangeNotify              <-chan domain.DeviceChangeEvent
+	linkChangeNotify                <-chan domain.LinkChangeEvent
+	alertNotify                     chan struct{}
+	broadcastCoalesceWindow         time.Duration
+	fullResyncInterval              time.Duration
+	lifecycleMu                     sync.Mutex
+	running                         atomic.Bool
+	cancel                          context.CancelFunc
+	done                            chan struct{}
+	healthDone                      chan struct{}
+	runtime                         *pipelineRuntimeState
+	overviewBuildMu                 sync.Mutex
+	staticPersistenceMu             sync.Mutex
+	staticPersistenceCache          map[uuid.UUID]staticPersistenceCacheEntry
+	staticPersistenceNow            func() time.Time
+	staticPersistenceMaxAge         time.Duration
+	staticPersistenceSelfHealSpread time.Duration
 }
 
 type staticPersistenceCacheEntry struct {
@@ -124,28 +126,29 @@ func NewPipelineOrchestrator(
 	linkChangeNotify <-chan domain.LinkChangeEvent,
 ) *PipelineOrchestrator {
 	p := &PipelineOrchestrator{
-		scheduler:               sched,
-		stateStore:              stateStore,
-		cache:                   cache,
-		hub:                     hub,
-		essential:               essential,
-		performance:             performance,
-		operational:             operational,
-		staticCollector:         staticCollector,
-		prometheus:              prometheus,
-		topologyService:         topologyService,
-		settingsRepo:            settingsRepo,
-		topologyNotify:          topologyNotify,
-		deviceChangeNotify:      deviceChangeNotify,
-		linkChangeNotify:        linkChangeNotify,
-		alertNotify:             make(chan struct{}, 1),
-		broadcastCoalesceWindow: pollingPolicyFromSettings(settingsRepo).WebSocketCoalesce,
-		fullResyncInterval:      pipelineFullResyncInterval,
-		done:                    make(chan struct{}),
-		healthDone:              make(chan struct{}),
-		runtime:                 newPipelineRuntimeState(initialPrometheusStatus(settingsRepo)),
-		staticPersistenceNow:    time.Now,
-		staticPersistenceMaxAge: staticPersistenceSelfHealInterval,
+		scheduler:                       sched,
+		stateStore:                      stateStore,
+		cache:                           cache,
+		hub:                             hub,
+		essential:                       essential,
+		performance:                     performance,
+		operational:                     operational,
+		staticCollector:                 staticCollector,
+		prometheus:                      prometheus,
+		topologyService:                 topologyService,
+		settingsRepo:                    settingsRepo,
+		topologyNotify:                  topologyNotify,
+		deviceChangeNotify:              deviceChangeNotify,
+		linkChangeNotify:                linkChangeNotify,
+		alertNotify:                     make(chan struct{}, 1),
+		broadcastCoalesceWindow:         pollingPolicyFromSettings(settingsRepo).WebSocketCoalesce,
+		fullResyncInterval:              pipelineFullResyncInterval,
+		done:                            make(chan struct{}),
+		healthDone:                      make(chan struct{}),
+		runtime:                         newPipelineRuntimeState(initialPrometheusStatus(settingsRepo)),
+		staticPersistenceNow:            time.Now,
+		staticPersistenceMaxAge:         staticPersistenceSelfHealInterval,
+		staticPersistenceSelfHealSpread: staticPersistenceSelfHealSpread,
 	}
 	p.taskRunner = &pipelineTaskRunner{pipeline: p}
 	p.broadcaster = &pipelineSnapshotBroadcaster{pipeline: p}
