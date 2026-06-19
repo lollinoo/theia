@@ -98,18 +98,6 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 		result.Err = err
 		return result
 	}
-	probeStartedAt := time.Now()
-	uptimePDUs, err := client.Get([]string{snmp.OidSysUpTime})
-	probeDuration := time.Since(probeStartedAt)
-	probeResult := classifySNMPCollectorResult(err)
-	observeSNMPCollectorOperation(deviceLabels, "performance", "sysuptime_probe", probeResult, probeDuration, 0)
-	if err != nil {
-		observability.Default().IncSNMPCollectorEarlyExit("performance", "sysuptime_probe_failed")
-		result.Err = fmt.Errorf("performance uptime probe: %w", err)
-		return result
-	}
-	result.Metrics.UptimeSecs = sysUpTimeSecondsFromPDUs(uptimePDUs)
-
 	instrumentedClient := instrumentedSNMPBulkWalkClient{
 		delegate:           client,
 		collector:          "performance",
@@ -117,7 +105,8 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 		deviceLabels:       deviceLabels,
 	}
 
-	if hasCachedInterfaceIndexes(device.Interfaces) {
+	hasInterfaceCounters := hasCachedInterfaceIndexes(device.Interfaces)
+	if hasInterfaceCounters {
 		speedByName, speedByDescr := indexInterfaceSpeeds(device.Interfaces)
 		counters := snmp.PollInterfaceCountersWithInterfaces(instrumentedClient, device.Interfaces)
 		result.Counters = make([]InterfaceCounterSnapshot, 0, len(counters))
@@ -133,7 +122,7 @@ func (c *PerformanceCollector) Poll(ctx context.Context, device domain.Device, t
 	sort.Slice(result.Counters, func(i, j int) bool {
 		return result.Counters[i].IfName < result.Counters[j].IfName
 	})
-	if performanceResultHasNoSNMPData(result) {
+	if hasInterfaceCounters && performanceResultHasNoSNMPData(result) {
 		result.Err = errors.New("performance poll returned no SNMP data")
 	}
 
@@ -164,43 +153,11 @@ func deviceHealthBulkWalkOperations(perfOIDs vendor.PerformanceOIDs) map[string]
 	}
 }
 
-func sysUpTimeSecondsFromPDUs(pdus []gosnmp.SnmpPDU) *float64 {
-	for _, pdu := range pdus {
-		if pdu.Name != snmp.OidSysUpTime {
-			continue
-		}
-		if v := uint32FromSNMPPDU(pdu); v > 0 {
-			secs := float64(v) / 100.0
-			return &secs
-		}
-	}
-	return nil
-}
-
-func uint32FromSNMPPDU(pdu gosnmp.SnmpPDU) uint32 {
-	switch v := pdu.Value.(type) {
-	case uint32:
-		return v
-	case uint:
-		return uint32(v)
-	case int:
-		if v >= 0 {
-			return uint32(v)
-		}
-	case int32:
-		if v >= 0 {
-			return uint32(v)
-		}
-	}
-	return 0
-}
-
 type instrumentedSNMPBulkWalkClient struct {
 	delegate           snmp.ClientInterface
 	collector          string
 	getOperations      map[string]string
 	bulkWalkOperations map[string]string
-	earlyExitReasons   map[string]string
 	deviceLabels       snmpCollectorDeviceLabels
 	slowThreshold      time.Duration
 }
@@ -218,11 +175,6 @@ func (c instrumentedSNMPBulkWalkClient) Get(oids []string) ([]gosnmp.SnmpPDU, er
 	result := classifySNMPCollectorResult(err)
 	observeSNMPCollectorOperation(c.deviceLabels, c.collector, operation, result, duration, c.slowThreshold)
 	logSNMPCollectorDebug(c.collector, operation, result, duration, len(pdus), err)
-	if err != nil {
-		if reason := c.earlyExitReasons[operation]; reason != "" {
-			observability.Default().IncSNMPCollectorEarlyExit(c.collector, reason)
-		}
-	}
 	return pdus, err
 }
 

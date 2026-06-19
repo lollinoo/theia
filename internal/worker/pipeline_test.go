@@ -801,8 +801,8 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 	if deviceState.Metrics.CPUPercent != nil || deviceState.Metrics.MemPercent != nil || deviceState.Metrics.TempCelsius != nil {
 		t.Fatalf("expected performance task to skip device-health metrics, got %#v", deviceState.Metrics)
 	}
-	if deviceState.Metrics.UptimeSecs == nil || *deviceState.Metrics.UptimeSecs != 30 {
-		t.Fatalf("expected uptime metric 30, got %#v", deviceState.Metrics.UptimeSecs)
+	if deviceState.Metrics.UptimeSecs != nil {
+		t.Fatalf("expected performance task to skip uptime metric, got %#v", deviceState.Metrics.UptimeSecs)
 	}
 	if len(deviceState.LinkMetrics) != 1 {
 		t.Fatalf("expected 1 computed link metric, got %d", len(deviceState.LinkMetrics))

@@ -73,8 +73,8 @@ type InterfaceCounter struct {
 }
 
 // PollOperationalStatus collects sysUpTime and per-interface ifOperStatus
-// values using vendor-resolved operational OIDs. Missing interface status
-// fields remain partial; sysUpTime transport/query failures return an error.
+// values using vendor-resolved operational OIDs. Missing fields remain partial;
+// a poll fails only when no usable uptime or interface status data is returned.
 func PollOperationalStatus(client ClientInterface, operationalOIDs vendor.OperationalOIDs) (uptimeSecs *float64, statuses map[string]string, err error) {
 	return PollOperationalStatusWithInterfaces(client, operationalOIDs, nil)
 }
@@ -92,18 +92,17 @@ func PollOperationalStatusWithInterfaces(client ClientInterface, operationalOIDs
 		statusOID = OidIfOperStatus
 	}
 
-	pdus, err := client.Get([]string{uptimeOID})
-	if err != nil {
-		return nil, nil, fmt.Errorf("getting sysUpTime: %w", err)
-	}
-	for _, pdu := range pdus {
-		if pdu.Name != uptimeOID {
-			continue
-		}
-		if v := uint32FromPDU(pdu); v > 0 {
-			secs := float64(v) / 100.0
-			uptimeSecs = &secs
-			break
+	pdus, uptimeErr := client.Get([]string{uptimeOID})
+	if uptimeErr == nil {
+		for _, pdu := range pdus {
+			if pdu.Name != uptimeOID {
+				continue
+			}
+			if v := uint32FromPDU(pdu); v > 0 {
+				secs := float64(v) / 100.0
+				uptimeSecs = &secs
+				break
+			}
 		}
 	}
 
@@ -112,7 +111,7 @@ func PollOperationalStatusWithInterfaces(client ClientInterface, operationalOIDs
 		ifNames = walkInterfaceNames(client)
 	}
 
-	_ = VisitBulkWalk(client, statusOID, func(pdu gosnmp.SnmpPDU) error {
+	statusErr := VisitBulkWalk(client, statusOID, func(pdu gosnmp.SnmpPDU) error {
 		idx := lastOIDIndex(pdu.Name, statusOID)
 		if idx < 0 {
 			return nil
@@ -127,6 +126,15 @@ func PollOperationalStatusWithInterfaces(client ClientInterface, operationalOIDs
 		statuses[ifName] = statusString(pdu.Value)
 		return nil
 	})
+
+	if uptimeSecs == nil && len(statuses) == 0 {
+		if uptimeErr != nil {
+			return nil, nil, fmt.Errorf("getting sysUpTime: %w", uptimeErr)
+		}
+		if statusErr != nil {
+			return nil, nil, fmt.Errorf("walking ifOperStatus: %w", statusErr)
+		}
+	}
 
 	return uptimeSecs, statuses, nil
 }
@@ -164,6 +172,11 @@ func PollInterfaceCountersWithInterfaces(client ClientInterface, interfaces []do
 
 	var counters []InterfaceCounter
 	for idx, name := range ifNames {
+		_, hasInOctets := inOctets[idx]
+		_, hasOutOctets := outOctets[idx]
+		if !hasInOctets && !hasOutOctets {
+			continue
+		}
 		counters = append(counters, InterfaceCounter{
 			IfIndex:   idx,
 			IfName:    name,
