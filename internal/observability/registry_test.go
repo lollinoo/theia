@@ -20,7 +20,18 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	registry.SetSchedulerInFlight(2)
 	registry.SetSchedulerQueueLag(domain.VolatilityClassStatic, 15*time.Second)
 	registry.IncSchedulerTaskDispatch(domain.VolatilityClassStatic)
+	registry.IncSchedulerTaskDispatchForTask("essential", domain.VolatilityClassPerformance)
+	registry.IncSchedulerTaskDispatchForTask("background", domain.VolatilityClassStatic)
 	registry.IncSchedulerBackpressure(domain.VolatilityClassStatic, "class_limit")
+	registry.IncSchedulerScopedBackpressure(
+		"background",
+		domain.VolatilityClassOperational,
+		"device_limit",
+		"device",
+		deviceID.String(),
+		"edge-router-01",
+	)
+	registry.SetRuntimeWorkerSettingEffective("polling_essential_workers", 72)
 	registry.ObserveSchedulerTaskDuration(domain.VolatilityClassStatic, 250*time.Millisecond)
 	registry.SetPollingEssentialOverloaded(true)
 	registry.IncPollingDeadlineMiss()
@@ -32,6 +43,9 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	registry.IncCacheInvalidation("link_repo")
 	registry.IncCacheReload()
 	registry.ObserveTopologyMaterialization(125*time.Millisecond, true)
+	registry.IncTopologyMaterializationSkip("unchanged")
+	registry.IncStaticPersistenceSkip("unchanged")
+	registry.IncStaticCollectionSkip("if_descr_walk", "cooldown")
 	registry.ObserveRefreshSnapshotBuild("full", 250*time.Millisecond, true)
 	registry.ObserveRefreshSnapshotBuild("dirty", 50*time.Millisecond, false)
 	registry.IncRefreshTopologyReload("topology_dirty")
@@ -40,6 +54,8 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	registry.ObservePrometheusRuntimeRequest("alerts", "error", 90*time.Millisecond)
 	registry.ObserveSNMPCollectorOperation("performance", "sysuptime_probe", "success", 25*time.Millisecond)
 	registry.ObserveSNMPCollectorOperation("performance", "bulk_walk", "timeout", 3*time.Second)
+	registry.ObserveSNMPCollectorOperation("performance", "if_hc_in_octets_walk", "success", 80*time.Millisecond)
+	registry.ObserveSNMPCollectorDeviceOperation(deviceID.String(), "edge-router-01", "192.0.2.10", "performance", "bulk_walk", "timeout", 3*time.Second, true)
 	registry.IncSNMPCollectorEarlyExit("performance", "sysuptime_probe_failed")
 	registry.ObserveWSMessage("broadcast", "snapshot", 512)
 	registry.IncWSBackpressure("broadcast", "hub_buffer_full")
@@ -69,8 +85,14 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_scheduler_ready_queue_depth{volatility_class="static"} 3`)
 	assertContainsMetric(t, body, `theia_scheduler_in_flight_tasks 2`)
 	assertContainsMetric(t, body, `theia_scheduler_queue_lag_seconds{volatility_class="static"} 15`)
-	assertContainsMetric(t, body, `theia_scheduler_task_dispatch_total{volatility_class="static"} 1`)
+	assertContainsMetric(t, body, `theia_scheduler_task_dispatch_total{task_kind="unknown",volatility_class="static"} 1`)
+	assertContainsMetric(t, body, `theia_scheduler_task_dispatch_total{task_kind="essential",volatility_class="performance"} 1`)
+	assertContainsMetric(t, body, `theia_scheduler_task_dispatch_total{task_kind="background",volatility_class="static"} 1`)
 	assertContainsMetric(t, body, `theia_scheduler_backpressure_total{reason="class_limit",volatility_class="static"} 1`)
+	assertContainsMetric(t, body, `# HELP theia_scheduler_scoped_backpressure_total Scheduler backpressure events by task kind, volatility class, reason, and isolation scope.`)
+	assertContainsMetric(t, body, `theia_scheduler_scoped_backpressure_total{reason="device_limit",scope="device",scope_id="`+deviceID.String()+`",scope_name="edge-router-01",task_kind="background",volatility_class="operational"} 1`)
+	assertContainsMetric(t, body, `# HELP theia_runtime_worker_setting_effective Effective runtime worker and polling tuning settings after defaults and bounds are applied.`)
+	assertContainsMetric(t, body, `theia_runtime_worker_setting_effective{setting="polling_essential_workers"} 72`)
 	assertContainsMetric(t, body, `theia_polling_essential_overloaded 1`)
 	assertContainsMetric(t, body, `theia_polling_deadline_miss_total 1`)
 	assertContainsMetric(t, body, `theia_poll_results_total{outcome="success",volatility_class="static"} 1`)
@@ -79,6 +101,9 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_cache_invalidation_total{source="link_repo"} 1`)
 	assertContainsMetric(t, body, `theia_cache_reload_total 1`)
 	assertContainsMetric(t, body, `theia_topology_materialization_seconds_count{result="success"} 1`)
+	assertContainsMetric(t, body, `theia_topology_materialization_skips_total{reason="unchanged"} 1`)
+	assertContainsMetric(t, body, `theia_static_persistence_skips_total{reason="unchanged"} 1`)
+	assertContainsMetric(t, body, `theia_static_collection_skips_total{operation="if_descr_walk",reason="cooldown"} 1`)
 	assertContainsMetric(t, body, `theia_refresh_snapshot_build_seconds_count{mode="full",result="success"} 1`)
 	assertContainsMetric(t, body, `theia_refresh_snapshot_build_seconds_count{mode="dirty",result="error"} 1`)
 	assertContainsMetric(t, body, `theia_refresh_topology_reload_total{reason="topology_dirty"} 1`)
@@ -92,6 +117,9 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="sysuptime_probe",result="success"} 1`)
 	assertContainsMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="bulk_walk",result="timeout"} 1`)
 	assertContainsMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="sysuptime_probe",result="success"} 1`)
+	assertContainsMetric(t, body, `theia_snmp_collector_operation_seconds_bucket{collector="performance",operation="if_hc_in_octets_walk",result="success",le="0.1"} 1`)
+	assertContainsMetric(t, body, `theia_snmp_collector_device_operation_last_duration_seconds{collector="performance",device="edge-router-01",device_id="`+deviceID.String()+`",operation="bulk_walk",result="timeout",target="192.0.2.10"} 3`)
+	assertContainsMetric(t, body, `theia_snmp_collector_device_slow_operations_total{collector="performance",device="edge-router-01",device_id="`+deviceID.String()+`",operation="bulk_walk",result="timeout",target="192.0.2.10"} 1`)
 	assertContainsMetric(t, body, `theia_snmp_collector_early_exit_total{collector="performance",reason="sysuptime_probe_failed"} 1`)
 	assertContainsMetric(t, body, `theia_ws_messages_total{scope="broadcast",type="snapshot"} 1`)
 	assertContainsMetric(t, body, `theia_ws_message_payload_bytes_count{scope="broadcast",type="snapshot"} 1`)
@@ -114,6 +142,23 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_bulk_operation_selected_bytes_total{operation="bulk_download",result="success",source="local"} 128`)
 	assertContainsMetric(t, body, `theia_unknown_neighbors_total{device_id="`+deviceID.String()+`",protocol="lldp"} 4`)
 	assertContainsMetric(t, body, `theia_state_changes_dropped_total 7`)
+}
+
+func TestHandlerRendersGoAndProcessMetrics(t *testing.T) {
+	registry := ResetDefaultForTest()
+	registry.SetSchedulerInFlight(2)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	assertContainsMetric(t, body, `process_cpu_seconds_total`)
+	assertContainsMetric(t, body, `process_resident_memory_bytes`)
+	assertContainsMetric(t, body, `go_goroutines`)
+	assertContainsMetric(t, body, `go_memstats_heap_alloc_bytes`)
+	assertContainsMetric(t, body, `go_memstats_gc_cpu_fraction`)
+	assertContainsMetric(t, body, `theia_scheduler_in_flight_tasks 2`)
 }
 
 func assertContainsMetric(t *testing.T, body, needle string) {

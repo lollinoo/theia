@@ -5,6 +5,7 @@ package observability
 import (
 	"fmt"
 	"net/http"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,12 +14,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/expfmt"
 )
+
+const runtimeGCCPUFractionMetricName = "go_memstats_gc_cpu_fraction"
 
 var (
 	defaultRegistryMu sync.RWMutex
 	defaultRegistry   = NewRegistry()
 )
+
+var runtimeMetricsGatherer = newRuntimeMetricsGatherer()
 
 var (
 	durationBucketsSeconds = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
@@ -40,9 +47,28 @@ type linkUpsertKey struct {
 	Result   string
 }
 
+type staticCollectionSkipKey struct {
+	Operation string
+	Reason    string
+}
+
 type schedulerBackpressureKey struct {
 	VolatilityClass string
 	Reason          string
+}
+
+type schedulerScopedBackpressureKey struct {
+	TaskKind        string
+	VolatilityClass string
+	Reason          string
+	Scope           string
+	ScopeID         string
+	ScopeName       string
+}
+
+type schedulerDispatchKey struct {
+	TaskKind        string
+	VolatilityClass string
 }
 
 type bulkOperationRejectionKey struct {
@@ -100,6 +126,15 @@ type snmpCollectorOperationKey struct {
 	Result    string
 }
 
+type snmpCollectorDeviceOperationKey struct {
+	DeviceID  string
+	Device    string
+	Target    string
+	Collector string
+	Operation string
+	Result    string
+}
+
 type snmpCollectorEarlyExitKey struct {
 	Collector string
 	Reason    string
@@ -123,45 +158,52 @@ type histogramSnapshot struct {
 type Registry struct {
 	mu sync.RWMutex
 
-	schedulerReadyDepth        map[domain.VolatilityClass]float64
-	schedulerQueueLagSeconds   map[domain.VolatilityClass]float64
-	schedulerInFlight          float64
-	schedulerTaskDispatchTotal map[domain.VolatilityClass]uint64
-	schedulerBackpressureTotal map[schedulerBackpressureKey]uint64
-	schedulerTaskDuration      map[domain.VolatilityClass]*histogram
-	bulkOperationInFlight      map[bulkOperationInFlightKey]float64
-	bulkOperationLimits        map[bulkOperationLimitKey]float64
-	bulkOperationRejections    map[bulkOperationRejectionKey]uint64
-	bulkOperationCompletions   map[bulkOperationCompletionKey]uint64
-	bulkOperationDuration      map[bulkOperationCompletionKey]*histogram
-	bulkOperationDevices       map[bulkOperationCompletionKey]uint64
-	bulkOperationFiles         map[bulkOperationCompletionKey]uint64
-	bulkOperationBytes         map[bulkOperationCompletionKey]uint64
-	pollingEssentialOverloaded float64
-	pollingDeadlineMissTotal   uint64
-	pollResultsTotal           map[taskResultKey]uint64
-	discoveryNeighbors         map[deviceProtocolKey]float64
-	linkUpsertsTotal           map[linkUpsertKey]uint64
-	cacheInvalidationsTotal    map[string]uint64
-	cacheReloadTotal           uint64
-	topologyMaterialization    map[string]*histogram
-	refreshSnapshotBuild       map[refreshSnapshotBuildKey]*histogram
-	refreshTopologyReloadTotal map[string]uint64
-	prometheusRuntimeRequests  map[prometheusRuntimeRequestKey]uint64
-	prometheusRuntimeDuration  map[prometheusRuntimeRequestKey]*histogram
-	snmpCollectorOperations    map[snmpCollectorOperationKey]uint64
-	snmpCollectorDuration      map[snmpCollectorOperationKey]*histogram
-	snmpCollectorEarlyExit     map[snmpCollectorEarlyExitKey]uint64
-	wsConnectedClients         float64
-	wsConnectionsTotal         map[string]uint64
-	wsMessagesTotal            map[wsMetricKey]uint64
-	wsBackpressureTotal        map[wsBackpressureKey]uint64
-	wsClientResyncTotal        map[wsClientResyncKey]uint64
-	wsOverviewMailboxClear     map[string]uint64
-	wsOverviewResyncSuppressed map[string]uint64
-	wsPayloadBytes             map[wsMetricKey]*histogram
-	unknownNeighborsTotal      map[deviceProtocolKey]uint64
-	stateChangesDroppedTotal   uint64
+	schedulerReadyDepth               map[domain.VolatilityClass]float64
+	schedulerQueueLagSeconds          map[domain.VolatilityClass]float64
+	schedulerInFlight                 float64
+	schedulerTaskDispatchTotal        map[schedulerDispatchKey]uint64
+	schedulerBackpressureTotal        map[schedulerBackpressureKey]uint64
+	schedulerScopedBackpressureTotal  map[schedulerScopedBackpressureKey]uint64
+	schedulerTaskDuration             map[domain.VolatilityClass]*histogram
+	bulkOperationInFlight             map[bulkOperationInFlightKey]float64
+	bulkOperationLimits               map[bulkOperationLimitKey]float64
+	bulkOperationRejections           map[bulkOperationRejectionKey]uint64
+	bulkOperationCompletions          map[bulkOperationCompletionKey]uint64
+	bulkOperationDuration             map[bulkOperationCompletionKey]*histogram
+	bulkOperationDevices              map[bulkOperationCompletionKey]uint64
+	bulkOperationFiles                map[bulkOperationCompletionKey]uint64
+	bulkOperationBytes                map[bulkOperationCompletionKey]uint64
+	pollingEssentialOverloaded        float64
+	pollingDeadlineMissTotal          uint64
+	runtimeWorkerSettings             map[string]float64
+	pollResultsTotal                  map[taskResultKey]uint64
+	discoveryNeighbors                map[deviceProtocolKey]float64
+	linkUpsertsTotal                  map[linkUpsertKey]uint64
+	cacheInvalidationsTotal           map[string]uint64
+	cacheReloadTotal                  uint64
+	topologyMaterialization           map[string]*histogram
+	topologyMaterializationSkipsTotal map[string]uint64
+	staticPersistenceSkipsTotal       map[string]uint64
+	staticCollectionSkipsTotal        map[staticCollectionSkipKey]uint64
+	refreshSnapshotBuild              map[refreshSnapshotBuildKey]*histogram
+	refreshTopologyReloadTotal        map[string]uint64
+	prometheusRuntimeRequests         map[prometheusRuntimeRequestKey]uint64
+	prometheusRuntimeDuration         map[prometheusRuntimeRequestKey]*histogram
+	snmpCollectorOperations           map[snmpCollectorOperationKey]uint64
+	snmpCollectorDuration             map[snmpCollectorOperationKey]*histogram
+	snmpCollectorDeviceLast           map[snmpCollectorDeviceOperationKey]float64
+	snmpCollectorDeviceSlow           map[snmpCollectorDeviceOperationKey]uint64
+	snmpCollectorEarlyExit            map[snmpCollectorEarlyExitKey]uint64
+	wsConnectedClients                float64
+	wsConnectionsTotal                map[string]uint64
+	wsMessagesTotal                   map[wsMetricKey]uint64
+	wsBackpressureTotal               map[wsBackpressureKey]uint64
+	wsClientResyncTotal               map[wsClientResyncKey]uint64
+	wsOverviewMailboxClear            map[string]uint64
+	wsOverviewResyncSuppressed        map[string]uint64
+	wsPayloadBytes                    map[wsMetricKey]*histogram
+	unknownNeighborsTotal             map[deviceProtocolKey]uint64
+	stateChangesDroppedTotal          uint64
 }
 
 // NewRegistry constructs registry state for the package.
@@ -177,29 +219,30 @@ func NewRegistry() *Registry {
 			domain.VolatilityClassOperational: 0,
 			domain.VolatilityClassStatic:      0,
 		},
-		schedulerTaskDispatchTotal: map[domain.VolatilityClass]uint64{
-			domain.VolatilityClassPerformance: 0,
-			domain.VolatilityClassOperational: 0,
-			domain.VolatilityClassStatic:      0,
-		},
-		schedulerBackpressureTotal: make(map[schedulerBackpressureKey]uint64),
-		bulkOperationInFlight:      make(map[bulkOperationInFlightKey]float64),
-		bulkOperationLimits:        make(map[bulkOperationLimitKey]float64),
-		bulkOperationRejections:    make(map[bulkOperationRejectionKey]uint64),
-		bulkOperationCompletions:   make(map[bulkOperationCompletionKey]uint64),
-		bulkOperationDuration:      make(map[bulkOperationCompletionKey]*histogram),
-		bulkOperationDevices:       make(map[bulkOperationCompletionKey]uint64),
-		bulkOperationFiles:         make(map[bulkOperationCompletionKey]uint64),
-		bulkOperationBytes:         make(map[bulkOperationCompletionKey]uint64),
+		schedulerTaskDispatchTotal:       make(map[schedulerDispatchKey]uint64),
+		schedulerBackpressureTotal:       make(map[schedulerBackpressureKey]uint64),
+		schedulerScopedBackpressureTotal: make(map[schedulerScopedBackpressureKey]uint64),
+		bulkOperationInFlight:            make(map[bulkOperationInFlightKey]float64),
+		bulkOperationLimits:              make(map[bulkOperationLimitKey]float64),
+		bulkOperationRejections:          make(map[bulkOperationRejectionKey]uint64),
+		bulkOperationCompletions:         make(map[bulkOperationCompletionKey]uint64),
+		bulkOperationDuration:            make(map[bulkOperationCompletionKey]*histogram),
+		bulkOperationDevices:             make(map[bulkOperationCompletionKey]uint64),
+		bulkOperationFiles:               make(map[bulkOperationCompletionKey]uint64),
+		bulkOperationBytes:               make(map[bulkOperationCompletionKey]uint64),
 		schedulerTaskDuration: map[domain.VolatilityClass]*histogram{
 			domain.VolatilityClassPerformance: newHistogram(durationBucketsSeconds),
 			domain.VolatilityClassOperational: newHistogram(durationBucketsSeconds),
 			domain.VolatilityClassStatic:      newHistogram(durationBucketsSeconds),
 		},
-		pollResultsTotal:        make(map[taskResultKey]uint64),
-		discoveryNeighbors:      make(map[deviceProtocolKey]float64),
-		linkUpsertsTotal:        make(map[linkUpsertKey]uint64),
-		cacheInvalidationsTotal: make(map[string]uint64),
+		runtimeWorkerSettings:             make(map[string]float64),
+		pollResultsTotal:                  make(map[taskResultKey]uint64),
+		discoveryNeighbors:                make(map[deviceProtocolKey]float64),
+		linkUpsertsTotal:                  make(map[linkUpsertKey]uint64),
+		cacheInvalidationsTotal:           make(map[string]uint64),
+		staticPersistenceSkipsTotal:       make(map[string]uint64),
+		topologyMaterializationSkipsTotal: make(map[string]uint64),
+		staticCollectionSkipsTotal:        make(map[staticCollectionSkipKey]uint64),
 		topologyMaterialization: map[string]*histogram{
 			"success": newHistogram(durationBucketsSeconds),
 			"error":   newHistogram(durationBucketsSeconds),
@@ -215,6 +258,8 @@ func NewRegistry() *Registry {
 		prometheusRuntimeDuration:  make(map[prometheusRuntimeRequestKey]*histogram),
 		snmpCollectorOperations:    make(map[snmpCollectorOperationKey]uint64),
 		snmpCollectorDuration:      make(map[snmpCollectorOperationKey]*histogram),
+		snmpCollectorDeviceLast:    make(map[snmpCollectorDeviceOperationKey]float64),
+		snmpCollectorDeviceSlow:    make(map[snmpCollectorDeviceOperationKey]uint64),
 		snmpCollectorEarlyExit:     make(map[snmpCollectorEarlyExitKey]uint64),
 		wsConnectionsTotal:         make(map[string]uint64),
 		wsMessagesTotal:            make(map[wsMetricKey]uint64),
@@ -241,7 +286,67 @@ func ResetDefaultForTest() *Registry {
 }
 
 func Handler() http.Handler {
-	return Default()
+	return metricsHandler{
+		registry:        Default(),
+		runtimeGatherer: runtimeMetricsGatherer,
+	}
+}
+
+type metricsHandler struct {
+	registry        *Registry
+	runtimeGatherer prometheus.Gatherer
+}
+
+func (h metricsHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	runtimeMetrics, err := marshalRuntimeMetrics(h.runtimeGatherer)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = w.Write(runtimeMetrics)
+	_, _ = w.Write(h.registry.MarshalPrometheus())
+}
+
+func newRuntimeMetricsGatherer() prometheus.Gatherer {
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(prometheus.NewGoCollector())
+	registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	return registry
+}
+
+func marshalRuntimeMetrics(gatherer prometheus.Gatherer) ([]byte, error) {
+	families, err := gatherer.Gather()
+	if err != nil {
+		return nil, fmt.Errorf("gather runtime metrics: %w", err)
+	}
+
+	var b strings.Builder
+	hasGCCPUFraction := false
+	for _, family := range families {
+		if family.GetName() == runtimeGCCPUFractionMetricName {
+			hasGCCPUFraction = true
+		}
+		if _, err := expfmt.MetricFamilyToText(&b, family); err != nil {
+			return nil, fmt.Errorf("encode runtime metric %s: %w", family.GetName(), err)
+		}
+	}
+	if !hasGCCPUFraction {
+		writeRuntimeGCCPUFractionMetric(&b)
+	}
+	return []byte(b.String()), nil
+}
+
+func writeRuntimeGCCPUFractionMetric(b *strings.Builder) {
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	writeGaugeSingle(
+		b,
+		runtimeGCCPUFractionMetricName,
+		"The fraction of this program's available CPU time used by the GC since the program started.",
+		stats.GCCPUFraction,
+	)
 }
 
 func (r *Registry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
@@ -272,13 +377,23 @@ func (r *Registry) MarshalPrometheus() []byte {
 	)
 	writeCounterVec(&b,
 		"theia_scheduler_task_dispatch_total",
-		"Total scheduled tasks dispatched by volatility class.",
+		"Total scheduled tasks dispatched by task kind and volatility class.",
 		sortedDispatchRows(r.schedulerTaskDispatchTotal),
 	)
 	writeCounterVec(&b,
 		"theia_scheduler_backpressure_total",
 		"Scheduler backpressure events by volatility class and reason.",
 		sortedSchedulerBackpressureRows(r.schedulerBackpressureTotal),
+	)
+	writeCounterVec(&b,
+		"theia_scheduler_scoped_backpressure_total",
+		"Scheduler backpressure events by task kind, volatility class, reason, and isolation scope.",
+		sortedSchedulerScopedBackpressureRows(r.schedulerScopedBackpressureTotal),
+	)
+	writeGaugeVec(&b,
+		"theia_runtime_worker_setting_effective",
+		"Effective runtime worker and polling tuning settings after defaults and bounds are applied.",
+		sortedRuntimeWorkerSettingRows(r.runtimeWorkerSettings),
 	)
 	writeCounterVec(&b,
 		"theia_bulk_operation_rejections_total",
@@ -365,6 +480,21 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"Static discovery materialization latency.",
 		sortedStringHistogramRows("result", r.topologyMaterialization),
 	)
+	writeCounterVec(&b,
+		"theia_topology_materialization_skips_total",
+		"Topology materialization skips by reason.",
+		sortedStringCounterRows("reason", r.topologyMaterializationSkipsTotal),
+	)
+	writeCounterVec(&b,
+		"theia_static_persistence_skips_total",
+		"Static discovery persistence skips by reason.",
+		sortedStringCounterRows("reason", r.staticPersistenceSkipsTotal),
+	)
+	writeCounterVec(&b,
+		"theia_static_collection_skips_total",
+		"Static discovery collection skips by operation and reason.",
+		sortedStaticCollectionSkipRows(r.staticCollectionSkipsTotal),
+	)
 	writeHistogramVec(&b,
 		"theia_refresh_snapshot_build_seconds",
 		"Refresh snapshot build latency by build mode and result.",
@@ -394,6 +524,16 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_snmp_collector_operation_seconds",
 		"SNMP collector operation latency by collector, operation, and result.",
 		sortedSNMPCollectorOperationHistogramRows(r.snmpCollectorDuration),
+	)
+	writeGaugeVec(&b,
+		"theia_snmp_collector_device_operation_last_duration_seconds",
+		"Most recent SNMP collector operation latency by device, collector, operation, and result.",
+		sortedSNMPCollectorDeviceOperationGaugeRows(r.snmpCollectorDeviceLast),
+	)
+	writeCounterVec(&b,
+		"theia_snmp_collector_device_slow_operations_total",
+		"Slow SNMP collector operation totals by device, collector, operation, and result.",
+		sortedSNMPCollectorDeviceOperationCounterRows(r.snmpCollectorDeviceSlow),
 	)
 	writeCounterVec(&b,
 		"theia_snmp_collector_early_exit_total",
@@ -476,9 +616,21 @@ func (r *Registry) SetSchedulerQueueLag(volatility domain.VolatilityClass, lag t
 }
 
 func (r *Registry) IncSchedulerTaskDispatch(volatility domain.VolatilityClass) {
+	r.IncSchedulerTaskDispatchForTask("unknown", volatility)
+}
+
+func (r *Registry) IncSchedulerTaskDispatchForTask(taskKind string, volatility domain.VolatilityClass) {
+	taskKind = strings.TrimSpace(taskKind)
+	if taskKind == "" {
+		taskKind = "unknown"
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.schedulerTaskDispatchTotal[volatility]++
+	r.schedulerTaskDispatchTotal[schedulerDispatchKey{
+		TaskKind:        taskKind,
+		VolatilityClass: string(volatility),
+	}]++
 }
 
 func (r *Registry) IncSchedulerBackpressure(volatility domain.VolatilityClass, reason string) {
@@ -487,6 +639,34 @@ func (r *Registry) IncSchedulerBackpressure(volatility domain.VolatilityClass, r
 	r.schedulerBackpressureTotal[schedulerBackpressureKey{
 		VolatilityClass: string(volatility),
 		Reason:          reason,
+	}]++
+}
+
+func (r *Registry) IncSchedulerScopedBackpressure(taskKind string, volatility domain.VolatilityClass, reason, scope, scopeID, scopeName string) {
+	taskKind = strings.TrimSpace(taskKind)
+	if taskKind == "" {
+		taskKind = "unknown"
+	}
+	reason = strings.TrimSpace(reason)
+	scope = strings.TrimSpace(scope)
+	scopeID = strings.TrimSpace(scopeID)
+	scopeName = strings.TrimSpace(scopeName)
+	if reason == "" || scope == "" || scopeID == "" {
+		return
+	}
+	if scopeName == "" {
+		scopeName = scopeID
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.schedulerScopedBackpressureTotal[schedulerScopedBackpressureKey{
+		TaskKind:        taskKind,
+		VolatilityClass: string(volatility),
+		Reason:          reason,
+		Scope:           scope,
+		ScopeID:         scopeID,
+		ScopeName:       scopeName,
 	}]++
 }
 
@@ -600,6 +780,27 @@ func (r *Registry) SetPollingEssentialOverloaded(overloaded bool) {
 	r.pollingEssentialOverloaded = 0
 }
 
+func (r *Registry) SetRuntimeWorkerSettingEffective(setting string, value float64) {
+	if !runtimeWorkerSettingAllowed(setting) {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.runtimeWorkerSettings[setting] = value
+}
+
+func (r *Registry) SetRuntimeWorkerSettingsEffective(settings []RuntimeWorkerSettingEffective) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, setting := range settings {
+		if !runtimeWorkerSettingAllowed(setting.Setting) {
+			continue
+		}
+		r.runtimeWorkerSettings[setting.Setting] = setting.Value
+	}
+}
+
 func (r *Registry) IncPollingDeadlineMiss() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -658,6 +859,43 @@ func (r *Registry) IncCacheReload() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cacheReloadTotal++
+}
+
+func (r *Registry) IncStaticPersistenceSkip(reason string) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "unknown"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.staticPersistenceSkipsTotal[reason]++
+}
+
+func (r *Registry) IncTopologyMaterializationSkip(reason string) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "unknown"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.topologyMaterializationSkipsTotal[reason]++
+}
+
+func (r *Registry) IncStaticCollectionSkip(operation, reason string) {
+	operation = strings.TrimSpace(operation)
+	if operation == "" {
+		operation = "unknown"
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "unknown"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.staticCollectionSkipsTotal[staticCollectionSkipKey{
+		Operation: operation,
+		Reason:    reason,
+	}]++
 }
 
 func (r *Registry) ObserveTopologyMaterialization(duration time.Duration, success bool) {
@@ -743,6 +981,42 @@ func (r *Registry) ObserveSNMPCollectorOperation(collector, operation, result st
 		r.snmpCollectorDuration[key] = h
 	}
 	h.observe(duration.Seconds())
+}
+
+// ObserveSNMPCollectorDeviceOperation records the latest per-device SNMP
+// operation latency and optionally increments the slow-operation counter.
+func (r *Registry) ObserveSNMPCollectorDeviceOperation(deviceID, device, target, collector, operation, result string, duration time.Duration, slow bool) {
+	if collector == "" || operation == "" || result == "" {
+		return
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	if deviceID == "" {
+		deviceID = "unknown"
+	}
+	if device == "" {
+		device = "unknown"
+	}
+	if target == "" {
+		target = "unknown"
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	key := snmpCollectorDeviceOperationKey{
+		DeviceID:  deviceID,
+		Device:    device,
+		Target:    target,
+		Collector: collector,
+		Operation: operation,
+		Result:    result,
+	}
+	r.snmpCollectorDeviceLast[key] = duration.Seconds()
+	if slow {
+		r.snmpCollectorDeviceSlow[key]++
+	}
 }
 
 func (r *Registry) IncSNMPCollectorEarlyExit(collector, reason string) {
@@ -885,6 +1159,27 @@ func (h *histogram) snapshot() histogramSnapshot {
 	}
 }
 
+// RuntimeWorkerSettingEffective is one fixed worker or polling tuning value after runtime coercion.
+type RuntimeWorkerSettingEffective struct {
+	Setting string
+	Value   float64
+}
+
+var runtimeWorkerSettingOrder = []string{
+	domain.SettingPollingEssentialWorkers,
+	domain.SettingSNMPWorkerPoolPerformance,
+	domain.SettingSNMPWorkerPoolOperational,
+	domain.SettingSNMPWorkerPoolStatic,
+	domain.SettingPollingMaxWorkersPerDevice,
+	domain.SettingPollingMaxWorkersPerSite,
+	domain.SettingPollingMaxWorkersPerSubnet,
+	domain.SettingPollingMaxInflightPerProfile,
+	domain.SettingPollingWebSocketCoalesceMS,
+	domain.SettingPollingPersistenceBatchMS,
+	domain.SettingPollingEssentialTimeoutMillis,
+	domain.SettingPollingEssentialRetries,
+}
+
 type gaugeRow struct {
 	labels map[string]string
 	value  float64
@@ -916,17 +1211,50 @@ func sortedVolatilityGaugeRows(values map[domain.VolatilityClass]float64) []gaug
 	return rows
 }
 
-func sortedDispatchRows(values map[domain.VolatilityClass]uint64) []counterRow {
-	order := []domain.VolatilityClass{
-		domain.VolatilityClassPerformance,
-		domain.VolatilityClassOperational,
-		domain.VolatilityClassStatic,
+func sortedRuntimeWorkerSettingRows(values map[string]float64) []gaugeRow {
+	rows := make([]gaugeRow, 0, len(values))
+	for _, setting := range runtimeWorkerSettingOrder {
+		value, ok := values[setting]
+		if !ok {
+			continue
+		}
+		rows = append(rows, gaugeRow{
+			labels: map[string]string{"setting": setting},
+			value:  value,
+		})
 	}
-	rows := make([]counterRow, 0, len(order))
-	for _, volatility := range order {
+	return rows
+}
+
+func runtimeWorkerSettingAllowed(setting string) bool {
+	for _, allowed := range runtimeWorkerSettingOrder {
+		if setting == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedDispatchRows(values map[schedulerDispatchKey]uint64) []counterRow {
+	keys := make([]schedulerDispatchKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].TaskKind != keys[j].TaskKind {
+			return keys[i].TaskKind < keys[j].TaskKind
+		}
+		return keys[i].VolatilityClass < keys[j].VolatilityClass
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
 		rows = append(rows, counterRow{
-			labels: map[string]string{"volatility_class": string(volatility)},
-			value:  values[volatility],
+			labels: map[string]string{
+				"task_kind":        key.TaskKind,
+				"volatility_class": key.VolatilityClass,
+			},
+			value: values[key],
 		})
 	}
 	return rows
@@ -950,6 +1278,47 @@ func sortedSchedulerBackpressureRows(values map[schedulerBackpressureKey]uint64)
 			labels: map[string]string{
 				"volatility_class": key.VolatilityClass,
 				"reason":           key.Reason,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedSchedulerScopedBackpressureRows(values map[schedulerScopedBackpressureKey]uint64) []counterRow {
+	keys := make([]schedulerScopedBackpressureKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].TaskKind != keys[j].TaskKind {
+			return keys[i].TaskKind < keys[j].TaskKind
+		}
+		if keys[i].VolatilityClass != keys[j].VolatilityClass {
+			return keys[i].VolatilityClass < keys[j].VolatilityClass
+		}
+		if keys[i].Reason != keys[j].Reason {
+			return keys[i].Reason < keys[j].Reason
+		}
+		if keys[i].Scope != keys[j].Scope {
+			return keys[i].Scope < keys[j].Scope
+		}
+		if keys[i].ScopeID != keys[j].ScopeID {
+			return keys[i].ScopeID < keys[j].ScopeID
+		}
+		return keys[i].ScopeName < keys[j].ScopeName
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"task_kind":        key.TaskKind,
+				"volatility_class": key.VolatilityClass,
+				"reason":           key.Reason,
+				"scope":            key.Scope,
+				"scope_id":         key.ScopeID,
+				"scope_name":       key.ScopeName,
 			},
 			value: values[key],
 		})
@@ -1209,6 +1578,30 @@ func sortedStringCounterRows(label string, values map[string]uint64) []counterRo
 	return rows
 }
 
+func sortedStaticCollectionSkipRows(values map[staticCollectionSkipKey]uint64) []counterRow {
+	keys := make([]staticCollectionSkipKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		return keys[i].Reason < keys[j].Reason
+	})
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"operation": key.Operation,
+				"reason":    key.Reason,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
 func sortedStringHistogramRows(label string, values map[string]*histogram) []histogramRow {
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -1343,6 +1736,40 @@ func sortedSNMPCollectorOperationHistogramRows(values map[snmpCollectorOperation
 	return rows
 }
 
+func sortedSNMPCollectorDeviceOperationGaugeRows(values map[snmpCollectorDeviceOperationKey]float64) []gaugeRow {
+	keys := make([]snmpCollectorDeviceOperationKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sortSNMPCollectorDeviceOperationKeys(keys)
+
+	rows := make([]gaugeRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, gaugeRow{
+			labels: snmpCollectorDeviceOperationLabels(key),
+			value:  values[key],
+		})
+	}
+	return rows
+}
+
+func sortedSNMPCollectorDeviceOperationCounterRows(values map[snmpCollectorDeviceOperationKey]uint64) []counterRow {
+	keys := make([]snmpCollectorDeviceOperationKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sortSNMPCollectorDeviceOperationKeys(keys)
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: snmpCollectorDeviceOperationLabels(key),
+			value:  values[key],
+		})
+	}
+	return rows
+}
+
 func sortSNMPCollectorOperationKeys(keys []snmpCollectorOperationKey) {
 	sort.Slice(keys, func(i, j int) bool {
 		if keys[i].Collector != keys[j].Collector {
@@ -1353,6 +1780,38 @@ func sortSNMPCollectorOperationKeys(keys []snmpCollectorOperationKey) {
 		}
 		return keys[i].Result < keys[j].Result
 	})
+}
+
+func sortSNMPCollectorDeviceOperationKeys(keys []snmpCollectorDeviceOperationKey) {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Device != keys[j].Device {
+			return keys[i].Device < keys[j].Device
+		}
+		if keys[i].Target != keys[j].Target {
+			return keys[i].Target < keys[j].Target
+		}
+		if keys[i].Collector != keys[j].Collector {
+			return keys[i].Collector < keys[j].Collector
+		}
+		if keys[i].Operation != keys[j].Operation {
+			return keys[i].Operation < keys[j].Operation
+		}
+		if keys[i].Result != keys[j].Result {
+			return keys[i].Result < keys[j].Result
+		}
+		return keys[i].DeviceID < keys[j].DeviceID
+	})
+}
+
+func snmpCollectorDeviceOperationLabels(key snmpCollectorDeviceOperationKey) map[string]string {
+	return map[string]string{
+		"device_id": key.DeviceID,
+		"device":    key.Device,
+		"target":    key.Target,
+		"collector": key.Collector,
+		"operation": key.Operation,
+		"result":    key.Result,
+	}
 }
 
 func sortedSNMPCollectorEarlyExitRows(values map[snmpCollectorEarlyExitKey]uint64) []counterRow {
@@ -1542,24 +2001,12 @@ func writeHistogramVec(b *strings.Builder, name, help string, rows []histogramRo
 	fmt.Fprintf(b, "# TYPE %s histogram\n", name)
 	for _, row := range rows {
 		for i, bucket := range row.value.buckets {
-			labels := copyLabels(row.labels)
-			labels["le"] = formatFloat(bucket)
-			fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatLabels(labels), row.value.counts[i])
+			fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatBucketLabels(row.labels, formatFloat(bucket)), row.value.counts[i])
 		}
-		labels := copyLabels(row.labels)
-		labels["le"] = "+Inf"
-		fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatLabels(labels), row.value.count)
+		fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatBucketLabels(row.labels, "+Inf"), row.value.count)
 		fmt.Fprintf(b, "%s_sum%s %s\n", name, formatLabels(row.labels), formatFloat(row.value.sum))
 		fmt.Fprintf(b, "%s_count%s %d\n", name, formatLabels(row.labels), row.value.count)
 	}
-}
-
-func copyLabels(labels map[string]string) map[string]string {
-	cloned := make(map[string]string, len(labels))
-	for key, value := range labels {
-		cloned[key] = value
-	}
-	return cloned
 }
 
 func formatLabels(labels map[string]string) string {
@@ -1578,6 +2025,14 @@ func formatLabels(labels map[string]string) string {
 		parts = append(parts, fmt.Sprintf(`%s="%s"`, key, escapeLabelValue(labels[key])))
 	}
 	return "{" + strings.Join(parts, ",") + "}"
+}
+
+func formatBucketLabels(labels map[string]string, le string) string {
+	if len(labels) == 0 {
+		return fmt.Sprintf(`{le="%s"}`, escapeLabelValue(le))
+	}
+
+	return strings.TrimSuffix(formatLabels(labels), "}") + fmt.Sprintf(`,le="%s"}`, escapeLabelValue(le))
 }
 
 func escapeLabelValue(value string) string {

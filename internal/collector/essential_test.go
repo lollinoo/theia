@@ -171,6 +171,33 @@ func TestEssentialCollectorConfiguredMultiPortProbeListFailsWhenAllPortsClosed(t
 	}
 }
 
+func TestEssentialCollectorMixedMultiPortProbeEvidenceIsReachable(t *testing.T) {
+	client := &scriptedEssentialClient{connectErr: assertiveError("timeout")}
+	collector := NewEssentialCollector(essentialTestRegistry(t, vendor.PerformanceOIDs{}), func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+	var capturedPorts []int
+	collector.networkProbe = func(_ context.Context, _ string, _ time.Duration, ports []int) error {
+		capturedPorts = append(capturedPorts, ports...)
+		if ports[0] == 8291 {
+			return nil
+		}
+		return assertiveError("tcp probe failed")
+	}
+
+	result := collector.Poll(context.Background(), domain.Device{ID: uuid.New(), IP: "10.0.0.4"}, time.Second, 0, []int{22, 8291, 443})
+
+	if result.NetworkReachable != polling.TriStateTrue {
+		t.Fatalf("NetworkReachable = %q, want true when any TCP probe port is reachable", result.NetworkReachable)
+	}
+	if result.SNMPReachable != polling.TriStateFalse {
+		t.Fatalf("SNMPReachable = %q, want false after SNMP connect failure", result.SNMPReachable)
+	}
+	if !reflect.DeepEqual(capturedPorts, []int{22, 8291, 443}) {
+		t.Fatalf("probe ports = %v, want [22, 8291, 443]", capturedPorts)
+	}
+}
+
 func TestEssentialCollectorConnectFailureProducesFailedResult(t *testing.T) {
 	deviceID := uuid.New()
 	registry, err := vendor.LoadRegistryFromEmbedded()

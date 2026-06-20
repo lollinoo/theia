@@ -18,39 +18,43 @@ import (
 
 // StaticDiscoveryInput represents static discovery input data used by the service orchestration.
 type StaticDiscoveryInput struct {
-	SysName                    string
-	SysDescr                   string
-	SysObjectID                string
-	HardwareModel              string
-	OSVersion                  string
-	Vendor                     string
-	DeviceType                 domain.DeviceType
-	Interfaces                 []domain.Interface
-	Neighbors                  []snmp.NeighborInfo
-	NeighborDiscoveryProtocols []domain.DiscoveryProtocol
-	NeighborDiscoveryFailures  []snmp.NeighborDiscoveryFailure
+	SysName                     string
+	SysDescr                    string
+	SysObjectID                 string
+	HardwareModel               string
+	OSVersion                   string
+	Vendor                      string
+	DeviceType                  domain.DeviceType
+	Interfaces                  []domain.Interface
+	Neighbors                   []snmp.NeighborInfo
+	NeighborDiscoveryProtocols  []domain.DiscoveryProtocol
+	NeighborDiscoveryFailures   []snmp.NeighborDiscoveryFailure
+	SkipTopologyMaterialization bool
 }
 
 // StaticPersistenceResult represents static persistence result data used by the service orchestration.
 type StaticPersistenceResult struct {
-	TopologyChanged bool
-	LinksCreated    int
+	TopologyChanged      bool
+	TopologyMaterialized bool
+	LinksCreated         int
+	UnresolvedNeighbors  int
 }
 
 type linkUpsertReporter interface {
 	UpsertDetailed(link *domain.Link) (domain.LinkUpsertResult, error)
 }
 
-func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDiscoveryInput) (result StaticPersistenceResult, err error) {
-	startedAt := time.Now()
-	defer func() {
-		observability.Default().ObserveTopologyMaterialization(time.Since(startedAt), err == nil)
-	}()
+type staticDiscoveryDeviceRepository interface {
+	GetByIDsForTopology([]uuid.UUID) ([]domain.Device, error)
+	UpdateStaticDiscovery(*domain.Device) error
+}
 
-	fresh, err := s.deviceRepo.GetByID(deviceID)
+func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDiscoveryInput) (result StaticPersistenceResult, err error) {
+	fresh, staticRepo, err := s.getDeviceForStaticDiscovery(deviceID)
 	if err != nil {
 		return StaticPersistenceResult{}, fmt.Errorf("re-fetch device: %w", err)
 	}
+	previousStatic := cloneStaticPersistenceDevice(*fresh)
 
 	mergedInterfaces := mergeStaticInterfaces(fresh.Interfaces, input.Interfaces)
 	interfaceChanged := staticInterfaceSetChanged(fresh.Interfaces, mergedInterfaces)
@@ -74,8 +78,10 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 		fresh.PollClass = domain.ClassifyPollClass(fresh.DeviceType)
 	}
 
-	if err := s.deviceRepo.Update(fresh); err != nil {
-		return StaticPersistenceResult{}, fmt.Errorf("update device: %w", err)
+	if staticPersistenceDeviceChanged(previousStatic, *fresh) {
+		if err := s.updateStaticDiscoveryDevice(staticRepo, fresh); err != nil {
+			return StaticPersistenceResult{}, fmt.Errorf("update device: %w", err)
+		}
 	}
 
 	neighbors := dedupePreferredDiscoveredNeighbors(input.Neighbors)
@@ -85,20 +91,28 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	unknownNeighbors := make(map[unknownNeighborKey]int)
 	unknownByProtocol := make(map[domain.DiscoveryProtocol]int)
 	if s.topologyStore != nil {
-		materialized, currentUnknowns, currentTotals, materializeErr := s.applyDiscoveryViaObservationStore(
-			*fresh,
-			neighbors,
-			input.NeighborDiscoveryProtocols,
-			input.NeighborDiscoveryFailures,
-		)
-		if materializeErr != nil {
-			return StaticPersistenceResult{}, materializeErr
+		if !input.SkipTopologyMaterialization {
+			startedAt := time.Now()
+			materialized, currentUnknowns, currentTotals, materializeErr := s.applyDiscoveryViaObservationStore(
+				*fresh,
+				neighbors,
+				input.NeighborDiscoveryProtocols,
+				input.NeighborDiscoveryFailures,
+			)
+			observability.Default().ObserveTopologyMaterialization(time.Since(startedAt), materializeErr == nil)
+			if materializeErr != nil {
+				return StaticPersistenceResult{}, materializeErr
+			}
+			result.TopologyChanged = result.TopologyChanged || materialized.TopologyChanged
+			result.TopologyMaterialized = true
+			result.LinksCreated += materialized.LinksCreated
+			result.UnresolvedNeighbors = materialized.UnresolvedNeighbors
+			unknownNeighbors = currentUnknowns
+			unknownByProtocol = currentTotals
 		}
-		result.TopologyChanged = result.TopologyChanged || materialized.TopologyChanged
-		result.LinksCreated += materialized.LinksCreated
-		unknownNeighbors = currentUnknowns
-		unknownByProtocol = currentTotals
 	} else {
+		startedAt := time.Now()
+		result.TopologyMaterialized = true
 		for _, neighbor := range neighbors {
 			normalizedIdentity := discoveredNeighborRemoteIdentity(neighbor)
 			if normalizedIdentity == "" {
@@ -150,12 +164,44 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 					string(neighbor.Protocol), upsertResult.Kind)
 			}
 		}
+		observability.Default().ObserveTopologyMaterialization(time.Since(startedAt), true)
 	}
 	logUnknownNeighborSummary(fresh.ID, fresh.SysName, unknownNeighbors, unknownByProtocol)
-	s.syncTopologyDiscoveryMetadata(fresh.ID, len(neighbors), false, snmp.HasCriticalNeighborDiscoveryFailure(input.NeighborDiscoveryFailures))
+	if result.UnresolvedNeighbors == 0 {
+		result.UnresolvedNeighbors = countUnknownNeighbors(unknownNeighbors)
+	}
+	if domain.ResolveTopologyDiscoveryMode(fresh, s.defaultTopologyDiscoveryMode()) != domain.TopologyDiscoveryModeOff {
+		s.syncTopologyDiscoveryMetadata(fresh.ID, len(neighbors), false, snmp.HasCriticalNeighborDiscoveryFailure(input.NeighborDiscoveryFailures))
+	}
 	s.reconcileResolvedBootstrapPeers(fresh.ID)
 
 	return result, nil
+}
+
+func (s *DeviceService) getDeviceForStaticDiscovery(deviceID uuid.UUID) (*domain.Device, staticDiscoveryDeviceRepository, error) {
+	if repo, ok := s.deviceRepo.(staticDiscoveryDeviceRepository); ok {
+		devices, err := repo.GetByIDsForTopology([]uuid.UUID{deviceID})
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(devices) == 0 {
+			return nil, nil, fmt.Errorf("device not found: %s", deviceID)
+		}
+		return &devices[0], repo, nil
+	}
+
+	fresh, err := s.deviceRepo.GetByID(deviceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return fresh, nil, nil
+}
+
+func (s *DeviceService) updateStaticDiscoveryDevice(repo staticDiscoveryDeviceRepository, device *domain.Device) error {
+	if repo != nil {
+		return repo.UpdateStaticDiscovery(device)
+	}
+	return s.deviceRepo.Update(device)
 }
 
 func shouldPromoteDiscoveredHostname(currentHostname string, deviceIP string, discoveredSysName string) bool {
@@ -305,8 +351,10 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 	}
 
 	return StaticPersistenceResult{
-		TopologyChanged: applied.TopologyChanged || prunedObservations > 0 || deletedStaleLinks > 0,
-		LinksCreated:    applied.LinksCreated,
+		TopologyChanged:      applied.TopologyChanged || prunedObservations > 0 || deletedStaleLinks > 0,
+		TopologyMaterialized: true,
+		LinksCreated:         applied.LinksCreated,
+		UnresolvedNeighbors:  countUnknownNeighbors(unknownNeighbors),
 	}, unknownNeighbors, unknownByProtocol, nil
 }
 
@@ -531,18 +579,32 @@ func (s *DeviceService) lookupDeviceLabel(deviceID uuid.UUID, cache map[uuid.UUI
 	if value := strings.TrimSpace(cache[deviceID]); value != "" {
 		return value
 	}
+	if repo, ok := s.deviceRepo.(staticDiscoveryDeviceRepository); ok {
+		devices, err := repo.GetByIDsForTopology([]uuid.UUID{deviceID})
+		if err != nil || len(devices) == 0 {
+			return deviceID.String()
+		}
+		label := staticDiscoveryDeviceLabel(devices[0], deviceID)
+		cache[deviceID] = label
+		return label
+	}
 	device, err := s.deviceRepo.GetByID(deviceID)
 	if err != nil || device == nil {
 		return deviceID.String()
 	}
+	label := staticDiscoveryDeviceLabel(*device, deviceID)
+	cache[deviceID] = label
+	return label
+}
+
+func staticDiscoveryDeviceLabel(device domain.Device, fallbackID uuid.UUID) string {
 	label := strings.TrimSpace(device.SysName)
 	if label == "" {
 		label = strings.TrimSpace(device.Hostname)
 	}
 	if label == "" {
-		label = deviceID.String()
+		label = fallbackID.String()
 	}
-	cache[deviceID] = label
 	return label
 }
 
@@ -581,6 +643,14 @@ func countNeighborsByProtocol(neighbors []snmp.NeighborInfo) map[domain.Discover
 		counts[neighbor.Protocol]++
 	}
 	return counts
+}
+
+func countUnknownNeighbors(unknowns map[unknownNeighborKey]int) int {
+	total := 0
+	for _, count := range unknowns {
+		total += count
+	}
+	return total
 }
 
 func discoveredNeighborRemoteIdentity(neighbor snmp.NeighborInfo) string {
@@ -652,6 +722,84 @@ type interfaceMaterialSignature struct {
 	IfName  string
 	IfDescr string
 	Speed   int64
+}
+
+type interfacePersistenceSignature struct {
+	IfIndex     int
+	IfName      string
+	IfDescr     string
+	Speed       int64
+	AdminStatus string
+	OperStatus  string
+}
+
+func cloneStaticPersistenceDevice(device domain.Device) domain.Device {
+	device.Interfaces = append([]domain.Interface(nil), device.Interfaces...)
+	return device
+}
+
+func staticPersistenceDeviceChanged(before, after domain.Device) bool {
+	if before.Hostname != after.Hostname ||
+		before.SysName != after.SysName ||
+		before.SysDescr != after.SysDescr ||
+		before.SysObjectID != after.SysObjectID ||
+		before.HardwareModel != after.HardwareModel ||
+		before.OSVersion != after.OSVersion ||
+		before.Vendor != after.Vendor ||
+		before.DeviceType != after.DeviceType ||
+		before.PollClass != after.PollClass {
+		return true
+	}
+
+	return interfacePersistenceSetChanged(before.Interfaces, after.Interfaces)
+}
+
+func interfacePersistenceSetChanged(before, after []domain.Interface) bool {
+	if len(before) != len(after) {
+		return true
+	}
+
+	beforeSignatures := interfacePersistenceSignatures(before)
+	afterSignatures := interfacePersistenceSignatures(after)
+	for i := range beforeSignatures {
+		if beforeSignatures[i] != afterSignatures[i] {
+			return true
+		}
+	}
+	return false
+}
+
+func interfacePersistenceSignatures(interfaces []domain.Interface) []interfacePersistenceSignature {
+	signatures := make([]interfacePersistenceSignature, 0, len(interfaces))
+	for _, iface := range interfaces {
+		signatures = append(signatures, interfacePersistenceSignature{
+			IfIndex:     iface.IfIndex,
+			IfName:      iface.IfName,
+			IfDescr:     iface.IfDescr,
+			Speed:       iface.Speed,
+			AdminStatus: iface.AdminStatus,
+			OperStatus:  iface.OperStatus,
+		})
+	}
+	sort.Slice(signatures, func(i, j int) bool {
+		if signatures[i].IfIndex != signatures[j].IfIndex {
+			return signatures[i].IfIndex < signatures[j].IfIndex
+		}
+		if signatures[i].IfName != signatures[j].IfName {
+			return signatures[i].IfName < signatures[j].IfName
+		}
+		if signatures[i].IfDescr != signatures[j].IfDescr {
+			return signatures[i].IfDescr < signatures[j].IfDescr
+		}
+		if signatures[i].Speed != signatures[j].Speed {
+			return signatures[i].Speed < signatures[j].Speed
+		}
+		if signatures[i].AdminStatus != signatures[j].AdminStatus {
+			return signatures[i].AdminStatus < signatures[j].AdminStatus
+		}
+		return signatures[i].OperStatus < signatures[j].OperStatus
+	})
+	return signatures
 }
 
 func mergeStaticInterfaces(existing, observed []domain.Interface) []domain.Interface {

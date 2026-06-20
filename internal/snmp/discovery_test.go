@@ -3,6 +3,7 @@ package snmp
 // This file exercises discovery behavior so refactors preserve the documented contract.
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/gosnmp/gosnmp"
@@ -185,6 +186,42 @@ func TestPollEssentialMetricsMemoryGetErrorIsPreserved(t *testing.T) {
 	}
 }
 
+func TestPollDeviceMetricsSkipsMemoryValueWalksWhenNoRAMType(t *testing.T) {
+	var walkedRoots []string
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			return []gosnmp.SnmpPDU{
+				{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(12300)},
+			}, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			walkedRoots = append(walkedRoots, rootOid)
+			if rootOid == OidHrProcessorLoad {
+				return []gosnmp.SnmpPDU{
+					{Name: OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 25},
+				}, nil
+			}
+			if rootOid == OidHrStorageType {
+				return nil, nil
+			}
+			return nil, nil
+		},
+	}
+
+	_, memPercent, _, _ := PollDeviceMetrics(client, vendor.PerformanceOIDs{
+		CPUOID: OidHrProcessorLoad,
+	})
+
+	if memPercent != nil {
+		t.Fatalf("memPercent = %v, want nil without RAM storage type", *memPercent)
+	}
+	for _, root := range []string{OidHrStorageAllocUnits, OidHrStorageSize, OidHrStorageUsed} {
+		if walkedRoot(walkedRoots, root) {
+			t.Fatalf("BulkWalk roots = %v, want no memory value walks without RAM storage type", walkedRoots)
+		}
+	}
+}
+
 func assertEssentialField(t *testing.T, field *EssentialMetricField, wantState string, wantValue float64) {
 	t.Helper()
 	if field == nil {
@@ -202,6 +239,15 @@ func assertEssentialField(t *testing.T, field *EssentialMetricField, wantState s
 	if field.Value == nil || *field.Value != wantValue {
 		t.Fatalf("field value = %v, want %v", field.Value, wantValue)
 	}
+}
+
+func walkedRoot(roots []string, needle string) bool {
+	for _, root := range roots {
+		if root == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPollOperationalStatus_Success(t *testing.T) {
@@ -346,7 +392,7 @@ func TestPollOperationalStatus_MissingFieldsStayPartial(t *testing.T) {
 	}
 }
 
-func TestPollOperationalStatus_QueryError(t *testing.T) {
+func TestPollOperationalStatus_StatusWalkErrorReturnsPartialUptime(t *testing.T) {
 	t.Parallel()
 
 	client := &MockClient{
@@ -372,11 +418,11 @@ func TestPollOperationalStatus_QueryError(t *testing.T) {
 	}
 
 	uptimeSecs, statuses, err := PollOperationalStatus(client, vendor.OperationalOIDs{})
-	if err == nil {
-		t.Fatal("expected error")
+	if err != nil {
+		t.Fatalf("PollOperationalStatus() error = %v, want partial success", err)
 	}
-	if uptimeSecs != nil {
-		t.Fatalf("uptimeSecs = %v, want nil", *uptimeSecs)
+	if uptimeSecs == nil || *uptimeSecs != 1 {
+		t.Fatalf("uptimeSecs = %v, want 1", uptimeSecs)
 	}
 	if statuses != nil {
 		t.Fatalf("statuses = %#v, want nil", statuses)
@@ -410,14 +456,20 @@ func TestDiscoverDevice(t *testing.T) {
 		},
 		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
 			switch rootOid {
-			case OidIfTable:
+			case OidIfDescr:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+				}, nil
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{
 					{Name: OidIfOperStatus + ".1", Type: gosnmp.Integer, Value: 1}, // up
 				}, nil
-			case OidIfXTable:
+			case OidIfName:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("eth1")},
+				}, nil
+			case OidIfHighSpeed:
+				return []gosnmp.SnmpPDU{
 					{Name: OidIfHighSpeed + ".1", Type: gosnmp.Gauge32, Value: uint(1000)}, // 1 Gbps
 				}, nil
 			case OidLLDPLocPortIfIndex:
@@ -498,6 +550,201 @@ func TestDiscoverDevice(t *testing.T) {
 	}
 }
 
+func TestDiscoverDeviceWalksInterfaceColumnsInsteadOfWholeTables(t *testing.T) {
+	reg := testDiscoveryRegistry(t)
+	var walked []string
+	mock := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysName:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("switch-column")})
+				case OidSysDescr:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS CRS")})
+				case OidSysObjectID:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			walked = append(walked, rootOid)
+			switch rootOid {
+			case OidIfDescr:
+				return []gosnmp.SnmpPDU{{Name: OidIfDescr + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7-descr")}}, nil
+			case OidIfSpeed:
+				return []gosnmp.SnmpPDU{{Name: OidIfSpeed + ".7", Type: gosnmp.Gauge32, Value: uint(1_000_000_000)}}, nil
+			case OidIfAdminStatus:
+				return []gosnmp.SnmpPDU{{Name: OidIfAdminStatus + ".7", Type: gosnmp.Integer, Value: 1}}, nil
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{{Name: OidIfOperStatus + ".7", Type: gosnmp.Integer, Value: 1}}, nil
+			case OidIfName:
+				return []gosnmp.SnmpPDU{{Name: OidIfName + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")}}, nil
+			case OidIfHighSpeed:
+				return []gosnmp.SnmpPDU{{Name: OidIfHighSpeed + ".7", Type: gosnmp.Gauge32, Value: uint(1000)}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	res, err := DiscoverDeviceWithPolicy(mock, reg, NeighborDiscoveryPolicy{})
+	if err != nil {
+		t.Fatalf("DiscoverDeviceWithPolicy returned error: %v", err)
+	}
+	for _, root := range walked {
+		if root == OidIfTable || root == OidIfXTable {
+			t.Fatalf("walked full interface table root %q; walked roots = %v", root, walked)
+		}
+	}
+	if len(res.Interfaces) != 1 {
+		t.Fatalf("interfaces = %#v, want one interface from column walks", res.Interfaces)
+	}
+	got := res.Interfaces[0]
+	if got.IfIndex != 7 || got.IfName != "sfp7" || got.IfDescr != "sfp7-descr" || got.Speed != 1_000_000_000 || got.AdminStatus != "up" || got.OperStatus != "up" {
+		t.Fatalf("interface = %#v, want column-derived interface", got)
+	}
+}
+
+func TestDiscoverDeviceUsesPartialInterfaceColumnDataAfterTimeout(t *testing.T) {
+	reg := testDiscoveryRegistry(t)
+	mock := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysName:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("switch-partial")})
+				case OidSysDescr:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS CRS")})
+				case OidSysObjectID:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfDescr:
+				return []gosnmp.SnmpPDU{{Name: OidIfDescr + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7-descr")}}, assertiveError("request timeout")
+			case OidIfSpeed:
+				return []gosnmp.SnmpPDU{{Name: OidIfSpeed + ".7", Type: gosnmp.Gauge32, Value: uint(100_000_000)}}, nil
+			case OidIfAdminStatus:
+				return []gosnmp.SnmpPDU{{Name: OidIfAdminStatus + ".7", Type: gosnmp.Integer, Value: 1}}, nil
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{{Name: OidIfOperStatus + ".7", Type: gosnmp.Integer, Value: 1}}, nil
+			case OidIfName:
+				return []gosnmp.SnmpPDU{{Name: OidIfName + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")}}, nil
+			case OidIfHighSpeed:
+				return []gosnmp.SnmpPDU{{Name: OidIfHighSpeed + ".7", Type: gosnmp.Gauge32, Value: uint(1000)}}, assertiveError("request timeout")
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	res, err := DiscoverDeviceWithPolicy(mock, reg, NeighborDiscoveryPolicy{})
+	if err != nil {
+		t.Fatalf("DiscoverDeviceWithPolicy returned error: %v", err)
+	}
+	if len(res.Interfaces) != 1 {
+		t.Fatalf("interfaces = %#v, want one interface from partial column walks", res.Interfaces)
+	}
+	got := res.Interfaces[0]
+	if got.IfIndex != 7 || got.IfName != "sfp7" || got.IfDescr != "sfp7-descr" || got.Speed != 1_000_000_000 {
+		t.Fatalf("interface = %#v, want partial timeout rows applied", got)
+	}
+}
+
+func TestDiscoverDeviceWithOptions_UsesCachedInterfaceNamesForNeighborContextOnly(t *testing.T) {
+	reg := testDiscoveryRegistry(t)
+	mock := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			var pdus []gosnmp.SnmpPDU
+			for _, oid := range oids {
+				switch oid {
+				case OidSysName:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysName, Type: gosnmp.OctetString, Value: []byte("switch-cached-context")})
+				case OidSysDescr:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysDescr, Type: gosnmp.OctetString, Value: []byte("RouterOS CRS")})
+				case OidSysObjectID:
+					pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.14988.1"})
+				}
+			}
+			return pdus, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{{Name: OidIfOperStatus + ".7", Type: gosnmp.Integer, Value: 1}}, nil
+			case OidLLDPLocPortIfIndex:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPLocPortIfIndex + ".1", Type: gosnmp.Integer, Value: 7}}, nil
+			case OidLLDPRemChassisId:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPRemChassisId + ".1000.1.1", Type: gosnmp.OctetString, Value: []byte("00:aa:bb:cc:dd:ee")}}, nil
+			case OidLLDPRemPortId:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPRemPortId + ".1000.1.1", Type: gosnmp.OctetString, Value: []byte("ether48")}}, nil
+			case OidLLDPRemSysName:
+				return []gosnmp.SnmpPDU{{Name: OidLLDPRemSysName + ".1000.1.1", Type: gosnmp.OctetString, Value: []byte("dist-01")}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	res, err := DiscoverDeviceWithOptions(mock, reg, DiscoveryOptions{
+		NeighborPolicy: NeighborDiscoveryPolicy{LLDP: true},
+		CachedInterfaces: []domain.Interface{
+			{IfIndex: 7, IfName: "cached-sfp7"},
+			{IfIndex: 9, IfName: "cached-extra"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DiscoverDeviceWithOptions returned error: %v", err)
+	}
+	if len(res.Interfaces) != 1 {
+		t.Fatalf("interfaces = %#v, want only one live-observed interface", res.Interfaces)
+	}
+	if got := res.Interfaces[0]; got.IfIndex != 7 || got.IfName != "" || got.OperStatus != "up" {
+		t.Fatalf("live interface = %#v, want partial live data without cached name", got)
+	}
+	if len(res.Neighbors) != 1 {
+		t.Fatalf("neighbors = %#v, want one LLDP neighbor", res.Neighbors)
+	}
+	if res.Neighbors[0].LocalIfName != "cached-sfp7" {
+		t.Fatalf("neighbor LocalIfName = %q, want cached-sfp7", res.Neighbors[0].LocalIfName)
+	}
+}
+
+func TestPollOperationalStatusUsesPartialStatusesAfterTimeout(t *testing.T) {
+	client := &MockClient{
+		GetFunc: func(oids []string) ([]gosnmp.SnmpPDU, error) {
+			return []gosnmp.SnmpPDU{{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(9000)}}, nil
+		},
+		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
+			switch rootOid {
+			case OidIfName:
+				return []gosnmp.SnmpPDU{{Name: OidIfName + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")}}, nil
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{{Name: OidIfOperStatus + ".7", Type: gosnmp.Integer, Value: 1}}, assertiveError("request timeout")
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	uptimeSecs, statuses, err := PollOperationalStatus(client, vendor.OperationalOIDs{})
+	if err != nil {
+		t.Fatalf("PollOperationalStatus() error = %v, want partial success", err)
+	}
+	if uptimeSecs == nil || *uptimeSecs != 90 {
+		t.Fatalf("uptimeSecs = %v, want 90", uptimeSecs)
+	}
+	if statuses["sfp7"] != "up" {
+		t.Fatalf("statuses[sfp7] = %q, want up from partial timeout data", statuses["sfp7"])
+	}
+}
+
 func TestDiscoverDeviceWithPolicyRecordsCriticalNeighborDiscoveryFailures(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -539,12 +786,15 @@ func TestDiscoverDeviceWithPolicyRecordsCriticalNeighborDiscoveryFailures(t *tes
 				},
 				BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
 					switch rootOid {
-					case OidIfTable:
+					case OidIfDescr:
 						return []gosnmp.SnmpPDU{
 							{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+						}, nil
+					case OidIfOperStatus:
+						return []gosnmp.SnmpPDU{
 							{Name: OidIfOperStatus + ".1", Type: gosnmp.Integer, Value: 1},
 						}, nil
-					case OidIfXTable:
+					case OidIfName:
 						return []gosnmp.SnmpPDU{
 							{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 						}, nil
@@ -664,11 +914,11 @@ func minimalDiscoveryClient() ClientInterface {
 		},
 		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
 			switch rootOid {
-			case OidIfTable:
+			case OidIfDescr:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 				}, nil
-			case OidIfXTable:
+			case OidIfName:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 				}, nil
@@ -722,12 +972,12 @@ func TestParseLLDPNeighbors(t *testing.T) {
 		},
 		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
 			switch rootOid {
-			case OidIfTable:
+			case OidIfDescr:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 					{Name: OidIfDescr + ".2", Type: gosnmp.OctetString, Value: []byte("ether2")},
 				}, nil
-			case OidIfXTable:
+			case OidIfName:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("eth1")},
 					{Name: OidIfName + ".2", Type: gosnmp.OctetString, Value: []byte("eth2")},
@@ -817,11 +1067,11 @@ func TestParseCDPNeighbors(t *testing.T) {
 		},
 		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
 			switch rootOid {
-			case OidIfTable:
+			case OidIfDescr:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("GigabitEthernet0/1")},
 				}, nil
-			case OidIfXTable:
+			case OidIfName:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("Gi0/1")},
 				}, nil
@@ -1042,12 +1292,15 @@ func TestDiscoverDevice_LLDPLocPortIfIndex(t *testing.T) {
 		},
 		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
 			switch rootOid {
-			case OidIfTable:
+			case OidIfDescr:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfDescr + ".5", Type: gosnmp.OctetString, Value: []byte("ether5-descr")},
+				}, nil
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{
 					{Name: OidIfOperStatus + ".5", Type: gosnmp.Integer, Value: 1},
 				}, nil
-			case OidIfXTable:
+			case OidIfName:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfName + ".5", Type: gosnmp.OctetString, Value: []byte("ether5")},
 				}, nil
@@ -1119,12 +1372,15 @@ func TestDiscoverDevice_LLDPLocPortIfIndex_Fallback(t *testing.T) {
 		},
 		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
 			switch rootOid {
-			case OidIfTable:
+			case OidIfDescr:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("eth1-descr")},
+				}, nil
+			case OidIfOperStatus:
+				return []gosnmp.SnmpPDU{
 					{Name: OidIfOperStatus + ".1", Type: gosnmp.Integer, Value: 1},
 				}, nil
-			case OidIfXTable:
+			case OidIfName:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("eth1")},
 				}, nil
@@ -1194,11 +1450,11 @@ func TestDiscoverDevice_LLDPPartialNeighborData(t *testing.T) {
 		},
 		BulkWalkFunc: func(rootOid string) ([]gosnmp.SnmpPDU, error) {
 			switch rootOid {
-			case OidIfTable:
+			case OidIfDescr:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 				}, nil
-			case OidIfXTable:
+			case OidIfName:
 				return []gosnmp.SnmpPDU{
 					{Name: OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 				}, nil
@@ -1264,5 +1520,117 @@ func TestDiscoverDevice_LLDPPartialNeighborData(t *testing.T) {
 	}
 	if !malformedFound {
 		t.Error("malformed neighbor (BB:BB:BB:BB:BB:02) not found in results")
+	}
+}
+
+type streamingBenchmarkClient struct {
+	walks map[string][]gosnmp.SnmpPDU
+}
+
+func newStreamingBenchmarkClient(rows int) *streamingBenchmarkClient {
+	client := &streamingBenchmarkClient{walks: make(map[string][]gosnmp.SnmpPDU)}
+	for _, oid := range []string{
+		OidIfDescr,
+		OidIfSpeed,
+		OidIfAdminStatus,
+		OidIfOperStatus,
+		OidIfName,
+		OidIfHighSpeed,
+		OidIfHCInOctets,
+		OidIfHCOutOctets,
+	} {
+		client.walks[oid] = make([]gosnmp.SnmpPDU, 0, rows)
+	}
+
+	for i := 1; i <= rows; i++ {
+		suffix := "." + strconv.Itoa(i)
+		ifName := "if" + strconv.Itoa(i)
+		client.walks[OidIfDescr] = append(client.walks[OidIfDescr], gosnmp.SnmpPDU{Name: OidIfDescr + suffix, Type: gosnmp.OctetString, Value: []byte(ifName)})
+		client.walks[OidIfSpeed] = append(client.walks[OidIfSpeed], gosnmp.SnmpPDU{Name: OidIfSpeed + suffix, Type: gosnmp.Gauge32, Value: uint32(1_000_000_000)})
+		client.walks[OidIfAdminStatus] = append(client.walks[OidIfAdminStatus], gosnmp.SnmpPDU{Name: OidIfAdminStatus + suffix, Type: gosnmp.Integer, Value: 1})
+		client.walks[OidIfOperStatus] = append(client.walks[OidIfOperStatus], gosnmp.SnmpPDU{Name: OidIfOperStatus + suffix, Type: gosnmp.Integer, Value: 1})
+		client.walks[OidIfName] = append(client.walks[OidIfName], gosnmp.SnmpPDU{Name: OidIfName + suffix, Type: gosnmp.OctetString, Value: []byte(ifName)})
+		client.walks[OidIfHighSpeed] = append(client.walks[OidIfHighSpeed], gosnmp.SnmpPDU{Name: OidIfHighSpeed + suffix, Type: gosnmp.Gauge32, Value: uint32(1000)})
+		client.walks[OidIfHCInOctets] = append(client.walks[OidIfHCInOctets], gosnmp.SnmpPDU{Name: OidIfHCInOctets + suffix, Type: gosnmp.Counter64, Value: uint64(i * 1000)})
+		client.walks[OidIfHCOutOctets] = append(client.walks[OidIfHCOutOctets], gosnmp.SnmpPDU{Name: OidIfHCOutOctets + suffix, Type: gosnmp.Counter64, Value: uint64(i * 2000)})
+	}
+	return client
+}
+
+func (c *streamingBenchmarkClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
+	pdus := make([]gosnmp.SnmpPDU, 0, len(oids))
+	for _, oid := range oids {
+		if oid == OidSysUpTime {
+			pdus = append(pdus, gosnmp.SnmpPDU{Name: OidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(123456)})
+		}
+	}
+	return pdus, nil
+}
+
+func (c *streamingBenchmarkClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
+	return c.walks[rootOID], nil
+}
+
+func (c *streamingBenchmarkClient) BulkWalkEach(rootOID string, visit func(gosnmp.SnmpPDU) error) error {
+	for _, pdu := range c.walks[rootOID] {
+		if err := visit(pdu); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func benchmarkInterfaces(rows int) []domain.Interface {
+	interfaces := make([]domain.Interface, 0, rows)
+	for i := 1; i <= rows; i++ {
+		interfaces = append(interfaces, domain.Interface{
+			IfIndex: i,
+			IfName:  "if" + strconv.Itoa(i),
+		})
+	}
+	return interfaces
+}
+
+func BenchmarkPollInterfaceCountersWithInterfacesStreaming(b *testing.B) {
+	client := newStreamingBenchmarkClient(5000)
+	interfaces := benchmarkInterfaces(5000)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		counters := PollInterfaceCountersWithInterfaces(client, interfaces)
+		if len(counters) != len(interfaces) {
+			b.Fatalf("counters = %d, want %d", len(counters), len(interfaces))
+		}
+	}
+}
+
+func BenchmarkPollOperationalStatusStreaming(b *testing.B) {
+	client := newStreamingBenchmarkClient(5000)
+	interfaces := benchmarkInterfaces(5000)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, statuses, err := PollOperationalStatusWithInterfaces(client, vendor.OperationalOIDs{}, interfaces)
+		if err != nil {
+			b.Fatalf("PollOperationalStatusWithInterfaces() error = %v", err)
+		}
+		if len(statuses) != len(interfaces) {
+			b.Fatalf("statuses = %d, want %d", len(statuses), len(interfaces))
+		}
+	}
+}
+
+func BenchmarkDiscoverInterfacesStreamingLargeTable(b *testing.B) {
+	client := newStreamingBenchmarkClient(5000)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		interfaces := discoverInterfaces(client)
+		if len(interfaces) != 5000 {
+			b.Fatalf("interfaces = %d, want 5000", len(interfaces))
+		}
 	}
 }

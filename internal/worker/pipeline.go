@@ -90,6 +90,18 @@ type PipelineOrchestrator struct {
 	done                    chan struct{}
 	healthDone              chan struct{}
 	runtime                 *pipelineRuntimeState
+	overviewBuildMu         sync.Mutex
+	staticPersistenceMu     sync.Mutex
+	staticPersistenceCache  map[uuid.UUID]staticPersistenceCacheEntry
+	staticPersistenceNow    func() time.Time
+}
+
+type staticPersistenceCacheEntry struct {
+	fingerprint                 string
+	topologyFingerprint         string
+	persistedAt                 time.Time
+	topologyMaterializedAt      time.Time
+	topologyUnresolvedNeighbors int
 }
 
 // NewPipelineOrchestrator constructs pipeline orchestrator state for the background worker lifecycle.
@@ -132,6 +144,7 @@ func NewPipelineOrchestrator(
 		done:                    make(chan struct{}),
 		healthDone:              make(chan struct{}),
 		runtime:                 newPipelineRuntimeState(initialPrometheusStatus(settingsRepo)),
+		staticPersistenceNow:    time.Now,
 	}
 	p.taskRunner = &pipelineTaskRunner{pipeline: p}
 	p.broadcaster = &pipelineSnapshotBroadcaster{pipeline: p}
@@ -242,12 +255,17 @@ func (p *PipelineOrchestrator) GetOverviewSnapshot() (*ws.SnapshotPayload, uint6
 
 // GetOrBuildOverviewSnapshot retrieves or build overview snapshot data from the background worker lifecycle.
 func (p *PipelineOrchestrator) GetOrBuildOverviewSnapshot() (*ws.SnapshotPayload, uint64) {
+	p.overviewBuildMu.Lock()
+	defer p.overviewBuildMu.Unlock()
+
 	p.runtime.mu.RLock()
-	hasRuntimeBase := p.runtime.prevHashes != nil
-	p.runtime.mu.RUnlock()
-	if hasRuntimeBase {
-		return p.runtime.getOverviewSnapshot()
+	if p.runtime.prevHashes != nil {
+		snapshot := ws.CloneSnapshot(p.runtime.lastSnapshot)
+		version := p.runtime.overviewVersion
+		p.runtime.mu.RUnlock()
+		return snapshot, version
 	}
+	p.runtime.mu.RUnlock()
 
 	snapshot, err := p.buildFullOverviewSnapshot()
 	if err != nil {
@@ -256,11 +274,21 @@ func (p *PipelineOrchestrator) GetOrBuildOverviewSnapshot() (*ws.SnapshotPayload
 	hashes := computeSnapshotHashes(snapshot)
 
 	p.runtime.mu.Lock()
+	if p.runtime.prevHashes != nil {
+		snapshot := ws.CloneSnapshot(p.runtime.lastSnapshot)
+		version := p.runtime.overviewVersion
+		p.runtime.mu.Unlock()
+		return snapshot, version
+	}
 	p.runtime.lastSnapshot = snapshot
 	p.runtime.prevHashes = hashes
 	p.runtime.overviewVersion++
 	version := p.runtime.overviewVersion
 	p.runtime.mu.Unlock()
+
+	if p.hub != nil && p.hub.HasOverviewClients() {
+		p.hub.BroadcastOverviewSnapshot(snapshot, version)
+	}
 
 	return ws.CloneSnapshot(snapshot), version
 }
@@ -457,6 +485,133 @@ func mergeSnapshotPayload(base *ws.SnapshotPayload, delta *ws.SnapshotPayload) *
 	syncSnapshotCompatibility(merged)
 
 	return merged
+}
+
+func applySnapshotDeltaToRuntime(base *ws.SnapshotPayload, hashes *sectionHashes, delta *ws.SnapshotPayload) (*ws.SnapshotPayload, *sectionHashes) {
+	if base == nil {
+		base = ws.EmptySnapshot()
+	}
+	ensureSnapshotRuntimeMaps(base)
+	if hashes == nil {
+		hashes = computeSnapshotHashes(base)
+	}
+	ensureSectionHashMaps(hashes)
+	if delta == nil {
+		return base, hashes
+	}
+
+	for key, value := range delta.Devices {
+		value = cloneDeviceRuntimeForSnapshot(value)
+		base.Devices[key] = value
+		base.DeviceMetrics[key] = value
+		base.DeviceStatuses[key] = compatibilityOperationalStatus(value.OperationalStatus)
+
+		deviceHash, statusHash := computeDeviceRuntimeHashes(value)
+		hashes.devices[key] = deviceHash
+		hashes.deviceMetrics[key] = deviceHash
+		hashes.deviceStatuses[key] = statusHash
+	}
+
+	for key, value := range delta.Links {
+		previous := base.Links[key]
+		removeLinkRuntimeFromCompatibility(base.LinkMetrics, previous, key)
+		base.Links[key] = value
+		compatibilityValue := value
+		if compatibilityValue.DeviceID == "" {
+			compatibilityValue.DeviceID = compatibilityValue.SourceDeviceID
+		}
+		base.LinkMetrics[compatibilityValue.DeviceID] = append(base.LinkMetrics[compatibilityValue.DeviceID], compatibilityValue)
+
+		linkHash := computeLinkRuntimeHash(value)
+		hashes.links[key] = linkHash
+		hashes.linkMetrics[key] = linkHash
+	}
+
+	return base, hashes
+}
+
+func ensureSnapshotRuntimeMaps(snapshot *ws.SnapshotPayload) {
+	if snapshot.Devices == nil {
+		snapshot.Devices = make(map[string]ws.DeviceRuntimeDTO)
+	}
+	if snapshot.Links == nil {
+		snapshot.Links = make(map[string]ws.LinkRuntimeDTO)
+	}
+	if snapshot.DeviceMetrics == nil || snapshot.LinkMetrics == nil || snapshot.DeviceStatuses == nil {
+		syncSnapshotCompatibility(snapshot)
+		return
+	}
+}
+
+func ensureSectionHashMaps(hashes *sectionHashes) {
+	if hashes.devices == nil {
+		hashes.devices = make(map[string]uint64)
+	}
+	if hashes.links == nil {
+		hashes.links = make(map[string]uint64)
+	}
+	if hashes.deviceMetrics == nil {
+		hashes.deviceMetrics = make(map[string]uint64)
+	}
+	if hashes.linkMetrics == nil {
+		hashes.linkMetrics = make(map[string]uint64)
+	}
+	if hashes.deviceStatuses == nil {
+		hashes.deviceStatuses = make(map[string]uint64)
+	}
+}
+
+func cloneDeviceRuntimeForSnapshot(value ws.DeviceRuntimeDTO) ws.DeviceRuntimeDTO {
+	value.RuntimeFlags = append([]string(nil), value.RuntimeFlags...)
+	if value.FieldStates != nil {
+		cloned := make(map[string]string, len(value.FieldStates))
+		for key, state := range value.FieldStates {
+			cloned[key] = state
+		}
+		value.FieldStates = cloned
+	}
+	return value
+}
+
+func removeLinkRuntimeFromCompatibility(metrics map[string][]ws.LinkRuntimeDTO, previous ws.LinkRuntimeDTO, linkID string) {
+	if len(metrics) == 0 {
+		return
+	}
+	if previous.LinkID != "" {
+		deviceID := previous.DeviceID
+		if deviceID == "" {
+			deviceID = previous.SourceDeviceID
+		}
+		if removeLinkRuntimeFromCompatibilityBucket(metrics, deviceID, linkID) {
+			return
+		}
+	}
+	for deviceID := range metrics {
+		if removeLinkRuntimeFromCompatibilityBucket(metrics, deviceID, linkID) {
+			return
+		}
+	}
+}
+
+func removeLinkRuntimeFromCompatibilityBucket(metrics map[string][]ws.LinkRuntimeDTO, deviceID string, linkID string) bool {
+	if deviceID == "" {
+		return false
+	}
+	links := metrics[deviceID]
+	for index, link := range links {
+		if link.LinkID != linkID {
+			continue
+		}
+		copy(links[index:], links[index+1:])
+		links = links[:len(links)-1]
+		if len(links) == 0 {
+			delete(metrics, deviceID)
+		} else {
+			metrics[deviceID] = links
+		}
+		return true
+	}
+	return false
 }
 
 func drainBroadcastLoopInputs(

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -248,6 +249,162 @@ func TestDeviceRepoGetByIDsForTopologySkipsSNMPDecryption(t *testing.T) {
 	}
 	if !stored.Valid || stored.String == "" {
 		t.Fatal("stored credentials unexpectedly empty")
+	}
+}
+
+func TestDeviceRepoUpdateStaticDiscoverySkipsSNMPCredentials(t *testing.T) {
+	db := newTestDB(t)
+	onChange := make(chan struct{}, 2)
+	repo := NewDeviceRepo(db, testKeyring, onChange)
+
+	pollingEnabled := false
+	notes := "preserve notes"
+	pollOverride := 45
+	device := &domain.Device{
+		ID:                          uuid.New(),
+		Hostname:                    "router-static",
+		IP:                          "10.0.0.10",
+		DeviceType:                  domain.DeviceTypeRouter,
+		Status:                      domain.DeviceStatusUp,
+		Managed:                     true,
+		Tags:                        map[string]string{"role": "edge"},
+		MetricsSource:               domain.MetricsSourcePrometheusSNMPFallback,
+		PrometheusLabelName:         "instance",
+		PrometheusLabelValue:        "router-static",
+		PollClass:                   domain.PollClassStandard,
+		PollIntervalOverride:        &pollOverride,
+		PollingEnabled:              &pollingEnabled,
+		Notes:                       &notes,
+		ProbePorts:                  []int{161, 9161},
+		TopologyDiscoveryMode:       domain.TopologyDiscoveryModeLLDP,
+		TopologyBootstrapState:      domain.TopologyBootstrapStatePending,
+		LastTopologyDiscoveryResult: "ports_pending",
+		SysName:                     "router-old",
+		SysDescr:                    "old descr",
+		SysObjectID:                 ".1.3.6.1.4.1.9.1.1",
+		HardwareModel:               "old model",
+		OSVersion:                   "1.0",
+		Vendor:                      "cisco",
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ge-0/0/0", IfDescr: "old uplink", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	select {
+	case <-onChange:
+	default:
+	}
+	changes := repo.SubscribeDeviceChanges(1)
+
+	rawCredentials := `{"version":"2c","v2c":{"community":"plaintext-community"}}`
+	if _, err := db.Exec(
+		`UPDATE devices SET snmp_credentials_json = ? WHERE id = ?`,
+		rawCredentials,
+		device.ID.String(),
+	); err != nil {
+		t.Fatalf("corrupting stored credentials failed: %v", err)
+	}
+
+	if _, err := repo.GetByIDs([]uuid.UUID{device.ID}); err == nil {
+		t.Fatal("GetByIDs should fail when strict credential decryption sees plaintext")
+	}
+
+	devices, err := repo.GetByIDsForTopology([]uuid.UUID{device.ID})
+	if err != nil {
+		t.Fatalf("GetByIDsForTopology failed: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("device count = %d, want 1", len(devices))
+	}
+
+	staticDevice := devices[0]
+	staticDevice.Hostname = "router-static-new"
+	staticDevice.SysName = "router-new"
+	staticDevice.SysDescr = "new descr"
+	staticDevice.SysObjectID = ".1.3.6.1.4.1.14988.1"
+	staticDevice.HardwareModel = "new model"
+	staticDevice.OSVersion = "2.0"
+	staticDevice.Vendor = "mikrotik"
+	staticDevice.DeviceType = domain.DeviceTypeSwitch
+	staticDevice.PollClass = domain.PollClassCore
+	staticDevice.Interfaces = []domain.Interface{
+		{IfIndex: 7, IfName: "ether7", IfDescr: "new uplink", Speed: 10_000_000_000, AdminStatus: "up", OperStatus: "down"},
+	}
+	if err := repo.UpdateStaticDiscovery(&staticDevice); err != nil {
+		t.Fatalf("UpdateStaticDiscovery failed: %v", err)
+	}
+	select {
+	case <-onChange:
+	case <-time.After(time.Second):
+		t.Fatal("expected static discovery update to notify repository change listeners")
+	}
+	select {
+	case event := <-changes:
+		if event.Kind != domain.ChangeKindUpdated || event.DeviceID != device.ID {
+			t.Fatalf("device change event = %#v, want updated event for %s", event, device.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected static discovery update to publish device change event")
+	}
+
+	var storedCreds, storedProbePorts, storedMetricsSource, storedTags, storedTopologyMode, storedTopologyResult string
+	var storedPollingEnabled int
+	var storedNotes sql.NullString
+	if err := db.QueryRow(
+		`SELECT snmp_credentials_json, probe_ports, metrics_source, polling_enabled, notes, tags_json,
+			topology_discovery_mode, last_topology_discovery_result
+		FROM devices WHERE id = ?`,
+		device.ID.String(),
+	).Scan(&storedCreds, &storedProbePorts, &storedMetricsSource, &storedPollingEnabled, &storedNotes, &storedTags, &storedTopologyMode, &storedTopologyResult); err != nil {
+		t.Fatalf("reading raw device row failed: %v", err)
+	}
+	if storedCreds != rawCredentials {
+		t.Fatalf("snmp_credentials_json changed to %q, want unchanged corrupted blob", storedCreds)
+	}
+	if storedProbePorts != domain.FormatProbePortsCSV(device.ProbePorts) {
+		t.Fatalf("probe_ports = %q, want unchanged", storedProbePorts)
+	}
+	if storedMetricsSource != string(domain.MetricsSourcePrometheusSNMPFallback) {
+		t.Fatalf("metrics_source = %q, want unchanged", storedMetricsSource)
+	}
+	if storedPollingEnabled != 0 {
+		t.Fatalf("polling_enabled = %d, want unchanged disabled value", storedPollingEnabled)
+	}
+	if !storedNotes.Valid || storedNotes.String != notes {
+		t.Fatalf("notes = %#v, want unchanged %q", storedNotes, notes)
+	}
+	if !strings.Contains(storedTags, `"role":"edge"`) {
+		t.Fatalf("tags_json = %q, want unchanged role tag", storedTags)
+	}
+	if storedTopologyMode != string(domain.TopologyDiscoveryModeLLDP) {
+		t.Fatalf("topology_discovery_mode = %q, want unchanged", storedTopologyMode)
+	}
+	if storedTopologyResult != "ports_pending" {
+		t.Fatalf("last_topology_discovery_result = %q, want unchanged", storedTopologyResult)
+	}
+
+	updated, err := repo.GetByIDsForTopology([]uuid.UUID{device.ID})
+	if err != nil {
+		t.Fatalf("GetByIDsForTopology after update failed: %v", err)
+	}
+	if len(updated) != 1 {
+		t.Fatalf("updated device count = %d, want 1", len(updated))
+	}
+	got := updated[0]
+	if got.SNMPCredentials != (domain.SNMPCredentials{}) {
+		t.Fatalf("SNMP credentials = %+v, want empty topology projection", got.SNMPCredentials)
+	}
+	if got.Hostname != "router-static-new" || got.SysName != "router-new" || got.DeviceType != domain.DeviceTypeSwitch || got.PollClass != domain.PollClassCore {
+		t.Fatalf("static fields not updated: hostname=%q sysName=%q deviceType=%q pollClass=%q", got.Hostname, got.SysName, got.DeviceType, got.PollClass)
+	}
+	if len(got.Interfaces) != 1 || got.Interfaces[0].IfIndex != 7 || got.Interfaces[0].IfName != "ether7" {
+		t.Fatalf("interfaces = %#v, want replaced static interface", got.Interfaces)
 	}
 }
 

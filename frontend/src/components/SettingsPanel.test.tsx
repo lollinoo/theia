@@ -67,6 +67,7 @@ describe('SettingsPanel (COMP-05)', () => {
 
     for (const heading of [
       'Polling',
+      'SNMP Debug',
       'Topology',
       'Integrations',
       'Bridge & Time',
@@ -94,7 +95,7 @@ describe('SettingsPanel (COMP-05)', () => {
       Array.from(screen.getByTestId('settings-panel-left-column').children).filter(
         (child) => child.tagName === 'SECTION',
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       Array.from(screen.getByTestId('settings-panel-right-column').children).filter(
         (child) => child.tagName === 'SECTION',
@@ -120,6 +121,7 @@ describe('SettingsPanel (COMP-05)', () => {
 
     for (const heading of [
       'Polling',
+      'SNMP Debug',
       'Topology',
       'Integrations',
       'Bridge & Time',
@@ -683,13 +685,20 @@ describe('SettingsPanel — Polling Workers settings', () => {
     const essentialWorkers = screen.getByLabelText('Essential Workers') as HTMLInputElement;
     const performancePool = screen.getByLabelText('Performance Pool') as HTMLInputElement;
     const maxWorkersPerDevice = screen.getByLabelText('Max Workers Per Device') as HTMLInputElement;
+    const maxInflightPerSNMPProfile = screen.getByLabelText(
+      'Max Inflight Per SNMP Profile',
+    ) as HTMLInputElement;
 
+    expect(essentialWorkers.value).toBe('64');
     expect(essentialWorkers.min).toBe('1');
     expect(essentialWorkers.max).toBe('256');
     expect(performancePool.min).toBe('1');
     expect(performancePool.max).toBe('128');
     expect(maxWorkersPerDevice.min).toBe('1');
     expect(maxWorkersPerDevice.max).toBe('32');
+    expect(maxInflightPerSNMPProfile.value).toBe('16');
+    expect(maxInflightPerSNMPProfile.min).toBe('1');
+    expect(maxInflightPerSNMPProfile.max).toBe('256');
   });
 
   it('rejects out-of-range worker settings and does not save them', async () => {
@@ -729,5 +738,209 @@ describe('SettingsPanel — Polling Workers settings', () => {
     expect(screen.getByText('polling_max_inflight_per_snmp_profile').className).toContain(
       'break-all',
     );
+  });
+});
+
+describe('SettingsPanel — SNMP Debug settings', () => {
+  beforeEach(async () => {
+    const { fetchSettingsWithMetadata, updateSetting } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockClear();
+    (updateSetting as ReturnType<typeof vi.fn>).mockClear();
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: {},
+      secrets: {},
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('renders the SNMP Debug section collapsed by default and expands on click', async () => {
+    await renderSettingsPanel();
+
+    expect(screen.getByRole('heading', { name: 'SNMP Debug' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /snmp debug parameters/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Background Timeout')).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /snmp debug parameters/i }));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('Request Profiles')).toBeInTheDocument();
+    expect(screen.getByText('Worker Pools')).toBeInTheDocument();
+    expect(screen.getByText('Isolation Limits')).toBeInTheDocument();
+    expect(screen.getByLabelText('Background Timeout')).toBeInTheDocument();
+    expect(screen.getByLabelText('Performance Counter Timeout')).toBeInTheDocument();
+    expect(screen.getByLabelText('Performance Counter Retries')).toBeInTheDocument();
+    expect(screen.getByLabelText('Essential Timeout')).toBeInTheDocument();
+    expect(screen.getByLabelText('Max Inflight Per SNMP Profile')).toBeInTheDocument();
+    expect(screen.getByText('GETBULK Max Repetitions')).toBeInTheDocument();
+    expect(screen.getByText('25')).toBeInTheDocument();
+  });
+
+  it('loads SNMP debug values from fetchSettings', async () => {
+    const { fetchSettingsWithMetadata } = await import('../api/client');
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {
+        snmp_timeout_seconds: '5',
+        snmp_retries: '2',
+        snmp_performance_counter_timeout_ms: '3500',
+        snmp_performance_counter_retries: '1',
+        polling_essential_timeout_ms: '900',
+        polling_essential_retries: '0',
+        snmp_worker_pool_size: '9',
+        polling_essential_workers: '32',
+        snmp_worker_pool_performance_size: '14',
+        snmp_worker_pool_operational_size: '10',
+        snmp_worker_pool_static_size: '2',
+        polling_max_workers_per_device: '1',
+        polling_max_workers_per_site: '16',
+        polling_max_workers_per_subnet: '16',
+        polling_max_inflight_per_snmp_profile: '16',
+      },
+      secrets: {},
+    });
+
+    await renderSettingsPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /snmp debug parameters/i }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Background Timeout')).toHaveValue(5);
+      expect(screen.getByLabelText('Background Retries')).toHaveValue(2);
+      expect(screen.getByLabelText('Performance Counter Timeout')).toHaveValue(3500);
+      expect(screen.getByLabelText('Performance Counter Retries')).toHaveValue(1);
+      expect(screen.getByLabelText('Essential Timeout')).toHaveValue(900);
+      expect(screen.getByLabelText('Essential Retries')).toHaveValue(0);
+      expect(screen.getByLabelText('Legacy Total Pool')).toHaveValue(9);
+      expect(screen.getByLabelText('Essential Workers')).toHaveValue(32);
+      expect(screen.getByLabelText('Performance Pool')).toHaveValue(14);
+      expect(screen.getByLabelText('Operational Pool')).toHaveValue(10);
+      expect(screen.getByLabelText('Static Pool')).toHaveValue(2);
+      expect(screen.getByLabelText('Max Workers Per Device')).toHaveValue(1);
+      expect(screen.getByLabelText('Max Workers Per Site')).toHaveValue(16);
+      expect(screen.getByLabelText('Max Workers Per Subnet')).toHaveValue(16);
+      expect(screen.getByLabelText('Max Inflight Per SNMP Profile')).toHaveValue(16);
+    });
+  });
+
+  it('saves a valid SNMP debug setting after the debounce window', async () => {
+    vi.useFakeTimers();
+    const { updateSetting } = await import('../api/client');
+    await renderSettingsPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /snmp debug parameters/i }));
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByLabelText('Background Retries'), { target: { value: '3' } });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+      await Promise.resolve();
+    });
+
+    expect(updateSetting).toHaveBeenCalledWith('snmp_retries', '3');
+  });
+
+  it('saves a valid performance counter SNMP setting after the debounce window', async () => {
+    vi.useFakeTimers();
+    const { updateSetting } = await import('../api/client');
+    await renderSettingsPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /snmp debug parameters/i }));
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByLabelText('Performance Counter Timeout'), {
+      target: { value: '3500' },
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+      await Promise.resolve();
+    });
+
+    expect(updateSetting).toHaveBeenCalledWith('snmp_performance_counter_timeout_ms', '3500');
+  });
+
+  it('rejects out-of-range SNMP debug settings and does not save them', async () => {
+    vi.useFakeTimers();
+    const { updateSetting } = await import('../api/client');
+    await renderSettingsPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /snmp debug parameters/i }));
+      await Promise.resolve();
+    });
+
+    const debugSection = screen.getByText('SNMP Debug Parameters').closest('div');
+    fireEvent.change(screen.getByLabelText('Background Timeout'), { target: { value: '121' } });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+      await Promise.resolve();
+    });
+
+    expect(updateSetting).not.toHaveBeenCalledWith('snmp_timeout_seconds', '121');
+    expect(debugSection).not.toBeNull();
+    expect(
+      within(debugSection as HTMLElement).getByText('Must be between 1 and 120'),
+    ).toBeInTheDocument();
+  });
+
+  it('rejects out-of-range performance counter SNMP settings and does not save them', async () => {
+    vi.useFakeTimers();
+    const { updateSetting } = await import('../api/client');
+    await renderSettingsPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /snmp debug parameters/i }));
+      await Promise.resolve();
+    });
+
+    const debugSection = screen.getByText('SNMP Debug Parameters').closest('div');
+    fireEvent.change(screen.getByLabelText('Performance Counter Timeout'), {
+      target: { value: '99' },
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+      await Promise.resolve();
+    });
+
+    expect(updateSetting).not.toHaveBeenCalledWith('snmp_performance_counter_timeout_ms', '99');
+    expect(debugSection).not.toBeNull();
+    expect(
+      within(debugSection as HTMLElement).getByText('Must be between 100 and 30000'),
+    ).toBeInTheDocument();
+  });
+
+  it('syncs shared worker values between SNMP Debug and Polling Workers', async () => {
+    await renderSettingsPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /snmp debug parameters/i }));
+      await Promise.resolve();
+    });
+    fireEvent.change(screen.getByLabelText('Performance Pool'), { target: { value: '15' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /polling workers/i }));
+      await Promise.resolve();
+    });
+
+    const performancePoolFields = screen.getAllByLabelText('Performance Pool');
+    expect(performancePoolFields).toHaveLength(2);
+    for (const field of performancePoolFields) {
+      expect(field).toHaveValue(15);
+    }
   });
 });

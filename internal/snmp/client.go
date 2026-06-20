@@ -3,7 +3,10 @@ package snmp
 // This file defines client SNMP collection and device-detection behavior.
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
@@ -19,6 +22,8 @@ type Client struct {
 	snmp    *gosnmp.GoSNMP
 }
 
+const defaultMaxRepetitions uint32 = 25
+
 // NewClient creates a new SNMP client configured with the given credentials.
 func NewClient(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (*Client, error) {
 	if timeout <= 0 {
@@ -31,6 +36,9 @@ func NewClient(target string, creds domain.SNMPCredentials, timeout time.Duratio
 		Timeout: timeout,
 		Retries: retries,
 		MaxOids: gosnmp.MaxOids,
+		// Keep GETBULK packet sizing aligned with the production snmp-exporter
+		// module. Larger packets have shown higher timeout rates on MikroTik.
+		MaxRepetitions: defaultMaxRepetitions,
 	}
 
 	if creds.Version == domain.SNMPVersionV2c {
@@ -139,6 +147,9 @@ func (c *Client) BulkWalk(rootOid string) ([]gosnmp.SnmpPDU, error) {
 		return nil
 	})
 	if err != nil {
+		if isSNMPTimeoutError(err) {
+			return variables, err
+		}
 		// Fallback to normal walk
 		variables = []gosnmp.SnmpPDU{}
 		err = c.snmp.Walk(rootOid, func(pdu gosnmp.SnmpPDU) error {
@@ -147,4 +158,43 @@ func (c *Client) BulkWalk(rootOid string) ([]gosnmp.SnmpPDU, error) {
 		})
 	}
 	return variables, err
+}
+
+// BulkWalkEach streams SNMP BULKWALK results to visit without retaining the
+// full result slice.
+func (c *Client) BulkWalkEach(rootOid string, visit func(gosnmp.SnmpPDU) error) error {
+	delivered := false
+	var visitErr error
+	err := c.snmp.BulkWalk(rootOid, func(pdu gosnmp.SnmpPDU) error {
+		delivered = true
+		if err := visit(pdu); err != nil {
+			visitErr = err
+			return err
+		}
+		return nil
+	})
+	if err == nil {
+		return nil
+	}
+	if isSNMPTimeoutError(err) || visitErr != nil || delivered {
+		return err
+	}
+	return c.snmp.Walk(rootOid, visit)
+}
+
+func isSNMPTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return true
+	}
+
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded")
 }

@@ -740,6 +740,56 @@ func (r *DeviceRepo) GetByIDsForTopology(ids []uuid.UUID) ([]domain.Device, erro
 	return devices, nil
 }
 
+// UpdateStaticDiscovery persists static discovery fields and replaces interfaces without touching credentials.
+func (r *DeviceRepo) UpdateStaticDiscovery(device *domain.Device) error {
+	return withWriteRetry(func() error {
+		return r.updateStaticDiscoveryOnce(device)
+	})
+}
+
+func (r *DeviceRepo) updateStaticDiscoveryOnce(device *domain.Device) error {
+	device.UpdatedAt = time.Now().UTC()
+
+	pollClass := device.PollClass
+	if pollClass == "" {
+		pollClass = domain.PollClassStandard
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(
+		`UPDATE devices SET hostname=?, sys_name=?, sys_name_lookup=?, sys_descr=?, sys_object_id=?,
+			hardware_model=?, os_version=?, vendor=?, device_type=?, poll_class=?, updated_at=?
+		WHERE id = ?`,
+		device.Hostname, device.SysName, normalizeDeviceSysNameLookup(device.SysName), device.SysDescr,
+		device.SysObjectID, device.HardwareModel, device.OSVersion, device.Vendor,
+		string(device.DeviceType), string(pollClass), device.UpdatedAt, device.ID.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("updating static discovery fields: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("device not found: %s", device.ID)
+	}
+	device.PollClass = pollClass
+
+	if err := replaceInterfacesTx(tx, device.ID, device.Interfaces, device.UpdatedAt); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	r.notify()
+	r.publishChange(domain.ChangeKindUpdated, device.ID)
+	return nil
+}
+
 // Update modifies an existing device and replaces its interfaces.
 func (r *DeviceRepo) Update(device *domain.Device) error {
 	return withWriteRetry(func() error {
@@ -839,34 +889,8 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 		}
 	}
 
-	// Replace interfaces: delete existing, insert new
-	if _, err := tx.Exec(`DELETE FROM interfaces WHERE device_id = ?`, device.ID.String()); err != nil {
-		return fmt.Errorf("deleting existing interfaces: %w", err)
-	}
-
-	now := time.Now().UTC()
-	for i := range device.Interfaces {
-		iface := &device.Interfaces[i]
-		iface.DeviceID = device.ID
-		iface.UpdatedAt = now
-		if iface.ID == uuid.Nil {
-			iface.ID = uuid.New()
-		}
-		if iface.CreatedAt.IsZero() {
-			iface.CreatedAt = now
-		}
-
-		_, err = tx.Exec(
-			`INSERT INTO interfaces (id, device_id, if_index, if_name, if_descr, speed,
-				admin_status, oper_status, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			iface.ID.String(), iface.DeviceID.String(), iface.IfIndex,
-			iface.IfName, iface.IfDescr, iface.Speed,
-			iface.AdminStatus, iface.OperStatus, iface.CreatedAt, iface.UpdatedAt,
-		)
-		if err != nil {
-			return fmt.Errorf("inserting interface %s: %w", iface.IfName, err)
-		}
+	if err := replaceInterfacesTx(tx, device.ID, device.Interfaces, time.Now().UTC()); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1189,6 +1213,38 @@ func replaceDeviceAddressesTx(tx *Tx, deviceID uuid.UUID, addresses []domain.Dev
 		}
 		addresses[i] = address
 	}
+	return nil
+}
+
+func replaceInterfacesTx(tx *Tx, deviceID uuid.UUID, interfaces []domain.Interface, now time.Time) error {
+	if _, err := tx.Exec(`DELETE FROM interfaces WHERE device_id = ?`, deviceID.String()); err != nil {
+		return fmt.Errorf("deleting existing interfaces: %w", err)
+	}
+
+	for i := range interfaces {
+		iface := &interfaces[i]
+		iface.DeviceID = deviceID
+		iface.UpdatedAt = now
+		if iface.ID == uuid.Nil {
+			iface.ID = uuid.New()
+		}
+		if iface.CreatedAt.IsZero() {
+			iface.CreatedAt = now
+		}
+
+		_, err := tx.Exec(
+			`INSERT INTO interfaces (id, device_id, if_index, if_name, if_descr, speed,
+				admin_status, oper_status, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			iface.ID.String(), iface.DeviceID.String(), iface.IfIndex,
+			iface.IfName, iface.IfDescr, iface.Speed,
+			iface.AdminStatus, iface.OperStatus, iface.CreatedAt, iface.UpdatedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting interface %s: %w", iface.IfName, err)
+		}
+	}
+
 	return nil
 }
 

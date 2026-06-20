@@ -12,6 +12,97 @@ import (
 	"github.com/lollinoo/theia/internal/observability"
 )
 
+func TestHubHasOverviewClientsReflectsRegisteredClients(t *testing.T) {
+	hub := NewHub()
+	if hub.HasOverviewClients() {
+		t.Fatal("new hub HasOverviewClients() = true, want false")
+	}
+
+	client := newObservedTestClient(hub)
+	hub.addClient(client)
+	if !hub.HasOverviewClients() {
+		t.Fatal("after addClient HasOverviewClients() = false, want true")
+	}
+
+	hub.removeClient(client)
+	if hub.HasOverviewClients() {
+		t.Fatal("after removeClient HasOverviewClients() = true, want false")
+	}
+}
+
+func TestHubHasOverviewClientsIgnoresBootstrappingClients(t *testing.T) {
+	hub := NewHub()
+	client := newObservedTestClient(hub)
+	client.bootstrapping = true
+	hub.addClient(client)
+	if hub.HasOverviewClients() {
+		t.Fatal("bootstrapping client made HasOverviewClients() = true, want false")
+	}
+
+	_ = client.markBootstrapSnapshotSelected(1, "rt-sha256:test")
+	if !hub.HasOverviewClients() {
+		t.Fatal("bootstrap-complete client made HasOverviewClients() = false, want true")
+	}
+}
+
+func TestHubOverviewSnapshotNoClientSkipsSerialization(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+	logs := captureDebugLogs(t)
+	hub := NewHub(WithBroadcastRecorder())
+
+	unsupported := math.NaN()
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{
+		DeviceID:   "dev-1",
+		CPUPercent: &unsupported,
+	}
+
+	hub.BroadcastOverviewSnapshot(snapshot, 1)
+
+	assertNoNoClientOverviewBroadcastEffects(t, hub, registry.MarshalPrometheus(), logs.String())
+}
+
+func TestHubOverviewDeltaNoClientSkipsSerialization(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+	logs := captureDebugLogs(t)
+	hub := NewHub(WithBroadcastRecorder())
+
+	delta := EmptyRuntimeDeltaPayload()
+	delta.Devices["dev-1"] = map[string]any{
+		"cpu_percent": math.NaN(),
+	}
+
+	hub.BroadcastOverviewDelta(delta, 1, 2, EmptySnapshot())
+
+	assertNoNoClientOverviewBroadcastEffects(t, hub, registry.MarshalPrometheus(), logs.String())
+}
+
+func TestHubOverviewResyncNoClientSkipsSerialization(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+	logs := captureDebugLogs(t)
+	hub := NewHub(WithBroadcastRecorder())
+
+	unsupported := math.NaN()
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{
+		DeviceID:   "dev-1",
+		CPUPercent: &unsupported,
+	}
+
+	hub.BroadcastOverviewResync(ResyncReasonClientResync, snapshot, 1)
+
+	assertNoNoClientOverviewBroadcastEffects(t, hub, registry.MarshalPrometheus(), logs.String())
+}
+
 func TestHubSetDetailSubscription_ReplacesPreviousDevice(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
@@ -595,4 +686,30 @@ func containsClient(clients []*Client, target *Client) bool {
 	}
 
 	return false
+}
+
+func assertNoNoClientOverviewBroadcastEffects(t *testing.T, hub *Hub, metrics []byte, logs string) {
+	t.Helper()
+
+	if messages := drainHubRecordedBroadcasts(hub); len(messages) != 0 {
+		t.Fatalf("expected no recorded overview broadcast messages, got %d", len(messages))
+	}
+	if strings.Contains(string(metrics), `theia_ws_messages_total{scope="broadcast"`) {
+		t.Fatalf("expected no broadcast message metric, got:\n%s", string(metrics))
+	}
+	if strings.Contains(logs, "failed to marshal overview") {
+		t.Fatalf("expected no overview marshal error log, got:\n%s", logs)
+	}
+}
+
+func drainHubRecordedBroadcasts(hub *Hub) [][]byte {
+	var messages [][]byte
+	for {
+		select {
+		case message := <-hub.BroadcastCh():
+			messages = append(messages, message)
+		default:
+			return messages
+		}
+	}
 }

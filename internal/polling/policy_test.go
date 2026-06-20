@@ -35,6 +35,12 @@ func TestPolicyFromSettingsUsesDefaults(t *testing.T) {
 	if policy.Timeouts[LaneEssential].Retries != 1 {
 		t.Fatalf("essential retries = %d, want 1", policy.Timeouts[LaneEssential].Retries)
 	}
+	if policy.Timeouts[LaneBackground].Timeout != 5*time.Second {
+		t.Fatalf("background timeout = %v, want 5s fallback", policy.Timeouts[LaneBackground].Timeout)
+	}
+	if policy.Timeouts[LaneBackground].Retries != 0 {
+		t.Fatalf("background retries = %d, want 0 fallback", policy.Timeouts[LaneBackground].Retries)
+	}
 }
 
 func TestPolicyFromSettingsAllowsZeroEssentialRetries(t *testing.T) {
@@ -46,6 +52,90 @@ func TestPolicyFromSettingsAllowsZeroEssentialRetries(t *testing.T) {
 
 	if policy.Timeouts[LaneEssential].Retries != 0 {
 		t.Fatalf("essential retries = %d, want 0", policy.Timeouts[LaneEssential].Retries)
+	}
+}
+
+func TestPolicyFromSettingsUsesConfiguredBackgroundSNMPProfile(t *testing.T) {
+	settings := fakeSettings{
+		domain.SettingSNMPTimeout: "10",
+		domain.SettingSNMPRetries: "2",
+	}
+
+	policy, _ := PolicyFromSettings(settings, 0, 300*time.Millisecond, 30*time.Second)
+
+	if policy.Timeouts[LaneBackground].Timeout != 10*time.Second {
+		t.Fatalf("background timeout = %v, want configured 10s", policy.Timeouts[LaneBackground].Timeout)
+	}
+	if policy.Timeouts[LaneBackground].Retries != 2 {
+		t.Fatalf("background retries = %d, want configured 2", policy.Timeouts[LaneBackground].Retries)
+	}
+}
+
+func TestPolicyFromSettingsDerivesPerformanceCounterWalksProfileFromBackground(t *testing.T) {
+	settings := fakeSettings{
+		domain.SettingSNMPTimeout: "10",
+		domain.SettingSNMPRetries: "2",
+	}
+
+	policy, _ := PolicyFromSettings(settings, 0, 300*time.Millisecond, 30*time.Second)
+	profile := policy.Timeouts[LanePerformanceCounterWalks]
+
+	if profile.Timeout != 2*time.Second {
+		t.Fatalf("performance counter timeout = %v, want capped 2s", profile.Timeout)
+	}
+	if profile.Retries != 0 {
+		t.Fatalf("performance counter retries = %d, want 0", profile.Retries)
+	}
+}
+
+func TestPolicyFromSettingsUsesConfiguredPerformanceCounterWalksProfile(t *testing.T) {
+	settings := fakeSettings{
+		domain.SettingSNMPTimeout:                         "10",
+		domain.SettingSNMPRetries:                         "2",
+		domain.SettingSNMPPerformanceCounterTimeoutMillis: "3500",
+		domain.SettingSNMPPerformanceCounterRetries:       "1",
+	}
+
+	policy, _ := PolicyFromSettings(settings, 0, 300*time.Millisecond, 30*time.Second)
+	profile := policy.Timeouts[LanePerformanceCounterWalks]
+
+	if profile.Timeout != 3500*time.Millisecond {
+		t.Fatalf("performance counter timeout = %v, want configured 3500ms", profile.Timeout)
+	}
+	if profile.Retries != 1 {
+		t.Fatalf("performance counter retries = %d, want configured 1", profile.Retries)
+	}
+}
+
+func TestPolicyFromSettingsPreservesLowerBackgroundTimeoutForPerformanceCounterWalks(t *testing.T) {
+	settings := fakeSettings{
+		domain.SettingSNMPTimeout: "1",
+		domain.SettingSNMPRetries: "0",
+	}
+
+	policy, _ := PolicyFromSettings(settings, 0, 300*time.Millisecond, 30*time.Second)
+	profile := policy.Timeouts[LanePerformanceCounterWalks]
+
+	if profile.Timeout != time.Second {
+		t.Fatalf("performance counter timeout = %v, want configured lower 1s", profile.Timeout)
+	}
+	if profile.Retries != 0 {
+		t.Fatalf("performance counter retries = %d, want 0", profile.Retries)
+	}
+}
+
+func TestPolicyFromSettingsDefaultSeedPreservesLowerBackgroundTimeoutForPerformanceCounterWalks(t *testing.T) {
+	settings := fakeSettings(domain.DefaultSettings())
+	settings[domain.SettingSNMPTimeout] = "1"
+
+	policy, _ := PolicyFromSettings(settings, 0, 300*time.Millisecond, 30*time.Second)
+	profile := policy.Timeouts[LanePerformanceCounterWalks]
+
+	if profile.Timeout != time.Second {
+		t.Fatalf("performance counter timeout = %v, want derived lower 1s from seeded defaults", profile.Timeout)
+	}
+	if profile.Retries != 0 {
+		t.Fatalf("performance counter retries = %d, want 0", profile.Retries)
 	}
 }
 

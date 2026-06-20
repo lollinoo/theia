@@ -88,11 +88,22 @@ func (s *pipelineTestScheduler) PollingHealth() polling.HealthSnapshot {
 	return s.health
 }
 
+func assertPipelineFloatPtrEqual(t *testing.T, got *float64, want float64, label string) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s = nil, want %v", label, want)
+	}
+	if *got != want {
+		t.Fatalf("%s = %v, want %v", label, *got, want)
+	}
+}
+
 type fakeTopologyService struct {
 	mu     sync.Mutex
 	calls  int
 	lastID uuid.UUID
 	lastIn service.StaticDiscoveryInput
+	inputs []service.StaticDiscoveryInput
 	result service.StaticPersistenceResult
 	err    error
 }
@@ -103,7 +114,12 @@ func (s *fakeTopologyService) ApplyStaticDiscovery(deviceID uuid.UUID, input ser
 	s.calls++
 	s.lastID = deviceID
 	s.lastIn = input
-	return s.result, s.err
+	s.inputs = append(s.inputs, input)
+	result := s.result
+	if !input.SkipTopologyMaterialization {
+		result.TopologyMaterialized = true
+	}
+	return result, s.err
 }
 
 func TestPipelineTaskRunnerPersistStaticDiscoveryPropagatesNeighborDiscoveryFailures(t *testing.T) {
@@ -145,6 +161,282 @@ func TestPipelineTaskRunnerPersistStaticDiscoveryPropagatesNeighborDiscoveryFail
 	failure := topologyService.lastIn.NeighborDiscoveryFailures[0]
 	if failure.Protocol != domain.DiscoveryProtocolCDP || failure.OID != snmp.OidCDPDeviceID || !failure.Critical || failure.Error != "cdp walk failed" {
 		t.Fatalf("propagated failure = %#v, want CDP device ID critical failure", failure)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoverySkipsUnchangedRegularResult(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	result := staticDiscoveryDedupeResult()
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 1 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 1 for unchanged regular static result", topologyService.calls)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_static_persistence_skips_total{reason="unchanged"} 1`) {
+		t.Fatalf("expected unchanged static persistence skip metric, got:\n%s", metrics)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoverySkipsCooldownSuppressedInterfaceFields(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	full := staticDiscoveryDedupeResult()
+	suppressed := staticDiscoveryDedupeResult()
+	suppressed.Interfaces[0].IfDescr = ""
+	suppressed.Interfaces[0].IfName = ""
+	device := domain.Device{
+		ID:         deviceID,
+		Interfaces: append([]domain.Interface(nil), full.Interfaces...),
+	}
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, full)
+	runner.persistStaticDiscovery(device, suppressed)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 1 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 1 when current device already has cooldown-suppressed interface fields", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryPersistsChangedRegularResult(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	first := staticDiscoveryDedupeResult()
+	second := staticDiscoveryDedupeResult()
+	second.Interfaces[0].Speed = 10_000_000_000
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, second)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 after interface speed changes", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoverySkipsUnchangedTopologyMaterialization(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	first := staticDiscoveryDedupeResult()
+	changedInterface := staticDiscoveryDedupeResult()
+	changedInterface.Interfaces[0].Speed = 10_000_000_000
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, changedInterface)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 after interface speed changes", topologyService.calls)
+	}
+	if len(topologyService.inputs) != 2 {
+		t.Fatalf("captured inputs = %d, want 2", len(topologyService.inputs))
+	}
+	if topologyService.inputs[0].SkipTopologyMaterialization {
+		t.Fatal("first static persistence skipped topology materialization, want initial materialization")
+	}
+	if !topologyService.inputs[1].SkipTopologyMaterialization {
+		t.Fatal("interface-only static change did not skip unchanged topology materialization")
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryMaterializesChangedTopology(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	first := staticDiscoveryDedupeResult()
+	changedTopology := staticDiscoveryDedupeResult()
+	changedTopology.Neighbors[0].RemotePortID = "ether3"
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, changedTopology)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 after neighbor changes", topologyService.calls)
+	}
+	if len(topologyService.inputs) != 2 {
+		t.Fatalf("captured inputs = %d, want 2", len(topologyService.inputs))
+	}
+	if topologyService.inputs[1].SkipTopologyMaterialization {
+		t.Fatal("changed topology skipped topology materialization")
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryMaterializesWhenPreviousTopologyHadUnresolvedNeighbors(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{
+		result: service.StaticPersistenceResult{UnresolvedNeighbors: 1},
+	}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	first := staticDiscoveryDedupeResult()
+	changedInterface := staticDiscoveryDedupeResult()
+	changedInterface.Interfaces[0].Speed = 10_000_000_000
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, changedInterface)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 after interface speed changes", topologyService.calls)
+	}
+	if len(topologyService.inputs) != 2 {
+		t.Fatalf("captured inputs = %d, want 2", len(topologyService.inputs))
+	}
+	if topologyService.inputs[1].SkipTopologyMaterialization {
+		t.Fatal("previous unresolved topology allowed topology materialization skip")
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoverySkipsUnchangedResultAfterOldSelfHealDeadline(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	deviceID := uuid.New()
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{
+		topologyService:      topologyService,
+		staticPersistenceNow: func() time.Time { return now },
+	}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	result := staticDiscoveryDedupeResult()
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+	now = now.Add(61 * time.Minute)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 1 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 1 after old unchanged self-heal deadline", topologyService.calls)
+	}
+	metrics := string(registry.MarshalPrometheus())
+	if !strings.Contains(metrics, `theia_static_persistence_skips_total{reason="unchanged"} 1`) {
+		t.Fatalf("expected unchanged static persistence skip metric, got:\n%s", metrics)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryPersistsChangedResultAfterOldSelfHealDeadline(t *testing.T) {
+	deviceID := uuid.New()
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{
+		topologyService:      topologyService,
+		staticPersistenceNow: func() time.Time { return now },
+	}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	first := staticDiscoveryDedupeResult()
+	changed := staticDiscoveryDedupeResult()
+	changed.Interfaces[0].Speed = 10_000_000_000
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, first)
+	now = now.Add(61 * time.Minute)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, changed)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 because changed fingerprints still persist after old self-heal deadline", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryDoesNotCachePersistenceFailure(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{err: errors.New("database unavailable")}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	result := staticDiscoveryDedupeResult()
+
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+	runner.persistStaticDiscovery(domain.Device{ID: deviceID}, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 because failed persistence must retry", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryPersistsUnchangedBootstrapFollowup(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	device := domain.Device{
+		ID:                     deviceID,
+		TopologyBootstrapState: domain.TopologyBootstrapStateFollowupScheduled,
+	}
+	result := staticDiscoveryDedupeResult()
+
+	runner.persistStaticDiscovery(device, result)
+	runner.persistStaticDiscovery(device, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 while bootstrap follow-up is pending", topologyService.calls)
+	}
+}
+
+func TestPipelineTaskRunnerPersistStaticDiscoveryForcedPersistsUnchangedResult(t *testing.T) {
+	deviceID := uuid.New()
+	topologyService := &fakeTopologyService{}
+	pipeline := &PipelineOrchestrator{topologyService: topologyService}
+	runner := &pipelineTaskRunner{pipeline: pipeline}
+	result := staticDiscoveryDedupeResult()
+
+	runner.persistStaticDiscoveryForced(domain.Device{ID: deviceID}, result)
+	runner.persistStaticDiscoveryForced(domain.Device{ID: deviceID}, result)
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 2 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 2 for forced static persistence", topologyService.calls)
+	}
+	if len(topologyService.inputs) != 2 {
+		t.Fatalf("captured inputs = %d, want 2", len(topologyService.inputs))
+	}
+	if topologyService.inputs[1].SkipTopologyMaterialization {
+		t.Fatal("forced static persistence skipped topology materialization")
+	}
+}
+
+func staticDiscoveryDedupeResult() collector.StaticResult {
+	return collector.StaticResult{
+		SysName:       "edge-sw",
+		SysDescr:      "SwitchOS",
+		SysObjectID:   ".1.3.6.1.4.1.14988.1",
+		HardwareModel: "CCR",
+		OSVersion:     "7.15",
+		Vendor:        "mikrotik",
+		DeviceType:    domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+		Neighbors: []snmp.NeighborInfo{
+			{LocalIfIndex: 1, LocalIfName: "ether1", RemoteSysName: "core", RemotePortID: "ether2", Protocol: domain.DiscoveryProtocolLLDP},
+		},
+		NeighborDiscoveryProtocols: []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
 	}
 }
 
@@ -297,6 +589,7 @@ type fakeSNMPClient struct {
 	walkResponses map[string][]gosnmp.SnmpPDU
 	getErr        map[string]error
 	walkErr       map[string]error
+	walkCalls     []string
 	connectDelay  time.Duration
 }
 
@@ -337,6 +630,7 @@ func (c *fakeSNMPClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
 }
 
 func (c *fakeSNMPClient) BulkWalk(rootOid string) ([]gosnmp.SnmpPDU, error) {
+	c.walkCalls = append(c.walkCalls, rootOid)
 	if err := c.walkErr[rootOid]; err != nil {
 		return nil, err
 	}
@@ -378,6 +672,36 @@ func newPerformanceTestCollector(t *testing.T) *collector.PerformanceCollector {
 	})
 }
 
+const (
+	testIfHCInOctetsWalkOperation  = "if_hc_in_octets_walk"
+	testIfHCOutOctetsWalkOperation = "if_hc_out_octets_walk"
+)
+
+func pipelineCounterCooldownTestDevice(deviceID uuid.UUID) domain.Device {
+	return domain.Device{
+		ID:            deviceID,
+		Hostname:      "edge-cooldown",
+		IP:            "192.0.2.85",
+		Managed:       true,
+		MetricsSource: domain.MetricsSourceSNMP,
+		Vendor:        "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", Speed: 1_000_000_000},
+		},
+	}
+}
+
+func armPipelineCounterCooldown(runtime *pipelineRuntimeState, deviceID uuid.UUID, now time.Time, expectedInterval time.Duration) {
+	for _, operation := range []string{testIfHCInOctetsWalkOperation, testIfHCOutOctetsWalkOperation} {
+		runtime.RecordCounterWalkResult(deviceID, operation, "timeout", now, expectedInterval)
+		runtime.RecordCounterWalkResult(deviceID, operation, "timeout", now.Add(time.Second), expectedInterval)
+	}
+}
+
 func newOperationalTestCollector(t *testing.T) *collector.OperationalCollector {
 	t.Helper()
 	client := &fakeSNMPClient{
@@ -408,14 +732,44 @@ func newStaticTestCollector(t *testing.T) *collector.StaticCollector {
 			snmp.OidSysObjectID: {{Name: snmp.OidSysObjectID, Value: ".1.3.6.1.4.1.14988.1"}},
 		},
 		walkResponses: map[string][]gosnmp.SnmpPDU{
-			snmp.OidIfTable: {
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Value: 40},
+				{Name: snmp.OidHrProcessorLoad + ".2", Value: 50},
+			},
+			snmp.OidHrStorageType: {
+				{Name: snmp.OidHrStorageType + ".1", Value: snmp.OidHrStorageRam},
+			},
+			snmp.OidHrStorageAllocUnits: {
+				{Name: snmp.OidHrStorageAllocUnits + ".1", Value: int64(1)},
+			},
+			snmp.OidHrStorageSize: {
+				{Name: snmp.OidHrStorageSize + ".1", Value: int64(200)},
+			},
+			snmp.OidHrStorageUsed: {
+				{Name: snmp.OidHrStorageUsed + ".1", Value: int64(100)},
+			},
+			snmp.OidEntPhySensorType: {
+				{Name: snmp.OidEntPhySensorType + ".1", Value: int64(8)},
+			},
+			snmp.OidEntPhySensorValue: {
+				{Name: snmp.OidEntPhySensorValue + ".1", Value: int64(47)},
+			},
+			snmp.OidIfDescr: {
 				{Name: snmp.OidIfDescr + ".1", Value: "uplink"},
+			},
+			snmp.OidIfSpeed: {
 				{Name: snmp.OidIfSpeed + ".1", Value: uint32(1_000_000_000)},
+			},
+			snmp.OidIfAdminStatus: {
 				{Name: snmp.OidIfAdminStatus + ".1", Value: 1},
+			},
+			snmp.OidIfOperStatus: {
 				{Name: snmp.OidIfOperStatus + ".1", Value: 1},
 			},
-			snmp.OidIfXTable: {
+			snmp.OidIfName: {
 				{Name: snmp.OidIfName + ".1", Value: "ether1"},
+			},
+			snmp.OidIfHighSpeed: {
 				{Name: snmp.OidIfHighSpeed + ".1", Value: uint32(1_000)},
 			},
 			snmp.OidLLDPLocPortIfIndex: {
@@ -432,6 +786,41 @@ func newStaticTestCollector(t *testing.T) *collector.StaticCollector {
 			},
 			snmp.OidLLDPRemSysName: {
 				{Name: snmp.OidLLDPRemSysName + ".0.1.1", Value: "remote-switch"},
+			},
+		},
+	}
+
+	return collector.NewStaticCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		return client, nil
+	})
+}
+
+func newStaticCachedContextTestCollector(t *testing.T) *collector.StaticCollector {
+	t.Helper()
+	client := &fakeSNMPClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysName:     {{Name: snmp.OidSysName, Value: "edge-cached-context"}},
+			snmp.OidSysDescr:    {{Name: snmp.OidSysDescr, Value: "SwitchOS edge"}},
+			snmp.OidSysObjectID: {{Name: snmp.OidSysObjectID, Value: ".1.3.6.1.4.1.14988.1"}},
+		},
+		walkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Value: 40},
+			},
+			snmp.OidIfOperStatus: {
+				{Name: snmp.OidIfOperStatus + ".7", Value: 1},
+			},
+			snmp.OidLLDPLocPortIfIndex: {
+				{Name: snmp.OidLLDPLocPortIfIndex + ".1", Value: int(7)},
+			},
+			snmp.OidLLDPRemChassisId: {
+				{Name: snmp.OidLLDPRemChassisId + ".1000.1.1", Value: "aa:bb:cc:dd:ee:ff"},
+			},
+			snmp.OidLLDPRemPortId: {
+				{Name: snmp.OidLLDPRemPortId + ".1000.1.1", Value: "ether48"},
+			},
+			snmp.OidLLDPRemSysName: {
+				{Name: snmp.OidLLDPRemSysName + ".1000.1.1", Value: "remote-switch"},
 			},
 		},
 	}
@@ -482,7 +871,7 @@ func TestPipelineRunsEssentialTaskWithEssentialTimeoutProfile(t *testing.T) {
 	}
 }
 
-func TestPipelineRunsPerformanceTaskWithBackgroundTimeoutProfile(t *testing.T) {
+func TestPipelineRunsPerformanceTaskWithPerformanceCounterTimeoutProfile(t *testing.T) {
 	device := domain.Device{
 		ID:            uuid.New(),
 		Hostname:      "edge-performance",
@@ -519,11 +908,62 @@ func TestPipelineRunsPerformanceTaskWithBackgroundTimeoutProfile(t *testing.T) {
 	}
 
 	pipeline.runTask(context.Background(), task)
-	if gotTimeout != 5*time.Second {
-		t.Fatalf("performance timeout = %v, want 5s background profile", gotTimeout)
+	if gotTimeout != 2*time.Second {
+		t.Fatalf("performance timeout = %v, want capped 2s performance counter profile", gotTimeout)
 	}
-	if gotRetries != 1 {
-		t.Fatalf("performance retries = %d, want 1 background retry", gotRetries)
+	if gotRetries != 0 {
+		t.Fatalf("performance retries = %d, want 0 performance counter retries", gotRetries)
+	}
+}
+
+func TestPipelineRunsOperationalAndStaticTasksWithBackgroundTimeoutProfile(t *testing.T) {
+	stateStore := state.NewStore()
+	settingsRepo := newMockWorkerSettingsRepo()
+	_ = settingsRepo.Set(domain.SettingSNMPTimeout, "10")
+	_ = settingsRepo.Set(domain.SettingSNMPRetries, "2")
+
+	gotProfiles := map[domain.VolatilityClass]polling.TimeoutProfile{}
+	operational := collector.NewOperationalCollector(buildEmptyVendorRegistry(), func(_ string, _ domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
+		gotProfiles[domain.VolatilityClassOperational] = polling.TimeoutProfile{Timeout: timeout, Retries: retries}
+		return &fakeSNMPClient{}, nil
+	})
+	staticCollector := collector.NewStaticCollector(buildEmptyVendorRegistry(), func(_ string, _ domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
+		gotProfiles[domain.VolatilityClassStatic] = polling.TimeoutProfile{Timeout: timeout, Retries: retries}
+		return &fakeSNMPClient{}, nil
+	})
+	pipeline := NewPipelineOrchestrator(nil, stateStore, nil, nil, nil, nil, operational, staticCollector, nil, nil, settingsRepo, nil, nil, nil)
+
+	for _, volatilityClass := range []domain.VolatilityClass{domain.VolatilityClassOperational, domain.VolatilityClassStatic} {
+		device := domain.Device{
+			ID:            uuid.New(),
+			Hostname:      "edge-" + string(volatilityClass),
+			IP:            "10.0.0.3",
+			Managed:       true,
+			PollClass:     domain.PollClassCore,
+			MetricsSource: domain.MetricsSourceSNMP,
+			Vendor:        "default",
+		}
+		pipeline.runTask(context.Background(), scheduler.PollTask{
+			Key:              scheduler.NewTaskKey(device.ID, volatilityClass),
+			Kind:             polling.TaskKindBackground,
+			Lane:             polling.LaneBackground,
+			VolatilityClass:  volatilityClass,
+			Device:           device,
+			ExpectedInterval: 30 * time.Second,
+		})
+	}
+
+	for _, volatilityClass := range []domain.VolatilityClass{domain.VolatilityClassOperational, domain.VolatilityClassStatic} {
+		profile, ok := gotProfiles[volatilityClass]
+		if !ok {
+			t.Fatalf("%s task did not create SNMP client", volatilityClass)
+		}
+		if profile.Timeout != 10*time.Second {
+			t.Fatalf("%s timeout = %v, want configured 10s background profile", volatilityClass, profile.Timeout)
+		}
+		if profile.Retries != 2 {
+			t.Fatalf("%s retries = %d, want configured 2 background retries", volatilityClass, profile.Retries)
+		}
 	}
 }
 
@@ -543,7 +983,7 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 			PrometheusLabelName:  "instance",
 			PrometheusLabelValue: "192.0.2.10",
 			Interfaces: []domain.Interface{
-				{IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000},
+				{IfIndex: 1, IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000},
 			},
 		},
 	}
@@ -594,8 +1034,11 @@ func TestPipelineOrchestratorPerformanceTaskUpdatesStoreAndCompletesScheduler(t 
 	if !ok {
 		t.Fatal("expected state store update for performance task")
 	}
-	if deviceState.Metrics.CPUPercent == nil || *deviceState.Metrics.CPUPercent != 55 {
-		t.Fatalf("expected CPU metric 55, got %#v", deviceState.Metrics.CPUPercent)
+	if deviceState.Metrics.CPUPercent != nil || deviceState.Metrics.MemPercent != nil || deviceState.Metrics.TempCelsius != nil {
+		t.Fatalf("expected performance task to skip device-health metrics, got %#v", deviceState.Metrics)
+	}
+	if deviceState.Metrics.UptimeSecs != nil {
+		t.Fatalf("expected performance task to skip uptime metric, got %#v", deviceState.Metrics.UptimeSecs)
 	}
 	if len(deviceState.LinkMetrics) != 1 {
 		t.Fatalf("expected 1 computed link metric, got %d", len(deviceState.LinkMetrics))
@@ -690,6 +1133,340 @@ func TestPipelineOrchestratorPerformanceTaskCompletionUsesWallClockFinish(t *tes
 	}
 }
 
+func TestPipelineOrchestratorPerformanceTaskSkipsSNMPWhenEssentialMarkedSNMPUnreachable(t *testing.T) {
+	deviceID := uuid.New()
+	essentialAt := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	store := state.NewStore()
+	store.Update(state.StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        essentialAt,
+		Essential: &state.EssentialUpdate{
+			PollStatus:       polling.PollStatusFailed,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateFalse,
+			Uptime:           polling.FieldStateError,
+			CPU:              polling.FieldStateError,
+			Memory:           polling.FieldStateError,
+		},
+	})
+
+	var snmpCalls int
+	performance := collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		snmpCalls++
+		return nil, errors.New("background performance SNMP should be skipped")
+	})
+	sched := newPipelineTestScheduler()
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		store,
+		nil,
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		performance,
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		nil,
+		nil,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            83,
+		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassPerformance),
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Device: domain.Device{
+			ID:            deviceID,
+			IP:            "192.0.2.83",
+			MetricsSource: domain.MetricsSourceSNMP,
+			Vendor:        "default",
+			SNMPCredentials: domain.SNMPCredentials{
+				Version: domain.SNMPVersionV2c,
+				V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+			},
+		},
+	})
+
+	if snmpCalls != 0 {
+		t.Fatalf("performance SNMP calls = %d, want 0 while essential SNMP state is unreachable", snmpCalls)
+	}
+	deviceState, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected existing essential state")
+	}
+	if !deviceState.LastPolledAt.Equal(essentialAt) {
+		t.Fatalf("LastPolledAt = %s, want unchanged essential timestamp %s", deviceState.LastPolledAt, essentialAt)
+	}
+	sched.mu.Lock()
+	defer sched.mu.Unlock()
+	if len(sched.completions) != 1 {
+		t.Fatalf("expected one scheduler completion for skipped task, got %d", len(sched.completions))
+	}
+}
+
+func TestPipelineCounterCooldownResetDeviceRuntimeClearsState(t *testing.T) {
+	deviceID := uuid.New()
+	runtime := newPipelineRuntimeState(ws.PrometheusStatusPayload{})
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+
+	armPipelineCounterCooldown(runtime, deviceID, now, 30*time.Second)
+	if !runtime.ShouldSkipCounterWalk(deviceID, testIfHCInOctetsWalkOperation, now.Add(time.Second)) {
+		t.Fatal("expected armed counter cooldown to skip in-octets walk")
+	}
+
+	runtime.resetDeviceRuntime(deviceID)
+	if runtime.ShouldSkipCounterWalk(deviceID, testIfHCInOctetsWalkOperation, now.Add(time.Second)) {
+		t.Fatal("counter cooldown state was not cleared by resetDeviceRuntime")
+	}
+}
+
+func TestPipelineCounterCooldownSkipKeepsPerformanceFreshnessAndSNMPReachability(t *testing.T) {
+	device := pipelineCounterCooldownTestDevice(uuid.New())
+	store := state.NewStore()
+	var snmpCalls int
+	fakeClient := &fakeSNMPClient{
+		walkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfHCInOctets: {
+				{Name: snmp.OidIfHCInOctets + ".1", Value: uint64(10_000)},
+			},
+			snmp.OidIfHCOutOctets: {
+				{Name: snmp.OidIfHCOutOctets + ".1", Value: uint64(20_000)},
+			},
+		},
+	}
+	performance := collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		snmpCalls++
+		return fakeClient, nil
+	})
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		store,
+		newPipelineTestCache([]domain.Device{device}, nil),
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		performance,
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		nil,
+		nil,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+	armPipelineCounterCooldown(pipeline.runtime, device.ID, time.Now().UTC(), 30*time.Second)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            85,
+		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassPerformance),
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Device:           device,
+	})
+
+	if snmpCalls != 1 {
+		t.Fatalf("performance SNMP factory calls = %d, want 1 for cooldown-aware poll", snmpCalls)
+	}
+	if len(fakeClient.walkCalls) != 0 {
+		t.Fatalf("BulkWalk calls = %v, want no HC counter walks during cooldown", fakeClient.walkCalls)
+	}
+	deviceState, ok := store.GetDevice(device.ID)
+	if !ok {
+		t.Fatal("expected performance cooldown skip to update device freshness")
+	}
+	if deviceState.LastPolledAt.IsZero() {
+		t.Fatal("LastPolledAt was not updated by cooldown skip")
+	}
+	if deviceState.Stale {
+		t.Fatal("device remains stale after successful cooldown skip")
+	}
+	if deviceState.SNMPReachable == polling.TriStateFalse {
+		t.Fatalf("SNMPReachable = %q, want not false after cooldown skip", deviceState.SNMPReachable)
+	}
+	if len(deviceState.LinkMetrics) != 0 {
+		t.Fatalf("link metrics = %d, want none during cooldown skip", len(deviceState.LinkMetrics))
+	}
+}
+
+func TestPipelinePrevCountersCounterCooldownSkipDoesNotInstallEmptyBaseline(t *testing.T) {
+	device := pipelineCounterCooldownTestDevice(uuid.New())
+	performance := collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		return &fakeSNMPClient{}, nil
+	})
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		state.NewStore(),
+		newPipelineTestCache([]domain.Device{device}, nil),
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		performance,
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		nil,
+		nil,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+	armPipelineCounterCooldown(pipeline.runtime, device.ID, time.Now().UTC(), 30*time.Second)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            86,
+		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassPerformance),
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Device:           device,
+	})
+
+	pipeline.runtime.mu.RLock()
+	_, ok := pipeline.runtime.prevCounters[device.ID]
+	pipeline.runtime.mu.RUnlock()
+	if ok {
+		t.Fatal("cooldown skip installed an empty prevCounters baseline")
+	}
+}
+
+func TestPipelineCounterCooldownKnownSNMPUnreachableSkipRemainsStronger(t *testing.T) {
+	device := pipelineCounterCooldownTestDevice(uuid.New())
+	essentialAt := time.Date(2026, 6, 19, 12, 30, 0, 0, time.UTC)
+	store := state.NewStore()
+	store.Update(state.StateUpdate{
+		DeviceID:         device.ID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        essentialAt,
+		Essential: &state.EssentialUpdate{
+			PollStatus:       polling.PollStatusFailed,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateFalse,
+			Uptime:           polling.FieldStateError,
+			CPU:              polling.FieldStateError,
+			Memory:           polling.FieldStateError,
+		},
+	})
+
+	var snmpCalls int
+	performance := collector.NewPerformanceCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		snmpCalls++
+		return nil, errors.New("background performance SNMP should be skipped before cooldown policy")
+	})
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		store,
+		newPipelineTestCache([]domain.Device{device}, nil),
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		performance,
+		newOperationalTestCollector(t),
+		newStaticTestCollector(t),
+		nil,
+		nil,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+	armPipelineCounterCooldown(pipeline.runtime, device.ID, time.Now().UTC(), 30*time.Second)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            87,
+		Key:              scheduler.NewTaskKey(device.ID, domain.VolatilityClassPerformance),
+		VolatilityClass:  domain.VolatilityClassPerformance,
+		ExpectedInterval: 30 * time.Second,
+		Device:           device,
+	})
+
+	if snmpCalls != 0 {
+		t.Fatalf("performance SNMP calls = %d, want 0 while known SNMP unreachable", snmpCalls)
+	}
+	deviceState, ok := store.GetDevice(device.ID)
+	if !ok {
+		t.Fatal("expected existing essential state")
+	}
+	if !deviceState.LastPolledAt.Equal(essentialAt) {
+		t.Fatalf("LastPolledAt = %s, want unchanged essential timestamp %s", deviceState.LastPolledAt, essentialAt)
+	}
+}
+
+func TestPipelineOrchestratorOperationalTaskSkipsSNMPWhenEssentialMarkedSNMPUnreachable(t *testing.T) {
+	deviceID := uuid.New()
+	essentialAt := time.Date(2026, 4, 28, 12, 5, 0, 0, time.UTC)
+	store := state.NewStore()
+	store.Update(state.StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        essentialAt,
+		Essential: &state.EssentialUpdate{
+			PollStatus:       polling.PollStatusFailed,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateFalse,
+			Uptime:           polling.FieldStateError,
+			CPU:              polling.FieldStateError,
+			Memory:           polling.FieldStateError,
+		},
+	})
+
+	var snmpCalls int
+	operational := collector.NewOperationalCollector(buildEmptyVendorRegistry(), func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+		snmpCalls++
+		return nil, errors.New("background operational SNMP should be skipped")
+	})
+	sched := newPipelineTestScheduler()
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		store,
+		nil,
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		newPerformanceTestCollector(t),
+		operational,
+		newStaticTestCollector(t),
+		nil,
+		nil,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            84,
+		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassOperational),
+		VolatilityClass:  domain.VolatilityClassOperational,
+		ExpectedInterval: domain.OperationalClassInterval,
+		Device: domain.Device{
+			ID:            deviceID,
+			IP:            "192.0.2.84",
+			MetricsSource: domain.MetricsSourceSNMP,
+			Vendor:        "default",
+			SNMPCredentials: domain.SNMPCredentials{
+				Version: domain.SNMPVersionV2c,
+				V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+			},
+		},
+	})
+
+	if snmpCalls != 0 {
+		t.Fatalf("operational SNMP calls = %d, want 0 while essential SNMP state is unreachable", snmpCalls)
+	}
+	deviceState, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected existing essential state")
+	}
+	if !deviceState.LastPolledAt.Equal(essentialAt) {
+		t.Fatalf("LastPolledAt = %s, want unchanged essential timestamp %s", deviceState.LastPolledAt, essentialAt)
+	}
+	sched.mu.Lock()
+	defer sched.mu.Unlock()
+	if len(sched.completions) != 1 {
+		t.Fatalf("expected one scheduler completion for skipped task, got %d", len(sched.completions))
+	}
+}
+
 func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNotify(t *testing.T) {
 	deviceID := uuid.New()
 	performanceAt := time.Date(2026, 4, 13, 12, 30, 0, 0, time.UTC)
@@ -753,6 +1530,9 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 	if deviceState.ExpectedInterval != 30*time.Second {
 		t.Fatalf("ExpectedInterval = %s, want 30s performance cadence", deviceState.ExpectedInterval)
 	}
+	assertPipelineFloatPtrEqual(t, deviceState.Metrics.CPUPercent, 45, "CPUPercent")
+	assertPipelineFloatPtrEqual(t, deviceState.Metrics.MemPercent, 50, "MemPercent")
+	assertPipelineFloatPtrEqual(t, deviceState.Metrics.TempCelsius, 47, "TempCelsius")
 
 	topologyService.mu.Lock()
 	if topologyService.calls != 1 {
@@ -780,6 +1560,64 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 		t.Fatalf("expected one scheduler completion, got %d", len(sched.completions))
 	}
 	sched.mu.Unlock()
+}
+
+func TestPipelineStaticTaskUsesCachedInterfacesForDiscoveryContext(t *testing.T) {
+	deviceID := uuid.New()
+	taskDevice := domain.Device{
+		ID:                    deviceID,
+		IP:                    "192.0.2.21",
+		Status:                domain.DeviceStatusProbing,
+		Vendor:                "default",
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeLLDP,
+	}
+	cachedDevice := taskDevice
+	cachedDevice.Interfaces = []domain.Interface{
+		{IfIndex: 7, IfName: "cached-uplink", Speed: 1_000_000_000},
+	}
+	topologyService := &fakeTopologyService{}
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		state.NewStore(),
+		newPipelineTestCache([]domain.Device{cachedDevice}, nil),
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		newPerformanceTestCollector(t),
+		newOperationalTestCollector(t),
+		newStaticCachedContextTestCollector(t),
+		nil,
+		topologyService,
+		newMockWorkerSettingsRepo(),
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		RunID:            78,
+		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassStatic),
+		VolatilityClass:  domain.VolatilityClassStatic,
+		ExpectedInterval: 5 * time.Minute,
+		Device:           taskDevice,
+	})
+
+	topologyService.mu.Lock()
+	defer topologyService.mu.Unlock()
+	if topologyService.calls != 1 {
+		t.Fatalf("ApplyStaticDiscovery calls = %d, want 1", topologyService.calls)
+	}
+	if len(topologyService.lastIn.Neighbors) != 1 {
+		t.Fatalf("neighbors = %#v, want one cached-context neighbor", topologyService.lastIn.Neighbors)
+	}
+	if topologyService.lastIn.Neighbors[0].LocalIfName != "cached-uplink" {
+		t.Fatalf("neighbor LocalIfName = %q, want cached-uplink", topologyService.lastIn.Neighbors[0].LocalIfName)
+	}
+	if len(topologyService.lastIn.Interfaces) != 1 {
+		t.Fatalf("interfaces = %#v, want only one live-observed interface", topologyService.lastIn.Interfaces)
+	}
+	if topologyService.lastIn.Interfaces[0].IfName == "cached-uplink" {
+		t.Fatalf("cached interface name was persisted as fresh interface data: %#v", topologyService.lastIn.Interfaces[0])
+	}
 }
 
 func TestPipelineOrchestratorBootstrapTaskUsesBootstrapLaneAndPersistsTopology(t *testing.T) {
@@ -817,14 +1655,22 @@ func TestPipelineOrchestratorBootstrapTaskUsesBootstrapLaneAndPersistsTopology(t
 				snmp.OidSysObjectID: {{Name: snmp.OidSysObjectID, Value: ".1.3.6.1.4.1.14988.1"}},
 			},
 			walkResponses: map[string][]gosnmp.SnmpPDU{
-				snmp.OidIfTable: {
+				snmp.OidIfDescr: {
 					{Name: snmp.OidIfDescr + ".1", Value: "uplink"},
+				},
+				snmp.OidIfSpeed: {
 					{Name: snmp.OidIfSpeed + ".1", Value: uint32(1_000_000_000)},
+				},
+				snmp.OidIfAdminStatus: {
 					{Name: snmp.OidIfAdminStatus + ".1", Value: 1},
+				},
+				snmp.OidIfOperStatus: {
 					{Name: snmp.OidIfOperStatus + ".1", Value: 1},
 				},
-				snmp.OidIfXTable: {
+				snmp.OidIfName: {
 					{Name: snmp.OidIfName + ".1", Value: "ether1"},
+				},
+				snmp.OidIfHighSpeed: {
 					{Name: snmp.OidIfHighSpeed + ".1", Value: uint32(1_000)},
 				},
 				snmp.OidLLDPLocPortIfIndex: {
@@ -943,6 +1789,65 @@ func TestPipelineOrchestratorTopologyDiscoveryMode_TreatsBootstrapOnceAsOffForRe
 		t.Run(tt.name, func(t *testing.T) {
 			if got := pipeline.taskRunner.topologyDiscoveryMode(tt.device); got != tt.want {
 				t.Fatalf("topologyDiscoveryMode() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPipelineOrchestratorBootstrapTopologyDiscoveryMode_UsesBootstrapState(t *testing.T) {
+	settingsRepo := newMockWorkerSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeLLDPCDP)); err != nil {
+		t.Fatalf("Set setting failed: %v", err)
+	}
+	pipeline := NewPipelineOrchestrator(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, settingsRepo, nil, nil, nil)
+
+	tests := []struct {
+		name   string
+		device domain.Device
+		want   domain.TopologyDiscoveryMode
+	}{
+		{
+			name: "pending inherit forces bootstrap once",
+			device: domain.Device{
+				TopologyDiscoveryMode:  domain.TopologyDiscoveryModeInherit,
+				TopologyBootstrapState: domain.TopologyBootstrapStatePending,
+			},
+			want: domain.TopologyDiscoveryModeBootstrapOnce,
+		},
+		{
+			name: "followup scheduled overrides continuous mode",
+			device: domain.Device{
+				TopologyDiscoveryMode:  domain.TopologyDiscoveryModeLLDPCDP,
+				TopologyBootstrapState: domain.TopologyBootstrapStateFollowupScheduled,
+			},
+			want: domain.TopologyDiscoveryModeBootstrapOnce,
+		},
+		{
+			name: "idle inherit uses default continuous mode",
+			device: domain.Device{
+				TopologyDiscoveryMode:  domain.TopologyDiscoveryModeInherit,
+				TopologyBootstrapState: domain.TopologyBootstrapStateIdle,
+			},
+			want: domain.TopologyDiscoveryModeLLDPCDP,
+		},
+		{
+			name: "completed bootstrap once becomes off",
+			device: domain.Device{
+				TopologyDiscoveryMode:  domain.TopologyDiscoveryModeBootstrapOnce,
+				TopologyBootstrapState: domain.TopologyBootstrapStateCompleted,
+			},
+			want: domain.TopologyDiscoveryModeOff,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner, ok := pipeline.taskRunner.(*pipelineTaskRunner)
+			if !ok {
+				t.Fatal("expected pipeline task runner to use pipelineTaskRunner")
+			}
+			if got := runner.bootstrapTopologyDiscoveryMode(tt.device); got != tt.want {
+				t.Fatalf("bootstrapTopologyDiscoveryMode() = %s, want %s", got, tt.want)
 			}
 		})
 	}
@@ -1338,7 +2243,89 @@ func TestPipelineOrchestratorRunTask_VirtualOperationalUsesPrometheusReachabilit
 	}
 }
 
+func TestPipelineOrchestratorRunTask_VirtualPrometheusUnreachableDrivesTCPReachability(t *testing.T) {
+	deviceID := uuid.New()
+	task := scheduler.PollTask{
+		RunID:            92,
+		Key:              scheduler.NewTaskKey(deviceID, domain.VolatilityClassOperational),
+		VolatilityClass:  domain.VolatilityClassOperational,
+		ExpectedInterval: domain.OperationalClassInterval,
+		Device: domain.Device{
+			ID:                   deviceID,
+			DeviceType:           domain.DeviceTypeVirtual,
+			IP:                   "192.0.2.91",
+			Status:               domain.DeviceStatusUnknown,
+			PrometheusLabelName:  "instance",
+			PrometheusLabelValue: "192.0.2.91",
+		},
+	}
+
+	sched := newPipelineTestScheduler()
+	store := state.NewStore()
+	promClient := &fakePrometheusClient{
+		probeStatuses: map[string]bool{"192.0.2.91": false},
+	}
+	settingsRepo := newMockWorkerSettingsRepo()
+	if err := settingsRepo.Set(domain.SettingPrometheusURL, "http://prometheus.test"); err != nil {
+		t.Fatalf("set prometheus_url: %v", err)
+	}
+
+	var snmpCalls int
+	operational := collector.NewOperationalCollector(
+		buildEmptyVendorRegistry(),
+		func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+			snmpCalls++
+			return nil, errors.New("virtual operational task should not create an SNMP client")
+		},
+	)
+
+	pipeline := NewPipelineOrchestrator(
+		sched,
+		store,
+		newPipelineTestCache([]domain.Device{task.Device}, nil),
+		ws.NewHub(ws.WithBroadcastRecorder()),
+		nil,
+		newPerformanceTestCollector(t),
+		operational,
+		newStaticTestCollector(t),
+		collector.NewPrometheusCollector(promClient),
+		&fakeTopologyService{},
+		settingsRepo,
+		make(chan struct{}, 1),
+		nil,
+		nil,
+	)
+	pipeline.prometheusMonitor.publishStatus(ws.PrometheusStatusPayload{
+		Enabled:   true,
+		Available: true,
+	})
+
+	pipeline.taskRunner.runTask(context.Background(), task)
+
+	deviceState, ok := store.GetDevice(deviceID)
+	if !ok {
+		t.Fatal("expected virtual operational task to update state store")
+	}
+	if deviceState.Reachability != state.ReachabilitySoftDown {
+		t.Fatalf("Reachability = %q, want %q", deviceState.Reachability, state.ReachabilitySoftDown)
+	}
+	if deviceState.ConsecutiveFailures != 1 {
+		t.Fatalf("ConsecutiveFailures = %d, want 1", deviceState.ConsecutiveFailures)
+	}
+	if snmpCalls != 0 {
+		t.Fatalf("expected virtual operational task to bypass SNMP collector, got %d SNMP call(s)", snmpCalls)
+	}
+}
+
 func newBroadcastTestPipeline(t *testing.T) (*PipelineOrchestrator, *ws.Hub, *state.Store, chan struct{}, uuid.UUID) {
+	return newBroadcastTestPipelineWithOverviewClient(t, true)
+}
+
+func newNoClientBroadcastTestPipeline(t *testing.T) (*PipelineOrchestrator, *ws.Hub, *state.Store, chan struct{}, uuid.UUID) {
+	return newBroadcastTestPipelineWithOverviewClient(t, false)
+}
+
+func newBroadcastTestPipelineWithOverviewClient(t *testing.T, attachClient bool) (*PipelineOrchestrator, *ws.Hub, *state.Store, chan struct{}, uuid.UUID) {
 	t.Helper()
 
 	deviceID := uuid.New()
@@ -1407,7 +2394,61 @@ func newBroadcastTestPipeline(t *testing.T) (*PipelineOrchestrator, *ws.Hub, *st
 		nil,
 	)
 
+	if attachClient {
+		attachOverviewBroadcastTestClient(t, hub)
+	}
+
 	return pipeline, hub, store, topologyNotify, deviceID
+}
+
+func attachOverviewBroadcastTestClient(t *testing.T, hub *ws.Hub) {
+	t.Helper()
+
+	go hub.Run()
+	server := httptest.NewServer(ws.NewHandler(
+		hub,
+		func() (*ws.SnapshotPayload, uint64) { return ws.EmptySnapshot(), 0 },
+		func() ws.AlertMessagePayload { return ws.AlertMessagePayload{Alerts: []ws.AlertDTO{}} },
+		func() ws.PrometheusStatusPayload { return ws.PrometheusStatusPayload{} },
+	))
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?runtime_version=0"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial overview broadcast websocket test client: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	waitForOverviewBroadcastClient(t, hub)
+	drainOverviewBroadcastClientBootstrap(t, conn)
+}
+
+func waitForOverviewBroadcastClient(t *testing.T, hub *ws.Hub) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if hub.HasOverviewClients() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("expected overview broadcast test client to register")
+}
+
+func drainOverviewBroadcastClientBootstrap(t *testing.T, conn *websocket.Conn) {
+	t.Helper()
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+	for i := 0; i < 2; i++ {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Fatalf("failed to drain overview broadcast bootstrap message %d: %v", i+1, err)
+		}
+	}
 }
 
 func TestPipelineWorkerCountIncludesEssentialWorkers(t *testing.T) {
@@ -1536,7 +2577,7 @@ func newDetailSubscriptionTestDevice() domain.Device {
 		Status: domain.DeviceStatusUnknown,
 		Vendor: "default",
 		Interfaces: []domain.Interface{
-			{IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000},
+			{IfIndex: 1, IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000},
 		},
 	}
 }
@@ -2244,6 +3285,120 @@ func TestMergeSnapshotPayload_RefreshesCompatibilityViewsAfterDelta(t *testing.T
 	}
 }
 
+func TestApplySnapshotDeltaToRuntime_UpdatesSnapshotAndHashesIncrementally(t *testing.T) {
+	deviceAID := uuid.New().String()
+	deviceBID := uuid.New().String()
+	linkAID := uuid.New().String()
+	linkBID := uuid.New().String()
+	updatedCollectedAt := "2026-04-20T10:30:00Z"
+
+	base := ws.EmptySnapshot()
+	base.Devices[deviceAID] = ws.DeviceRuntimeDTO{
+		DeviceID:          deviceAID,
+		OperationalStatus: string(domain.DeviceStatusDown),
+		MetricsStatus:     "missing",
+	}
+	base.Devices[deviceBID] = ws.DeviceRuntimeDTO{
+		DeviceID:          deviceBID,
+		OperationalStatus: string(domain.DeviceStatusUp),
+		RuntimeFlags:      []string{},
+		MetricsStatus:     "available",
+	}
+	base.Links[linkAID] = ws.LinkRuntimeDTO{
+		LinkID:         linkAID,
+		SourceDeviceID: deviceAID,
+		TargetDeviceID: deviceBID,
+		DeviceID:       deviceAID,
+		SourceIfName:   "ether1",
+		MetricsStatus:  "missing",
+	}
+	base.Links[linkBID] = ws.LinkRuntimeDTO{
+		LinkID:         linkBID,
+		SourceDeviceID: deviceBID,
+		TargetDeviceID: deviceAID,
+		DeviceID:       deviceBID,
+		SourceIfName:   "ether2",
+		MetricsStatus:  "available",
+	}
+	syncSnapshotCompatibility(base)
+	baseHashes := computeSnapshotHashes(base)
+	expectedBase := ws.CloneSnapshot(base)
+
+	delta := ws.EmptySnapshot()
+	delta.Devices[deviceAID] = ws.DeviceRuntimeDTO{
+		DeviceID:          deviceAID,
+		OperationalStatus: string(domain.DeviceStatusUp),
+		MetricsStatus:     "available",
+	}
+	delta.Links[linkAID] = ws.LinkRuntimeDTO{
+		LinkID:          linkAID,
+		SourceDeviceID:  deviceAID,
+		TargetDeviceID:  deviceBID,
+		DeviceID:        deviceAID,
+		SourceIfName:    "ether1",
+		MetricsStatus:   "available",
+		LastCollectedAt: &updatedCollectedAt,
+	}
+
+	expected := mergeSnapshotPayload(expectedBase, delta)
+	expectedHashes := computeSnapshotHashes(expected)
+
+	got, gotHashes := applySnapshotDeltaToRuntime(base, baseHashes, delta)
+
+	if got != base {
+		t.Fatal("expected runtime snapshot to be updated in place")
+	}
+	if gotHashes != baseHashes {
+		t.Fatal("expected section hashes to be updated in place")
+	}
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("incremental snapshot mismatch\n got: %#v\nwant: %#v", got, expected)
+	}
+	if !reflect.DeepEqual(gotHashes, expectedHashes) {
+		t.Fatalf("incremental hashes mismatch\n got: %#v\nwant: %#v", gotHashes, expectedHashes)
+	}
+}
+
+func TestRemoveLinkRuntimeFromCompatibility_UsesPreviousBucketAndFallbackSourceDevice(t *testing.T) {
+	linkID := uuid.New().String()
+	oldDeviceID := uuid.New().String()
+	otherDeviceID := uuid.New().String()
+	sourceDeviceID := uuid.New().String()
+	sourceFallbackLinkID := uuid.New().String()
+
+	metrics := map[string][]ws.LinkRuntimeDTO{
+		oldDeviceID: {
+			{LinkID: linkID, DeviceID: oldDeviceID},
+			{LinkID: "keep-old", DeviceID: oldDeviceID},
+		},
+		otherDeviceID: {
+			{LinkID: "keep-other", DeviceID: otherDeviceID},
+		},
+		sourceDeviceID: {
+			{LinkID: sourceFallbackLinkID, SourceDeviceID: sourceDeviceID},
+		},
+	}
+
+	removeLinkRuntimeFromCompatibility(metrics, ws.LinkRuntimeDTO{LinkID: linkID, DeviceID: oldDeviceID}, linkID)
+
+	if len(metrics[oldDeviceID]) != 1 || metrics[oldDeviceID][0].LinkID != "keep-old" {
+		t.Fatalf("old bucket after targeted removal = %#v, want only keep-old", metrics[oldDeviceID])
+	}
+	if len(metrics[otherDeviceID]) != 1 || metrics[otherDeviceID][0].LinkID != "keep-other" {
+		t.Fatalf("other bucket changed during targeted removal: %#v", metrics[otherDeviceID])
+	}
+
+	removeLinkRuntimeFromCompatibility(
+		metrics,
+		ws.LinkRuntimeDTO{LinkID: sourceFallbackLinkID, SourceDeviceID: sourceDeviceID},
+		sourceFallbackLinkID,
+	)
+
+	if _, exists := metrics[sourceDeviceID]; exists {
+		t.Fatalf("source fallback bucket still exists after removing its only link: %#v", metrics[sourceDeviceID])
+	}
+}
+
 func TestPipelineOrchestratorBroadcastLoop_LinkChangeBroadcastsTopologyInvalidationOnly(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
@@ -2337,7 +3492,559 @@ func TestPipelineOrchestratorBroadcastLoop_AlertRefreshBroadcastsAlertMessage(t 
 	}
 }
 
-func TestPipelineOrchestratorBroadcastDirty_AlertResolutionWithoutRuntimeBaseUsesNarrowPatch(t *testing.T) {
+func TestPipelineOrchestratorBroadcastDirty_DirtyDeviceNoClientSkipsNarrowOverviewBuild(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	cpu := float64(72)
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  &cpu,
+			CollectedAt: time.Date(2026, 4, 13, 12, 1, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 13, 12, 1, 0, 0, time.UTC),
+	})
+
+	hooks := installPipelineSnapshotHookCounters(t)
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	if hooks.narrowCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", hooks.narrowCalls)
+	}
+	if hooks.fullCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", hooks.fullCalls)
+	}
+	if messages := drainBroadcastCh(hub); len(messages) != 0 {
+		t.Fatalf("expected no overview broadcast messages without clients, got %v", broadcastMessageTypes(t, messages))
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_ForcedFullResyncNoClientSkipsFullOverviewBuild(t *testing.T) {
+	pipeline, hub, _, _, _ := newNoClientBroadcastTestPipeline(t)
+
+	hooks := installPipelineSnapshotHookCounters(t)
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), nil, false, false, true); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	if hooks.fullCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", hooks.fullCalls)
+	}
+	if hooks.narrowCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", hooks.narrowCalls)
+	}
+	if messages := drainBroadcastCh(hub); len(messages) != 0 {
+		t.Fatalf("expected no overview broadcast messages without clients, got %v", broadcastMessageTypes(t, messages))
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_NoClientDirtyWorkSetsRuntimeBaseStale(t *testing.T) {
+	pipeline, _, _, _, deviceID := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	pipeline.runtime.mu.RLock()
+	seeded := pipeline.runtime.prevHashes != nil
+	pipeline.runtime.mu.RUnlock()
+	if !seeded {
+		t.Fatal("expected broadcastOnce to seed runtime hash base")
+	}
+
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	pipeline.runtime.mu.RLock()
+	stale := pipeline.runtime.prevHashes == nil
+	pipeline.runtime.mu.RUnlock()
+	if !stale {
+		t.Fatal("expected no-client dirty work to clear runtime hash base")
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_TopologyOnlyNoClientMarksRuntimeBaseStale(t *testing.T) {
+	pipeline, hub, _, _, _ := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	hooks := installPipelineSnapshotHookCounters(t)
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), nil, false, true, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	pipeline.runtime.mu.RLock()
+	stale := pipeline.runtime.prevHashes == nil
+	pipeline.runtime.mu.RUnlock()
+	if !stale {
+		t.Fatal("expected topology-only no-client work to clear runtime hash base")
+	}
+	if hooks.fullCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", hooks.fullCalls)
+	}
+	if hooks.narrowCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", hooks.narrowCalls)
+	}
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) != 1 || types[0] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected topology invalidation only, got %v", types)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_DirtyTopologyNoClientMarksRuntimeBaseStale(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	cpu := float64(91)
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  &cpu,
+			CollectedAt: time.Date(2026, 4, 13, 12, 3, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 13, 12, 3, 0, 0, time.UTC),
+	})
+
+	hooks := installPipelineSnapshotHookCounters(t)
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, true, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	pipeline.runtime.mu.RLock()
+	stale := pipeline.runtime.prevHashes == nil
+	pipeline.runtime.mu.RUnlock()
+	if !stale {
+		t.Fatal("expected dirty+topology no-client work to clear runtime hash base")
+	}
+	if hooks.fullCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", hooks.fullCalls)
+	}
+	if hooks.narrowCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", hooks.narrowCalls)
+	}
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) != 1 || types[0] != ws.MessageTypeTopologyChanged {
+		t.Fatalf("expected topology invalidation only, got %v", types)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_AlertOnlyNoClientStillBroadcastsAlert(t *testing.T) {
+	pipeline, hub, _, _, deviceID := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+			Summary:   "device down",
+		}},
+	})
+
+	hooks := installPipelineSnapshotHookCounters(t)
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), nil, true, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) != 1 || types[0] != ws.MessageTypeAlert {
+		t.Fatalf("expected alert-only no-client work to broadcast alert only, got %v", types)
+	}
+	if hooks.narrowCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", hooks.narrowCalls)
+	}
+	if hooks.fullCalls != 0 {
+		t.Fatalf("full state snapshot calls = %d, want 0", hooks.fullCalls)
+	}
+}
+
+func TestPipelineOrchestratorGetOrBuildOverviewSnapshotRebuildsAfterSkippedNoClientDirtyFlush(t *testing.T) {
+	pipeline, _, store, _, deviceID := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	updatedCPU := float64(88)
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  &updatedCPU,
+			CollectedAt: time.Date(2026, 4, 13, 12, 2, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 13, 12, 2, 0, 0, time.UTC),
+	})
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	hooks := installPipelineSnapshotHookCounters(t)
+	snapshot, _ := pipeline.GetOrBuildOverviewSnapshot()
+
+	if hooks.fullCalls != 1 {
+		t.Fatalf("GetOrBuildOverviewSnapshot full state snapshot calls = %d, want 1", hooks.fullCalls)
+	}
+	deviceRuntime, ok := snapshot.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected rebuilt snapshot to include device %s", deviceID)
+	}
+	if deviceRuntime.CPUPercent == nil || *deviceRuntime.CPUPercent != updatedCPU {
+		t.Fatalf("CPUPercent = %#v, want %v", deviceRuntime.CPUPercent, updatedCPU)
+	}
+}
+
+func TestPipelineOrchestratorGetOrBuildOverviewSnapshotBroadcastsRebuiltSnapshotToExistingClients(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	updatedCPU := float64(89)
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  &updatedCPU,
+			CollectedAt: time.Date(2026, 4, 13, 12, 3, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 13, 12, 3, 0, 0, time.UTC),
+	})
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	attachOverviewBroadcastTestClient(t, hub)
+	drainBroadcastCh(hub)
+
+	hooks := installPipelineSnapshotHookCounters(t)
+	snapshot, _ := pipeline.GetOrBuildOverviewSnapshot()
+
+	if hooks.fullCalls != 1 {
+		t.Fatalf("GetOrBuildOverviewSnapshot full state snapshot calls = %d, want 1", hooks.fullCalls)
+	}
+	deviceRuntime, ok := snapshot.Devices[deviceID.String()]
+	if !ok {
+		t.Fatalf("expected rebuilt snapshot to include device %s", deviceID)
+	}
+	if deviceRuntime.CPUPercent == nil || *deviceRuntime.CPUPercent != updatedCPU {
+		t.Fatalf("CPUPercent = %#v, want %v", deviceRuntime.CPUPercent, updatedCPU)
+	}
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) != 1 || types[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected rebuilt stale base to broadcast full snapshot to existing clients, got %v", types)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_DirtyBuildWithClientDoesNotLetConcurrentBootstrapReplaceBase(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	updatedCPU := float64(93)
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  &updatedCPU,
+			CollectedAt: time.Date(2026, 4, 13, 12, 4, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 13, 12, 4, 0, 0, time.UTC),
+	})
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	dirtyBuildEntered := make(chan struct{}, 1)
+	releaseDirtyBuild := make(chan struct{})
+	var releaseOnce sync.Once
+	fullBuildCalls := 0
+	var fullBuildMu sync.Mutex
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullBuildMu.Lock()
+		fullBuildCalls++
+		fullBuildMu.Unlock()
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		select {
+		case dirtyBuildEntered <- struct{}{}:
+		default:
+		}
+		<-releaseDirtyBuild
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		releaseOnce.Do(func() {
+			close(releaseDirtyBuild)
+		})
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	dirtyErr := make(chan error, 1)
+	go func() {
+		dirtyErr <- pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false)
+	}()
+
+	select {
+	case <-dirtyBuildEntered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for dirty overview build to enter")
+	}
+
+	bootstrapDone := make(chan struct{})
+	go func() {
+		_, _ = pipeline.GetOrBuildOverviewSnapshot()
+		close(bootstrapDone)
+	}()
+
+	select {
+	case <-bootstrapDone:
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() {
+		close(releaseDirtyBuild)
+	})
+
+	select {
+	case err := <-dirtyErr:
+		if err != nil {
+			t.Fatalf("broadcastDirty returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for dirty overview build to finish")
+	}
+	select {
+	case <-bootstrapDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for concurrent GetOrBuildOverviewSnapshot")
+	}
+
+	fullBuildMu.Lock()
+	gotFullBuildCalls := fullBuildCalls
+	fullBuildMu.Unlock()
+	if gotFullBuildCalls != 0 {
+		t.Fatalf("concurrent GetOrBuildOverviewSnapshot full state snapshot calls = %d, want 0", gotFullBuildCalls)
+	}
+
+	messages := drainBroadcastCh(hub)
+	types := broadcastMessageTypes(t, messages)
+	if len(types) != 1 || types[0] != ws.MessageTypeRuntimeDelta {
+		t.Fatalf("expected connected client dirty flush to broadcast runtime_delta, got %v", types)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_DirtyDeviceWithStaleBaseUsesFullSnapshot(t *testing.T) {
+	pipeline, hub, store, _, deviceAID := newNoClientBroadcastTestPipeline(t)
+	deviceBID := uuid.New()
+	pipeline.cache = newPipelineTestCache([]domain.Device{
+		{
+			ID:            deviceAID,
+			IP:            "192.0.2.40",
+			Status:        domain.DeviceStatusProbing,
+			SysName:       "dist-sw-1",
+			HardwareModel: "CRS328-24P-4S+",
+			Interfaces:    []domain.Interface{{IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000}},
+		},
+		{
+			ID:            deviceBID,
+			IP:            "192.0.2.41",
+			Status:        domain.DeviceStatusProbing,
+			SysName:       "dist-sw-2",
+			HardwareModel: "CRS326-24G-2S+",
+			Interfaces:    []domain.Interface{{IfName: "ether1", IfDescr: "uplink", Speed: 1_000_000_000}},
+		},
+	}, nil)
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceBID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceBID,
+			CPUPercent:  floatPtr(35),
+			CollectedAt: time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC),
+	})
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+
+	cpuA := float64(74)
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceAID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceAID,
+			CPUPercent:  &cpuA,
+			CollectedAt: time.Date(2026, 4, 13, 12, 5, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 13, 12, 5, 0, 0, time.UTC),
+	})
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceAID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty no-client dirty A returned error: %v", err)
+	}
+	pipeline.runtime.mu.RLock()
+	stale := pipeline.runtime.prevHashes == nil
+	pipeline.runtime.mu.RUnlock()
+	if !stale {
+		t.Fatal("expected no-client dirty A work to clear runtime hash base")
+	}
+
+	attachOverviewBroadcastTestClient(t, hub)
+
+	cpuB := float64(82)
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceBID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceBID,
+			CPUPercent:  &cpuB,
+			CollectedAt: time.Date(2026, 4, 13, 12, 6, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 4, 13, 12, 6, 0, 0, time.UTC),
+	})
+
+	hooks := installPipelineSnapshotHookCounters(t)
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceBID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty live-client dirty B returned error: %v", err)
+	}
+
+	if hooks.fullCalls != 1 {
+		t.Fatalf("full state snapshot calls = %d, want 1", hooks.fullCalls)
+	}
+	if hooks.narrowCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", hooks.narrowCalls)
+	}
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) != 1 || types[0] != ws.MessageTypeSnapshot {
+		t.Fatalf("expected stale-base dirty device to broadcast full snapshot, got %v", types)
+	}
+
+	pipeline.runtime.mu.RLock()
+	snapshot := ws.CloneSnapshot(pipeline.runtime.lastSnapshot)
+	pipeline.runtime.mu.RUnlock()
+	deviceA, ok := snapshot.Devices[deviceAID.String()]
+	if !ok {
+		t.Fatalf("expected runtime snapshot to include device A %s", deviceAID)
+	}
+	if deviceA.CPUPercent == nil || *deviceA.CPUPercent != cpuA {
+		t.Fatalf("device A CPUPercent = %#v, want %v", deviceA.CPUPercent, cpuA)
+	}
+	deviceB, ok := snapshot.Devices[deviceBID.String()]
+	if !ok {
+		t.Fatalf("expected runtime snapshot to include device B %s", deviceBID)
+	}
+	if deviceB.CPUPercent == nil || *deviceB.CPUPercent != cpuB {
+		t.Fatalf("device B CPUPercent = %#v, want %v", deviceB.CPUPercent, cpuB)
+	}
+}
+
+func TestPipelineOrchestratorGetOrBuildOverviewSnapshotConcurrentRebuildsShareSingleBuildAndVersion(t *testing.T) {
+	pipeline, _, _, _, _ := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.prevHashes = nil
+	pipeline.runtime.overviewVersion = 10
+	pipeline.runtime.mu.Unlock()
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	const callers = 8
+	buildEntered := make(chan struct{}, callers)
+	releaseBuild := make(chan struct{})
+	var buildMu sync.Mutex
+	buildCalls := 0
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		buildMu.Lock()
+		buildCalls++
+		buildMu.Unlock()
+		buildEntered <- struct{}{}
+		<-releaseBuild
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		t.Fatalf("GetOrBuildOverviewSnapshot called narrow state snapshot hook with ids=%v", ids)
+		return nil
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	start := make(chan struct{})
+	var ready sync.WaitGroup
+	var done sync.WaitGroup
+	versions := make([]uint64, callers)
+	ready.Add(callers)
+	done.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func(index int) {
+			defer done.Done()
+			ready.Done()
+			<-start
+			_, version := pipeline.GetOrBuildOverviewSnapshot()
+			versions[index] = version
+		}(i)
+	}
+	ready.Wait()
+	close(start)
+
+	waitForBuildEntrants(t, buildEntered, 1, time.Second)
+	_ = waitForBuildEntrantsOrTimeout(buildEntered, 1, 250*time.Millisecond)
+	close(releaseBuild)
+
+	doneCh := make(chan struct{})
+	go func() {
+		done.Wait()
+		close(doneCh)
+	}()
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for concurrent GetOrBuildOverviewSnapshot calls")
+	}
+
+	buildMu.Lock()
+	gotBuildCalls := buildCalls
+	buildMu.Unlock()
+	if gotBuildCalls != 1 {
+		t.Fatalf("full state snapshot calls = %d, want 1", gotBuildCalls)
+	}
+	for i, version := range versions {
+		if version != versions[0] {
+			t.Fatalf("versions[%d] = %d, want shared version %d: all=%v", i, version, versions[0], versions)
+		}
+	}
+	if versions[0] != 11 {
+		t.Fatalf("shared version = %d, want 11", versions[0])
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_AlertResolutionWithoutRuntimeBaseFallsBackToFullSnapshotAndAlert(t *testing.T) {
 	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
 	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{
 		deviceID: {{
@@ -2383,31 +4090,95 @@ func TestPipelineOrchestratorBroadcastDirty_AlertResolutionWithoutRuntimeBaseUse
 
 	messages := drainBroadcastCh(hub)
 	types := broadcastMessageTypes(t, messages)
-	if len(types) != 2 || types[0] != ws.MessageTypeRuntimeDelta || types[1] != ws.MessageTypeAlert {
-		t.Fatalf("expected alert resolution to broadcast runtime_delta then alert, got %v", types)
+	if len(types) != 2 || types[0] != ws.MessageTypeSnapshot || types[1] != ws.MessageTypeAlert {
+		t.Fatalf("expected alert resolution without runtime base to broadcast snapshot then alert, got %v", types)
 	}
 
-	var deltaMessage wsVersionedRuntimeDeltaMessage
-	if err := json.Unmarshal(messages[0], &deltaMessage); err != nil {
-		t.Fatalf("decode alert resolution delta: %v", err)
+	var snapshotMessage wsVersionedSnapshotMessage
+	if err := json.Unmarshal(messages[0], &snapshotMessage); err != nil {
+		t.Fatalf("decode alert resolution snapshot: %v", err)
 	}
-	deviceRuntime, ok := deltaMessage.Payload.Delta.Devices[deviceID.String()]
+	if snapshotMessage.Payload.Snapshot == nil {
+		t.Fatal("expected alert resolution fallback snapshot payload")
+	}
+	deviceRuntime, ok := snapshotMessage.Payload.Snapshot.Devices[deviceID.String()]
 	if !ok {
-		t.Fatalf("expected alert resolution delta for device %s", deviceID)
+		t.Fatalf("expected alert resolution snapshot for device %s", deviceID)
 	}
-	if got, ok := deviceRuntime["alert_status"]; !ok || got != string(domain.AlertStatusNormal) {
-		t.Fatalf("alert_status patch = %#v, want %q", deviceRuntime["alert_status"], domain.AlertStatusNormal)
+	if deviceRuntime.AlertStatus != string(domain.AlertStatusNormal) {
+		t.Fatalf("alert status = %q, want %q", deviceRuntime.AlertStatus, domain.AlertStatusNormal)
 	}
-	if got, ok := deviceRuntime["firing_alert_count"]; !ok || got != float64(0) {
-		t.Fatalf("firing_alert_count patch = %#v, want explicit 0", deviceRuntime["firing_alert_count"])
+	if deviceRuntime.FiringAlertCount != 0 {
+		t.Fatalf("firing alert count = %d, want 0", deviceRuntime.FiringAlertCount)
 	}
-	if fullSnapshotCalls != 0 {
-		t.Fatalf("full state snapshot calls = %d, want 0", fullSnapshotCalls)
+	if fullSnapshotCalls != 1 {
+		t.Fatalf("full state snapshot calls = %d, want 1", fullSnapshotCalls)
 	}
-	if narrowSnapshotCalls != 1 {
-		t.Fatalf("narrow state snapshot calls = %d, want 1", narrowSnapshotCalls)
+	if narrowSnapshotCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", narrowSnapshotCalls)
 	}
-	assertUUIDSliceSetEqual(t, requestedIDs, map[uuid.UUID]struct{}{deviceID: {}})
+	if len(requestedIDs) != 0 {
+		t.Fatalf("narrow requested IDs = %v, want none", requestedIDs)
+	}
+}
+
+func TestPipelineOrchestratorBroadcastDirty_AlertOnlyWithStaleBaseUsesFullSnapshot(t *testing.T) {
+	pipeline, hub, _, _, deviceID := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{
+		deviceID: {{
+			DeviceID:  deviceID,
+			Severity:  "critical",
+			AlertName: "DeviceDown",
+			State:     "firing",
+			Summary:   "device down",
+		}},
+	})
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), map[uuid.UUID]struct{}{deviceID: {}}, false, false, false); err != nil {
+		t.Fatalf("broadcastDirty no-client dirty returned error: %v", err)
+	}
+	pipeline.runtime.mu.RLock()
+	stale := pipeline.runtime.prevHashes == nil
+	pipeline.runtime.mu.RUnlock()
+	if !stale {
+		t.Fatal("expected no-client dirty work to clear runtime hash base")
+	}
+
+	attachOverviewBroadcastTestClient(t, hub)
+	drainBroadcastCh(hub)
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	fullSnapshotCalls := 0
+	narrowSnapshotCalls := 0
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		fullSnapshotCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		narrowSnapshotCalls++
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+
+	if err := pipeline.broadcaster.broadcastDirty(context.Background(), nil, true, false, false); err != nil {
+		t.Fatalf("broadcastDirty alert-only stale base returned error: %v", err)
+	}
+
+	if fullSnapshotCalls != 1 {
+		t.Fatalf("full state snapshot calls = %d, want 1", fullSnapshotCalls)
+	}
+	if narrowSnapshotCalls != 0 {
+		t.Fatalf("narrow state snapshot calls = %d, want 0", narrowSnapshotCalls)
+	}
+	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
+	if len(types) != 2 || types[0] != ws.MessageTypeSnapshot || types[1] != ws.MessageTypeAlert {
+		t.Fatalf("expected alert-only stale base to broadcast snapshot then alert, got %v", types)
+	}
 }
 
 func TestPipelineOrchestratorBroadcastDirty_DeviceOnlyWithoutRuntimeBaseFallsBackToFullSnapshot(t *testing.T) {
@@ -2631,6 +4402,7 @@ func TestPipelineOrchestratorBroadcastOnce_MixedTierPollsKeepPerformanceFreshnes
 		nil,
 		nil,
 	)
+	attachOverviewBroadcastTestClient(t, hub)
 
 	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
 		RunID:            10,
@@ -2894,6 +4666,60 @@ func clearBufferedStateChanges(store *state.Store) {
 			return
 		}
 	}
+}
+
+type pipelineSnapshotHookCounters struct {
+	fullCalls   int
+	narrowCalls int
+}
+
+func installPipelineSnapshotHookCounters(t *testing.T) *pipelineSnapshotHookCounters {
+	t.Helper()
+
+	previousSnapshotAll := snapshotAllPipelineState
+	previousSnapshotFor := snapshotPipelineStateFor
+	counters := &pipelineSnapshotHookCounters{}
+	snapshotAllPipelineState = func(store *state.Store) map[uuid.UUID]state.DeviceState {
+		counters.fullCalls++
+		return store.Snapshot()
+	}
+	snapshotPipelineStateFor = func(store *state.Store, ids []uuid.UUID) map[uuid.UUID]state.DeviceState {
+		counters.narrowCalls++
+		return store.SnapshotFor(ids)
+	}
+	t.Cleanup(func() {
+		snapshotAllPipelineState = previousSnapshotAll
+		snapshotPipelineStateFor = previousSnapshotFor
+	})
+	return counters
+}
+
+func waitForBuildEntrants(t *testing.T, buildEntered <-chan struct{}, want int, timeout time.Duration) {
+	t.Helper()
+
+	for i := 0; i < want; i++ {
+		select {
+		case <-buildEntered:
+		case <-time.After(timeout):
+			t.Fatalf("timed out waiting for full snapshot build entrant %d/%d", i+1, want)
+		}
+	}
+}
+
+func waitForBuildEntrantsOrTimeout(buildEntered <-chan struct{}, want int, timeout time.Duration) int {
+	got := 0
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for got < want {
+		select {
+		case <-buildEntered:
+			got++
+		case <-timer.C:
+			return got
+		}
+	}
+	return got
 }
 
 func assertUUIDSliceSetEqual(t *testing.T, got []uuid.UUID, want map[uuid.UUID]struct{}) {

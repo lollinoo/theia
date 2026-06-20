@@ -217,6 +217,7 @@ func (r OperationalResult) ToStoreUpdate(expectedInterval time.Duration) state.S
 // device poll.
 type StaticResult struct {
 	DeviceID                   uuid.UUID
+	Metrics                    domain.DeviceMetrics
 	SysName                    string
 	SysDescr                   string
 	SysObjectID                string

@@ -23,6 +23,7 @@ type scriptedCollectorClient struct {
 	getErrs           map[string]error
 	bulkWalkResponses map[string][]gosnmp.SnmpPDU
 	bulkWalkErrs      map[string]error
+	bulkWalkDelays    map[string]time.Duration
 	bulkWalkCalls     []string
 	connectErr        error
 	connectCalls      int
@@ -42,6 +43,9 @@ func (c *scriptedCollectorClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
 
 func (c *scriptedCollectorClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
 	c.bulkWalkCalls = append(c.bulkWalkCalls, rootOID)
+	if delay := c.bulkWalkDelays[rootOID]; delay > 0 {
+		time.Sleep(delay)
+	}
 	if err := c.bulkWalkErrs[rootOID]; err != nil {
 		return nil, err
 	}
@@ -199,7 +203,7 @@ func TestOperationalCollectorPoll(t *testing.T) {
 			},
 		},
 		{
-			name: "query error returns error without fabricated fields",
+			name: "status walk error keeps uptime partial result",
 			device: domain.Device{
 				ID:     uuid.New(),
 				IP:     "192.0.2.23",
@@ -224,14 +228,14 @@ func TestOperationalCollectorPoll(t *testing.T) {
 			assert: func(t *testing.T, result OperationalResult, client *scriptedCollectorClient, _ []collectorCtorCall) {
 				t.Helper()
 
-				if result.Err == nil {
-					t.Fatal("expected error")
+				if result.Err != nil {
+					t.Fatalf("Err = %v, want nil", result.Err)
 				}
-				if result.Reachable {
-					t.Fatal("Reachable = true, want false")
+				if !result.Reachable {
+					t.Fatal("Reachable = false, want true")
 				}
-				if result.UptimeSecs != nil {
-					t.Fatalf("UptimeSecs = %v, want nil", *result.UptimeSecs)
+				if result.UptimeSecs == nil || *result.UptimeSecs != 12 {
+					t.Fatalf("UptimeSecs = %v, want 12", result.UptimeSecs)
 				}
 				if result.InterfaceStatuses != nil {
 					t.Fatalf("InterfaceStatuses = %#v, want nil", result.InterfaceStatuses)
@@ -282,7 +286,7 @@ func TestOperationalResultImplementsStateUpdate(t *testing.T) {
 	var _ StateUpdate = OperationalResult{}
 }
 
-func TestOperationalCollectorPoll_RecordsSysUpTimeEarlyExitMetrics(t *testing.T) {
+func TestOperationalCollectorPoll_KeepsStatusesWhenSysUpTimeFails(t *testing.T) {
 	registry, err := vendor.LoadRegistryFromEmbedded()
 	if err != nil {
 		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
@@ -295,6 +299,14 @@ func TestOperationalCollectorPoll_RecordsSysUpTimeEarlyExitMetrics(t *testing.T)
 	client := &scriptedCollectorClient{
 		getErrs: map[string]error{
 			snmp.OidSysUpTime: errors.New("deadline exceeded"),
+		},
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfName: {
+				{Name: snmp.OidIfName + ".1", Value: "ether1"},
+			},
+			snmp.OidIfOperStatus: {
+				{Name: snmp.OidIfOperStatus + ".1", Value: int(1)},
+			},
 		},
 	}
 	collector := NewOperationalCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
@@ -311,19 +323,73 @@ func TestOperationalCollectorPoll_RecordsSysUpTimeEarlyExitMetrics(t *testing.T)
 		},
 	}, time.Second, 1)
 
-	if result.Err == nil {
-		t.Fatal("Err = nil, want sysUpTime probe failure")
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil from interface status data", result.Err)
 	}
-	if len(client.bulkWalkCalls) != 0 {
-		t.Fatalf("BulkWalk calls = %v, want none after sysUpTime early exit", client.bulkWalkCalls)
+	if !result.Reachable {
+		t.Fatal("Reachable = false, want true")
+	}
+	if result.UptimeSecs != nil {
+		t.Fatalf("UptimeSecs = %v, want nil", *result.UptimeSecs)
+	}
+	if result.InterfaceStatuses["ether1"] != "up" {
+		t.Fatalf("InterfaceStatuses[ether1] = %q, want up", result.InterfaceStatuses["ether1"])
+	}
+	if !containsString(client.bulkWalkCalls, snmp.OidIfName) || !containsString(client.bulkWalkCalls, snmp.OidIfOperStatus) {
+		t.Fatalf("BulkWalk calls = %v, want operational walk attempts after sysUpTime timeout", client.bulkWalkCalls)
 	}
 
 	body := string(metrics.MarshalPrometheus())
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="operational",operation="sysuptime_probe",result="timeout"} 1`)
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="operational",operation="sysuptime_probe",result="timeout"} 1`)
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_early_exit_total{collector="operational",reason="sysuptime_probe_failed"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="operational",operation="if_name_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="operational",operation="if_oper_status_walk",result="success"} 1`)
+	if strings.Contains(body, `theia_snmp_collector_early_exit_total{collector="operational",reason="sysuptime_probe_failed"}`) {
+		t.Fatalf("metrics output unexpectedly recorded operational sysUpTime early exit:\n%s", body)
+	}
 	if strings.Contains(body, `collector="operational",operation="bulk_walk"`) {
-		t.Fatalf("metrics output unexpectedly recorded operational bulk_walk after sysUpTime early exit:\n%s", body)
+		t.Fatalf("metrics output unexpectedly recorded operational bulk_walk for mapped walks:\n%s", body)
+	}
+}
+
+func TestOperationalCollectorPoll_ReturnsErrorWhenSysUpTimeAndStatusesFail(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := &scriptedCollectorClient{
+		getErrs: map[string]error{
+			snmp.OidSysUpTime: errors.New("deadline exceeded"),
+		},
+		bulkWalkErrs: map[string]error{
+			snmp.OidIfName:       errors.New("name walk timeout"),
+			snmp.OidIfDescr:      errors.New("descr walk timeout"),
+			snmp.OidIfOperStatus: errors.New("status walk timeout"),
+		},
+	}
+	collector := NewOperationalCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.44",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}, time.Second, 1)
+
+	if result.Err == nil {
+		t.Fatal("Err = nil, want all operational SNMP data failure")
+	}
+	if result.Reachable {
+		t.Fatal("Reachable = true, want false")
+	}
+	if !containsString(client.bulkWalkCalls, snmp.OidIfName) || !containsString(client.bulkWalkCalls, snmp.OidIfDescr) || !containsString(client.bulkWalkCalls, snmp.OidIfOperStatus) {
+		t.Fatalf("BulkWalk calls = %v, want name, descr, and status attempts", client.bulkWalkCalls)
 	}
 }
 
@@ -376,10 +442,65 @@ func TestOperationalCollectorPoll_RecordsBulkWalkMetricsAfterSysUpTimeSuccess(t 
 	body := string(metrics.MarshalPrometheus())
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="operational",operation="sysuptime_probe",result="success"} 1`)
 	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="operational",operation="sysuptime_probe",result="success"} 1`)
-	if !strings.Contains(body, `theia_snmp_collector_operations_total{collector="operational",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing operational bulk_walk counter\n%s", body)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="operational",operation="if_name_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="operational",operation="if_name_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="operational",operation="if_oper_status_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="operational",operation="if_oper_status_walk",result="success"} 1`)
+	if strings.Contains(body, `collector="operational",operation="bulk_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped operational walks:\n%s", body)
 	}
-	if !strings.Contains(body, `theia_snmp_collector_operation_seconds_count{collector="operational",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing operational bulk_walk histogram\n%s", body)
+}
+
+func TestOperationalCollectorPoll_UsesCachedInterfaceNamesForStatuses(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := &scriptedCollectorClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysUpTime: {
+				{Name: snmp.OidSysUpTime, Value: uint32(9000)},
+			},
+		},
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfOperStatus: {
+				{Name: snmp.OidIfOperStatus + ".7", Value: int(1)},
+				{Name: snmp.OidIfOperStatus + ".9", Value: int(2)},
+			},
+		},
+	}
+	collector := NewOperationalCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.43",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 7, IfName: "sfp7"},
+			{IfIndex: 9, IfDescr: "ether9"},
+		},
+	}, time.Second, 1)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if containsString(client.bulkWalkCalls, snmp.OidIfName) || containsString(client.bulkWalkCalls, snmp.OidIfDescr) {
+		t.Fatalf("BulkWalk calls = %v, want cached interface names without ifName/ifDescr walks", client.bulkWalkCalls)
+	}
+	if !containsString(client.bulkWalkCalls, snmp.OidIfOperStatus) {
+		t.Fatalf("BulkWalk calls = %v, want ifOperStatus walk", client.bulkWalkCalls)
+	}
+	if result.InterfaceStatuses["sfp7"] != "up" {
+		t.Fatalf("InterfaceStatuses[sfp7] = %q, want up", result.InterfaceStatuses["sfp7"])
+	}
+	if result.InterfaceStatuses["ether9"] != "down" {
+		t.Fatalf("InterfaceStatuses[ether9] = %q, want down", result.InterfaceStatuses["ether9"])
 	}
 }

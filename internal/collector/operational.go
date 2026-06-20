@@ -102,12 +102,15 @@ func (c *OperationalCollector) Poll(ctx context.Context, device domain.Device, t
 		delegate:      client,
 		collector:     "operational",
 		getOperations: map[string]string{uptimeOID: "sysuptime_probe"},
-		earlyExitReasons: map[string]string{
-			"sysuptime_probe": "sysuptime_probe_failed",
+		bulkWalkOperations: map[string]string{
+			snmp.OidIfName:       "if_name_walk",
+			snmp.OidIfDescr:      "if_descr_walk",
+			snmp.OidIfOperStatus: "if_oper_status_walk",
 		},
+		deviceLabels: snmpCollectorDeviceMetricLabels(device),
 	}
 
-	uptimeSecs, statuses, err := snmp.PollOperationalStatus(instrumentedClient, operationalOIDs)
+	uptimeSecs, statuses, err := snmp.PollOperationalStatusWithInterfaces(instrumentedClient, operationalOIDs, device.Interfaces)
 	if err != nil {
 		result.Err = fmt.Errorf("poll operational status: %w", err)
 		return result

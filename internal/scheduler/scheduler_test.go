@@ -7,6 +7,7 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
 	"strings"
@@ -86,7 +87,7 @@ func TestRefreshDevices_SeedsManagedDeviceAcrossAllThreeVolatilityClasses(t *tes
 	for _, tc := range tests {
 		key := NewTaskKey(device.ID, tc.volatility)
 		item := mustSchedulerItem(t, scheduler, key)
-		wantDueAt := now.Add(initialOffset(device.ID, tc.interval))
+		wantDueAt := now.Add(initialOffsetForKey(key, tc.interval))
 
 		if item.task.PollClass != device.PollClass {
 			t.Fatalf("%s poll class = %q, want %q", tc.volatility, item.task.PollClass, device.PollClass)
@@ -292,7 +293,7 @@ func TestRefreshDevices_SchedulesOperationalOnlyForVirtualIPDevices(t *testing.T
 
 	operationalKey := NewTaskKey(virtualWithIP.ID, domain.VolatilityClassOperational)
 	item := mustSchedulerItem(t, scheduler, operationalKey)
-	wantDueAt := now.Add(initialOffset(virtualWithIP.ID, domain.OperationalClassInterval))
+	wantDueAt := now.Add(initialOffsetForKey(operationalKey, domain.OperationalClassInterval))
 	if item.task.ExpectedInterval != domain.OperationalClassInterval {
 		t.Fatalf("operational expected interval = %v, want %v", item.task.ExpectedInterval, domain.OperationalClassInterval)
 	}
@@ -1154,6 +1155,80 @@ func TestSchedulerRecordMetricsLocked_UpdatesEssentialOverloadGaugeAfterDispatch
 	}
 }
 
+func TestSchedulerRecordMetricsLocked_ExportsEffectiveWorkerSettings(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	scheduler := NewScheduler(&fakeDeviceSource{}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers:       "42",
+			domain.SettingSNMPWorkerPoolPerformance:     "11",
+			domain.SettingSNMPWorkerPoolOperational:     "7",
+			domain.SettingSNMPWorkerPoolStatic:          "5",
+			domain.SettingPollingMaxWorkersPerDevice:    "3",
+			domain.SettingPollingMaxWorkersPerSite:      "21",
+			domain.SettingPollingMaxWorkersPerSubnet:    "13",
+			domain.SettingPollingMaxInflightPerProfile:  "17",
+			domain.SettingPollingWebSocketCoalesceMS:    "750",
+			domain.SettingPollingPersistenceBatchMS:     "1500",
+			domain.SettingPollingEssentialTimeoutMillis: "900",
+			domain.SettingPollingEssentialRetries:       "2",
+		},
+	})
+
+	scheduler.recordMetricsLocked(time.Date(2026, 4, 24, 10, 5, 0, 0, time.UTC))
+
+	metrics := string(registry.MarshalPrometheus())
+	for _, want := range []string{
+		`theia_runtime_worker_setting_effective{setting="polling_essential_workers"} 42`,
+		`theia_runtime_worker_setting_effective{setting="snmp_worker_pool_performance_size"} 11`,
+		`theia_runtime_worker_setting_effective{setting="snmp_worker_pool_operational_size"} 7`,
+		`theia_runtime_worker_setting_effective{setting="snmp_worker_pool_static_size"} 5`,
+		`theia_runtime_worker_setting_effective{setting="polling_max_workers_per_device"} 3`,
+		`theia_runtime_worker_setting_effective{setting="polling_max_workers_per_site"} 21`,
+		`theia_runtime_worker_setting_effective{setting="polling_max_workers_per_subnet"} 13`,
+		`theia_runtime_worker_setting_effective{setting="polling_max_inflight_per_snmp_profile"} 17`,
+		`theia_runtime_worker_setting_effective{setting="polling_websocket_coalesce_ms"} 750`,
+		`theia_runtime_worker_setting_effective{setting="polling_persistence_batch_ms"} 1500`,
+		`theia_runtime_worker_setting_effective{setting="polling_essential_timeout_ms"} 900`,
+		`theia_runtime_worker_setting_effective{setting="polling_essential_retries"} 2`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics output missing %q\n%s", want, metrics)
+		}
+	}
+}
+
+func TestSchedulerRecordMetricsLocked_ExportsEffectiveWorkerSettingsClampedByBuffer(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	scheduler := NewScheduler(&fakeDeviceSource{}, fakeSettingsRepo{
+		values: map[string]string{
+			domain.SettingPollingEssentialWorkers:   "256",
+			domain.SettingSNMPWorkerPoolPerformance: "128",
+			domain.SettingSNMPWorkerPoolOperational: "128",
+			domain.SettingSNMPWorkerPoolStatic:      "128",
+		},
+	})
+	clampedBudgets := scheduler.classBudgets()
+	essentialWorkers := clampEssentialLimit(256, scheduler.bufferLimit())
+
+	scheduler.recordMetricsLocked(time.Date(2026, 4, 24, 10, 5, 0, 0, time.UTC))
+
+	metrics := string(registry.MarshalPrometheus())
+	for _, want := range []string{
+		runtimeWorkerSettingMetricLine(domain.SettingPollingEssentialWorkers, essentialWorkers),
+		runtimeWorkerSettingMetricLine(domain.SettingSNMPWorkerPoolPerformance, clampedBudgets[domain.VolatilityClassPerformance]),
+		runtimeWorkerSettingMetricLine(domain.SettingSNMPWorkerPoolOperational, clampedBudgets[domain.VolatilityClassOperational]),
+		runtimeWorkerSettingMetricLine(domain.SettingSNMPWorkerPoolStatic, clampedBudgets[domain.VolatilityClassStatic]),
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics output missing %q\n%s", want, metrics)
+		}
+	}
+}
+
+func runtimeWorkerSettingMetricLine(setting string, value int) string {
+	return fmt.Sprintf(`theia_runtime_worker_setting_effective{setting="%s"} %d`, setting, value)
+}
+
 func TestSchedulerPollingHealthIsSafeDuringRuntimeMutations(t *testing.T) {
 	devices := make([]domain.Device, 0, 16)
 	for i := 0; i < 16; i++ {
@@ -1279,6 +1354,156 @@ func TestSchedulerDispatchReady_RespectsPollingIsolationBudgets(t *testing.T) {
 	}
 }
 
+func TestSchedulerDispatchReady_RecordsScopedDeviceAndSiteBackpressure(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	siteID := uuid.MustParse("53100000-0000-0000-0000-000000000101")
+	deviceBlockedID := uuid.MustParse("53100000-0000-0000-0000-000000000102")
+	siteHolderID := uuid.MustParse("53100000-0000-0000-0000-000000000103")
+	siteBlockedID := uuid.MustParse("53100000-0000-0000-0000-000000000104")
+	scheduler := NewScheduler(
+		&fakeDeviceSource{},
+		fakeSettingsRepo{values: map[string]string{
+			domain.SettingSNMPWorkerPoolPerformance:    "8",
+			domain.SettingSNMPWorkerPoolOperational:    "8",
+			domain.SettingSNMPWorkerPoolStatic:         "8",
+			domain.SettingPollingEssentialWorkers:      "8",
+			domain.SettingPollingMaxWorkersPerDevice:   "1",
+			domain.SettingPollingMaxWorkersPerSite:     "1",
+			domain.SettingPollingMaxWorkersPerSubnet:   "16",
+			domain.SettingPollingMaxInflightPerProfile: "16",
+		}},
+	)
+	now := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
+	scheduler.tasks = make(chan PollTask, 64)
+	scheduler.inFlight = 2
+	scheduler.incrementInFlight(PollTask{
+		Key: NewTaskKey(deviceBlockedID, domain.VolatilityClassPerformance),
+		Device: domain.Device{
+			ID:       deviceBlockedID,
+			Hostname: "edge-device-holder",
+			IP:       "10.80.1.10",
+		},
+		VolatilityClass: domain.VolatilityClassPerformance,
+	})
+	scheduler.incrementInFlight(PollTask{
+		Key: NewTaskKey(siteHolderID, domain.VolatilityClassPerformance),
+		Device: domain.Device{
+			ID:      siteHolderID,
+			IP:      "10.81.1.10",
+			AreaIDs: []uuid.UUID{siteID},
+		},
+		VolatilityClass: domain.VolatilityClassPerformance,
+	})
+	deviceBlocked := &heapItem{
+		task: PollTask{
+			Key: NewTaskKey(deviceBlockedID, domain.VolatilityClassPerformance),
+			Device: domain.Device{
+				ID:       deviceBlockedID,
+				Hostname: "edge-device-blocked",
+				IP:       "10.80.1.10",
+			},
+			VolatilityClass: domain.VolatilityClassPerformance,
+		},
+		dueAt:  now.Add(-time.Minute),
+		queued: true,
+		index:  -1,
+	}
+	siteBlocked := &heapItem{
+		task: PollTask{
+			Key: NewTaskKey(siteBlockedID, domain.VolatilityClassPerformance),
+			Device: domain.Device{
+				ID:      siteBlockedID,
+				IP:      "10.81.2.10",
+				AreaIDs: []uuid.UUID{siteID},
+			},
+			VolatilityClass: domain.VolatilityClassPerformance,
+		},
+		dueAt:  now.Add(-30 * time.Second),
+		queued: true,
+		index:  -1,
+	}
+	scheduler.ready[readyPriority(deviceBlocked.task)] = []*heapItem{deviceBlocked, siteBlocked}
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	metrics := string(registry.MarshalPrometheus())
+	for _, line := range []string{
+		`theia_scheduler_backpressure_total{reason="device_limit",volatility_class="performance"} 1`,
+		`theia_scheduler_backpressure_total{reason="site_limit",volatility_class="performance"} 1`,
+		`theia_scheduler_scoped_backpressure_total{reason="device_limit",scope="device",scope_id="` + deviceBlockedID.String() + `",scope_name="edge-device-blocked",task_kind="background",volatility_class="performance"} 1`,
+		`theia_scheduler_scoped_backpressure_total{reason="site_limit",scope="site",scope_id="` + siteID.String() + `",scope_name="` + siteID.String() + `",task_kind="background",volatility_class="performance"} 1`,
+	} {
+		if !strings.Contains(metrics, line+"\n") {
+			t.Fatalf("missing backpressure metric %q, got:\n%s", line, metrics)
+		}
+	}
+}
+
+func TestSchedulerDispatchReady_ProfileScopedBackpressureDoesNotExposeCommunity(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	const secretCommunity = "secret-profile-community"
+	sharedProfile := domain.SNMPCredentials{
+		Version: domain.SNMPVersionV2c,
+		V2c:     &domain.SNMPv2cCredentials{Community: secretCommunity},
+	}
+	inFlightID := uuid.MustParse("53100000-0000-0000-0000-000000000201")
+	blockedID := uuid.MustParse("53100000-0000-0000-0000-000000000202")
+	scheduler := NewScheduler(
+		&fakeDeviceSource{},
+		fakeSettingsRepo{values: map[string]string{
+			domain.SettingSNMPWorkerPoolPerformance:    "8",
+			domain.SettingSNMPWorkerPoolOperational:    "8",
+			domain.SettingSNMPWorkerPoolStatic:         "8",
+			domain.SettingPollingEssentialWorkers:      "8",
+			domain.SettingPollingMaxWorkersPerDevice:   "16",
+			domain.SettingPollingMaxWorkersPerSite:     "16",
+			domain.SettingPollingMaxWorkersPerSubnet:   "16",
+			domain.SettingPollingMaxInflightPerProfile: "1",
+		}},
+	)
+	now := time.Date(2026, 5, 4, 10, 5, 0, 0, time.UTC)
+	scheduler.tasks = make(chan PollTask, 64)
+	scheduler.inFlight = 1
+	scheduler.incrementInFlight(PollTask{
+		Key: NewTaskKey(inFlightID, domain.VolatilityClassOperational),
+		Device: domain.Device{
+			ID:              inFlightID,
+			IP:              "10.82.1.10",
+			SNMPCredentials: sharedProfile,
+		},
+		VolatilityClass: domain.VolatilityClassOperational,
+	})
+	blocked := &heapItem{
+		task: PollTask{
+			Key: NewTaskKey(blockedID, domain.VolatilityClassOperational),
+			Device: domain.Device{
+				ID:              blockedID,
+				IP:              "10.82.2.10",
+				SNMPCredentials: sharedProfile,
+			},
+			VolatilityClass: domain.VolatilityClassOperational,
+		},
+		dueAt:  now.Add(-time.Minute),
+		queued: true,
+		index:  -1,
+	}
+	scheduler.ready[readyPriority(blocked.task)] = []*heapItem{blocked}
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	metrics := string(registry.MarshalPrometheus())
+	if strings.Contains(metrics, secretCommunity) {
+		t.Fatalf("scoped profile metrics exposed raw community %q:\n%s", secretCommunity, metrics)
+	}
+	if !strings.Contains(metrics, `theia_scheduler_backpressure_total{reason="profile_limit",volatility_class="operational"} 1`) {
+		t.Fatalf("expected aggregate profile_limit metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_scheduler_scoped_backpressure_total{reason="profile_limit",scope="snmp_profile",`) ||
+		!strings.Contains(metrics, `task_kind="background",volatility_class="operational"} 1`) {
+		t.Fatalf("expected scoped profile_limit metric with fingerprinted scope, got:\n%s", metrics)
+	}
+}
+
 func TestSchedulerDispatchReady_RecordsEssentialProfileBackpressureReason(t *testing.T) {
 	observability.ResetDefaultForTest()
 
@@ -1338,6 +1563,10 @@ func TestSchedulerDispatchReady_RecordsEssentialProfileBackpressureReason(t *tes
 	}
 	if !strings.Contains(metrics, `theia_scheduler_backpressure_total{reason="essential_profile_limit",volatility_class="performance"} 1`) {
 		t.Fatalf("expected detailed essential_profile_limit backpressure metric, got:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `theia_scheduler_scoped_backpressure_total{reason="essential_profile_limit",scope="snmp_profile",`) ||
+		!strings.Contains(metrics, `task_kind="essential",volatility_class="performance"} 1`) {
+		t.Fatalf("expected scoped essential_profile_limit backpressure metric, got:\n%s", metrics)
 	}
 }
 
@@ -2172,7 +2401,7 @@ func TestSchedulerComplete_RequeuesImmediatePendingRerun(t *testing.T) {
 	}
 }
 
-func TestSchedulerComplete_ReinsertsFromFinishedAt(t *testing.T) {
+func TestSchedulerComplete_ReinsertsFromPreviousDuePhase(t *testing.T) {
 	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
 	scheduler.rnd = rand.New(rand.NewSource(7))
 
@@ -2193,8 +2422,8 @@ func TestSchedulerComplete_ReinsertsFromFinishedAt(t *testing.T) {
 	scheduler.items[item.task.Key] = item
 	scheduler.inFlight = 1
 
-	want := jitteredNext(finishedAt, item.interval, rand.New(rand.NewSource(7)))
-	notWant := jitteredNext(previousDue, item.interval, rand.New(rand.NewSource(7)))
+	want := previousDue.Add(10 * time.Minute)
+	notWant := jitteredNext(finishedAt, item.interval, rand.New(rand.NewSource(7)))
 
 	scheduler.handleCompletion(Completion{Key: item.task.Key, FinishedAt: finishedAt})
 
@@ -2208,7 +2437,7 @@ func TestSchedulerComplete_ReinsertsFromFinishedAt(t *testing.T) {
 		t.Fatalf("task dueAt = %v, want %v", item.task.DueAt, want)
 	}
 	if item.dueAt.Equal(notWant) {
-		t.Fatalf("dueAt = %v, matched previous-due reinsertion %v", item.dueAt, notWant)
+		t.Fatalf("dueAt = %v, matched finished-at reinsertion %v", item.dueAt, notWant)
 	}
 	if got := scheduler.heap.Len(); got != 1 {
 		t.Fatalf("heap.Len() = %d, want 1", got)
@@ -2290,12 +2519,66 @@ func TestSchedulerComplete_CoalescesSkippedBackgroundWindowsToNextInterval(t *te
 	if got := len(scheduler.ready[VolatilityPriority(domain.VolatilityClassPerformance)]); got != 0 {
 		t.Fatalf("ready queue length = %d, want 0", got)
 	}
-	want := jitteredNext(finishedAt, item.interval, rand.New(rand.NewSource(7)))
+	want := dueAt.Add(120 * time.Second)
 	if !item.dueAt.Equal(want) {
-		t.Fatalf("dueAt = %v, want next interval %v", item.dueAt, want)
+		t.Fatalf("dueAt = %v, want preserved phase %v", item.dueAt, want)
 	}
 	if item.skippedWindows != 0 {
 		t.Fatalf("skippedWindows = %d, want 0 after coalescing", item.skippedWindows)
+	}
+}
+
+func TestSchedulerComplete_PreservesBackgroundPhaseForSameCompletionWave(t *testing.T) {
+	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
+	finishedAt := time.Unix(1_700_000_075, 0).UTC()
+	firstDue := time.Unix(1_700_000_000, 0).UTC()
+	secondDue := firstDue.Add(10 * time.Second)
+	firstKey := NewTaskKey(uuid.MustParse("60000000-0000-0000-0000-000000000101"), domain.VolatilityClassPerformance)
+	secondKey := NewTaskKey(uuid.MustParse("60000000-0000-0000-0000-000000000102"), domain.VolatilityClassPerformance)
+	first := &heapItem{
+		task: PollTask{
+			Key:              firstKey,
+			VolatilityClass:  domain.VolatilityClassPerformance,
+			ExpectedInterval: 30 * time.Second,
+			DueAt:            firstDue,
+		},
+		dueAt:        firstDue,
+		dispatchedAt: firstDue,
+		interval:     30 * time.Second,
+		inFlight:     true,
+		index:        -1,
+	}
+	second := &heapItem{
+		task: PollTask{
+			Key:              secondKey,
+			VolatilityClass:  domain.VolatilityClassPerformance,
+			ExpectedInterval: 30 * time.Second,
+			DueAt:            secondDue,
+		},
+		dueAt:        secondDue,
+		dispatchedAt: secondDue,
+		interval:     30 * time.Second,
+		inFlight:     true,
+		index:        -1,
+	}
+
+	scheduler.items[firstKey] = first
+	scheduler.items[secondKey] = second
+	scheduler.inFlight = 2
+
+	scheduler.handleCompletion(Completion{Key: firstKey, FinishedAt: finishedAt})
+	scheduler.handleCompletion(Completion{Key: secondKey, FinishedAt: finishedAt})
+
+	wantFirst := firstDue.Add(90 * time.Second)
+	wantSecond := secondDue.Add(90 * time.Second)
+	if !first.dueAt.Equal(wantFirst) {
+		t.Fatalf("first dueAt = %v, want %v", first.dueAt, wantFirst)
+	}
+	if !second.dueAt.Equal(wantSecond) {
+		t.Fatalf("second dueAt = %v, want %v", second.dueAt, wantSecond)
+	}
+	if first.dueAt.Equal(second.dueAt) {
+		t.Fatalf("completion wave collapsed to one dueAt: first=%v second=%v", first.dueAt, second.dueAt)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
@@ -30,6 +31,7 @@ import (
 	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/service"
+	"github.com/lollinoo/theia/internal/settingscache"
 	"github.com/lollinoo/theia/internal/ssh"
 	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/worker"
@@ -408,7 +410,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	positionRepo := postgres.NewPositionRepo(db)
 	canvasMapRepo := postgres.NewCanvasMapRepo(db)
 	canvasMapPositionRepo := postgres.NewCanvasMapPositionRepo(db)
-	settingsRepo := postgres.NewSettingsRepo(db)
+	settingsRepo := settingscache.New(postgres.NewSettingsRepo(db), 5*time.Second)
 	logging.Debugf("runtime effective config %s", runtimeDebugSettingsSummary(cfg, settingsRepo))
 	snmpProfileRepo := postgres.NewSNMPProfileRepo(db, encryptionKeyring)
 	credentialProfileRepo := postgres.NewCredentialProfileRepo(db)
@@ -545,7 +547,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	wsHandler := ws.NewHandler(
 		hub,
-		pipeline.GetOverviewSnapshot,
+		pipeline.GetOrBuildOverviewSnapshot,
 		pipeline.GetAlerts,
 		pipeline.GetPrometheusStatus,
 		ws.WithAllowedOrigins(cfg.AllowedOrigins),
@@ -581,17 +583,8 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	metricsHandler := observability.Handler()
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{
-		Addr: cfg.ListenAddr,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/metrics" {
-				if !authenticateMetricsRequest(w, r, metricsToken) {
-					return
-				}
-				metricsHandler.ServeHTTP(w, r)
-				return
-			}
-			router.ServeHTTP(w, r)
-		}),
+		Addr:    cfg.ListenAddr,
+		Handler: runtimeHTTPHandler(router, metricsHandler, metricsToken),
 	}
 
 	b.handleShutdown(cancel, server, children)
@@ -642,6 +635,48 @@ func minutesToDuration(minutes int) time.Duration {
 		return 0
 	}
 	return time.Duration(minutes) * time.Minute
+}
+
+func runtimeHTTPHandler(router http.Handler, metricsHandler http.Handler, metricsToken string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			if !authenticateMetricsRequest(w, r, metricsToken) {
+				return
+			}
+			metricsHandler.ServeHTTP(w, r)
+			return
+		}
+		if isPprofPath(r.URL.Path) {
+			if !authenticateMetricsRequest(w, r, metricsToken) {
+				return
+			}
+			servePprof(w, r)
+			return
+		}
+		router.ServeHTTP(w, r)
+	})
+}
+
+func isPprofPath(path string) bool {
+	return path == "/debug/pprof" || strings.HasPrefix(path, "/debug/pprof/")
+}
+
+func servePprof(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/debug/pprof", "/debug/pprof/":
+		pprof.Index(w, r)
+	case "/debug/pprof/cmdline":
+		pprof.Cmdline(w, r)
+	case "/debug/pprof/profile":
+		pprof.Profile(w, r)
+	case "/debug/pprof/symbol":
+		pprof.Symbol(w, r)
+	case "/debug/pprof/trace":
+		pprof.Trace(w, r)
+	default:
+		name := strings.TrimPrefix(r.URL.Path, "/debug/pprof/")
+		pprof.Handler(name).ServeHTTP(w, r)
+	}
 }
 
 func authenticateMetricsRequest(w http.ResponseWriter, r *http.Request, expectedToken string) bool {

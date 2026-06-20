@@ -4,7 +4,12 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -88,6 +93,7 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		p.stateStore.Update(state.StateUpdate{
 			DeviceID:         task.Device.ID,
 			VolatilityClass:  domain.VolatilityClassStatic,
+			Metrics:          staticResultMetrics(result),
 			PollSuccess:      result.Err == nil,
 			ExpectedInterval: task.ExpectedInterval,
 			Timestamp:        finishedAt,
@@ -97,7 +103,7 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			return
 		}
 
-		r.persistStaticDiscovery(task.Device, result)
+		r.persistStaticDiscoveryForced(task.Device, result)
 		return
 	}
 
@@ -111,9 +117,15 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		if p.performance == nil || p.stateStore == nil {
 			return
 		}
+		if r.knownSNMPUnreachable(task.Device.ID) {
+			return
+		}
 
-		profile := r.timeoutProfile(polling.LaneBackground)
-		result := p.performance.Poll(ctx, task.Device, profile.Timeout, profile.Retries)
+		profile := r.timeoutProfile(polling.LanePerformanceCounterWalks)
+		result := p.performance.PollWithOptions(ctx, task.Device, profile.Timeout, profile.Retries, collector.PerformancePollOptions{
+			ExpectedInterval: task.ExpectedInterval,
+			CounterCooldown:  p.runtime,
+		})
 		finishedAt = completionTime(result.CollectedAt)
 		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 
@@ -126,16 +138,18 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 				}
 			}
 
-			p.runtime.mu.Lock()
-			linkMetrics, next := collector.ComputeCounterRates(
-				result.Counters,
-				p.runtime.prevCounters[task.Device.ID],
-				completionTime(result.CollectedAt),
-				task.ExpectedInterval,
-			)
-			p.runtime.prevCounters[task.Device.ID] = next
-			p.runtime.mu.Unlock()
-			update.LinkMetrics = linkMetrics
+			if len(result.Counters) > 0 {
+				p.runtime.mu.Lock()
+				linkMetrics, next := collector.ComputeCounterRates(
+					result.Counters,
+					p.runtime.prevCounters[task.Device.ID],
+					completionTime(result.CollectedAt),
+					task.ExpectedInterval,
+				)
+				p.runtime.prevCounters[task.Device.ID] = next
+				p.runtime.mu.Unlock()
+				update.LinkMetrics = linkMetrics
+			}
 		}
 
 		p.stateStore.Update(update)
@@ -143,6 +157,9 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 
 	case domain.VolatilityClassOperational:
 		if p.operational == nil || p.stateStore == nil {
+			return
+		}
+		if r.knownSNMPUnreachable(task.Device.ID) {
 			return
 		}
 
@@ -159,50 +176,485 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		}
 
 		profile := r.timeoutProfile(polling.LaneBackground)
-		result := p.staticCollector.Poll(ctx, task.Device, profile.Timeout, profile.Retries, r.topologyDiscoveryMode(task.Device))
+		staticDevice := r.staticPollDevice(task.Device)
+		result := p.staticCollector.Poll(ctx, staticDevice, profile.Timeout, profile.Retries, r.topologyDiscoveryMode(staticDevice))
 		finishedAt = completionTime(result.CollectedAt)
 		observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 		p.stateStore.Update(state.StateUpdate{
-			DeviceID:         task.Device.ID,
+			DeviceID:         staticDevice.ID,
 			VolatilityClass:  domain.VolatilityClassStatic,
+			Metrics:          staticResultMetrics(result),
 			PollSuccess:      result.Err == nil,
 			ExpectedInterval: task.ExpectedInterval,
 			Timestamp:        completionTime(result.CollectedAt),
 		})
-		r.publishSubscribedDetailDelta(task.Device)
+		r.publishSubscribedDetailDelta(staticDevice)
 		if result.Err != nil || p.topologyService == nil {
 			return
 		}
 
-		r.persistStaticDiscovery(task.Device, result)
+		r.persistStaticDiscovery(staticDevice, result)
 	}
 }
 
-func (r *pipelineTaskRunner) persistStaticDiscovery(device domain.Device, result collector.StaticResult) {
+func staticResultMetrics(result collector.StaticResult) *domain.DeviceMetrics {
+	if result.Err != nil {
+		return nil
+	}
+	metrics := result.Metrics
+	return &metrics
+}
+
+func (r *pipelineTaskRunner) knownSNMPUnreachable(deviceID uuid.UUID) bool {
 	p := r.pipeline
+	if p == nil || p.stateStore == nil || deviceID == uuid.Nil {
+		return false
+	}
+	deviceState, ok := p.stateStore.GetDevice(deviceID)
+	return ok && deviceState.SNMPReachable == polling.TriStateFalse
+}
+
+func (r *pipelineTaskRunner) staticPollDevice(device domain.Device) domain.Device {
+	p := r.pipeline
+	if p == nil || p.cache == nil || device.ID == uuid.Nil || len(device.Interfaces) > 0 {
+		return device
+	}
+	cached, ok, err := p.cache.GetDeviceByID(device.ID)
+	if err != nil || !ok || len(cached.Interfaces) == 0 || !sameStaticPollIdentity(device, cached) {
+		return device
+	}
+	device.Interfaces = append([]domain.Interface(nil), cached.Interfaces...)
+	return device
+}
+
+func sameStaticPollIdentity(taskDevice domain.Device, cached domain.Device) bool {
+	if taskDevice.ID != cached.ID {
+		return false
+	}
+	taskIP := strings.TrimSpace(taskDevice.IP)
+	cachedIP := strings.TrimSpace(cached.IP)
+	if taskIP != "" && cachedIP != "" && taskIP != cachedIP {
+		return false
+	}
+	return true
+}
+
+func (r *pipelineTaskRunner) persistStaticDiscovery(device domain.Device, result collector.StaticResult) {
+	r.persistStaticDiscoveryWithPolicy(device, result, false)
+}
+
+func (r *pipelineTaskRunner) persistStaticDiscoveryForced(device domain.Device, result collector.StaticResult) {
+	r.persistStaticDiscoveryWithPolicy(device, result, true)
+}
+
+func (r *pipelineTaskRunner) persistStaticDiscoveryWithPolicy(device domain.Device, result collector.StaticResult, force bool) {
+	p := r.pipeline
+	force = force || staticPersistenceRequiresBootstrapFollowup(device)
+	fingerprint := staticDiscoveryFingerprint(device, result)
+	topologyFingerprint := staticDiscoveryTopologyFingerprint(result)
+	if !force {
+		shouldPersist, skipReason := p.shouldPersistStaticDiscovery(device.ID, fingerprint)
+		if !shouldPersist {
+			if skipReason == "" {
+				skipReason = "unchanged"
+			}
+			observability.Default().IncStaticPersistenceSkip(skipReason)
+			return
+		}
+	}
+	skipTopologyMaterialization := !force && p.staticTopologyFingerprintUnchanged(device.ID, topologyFingerprint)
+
 	persisted, err := p.topologyService.ApplyStaticDiscovery(device.ID, service.StaticDiscoveryInput{
-		SysName:                    result.SysName,
-		SysDescr:                   result.SysDescr,
-		SysObjectID:                result.SysObjectID,
-		HardwareModel:              result.HardwareModel,
-		OSVersion:                  result.OSVersion,
-		Vendor:                     result.Vendor,
-		DeviceType:                 result.DeviceType,
-		Interfaces:                 append([]domain.Interface(nil), result.Interfaces...),
-		Neighbors:                  append([]snmp.NeighborInfo(nil), result.Neighbors...),
-		NeighborDiscoveryProtocols: append([]domain.DiscoveryProtocol(nil), result.NeighborDiscoveryProtocols...),
-		NeighborDiscoveryFailures:  append([]snmp.NeighborDiscoveryFailure(nil), result.NeighborDiscoveryFailures...),
+		SysName:                     result.SysName,
+		SysDescr:                    result.SysDescr,
+		SysObjectID:                 result.SysObjectID,
+		HardwareModel:               result.HardwareModel,
+		OSVersion:                   result.OSVersion,
+		Vendor:                      result.Vendor,
+		DeviceType:                  result.DeviceType,
+		Interfaces:                  append([]domain.Interface(nil), result.Interfaces...),
+		Neighbors:                   append([]snmp.NeighborInfo(nil), result.Neighbors...),
+		NeighborDiscoveryProtocols:  append([]domain.DiscoveryProtocol(nil), result.NeighborDiscoveryProtocols...),
+		NeighborDiscoveryFailures:   append([]snmp.NeighborDiscoveryFailure(nil), result.NeighborDiscoveryFailures...),
+		SkipTopologyMaterialization: skipTopologyMaterialization,
 	})
 	if err != nil {
 		log.Printf("pipeline: static persistence failed for %s: %v", device.ID, err)
 		return
 	}
+	if skipTopologyMaterialization {
+		observability.Default().IncTopologyMaterializationSkip("unchanged")
+	}
+	p.rememberStaticDiscoveryPersistence(device.ID, fingerprint, topologyFingerprint, persisted)
 	if persisted.TopologyChanged && p.topologyNotify != nil {
 		select {
 		case p.topologyNotify <- struct{}{}:
 		default:
 		}
 	}
+}
+
+func staticPersistenceRequiresBootstrapFollowup(device domain.Device) bool {
+	switch domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState) {
+	case domain.TopologyBootstrapStatePending, domain.TopologyBootstrapStateFollowupScheduled:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *PipelineOrchestrator) shouldPersistStaticDiscovery(deviceID uuid.UUID, fingerprint string) (bool, string) {
+	if p == nil || deviceID == uuid.Nil || fingerprint == "" {
+		return true, ""
+	}
+
+	p.staticPersistenceMu.Lock()
+	defer p.staticPersistenceMu.Unlock()
+	entry, ok := p.staticPersistenceCache[deviceID]
+	if !ok || entry.fingerprint != fingerprint || entry.persistedAt.IsZero() {
+		return true, ""
+	}
+	return false, "unchanged"
+}
+
+func (p *PipelineOrchestrator) staticTopologyFingerprintUnchanged(deviceID uuid.UUID, topologyFingerprint string) bool {
+	if p == nil || deviceID == uuid.Nil || topologyFingerprint == "" {
+		return false
+	}
+
+	p.staticPersistenceMu.Lock()
+	defer p.staticPersistenceMu.Unlock()
+	entry, ok := p.staticPersistenceCache[deviceID]
+	if !ok ||
+		entry.topologyFingerprint != topologyFingerprint ||
+		entry.topologyMaterializedAt.IsZero() ||
+		entry.topologyUnresolvedNeighbors > 0 {
+		return false
+	}
+	return true
+}
+
+func (p *PipelineOrchestrator) rememberStaticDiscoveryPersistence(
+	deviceID uuid.UUID,
+	fingerprint string,
+	topologyFingerprint string,
+	result service.StaticPersistenceResult,
+) {
+	if p == nil || deviceID == uuid.Nil || fingerprint == "" {
+		return
+	}
+	now := p.staticPersistenceClock().UTC()
+	p.staticPersistenceMu.Lock()
+	defer p.staticPersistenceMu.Unlock()
+	if p.staticPersistenceCache == nil {
+		p.staticPersistenceCache = make(map[uuid.UUID]staticPersistenceCacheEntry)
+	}
+	entry := p.staticPersistenceCache[deviceID]
+	if result.TopologyMaterialized {
+		entry.topologyFingerprint = topologyFingerprint
+		entry.topologyMaterializedAt = now
+		entry.topologyUnresolvedNeighbors = result.UnresolvedNeighbors
+	} else if entry.topologyFingerprint != topologyFingerprint {
+		entry.topologyFingerprint = topologyFingerprint
+		entry.topologyMaterializedAt = time.Time{}
+		entry.topologyUnresolvedNeighbors = 0
+	}
+	entry.fingerprint = fingerprint
+	entry.persistedAt = now
+	p.staticPersistenceCache[deviceID] = entry
+}
+
+func (p *PipelineOrchestrator) staticPersistenceClock() time.Time {
+	if p != nil && p.staticPersistenceNow != nil {
+		return p.staticPersistenceNow()
+	}
+	return time.Now()
+}
+
+type staticDiscoveryFingerprintPayload struct {
+	SysName                    string
+	SysDescr                   string
+	SysObjectID                string
+	HardwareModel              string
+	OSVersion                  string
+	Vendor                     string
+	DeviceType                 domain.DeviceType
+	Interfaces                 []staticDiscoveryInterfaceFingerprint
+	Neighbors                  []staticDiscoveryNeighborFingerprint
+	NeighborDiscoveryProtocols []domain.DiscoveryProtocol
+	NeighborDiscoveryFailures  []snmp.NeighborDiscoveryFailure
+}
+
+type staticDiscoveryTopologyFingerprintPayload struct {
+	Neighbors                  []staticDiscoveryNeighborFingerprint
+	NeighborDiscoveryProtocols []domain.DiscoveryProtocol
+	NeighborDiscoveryFailures  []staticDiscoveryNeighborFailureFingerprint
+}
+
+type staticDiscoveryInterfaceFingerprint struct {
+	IfIndex     int
+	IfName      string
+	IfDescr     string
+	Speed       int64
+	AdminStatus string
+	OperStatus  string
+}
+
+type staticDiscoveryNeighborFingerprint struct {
+	RemoteChassisID string
+	RemotePortID    string
+	RemoteSysName   string
+	LocalIfIndex    int
+	LocalIfName     string
+	Protocol        domain.DiscoveryProtocol
+}
+
+type staticDiscoveryNeighborFailureFingerprint struct {
+	Protocol domain.DiscoveryProtocol
+	OID      string
+	Critical bool
+}
+
+func staticDiscoveryFingerprint(device domain.Device, result collector.StaticResult) string {
+	payload := staticDiscoveryFingerprintPayload{
+		SysName:                    strings.TrimSpace(result.SysName),
+		SysDescr:                   strings.TrimSpace(result.SysDescr),
+		SysObjectID:                strings.TrimSpace(result.SysObjectID),
+		HardwareModel:              strings.TrimSpace(result.HardwareModel),
+		OSVersion:                  strings.TrimSpace(result.OSVersion),
+		Vendor:                     strings.TrimSpace(result.Vendor),
+		DeviceType:                 result.DeviceType,
+		Interfaces:                 staticDiscoveryInterfaceFingerprints(device.Interfaces, result.Interfaces),
+		Neighbors:                  staticDiscoveryNeighborFingerprints(result.Neighbors),
+		NeighborDiscoveryProtocols: append([]domain.DiscoveryProtocol(nil), result.NeighborDiscoveryProtocols...),
+		NeighborDiscoveryFailures:  append([]snmp.NeighborDiscoveryFailure(nil), result.NeighborDiscoveryFailures...),
+	}
+	sort.Slice(payload.NeighborDiscoveryProtocols, func(i, j int) bool {
+		return payload.NeighborDiscoveryProtocols[i] < payload.NeighborDiscoveryProtocols[j]
+	})
+	sort.Slice(payload.NeighborDiscoveryFailures, func(i, j int) bool {
+		left := payload.NeighborDiscoveryFailures[i]
+		right := payload.NeighborDiscoveryFailures[j]
+		if left.Protocol != right.Protocol {
+			return left.Protocol < right.Protocol
+		}
+		if left.OID != right.OID {
+			return left.OID < right.OID
+		}
+		if left.Critical != right.Critical {
+			return !left.Critical && right.Critical
+		}
+		return left.Error < right.Error
+	})
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func staticDiscoveryTopologyFingerprint(result collector.StaticResult) string {
+	payload := staticDiscoveryTopologyFingerprintPayload{
+		Neighbors:                  staticDiscoveryNeighborFingerprints(result.Neighbors),
+		NeighborDiscoveryProtocols: append([]domain.DiscoveryProtocol(nil), result.NeighborDiscoveryProtocols...),
+		NeighborDiscoveryFailures:  staticDiscoveryNeighborFailureFingerprints(result.NeighborDiscoveryFailures),
+	}
+	sort.Slice(payload.NeighborDiscoveryProtocols, func(i, j int) bool {
+		return payload.NeighborDiscoveryProtocols[i] < payload.NeighborDiscoveryProtocols[j]
+	})
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func staticDiscoveryInterfaceFingerprints(existing []domain.Interface, observed []domain.Interface) []staticDiscoveryInterfaceFingerprint {
+	interfaces := canonicalStaticDiscoveryInterfaces(existing, observed)
+	if len(interfaces) == 0 {
+		return nil
+	}
+	fingerprints := make([]staticDiscoveryInterfaceFingerprint, 0, len(interfaces))
+	for _, iface := range interfaces {
+		fingerprints = append(fingerprints, staticDiscoveryInterfaceFingerprint{
+			IfIndex:     iface.IfIndex,
+			IfName:      strings.TrimSpace(iface.IfName),
+			IfDescr:     strings.TrimSpace(iface.IfDescr),
+			Speed:       iface.Speed,
+			AdminStatus: strings.TrimSpace(iface.AdminStatus),
+			OperStatus:  strings.TrimSpace(iface.OperStatus),
+		})
+	}
+	sort.Slice(fingerprints, func(i, j int) bool {
+		left := fingerprints[i]
+		right := fingerprints[j]
+		if left.IfIndex != right.IfIndex {
+			return left.IfIndex < right.IfIndex
+		}
+		if left.IfName != right.IfName {
+			return left.IfName < right.IfName
+		}
+		return left.IfDescr < right.IfDescr
+	})
+	return fingerprints
+}
+
+func canonicalStaticDiscoveryInterfaces(existing []domain.Interface, observed []domain.Interface) []domain.Interface {
+	if len(existing) == 0 {
+		return append([]domain.Interface(nil), observed...)
+	}
+	if len(observed) == 0 {
+		return append([]domain.Interface(nil), existing...)
+	}
+
+	merged := append([]domain.Interface(nil), existing...)
+	indexByKey := make(map[string]int, len(existing)*3)
+	for index, iface := range merged {
+		for _, key := range staticDiscoveryInterfaceIdentityKeys(iface) {
+			if _, exists := indexByKey[key]; !exists {
+				indexByKey[key] = index
+			}
+		}
+	}
+
+	for _, iface := range observed {
+		matchIndex := -1
+		for _, key := range staticDiscoveryInterfaceIdentityKeys(iface) {
+			if index, ok := indexByKey[key]; ok {
+				matchIndex = index
+				break
+			}
+		}
+		if matchIndex >= 0 {
+			merged[matchIndex] = canonicalStaticDiscoveryInterface(merged[matchIndex], iface)
+			for _, key := range staticDiscoveryInterfaceIdentityKeys(merged[matchIndex]) {
+				if _, exists := indexByKey[key]; !exists {
+					indexByKey[key] = matchIndex
+				}
+			}
+			continue
+		}
+		merged = append(merged, iface)
+		newIndex := len(merged) - 1
+		for _, key := range staticDiscoveryInterfaceIdentityKeys(iface) {
+			if _, exists := indexByKey[key]; !exists {
+				indexByKey[key] = newIndex
+			}
+		}
+	}
+	return merged
+}
+
+func canonicalStaticDiscoveryInterface(existing domain.Interface, observed domain.Interface) domain.Interface {
+	merged := existing
+	if observed.IfIndex != 0 {
+		merged.IfIndex = observed.IfIndex
+	}
+	if strings.TrimSpace(observed.IfName) != "" {
+		merged.IfName = observed.IfName
+	}
+	if strings.TrimSpace(observed.IfDescr) != "" {
+		merged.IfDescr = observed.IfDescr
+	}
+	if observed.Speed > 0 {
+		merged.Speed = observed.Speed
+	}
+	if strings.TrimSpace(observed.AdminStatus) != "" {
+		merged.AdminStatus = observed.AdminStatus
+	}
+	if strings.TrimSpace(observed.OperStatus) != "" {
+		merged.OperStatus = observed.OperStatus
+	}
+	return merged
+}
+
+func staticDiscoveryInterfaceIdentityKeys(iface domain.Interface) []string {
+	keys := make([]string, 0, 3)
+	if iface.IfIndex > 0 {
+		keys = append(keys, fmt.Sprintf("index:%d", iface.IfIndex))
+	}
+	if key := normalizedStaticDiscoveryInterfaceName(iface.IfName); key != "" {
+		keys = append(keys, "name:"+key)
+	}
+	if key := normalizedStaticDiscoveryInterfaceName(iface.IfDescr); key != "" {
+		keys = append(keys, "name:"+key)
+	}
+	return keys
+}
+
+func normalizedStaticDiscoveryInterfaceName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func staticDiscoveryNeighborFingerprints(neighbors []snmp.NeighborInfo) []staticDiscoveryNeighborFingerprint {
+	if len(neighbors) == 0 {
+		return nil
+	}
+	fingerprints := make([]staticDiscoveryNeighborFingerprint, 0, len(neighbors))
+	for _, neighbor := range neighbors {
+		fingerprints = append(fingerprints, staticDiscoveryNeighborFingerprint{
+			RemoteChassisID: strings.TrimSpace(neighbor.RemoteChassisID),
+			RemotePortID:    strings.TrimSpace(neighbor.RemotePortID),
+			RemoteSysName:   strings.TrimSpace(neighbor.RemoteSysName),
+			LocalIfIndex:    neighbor.LocalIfIndex,
+			LocalIfName:     strings.TrimSpace(neighbor.LocalIfName),
+			Protocol:        neighbor.Protocol,
+		})
+	}
+	sort.Slice(fingerprints, func(i, j int) bool {
+		left := fingerprints[i]
+		right := fingerprints[j]
+		if left.Protocol != right.Protocol {
+			return left.Protocol < right.Protocol
+		}
+		if left.LocalIfIndex != right.LocalIfIndex {
+			return left.LocalIfIndex < right.LocalIfIndex
+		}
+		if left.LocalIfName != right.LocalIfName {
+			return left.LocalIfName < right.LocalIfName
+		}
+		if left.RemoteSysName != right.RemoteSysName {
+			return left.RemoteSysName < right.RemoteSysName
+		}
+		if left.RemoteChassisID != right.RemoteChassisID {
+			return left.RemoteChassisID < right.RemoteChassisID
+		}
+		return left.RemotePortID < right.RemotePortID
+	})
+	return fingerprints
+}
+
+func staticDiscoveryNeighborFailureFingerprints(failures []snmp.NeighborDiscoveryFailure) []staticDiscoveryNeighborFailureFingerprint {
+	if len(failures) == 0 {
+		return nil
+	}
+	fingerprints := make([]staticDiscoveryNeighborFailureFingerprint, 0, len(failures))
+	for _, failure := range failures {
+		fingerprints = append(fingerprints, staticDiscoveryNeighborFailureFingerprint{
+			Protocol: failure.Protocol,
+			OID:      strings.TrimSpace(failure.OID),
+			Critical: failure.Critical,
+		})
+	}
+	sort.Slice(fingerprints, func(i, j int) bool {
+		left := fingerprints[i]
+		right := fingerprints[j]
+		if left.Protocol != right.Protocol {
+			return left.Protocol < right.Protocol
+		}
+		if left.OID != right.OID {
+			return left.OID < right.OID
+		}
+		if left.Critical != right.Critical {
+			return !left.Critical && right.Critical
+		}
+		return false
+	})
+	return fingerprints
 }
 
 func (r *pipelineTaskRunner) runVirtualTask(ctx context.Context, task scheduler.PollTask) time.Time {
@@ -243,7 +695,7 @@ func (r *pipelineTaskRunner) runVirtualOperationalTask(ctx context.Context, task
 			if enrichment.ProbeReachable != nil {
 				result.Reachable = *enrichment.ProbeReachable
 				completedAt := completionTime(result.CollectedAt)
-				p.stateStore.Update(result.ToStoreUpdate(task.ExpectedInterval))
+				p.stateStore.Update(virtualReachabilityStoreUpdate(task, result))
 				p.stateStore.Update(state.StateUpdate{
 					DeviceID:         task.Device.ID,
 					VolatilityClass:  domain.VolatilityClassPerformance,
@@ -266,7 +718,7 @@ func (r *pipelineTaskRunner) runVirtualOperationalTask(ctx context.Context, task
 	observability.Default().IncPollResult(task.VolatilityClass, result.Err == nil)
 
 	completedAt := completionTime(result.CollectedAt)
-	p.stateStore.Update(result.ToStoreUpdate(task.ExpectedInterval))
+	p.stateStore.Update(virtualReachabilityStoreUpdate(task, result))
 	// Virtual nodes only run the operational tier, so stamp freshness metadata
 	// explicitly to keep the UI footer out of the "waiting for first poll" state.
 	p.stateStore.Update(state.StateUpdate{
@@ -278,6 +730,31 @@ func (r *pipelineTaskRunner) runVirtualOperationalTask(ctx context.Context, task
 	})
 	r.publishSubscribedDetailDelta(task.Device)
 	return completedAt
+}
+
+func virtualReachabilityStoreUpdate(task scheduler.PollTask, result collector.OperationalResult) state.StateUpdate {
+	networkReachable := polling.TriStateFalse
+	pollStatus := polling.PollStatusFailed
+	if result.Reachable {
+		networkReachable = polling.TriStateTrue
+		pollStatus = polling.PollStatusComplete
+	}
+
+	return state.StateUpdate{
+		DeviceID:         task.Device.ID,
+		VolatilityClass:  domain.VolatilityClassOperational,
+		PollSuccess:      result.Reachable,
+		ExpectedInterval: task.ExpectedInterval,
+		Timestamp:        completionTime(result.CollectedAt),
+		Essential: &state.EssentialUpdate{
+			PollStatus:       pollStatus,
+			NetworkReachable: networkReachable,
+			SNMPReachable:    polling.TriStateUnknown,
+			Uptime:           polling.FieldStateMissing,
+			CPU:              polling.FieldStateMissing,
+			Memory:           polling.FieldStateMissing,
+		},
+	}
 }
 
 func (r *pipelineTaskRunner) publishSubscribedDetailDelta(device domain.Device) {
@@ -401,23 +878,28 @@ func (r *pipelineTaskRunner) topologyDiscoveryMode(device domain.Device) domain.
 }
 
 func (r *pipelineTaskRunner) bootstrapTopologyDiscoveryMode(device domain.Device) domain.TopologyDiscoveryMode {
-	return r.resolvedTopologyDiscoveryMode(device)
+	defaultMode := r.defaultTopologyDiscoveryMode()
+	return domain.ResolveTopologyDiscoveryMode(&device, defaultMode)
 }
 
 func (r *pipelineTaskRunner) resolvedTopologyDiscoveryMode(device domain.Device) domain.TopologyDiscoveryMode {
-	p := r.pipeline
-	defaultMode := domain.TopologyDiscoveryModeLLDPCDP
-	if p.settingsRepo != nil {
-		if value, err := p.settingsRepo.Get(domain.SettingTopologyDiscoveryDefaultMode); err == nil {
-			defaultMode = domain.NormalizeTopologyDiscoveryMode(domain.TopologyDiscoveryMode(value), domain.TopologyDiscoveryModeLLDPCDP)
-		}
-	}
-
+	defaultMode := r.defaultTopologyDiscoveryMode()
 	mode := domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
 	if mode == domain.TopologyDiscoveryModeInherit {
 		mode = defaultMode
 	}
 	return mode
+}
+
+func (r *pipelineTaskRunner) defaultTopologyDiscoveryMode() domain.TopologyDiscoveryMode {
+	p := r.pipeline
+	defaultMode := domain.TopologyDiscoveryModeLLDPCDP
+	if p != nil && p.settingsRepo != nil {
+		if value, err := p.settingsRepo.Get(domain.SettingTopologyDiscoveryDefaultMode); err == nil {
+			defaultMode = domain.NormalizeTopologyDiscoveryMode(domain.TopologyDiscoveryMode(value), domain.TopologyDiscoveryModeLLDPCDP)
+		}
+	}
+	return defaultMode
 }
 
 func (p *PipelineOrchestrator) runTask(ctx context.Context, task scheduler.PollTask) {

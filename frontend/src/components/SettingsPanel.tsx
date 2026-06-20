@@ -30,11 +30,18 @@ import { PollingSettingsSection } from './settings-panel/PollingSettingsSection'
 import { PrometheusSettingsSection } from './settings-panel/PrometheusSettingsSection';
 import { SavedIndicator } from './settings-panel/SavedIndicator';
 import { SettingsSection } from './settings-panel/SettingsSection';
+import { SNMPDebugSettingsSection } from './settings-panel/SNMPDebugSettingsSection';
 import {
+  createSNMPDebugSavedFlags,
+  createSNMPDebugTimerRefs,
   createWorkerSavedFlags,
   createWorkerTimerRefs,
+  DEFAULT_SNMP_DEBUG_SETTINGS,
   DEFAULT_WORKER_SETTINGS,
   PRESET_VALUES,
+  SNMP_DEBUG_SETTINGS,
+  type SNMPDebugSetting,
+  type SNMPDebugSettingKey,
   WORKER_SETTINGS,
   type WorkerSetting,
   type WorkerSettingKey,
@@ -42,6 +49,7 @@ import {
 import { controlClass, fieldLabelClass } from './settings-panel/settingsPanelStyles';
 
 const DEFAULT_NETWORK_PROBE_PORTS = '22,8291,80,443';
+const WORKER_SETTING_KEYS = new Set<string>(WORKER_SETTINGS.map((setting) => setting.key));
 
 /** Props for the admin settings container; changes notify parents that runtime config may need refresh. */
 interface SettingsPanelProps {
@@ -74,6 +82,10 @@ function normalizeNetworkProbePorts(value: string): { value: string; error: stri
   return { value: ports.join(','), error: null };
 }
 
+function isWorkerSettingKey(key: SNMPDebugSettingKey): key is WorkerSettingKey {
+  return WORKER_SETTING_KEYS.has(key);
+}
+
 /**
  * Renders admin-level settings and owns fetch, validation, debounced autosave, and saved indicators.
  * Profile managers and section components handle presentation while this container persists setting keys.
@@ -101,10 +113,16 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [bridgePort, setBridgePort] = useState('1337');
   const [savedBridgePort, setSavedBridgePort] = useState(false);
   const [workerSectionOpen, setWorkerSectionOpen] = useState(false);
+  const [snmpDebugSectionOpen, setSNMPDebugSectionOpen] = useState(false);
   const [workerSettings, setWorkerSettings] =
     useState<Record<WorkerSettingKey, string>>(DEFAULT_WORKER_SETTINGS);
   const [savedWorkerSettings, setSavedWorkerSettings] =
     useState<Record<WorkerSettingKey, boolean>>(createWorkerSavedFlags);
+  const [snmpDebugSettings, setSNMPDebugSettings] = useState<Record<SNMPDebugSettingKey, string>>(
+    DEFAULT_SNMP_DEBUG_SETTINGS,
+  );
+  const [savedSNMPDebugSettings, setSavedSNMPDebugSettings] =
+    useState<Record<SNMPDebugSettingKey, boolean>>(createSNMPDebugSavedFlags);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const pollingTimerRef = useRef<number | null>(null);
@@ -123,6 +141,12 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const workerTimerRefs = useRef<Record<WorkerSettingKey, number | null>>(createWorkerTimerRefs());
   const savedWorkerTimerRefs = useRef<Record<WorkerSettingKey, number | null>>(
     createWorkerTimerRefs(),
+  );
+  const snmpDebugTimerRefs = useRef<Record<SNMPDebugSettingKey, number | null>>(
+    createSNMPDebugTimerRefs(),
+  );
+  const savedSNMPDebugTimerRefs = useRef<Record<SNMPDebugSettingKey, number | null>>(
+    createSNMPDebugTimerRefs(),
   );
 
   useEffect(() => {
@@ -148,6 +172,13 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
         setWorkerSettings((prev) => {
           const next = { ...prev };
           for (const setting of WORKER_SETTINGS) {
+            next[setting.key] = settings[setting.key] ?? setting.defaultValue;
+          }
+          return next;
+        });
+        setSNMPDebugSettings((prev) => {
+          const next = { ...prev };
+          for (const setting of SNMP_DEBUG_SETTINGS) {
             next[setting.key] = settings[setting.key] ?? setting.defaultValue;
           }
           return next;
@@ -190,6 +221,17 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }, 2000);
   }
 
+  /** Shows the saved indicator for one SNMP debug setting without affecting other rows. */
+  function showSNMPDebugSaved(key: SNMPDebugSettingKey) {
+    setSavedSNMPDebugSettings((prev) => ({ ...prev, [key]: true }));
+    if (savedSNMPDebugTimerRefs.current[key] !== null) {
+      window.clearTimeout(savedSNMPDebugTimerRefs.current[key]);
+    }
+    savedSNMPDebugTimerRefs.current[key] = window.setTimeout(() => {
+      setSavedSNMPDebugSettings((prev) => ({ ...prev, [key]: false }));
+    }, 2000);
+  }
+
   /** Validates worker numeric settings before scheduling an autosave request. */
   function validateIntegerRange(value: string, min: number, max: number): string | null {
     const trimmed = value.trim();
@@ -204,8 +246,12 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     const setting = WORKER_SETTINGS.find((candidate) => candidate.key === key);
     if (!setting) return;
     setWorkerSettings((prev) => ({ ...prev, [key]: value }));
+    setSNMPDebugSettings((prev) => ({ ...prev, [key]: value }));
     if (workerTimerRefs.current[key] !== null) {
       window.clearTimeout(workerTimerRefs.current[key]);
+    }
+    if (snmpDebugTimerRefs.current[key] !== null) {
+      window.clearTimeout(snmpDebugTimerRefs.current[key]);
     }
 
     const err = validateIntegerRange(value, setting.min, setting.max);
@@ -217,7 +263,43 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     setFieldError(key, null);
     const normalized = String(parseInt(value, 10));
     workerTimerRefs.current[key] = window.setTimeout(() => {
-      void updateSetting(key, normalized).then(() => showWorkerSaved(key));
+      void updateSetting(key, normalized).then(() => {
+        showWorkerSaved(key);
+        showSNMPDebugSaved(key);
+      });
+    }, 500);
+  }
+
+  /** Debounces SNMP debug setting persistence and keeps duplicate worker controls synchronized. */
+  function handleSNMPDebugSettingChange(key: SNMPDebugSettingKey, value: string) {
+    const setting = SNMP_DEBUG_SETTINGS.find((candidate) => candidate.key === key);
+    if (!setting) return;
+    setSNMPDebugSettings((prev) => ({ ...prev, [key]: value }));
+    if (isWorkerSettingKey(key)) {
+      setWorkerSettings((prev) => ({ ...prev, [key]: value }));
+      if (workerTimerRefs.current[key] !== null) {
+        window.clearTimeout(workerTimerRefs.current[key]);
+      }
+    }
+    if (snmpDebugTimerRefs.current[key] !== null) {
+      window.clearTimeout(snmpDebugTimerRefs.current[key]);
+    }
+
+    const err = validateIntegerRange(value, setting.min, setting.max);
+    if (err) {
+      setFieldError(key, err);
+      return;
+    }
+
+    setFieldError(key, null);
+    const normalized = String(parseInt(value, 10));
+    snmpDebugTimerRefs.current[key] = window.setTimeout(() => {
+      void updateSetting(key, normalized).then(() => {
+        showSNMPDebugSaved(key);
+        if (isWorkerSettingKey(key)) {
+          showWorkerSaved(key);
+        }
+      });
     }, 500);
   }
 
@@ -388,6 +470,13 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     );
   }
 
+  function handleSNMPDebugSettingBlur(setting: SNMPDebugSetting) {
+    setFieldError(
+      setting.key,
+      validateIntegerRange(snmpDebugSettings[setting.key], setting.min, setting.max),
+    );
+  }
+
   return (
     <div
       data-testid="settings-panel-layout"
@@ -421,6 +510,24 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
             onWorkerSectionToggle={() => setWorkerSectionOpen((prev) => !prev)}
             onWorkerSettingChange={handleWorkerSettingChange}
             onWorkerSettingBlur={handleWorkerSettingBlur}
+          />
+        </SettingsSection>
+
+        <SettingsSection
+          id="settings-snmp-debug-heading"
+          title="SNMP Debug"
+          description="Runtime SNMP collection timing and concurrency controls."
+          icon="tune"
+          accent="warning"
+        >
+          <SNMPDebugSettingsSection
+            open={snmpDebugSectionOpen}
+            settings={snmpDebugSettings}
+            savedSettings={savedSNMPDebugSettings}
+            fieldErrors={fieldErrors}
+            onToggle={() => setSNMPDebugSectionOpen((prev) => !prev)}
+            onSettingChange={handleSNMPDebugSettingChange}
+            onSettingBlur={handleSNMPDebugSettingBlur}
           />
         </SettingsSection>
 

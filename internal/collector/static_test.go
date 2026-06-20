@@ -65,14 +65,37 @@ func TestStaticCollectorPoll(t *testing.T) {
 						".1.3.6.1.4.1.14988.1.1.4.4.0": {
 							{Name: ".1.3.6.1.4.1.14988.1.1.4.4.0", Type: gosnmp.OctetString, Value: []byte("7.22.1")},
 						},
+						".1.3.6.1.4.1.14988.1.1.3.10.0": {
+							{Name: ".1.3.6.1.4.1.14988.1.1.3.10.0", Type: gosnmp.Integer, Value: 481},
+						},
 					},
 					bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
-						snmp.OidIfTable: {
+						snmp.OidHrProcessorLoad: {
+							{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 20},
+							{Name: snmp.OidHrProcessorLoad + ".2", Type: gosnmp.Integer, Value: 40},
+						},
+						snmp.OidHrStorageType: {
+							{Name: snmp.OidHrStorageType + ".1", Type: gosnmp.ObjectIdentifier, Value: snmp.OidHrStorageRam},
+						},
+						snmp.OidHrStorageAllocUnits: {
+							{Name: snmp.OidHrStorageAllocUnits + ".1", Type: gosnmp.Integer, Value: 1},
+						},
+						snmp.OidHrStorageSize: {
+							{Name: snmp.OidHrStorageSize + ".1", Type: gosnmp.Integer, Value: 200},
+						},
+						snmp.OidHrStorageUsed: {
+							{Name: snmp.OidHrStorageUsed + ".1", Type: gosnmp.Integer, Value: 100},
+						},
+						snmp.OidIfDescr: {
 							{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
+						},
+						snmp.OidIfOperStatus: {
 							{Name: snmp.OidIfOperStatus + ".1", Type: gosnmp.Integer, Value: 1},
 						},
-						snmp.OidIfXTable: {
+						snmp.OidIfName: {
 							{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("eth1")},
+						},
+						snmp.OidIfHighSpeed: {
 							{Name: snmp.OidIfHighSpeed + ".1", Type: gosnmp.Gauge32, Value: uint(1000)},
 						},
 						snmp.OidLLDPLocPortIfIndex: {
@@ -129,6 +152,9 @@ func TestStaticCollectorPoll(t *testing.T) {
 				if result.DeviceType != domain.DeviceTypeRouter {
 					t.Fatalf("DeviceType = %q, want %q", result.DeviceType, domain.DeviceTypeRouter)
 				}
+				assertFloatPtrEqual(t, result.Metrics.CPUPercent, 30, "CPUPercent")
+				assertFloatPtrEqual(t, result.Metrics.MemPercent, 50, "MemPercent")
+				assertFloatPtrEqual(t, result.Metrics.TempCelsius, 48.1, "TempCelsius")
 				if len(result.Interfaces) != 1 {
 					t.Fatalf("interface count = %d, want 1", len(result.Interfaces))
 				}
@@ -177,10 +203,10 @@ func TestStaticCollectorPoll(t *testing.T) {
 						},
 					},
 					bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
-						snmp.OidIfTable: {
+						snmp.OidIfDescr: {
 							{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 						},
-						snmp.OidIfXTable: {
+						snmp.OidIfName: {
 							{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 						},
 					},
@@ -279,6 +305,477 @@ func TestStaticCollectorPoll(t *testing.T) {
 	}
 }
 
+func TestStaticCollectorPoll_SkipsOptionalHealthWalksWhenDiscoveryConsumesBudget(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := &scriptedCollectorClient{
+		getResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidSysName: {
+				{Name: snmp.OidSysName, Type: gosnmp.OctetString, Value: []byte("slow-static")},
+			},
+			snmp.OidSysDescr: {
+				{Name: snmp.OidSysDescr, Type: gosnmp.OctetString, Value: []byte("Generic switch")},
+			},
+			snmp.OidSysObjectID: {
+				{Name: snmp.OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.99999.1"},
+			},
+		},
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfDescr: {
+				{Name: snmp.OidIfDescr + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7-descr")},
+			},
+			snmp.OidIfName: {
+				{Name: snmp.OidIfName + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")},
+			},
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 64},
+			},
+			snmp.OidHrStorageType: {
+				{Name: snmp.OidHrStorageType + ".1", Type: gosnmp.ObjectIdentifier, Value: snmp.OidHrStorageRam},
+			},
+		},
+		bulkWalkDelays: map[string]time.Duration{
+			snmp.OidIfDescr: 25 * time.Millisecond,
+		},
+	}
+	collector := NewStaticCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID: uuid.New(),
+		IP: "192.0.2.61",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}, 10*time.Millisecond, 0, domain.TopologyDiscoveryModeOff)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil because optional health walks are skippable", result.Err)
+	}
+	if len(result.Interfaces) != 1 || result.Interfaces[0].IfName != "sfp7" {
+		t.Fatalf("Interfaces = %#v, want core static discovery to complete", result.Interfaces)
+	}
+	for _, oid := range []string{
+		snmp.OidHrProcessorLoad,
+		snmp.OidHrStorageType,
+		snmp.OidHrStorageAllocUnits,
+		snmp.OidHrStorageSize,
+		snmp.OidHrStorageUsed,
+		snmp.OidEntPhySensorType,
+		snmp.OidEntPhySensorValue,
+	} {
+		if slices.Contains(client.bulkWalkCalls, oid) {
+			t.Fatalf("BulkWalk calls = %v, want optional health walk %s skipped after slow discovery", client.bulkWalkCalls, oid)
+		}
+	}
+	if result.Metrics.CPUPercent != nil || result.Metrics.MemPercent != nil || result.Metrics.TempCelsius != nil {
+		t.Fatalf("Metrics = %#v, want no optional health metrics when health walks are skipped", result.Metrics)
+	}
+}
+
+func TestStaticCollectorPoll_CooldownsTimedOutOptionalHealthWalks(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	clients := []*scriptedCollectorClient{
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+			bulkWalkErrs: map[string]error{
+				snmp.OidHrProcessorLoad: errors.New("request timeout"),
+			},
+		},
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+		},
+	}
+	clients[1].bulkWalkResponses[snmp.OidHrProcessorLoad] = []gosnmp.SnmpPDU{
+		{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 77},
+	}
+	call := 0
+	collector := NewStaticCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		client := clients[call]
+		call++
+		return client, nil
+	})
+	device := domain.Device{
+		ID: deviceID,
+		IP: "192.0.2.62",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	first := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeOff)
+	if first.Err != nil {
+		t.Fatalf("first Err = %v, want nil because optional health timeout is non-fatal", first.Err)
+	}
+	if !slices.Contains(clients[0].bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("first BulkWalk calls = %v, want initial CPU health attempt", clients[0].bulkWalkCalls)
+	}
+
+	second := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeOff)
+	if second.Err != nil {
+		t.Fatalf("second Err = %v, want nil", second.Err)
+	}
+	if slices.Contains(clients[1].bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("second BulkWalk calls = %v, want CPU health walk skipped during cooldown", clients[1].bulkWalkCalls)
+	}
+	if second.Metrics.CPUPercent != nil {
+		t.Fatalf("second CPUPercent = %v, want nil while CPU health walk is cooling down", *second.Metrics.CPUPercent)
+	}
+}
+
+func TestStaticCollectorPoll_CooldownsTimedOutStaticInterfaceWalks(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+	metrics := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	deviceID := uuid.New()
+	clients := []*scriptedCollectorClient{
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+			bulkWalkErrs: map[string]error{
+				snmp.OidIfDescr: errors.New("request timeout"),
+			},
+		},
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+		},
+	}
+	call := 0
+	collector := NewStaticCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		client := clients[call]
+		call++
+		return client, nil
+	})
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	collector.now = func() time.Time { return now }
+	device := domain.Device{
+		ID: deviceID,
+		IP: "192.0.2.63",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	first := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeOff)
+	if first.Err != nil {
+		t.Fatalf("first Err = %v, want nil because interface column timeout is non-fatal", first.Err)
+	}
+	if !slices.Contains(clients[0].bulkWalkCalls, snmp.OidIfDescr) {
+		t.Fatalf("first BulkWalk calls = %v, want initial ifDescr attempt", clients[0].bulkWalkCalls)
+	}
+
+	now = now.Add(time.Minute)
+	second := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeOff)
+	if second.Err != nil {
+		t.Fatalf("second Err = %v, want nil", second.Err)
+	}
+	if slices.Contains(clients[1].bulkWalkCalls, snmp.OidIfDescr) {
+		t.Fatalf("second BulkWalk calls = %v, want ifDescr skipped during cooldown", clients[1].bulkWalkCalls)
+	}
+	for _, oid := range []string{snmp.OidIfSpeed, snmp.OidIfAdminStatus, snmp.OidIfOperStatus, snmp.OidIfName, snmp.OidIfHighSpeed} {
+		if !slices.Contains(clients[1].bulkWalkCalls, oid) {
+			t.Fatalf("second BulkWalk calls = %v, want non-cooled interface column %s attempted", clients[1].bulkWalkCalls, oid)
+		}
+	}
+	body := string(metrics.MarshalPrometheus())
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_descr_walk",result="skipped_cooldown"} 1`)
+	if !strings.Contains(body, `theia_static_collection_skips_total{operation="if_descr_walk",reason="cooldown"} 1`) {
+		t.Fatalf("expected static collection cooldown skip metric, got:\n%s", body)
+	}
+}
+
+func TestStaticInterfaceCooldownClient_ExpiredCooldownAllowsWalk(t *testing.T) {
+	state := newStaticHealthWalkState()
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	state.cooldown("device-1", "if_descr_walk", now.Add(time.Minute))
+	delegate := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidIfDescr: {{Name: snmp.OidIfDescr + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")}},
+		},
+	}
+	client := staticInterfaceCooldownClient{
+		delegate:  delegate,
+		state:     state,
+		deviceKey: "device-1",
+		now:       func() time.Time { return now.Add(2 * time.Minute) },
+		cooldown:  time.Minute,
+	}
+
+	pdus, err := client.BulkWalk(snmp.OidIfDescr)
+	if err != nil {
+		t.Fatalf("BulkWalk() error = %v", err)
+	}
+	if len(pdus) != 1 {
+		t.Fatalf("pdus = %d, want 1", len(pdus))
+	}
+	if state.coolingDown("device-1", "if_descr_walk", now.Add(2*time.Minute)) {
+		t.Fatal("successful interface walk did not clear cooldown state")
+	}
+}
+
+func TestStaticCollectorPoll_StaticInterfaceCooldownDoesNotSuppressBootstrapDiscovery(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	clients := []*scriptedCollectorClient{
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+			bulkWalkErrs: map[string]error{
+				snmp.OidIfDescr: errors.New("request timeout"),
+			},
+		},
+		{
+			getResponses:      staticDiscoveryGetResponses(),
+			bulkWalkResponses: staticDiscoveryWalkResponses(),
+		},
+	}
+	call := 0
+	collector := NewStaticCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		client := clients[call]
+		call++
+		return client, nil
+	})
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	collector.now = func() time.Time { return now }
+	device := domain.Device{
+		ID: deviceID,
+		IP: "192.0.2.64",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	first := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeOff)
+	if first.Err != nil {
+		t.Fatalf("first Err = %v, want nil", first.Err)
+	}
+
+	now = now.Add(time.Minute)
+	second := collector.Poll(context.Background(), device, time.Second, 0, domain.TopologyDiscoveryModeBootstrapOnce)
+	if second.Err != nil {
+		t.Fatalf("bootstrap Err = %v, want nil", second.Err)
+	}
+	if !slices.Contains(clients[1].bulkWalkCalls, snmp.OidIfDescr) {
+		t.Fatalf("bootstrap BulkWalk calls = %v, want ifDescr attempted despite regular cooldown", clients[1].bulkWalkCalls)
+	}
+}
+
+func TestOptionalStaticHealthClient_NonTimeoutErrorDoesNotStartCooldown(t *testing.T) {
+	state := newStaticHealthWalkState()
+	first := &scriptedCollectorClient{
+		bulkWalkErrs: map[string]error{
+			snmp.OidHrProcessorLoad: errors.New("no such name"),
+		},
+	}
+	client := optionalStaticHealthClient{
+		delegate:  first,
+		state:     state,
+		deviceKey: "device-1",
+		startedAt: time.Now(),
+		budget:    time.Second,
+		cooldown:  staticOptionalHealthCooldown,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	if _, err := client.BulkWalk(snmp.OidHrProcessorLoad); err == nil {
+		t.Fatal("first BulkWalk error = nil, want non-timeout error")
+	}
+
+	second := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 60}},
+		},
+	}
+	client.delegate = second
+	if _, err := client.BulkWalk(snmp.OidHrProcessorLoad); err != nil {
+		t.Fatalf("second BulkWalk error = %v, want nil because non-timeout must not cool down", err)
+	}
+	if !slices.Contains(second.bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("second BulkWalk calls = %v, want retry after non-timeout error", second.bulkWalkCalls)
+	}
+}
+
+func TestOptionalStaticHealthClient_BulkWalkEachSkipsExpiredOptionalHealthBudget(t *testing.T) {
+	delegate := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 70}},
+		},
+	}
+	client := optionalStaticHealthClient{
+		delegate:  delegate,
+		state:     newStaticHealthWalkState(),
+		deviceKey: "device-1",
+		startedAt: time.Now().Add(-time.Second),
+		budget:    time.Millisecond,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	visited := 0
+	if err := client.BulkWalkEach(snmp.OidHrProcessorLoad, func(gosnmp.SnmpPDU) error {
+		visited++
+		return nil
+	}); err != nil {
+		t.Fatalf("BulkWalkEach() error = %v", err)
+	}
+	if visited != 0 {
+		t.Fatalf("visited PDUs = %d, want none after optional health budget expires", visited)
+	}
+	if len(delegate.bulkWalkCalls) != 0 {
+		t.Fatalf("BulkWalk calls = %v, want skipped optional health walk", delegate.bulkWalkCalls)
+	}
+}
+
+func TestOptionalStaticHealthClient_BulkWalkEachHonorsCooldown(t *testing.T) {
+	state := newStaticHealthWalkState()
+	firstDelegate := &scriptedCollectorClient{
+		bulkWalkErrs: map[string]error{snmp.OidHrProcessorLoad: errors.New("request timeout")},
+	}
+	first := optionalStaticHealthClient{
+		delegate:  firstDelegate,
+		state:     state,
+		deviceKey: "device-1",
+		cooldown:  time.Minute,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	if err := first.BulkWalkEach(snmp.OidHrProcessorLoad, func(gosnmp.SnmpPDU) error {
+		return nil
+	}); err == nil {
+		t.Fatal("first BulkWalkEach error = nil, want timeout")
+	}
+	if !slices.Contains(firstDelegate.bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("first BulkWalk calls = %v, want initial CPU health attempt", firstDelegate.bulkWalkCalls)
+	}
+
+	secondDelegate := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 70}},
+		},
+	}
+	second := optionalStaticHealthClient{
+		delegate:  secondDelegate,
+		state:     state,
+		deviceKey: "device-1",
+		cooldown:  time.Minute,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	visited := 0
+	if err := second.BulkWalkEach(snmp.OidHrProcessorLoad, func(gosnmp.SnmpPDU) error {
+		visited++
+		return nil
+	}); err != nil {
+		t.Fatalf("second BulkWalkEach() error = %v", err)
+	}
+	if visited != 0 {
+		t.Fatalf("visited PDUs = %d, want none while CPU health walk is cooling down", visited)
+	}
+	if slices.Contains(secondDelegate.bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("second BulkWalk calls = %v, want CPU health walk skipped during cooldown", secondDelegate.bulkWalkCalls)
+	}
+}
+
+func TestOptionalStaticHealthClient_BulkWalkEachCallbackErrorDoesNotStartCooldown(t *testing.T) {
+	state := newStaticHealthWalkState()
+	firstDelegate := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 70}},
+		},
+	}
+	first := optionalStaticHealthClient{
+		delegate:  firstDelegate,
+		state:     state,
+		deviceKey: "device-1",
+		cooldown:  time.Minute,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	sentinel := errors.New("stop visiting")
+	if err := first.BulkWalkEach(snmp.OidHrProcessorLoad, func(gosnmp.SnmpPDU) error {
+		return sentinel
+	}); !errors.Is(err, sentinel) {
+		t.Fatalf("first BulkWalkEach error = %v, want sentinel", err)
+	}
+
+	secondDelegate := &scriptedCollectorClient{
+		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+			snmp.OidHrProcessorLoad: {{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 71}},
+		},
+	}
+	second := optionalStaticHealthClient{
+		delegate:  secondDelegate,
+		state:     state,
+		deviceKey: "device-1",
+		cooldown:  time.Minute,
+		cpuOID:    snmp.OidHrProcessorLoad,
+	}
+
+	visited := 0
+	if err := second.BulkWalkEach(snmp.OidHrProcessorLoad, func(gosnmp.SnmpPDU) error {
+		visited++
+		return nil
+	}); err != nil {
+		t.Fatalf("second BulkWalkEach() error = %v", err)
+	}
+	if visited != 1 {
+		t.Fatalf("visited PDUs = %d, want health walk to run after callback error", visited)
+	}
+	if !slices.Contains(secondDelegate.bulkWalkCalls, snmp.OidHrProcessorLoad) {
+		t.Fatalf("second BulkWalk calls = %v, want CPU health walk not cooling down", secondDelegate.bulkWalkCalls)
+	}
+}
+
+func staticDiscoveryGetResponses() map[string][]gosnmp.SnmpPDU {
+	return map[string][]gosnmp.SnmpPDU{
+		snmp.OidSysName: {
+			{Name: snmp.OidSysName, Type: gosnmp.OctetString, Value: []byte("cooldown-static")},
+		},
+		snmp.OidSysDescr: {
+			{Name: snmp.OidSysDescr, Type: gosnmp.OctetString, Value: []byte("Generic switch")},
+		},
+		snmp.OidSysObjectID: {
+			{Name: snmp.OidSysObjectID, Type: gosnmp.ObjectIdentifier, Value: "1.3.6.1.4.1.99999.1"},
+		},
+	}
+}
+
+func staticDiscoveryWalkResponses() map[string][]gosnmp.SnmpPDU {
+	return map[string][]gosnmp.SnmpPDU{
+		snmp.OidIfDescr: {
+			{Name: snmp.OidIfDescr + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7-descr")},
+		},
+		snmp.OidIfName: {
+			{Name: snmp.OidIfName + ".7", Type: gosnmp.OctetString, Value: []byte("sfp7")},
+		},
+	}
+}
+
 func TestStaticResultImplementsStateUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -304,10 +801,31 @@ func TestStaticCollectorPoll_PropagatesNeighborDiscoveryFailures(t *testing.T) {
 			},
 		},
 		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
-			snmp.OidIfTable: {
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 30},
+			},
+			snmp.OidHrStorageType: {
+				{Name: snmp.OidHrStorageType + ".1", Type: gosnmp.ObjectIdentifier, Value: snmp.OidHrStorageRam},
+			},
+			snmp.OidHrStorageAllocUnits: {
+				{Name: snmp.OidHrStorageAllocUnits + ".1", Type: gosnmp.Integer, Value: 1},
+			},
+			snmp.OidHrStorageSize: {
+				{Name: snmp.OidHrStorageSize + ".1", Type: gosnmp.Integer, Value: 200},
+			},
+			snmp.OidHrStorageUsed: {
+				{Name: snmp.OidHrStorageUsed + ".1", Type: gosnmp.Integer, Value: 100},
+			},
+			snmp.OidEntPhySensorType: {
+				{Name: snmp.OidEntPhySensorType + ".1", Type: gosnmp.Integer, Value: 8},
+			},
+			snmp.OidEntPhySensorValue: {
+				{Name: snmp.OidEntPhySensorValue + ".1", Type: gosnmp.Integer, Value: 47},
+			},
+			snmp.OidIfDescr: {
 				{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 			},
-			snmp.OidIfXTable: {
+			snmp.OidIfName: {
 				{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 			},
 		},
@@ -353,11 +871,11 @@ func TestStaticCollectorHasNoServiceOrRepositoryCollaborators(t *testing.T) {
 	t.Parallel()
 
 	typ := reflect.TypeOf(StaticCollector{})
-	if typ.NumField() != 3 {
-		t.Fatalf("field count = %d, want 3", typ.NumField())
+	if typ.NumField() != 5 {
+		t.Fatalf("field count = %d, want 5", typ.NumField())
 	}
 
-	wantFields := []string{"registry", "newClient", "now"}
+	wantFields := []string{"registry", "newClient", "now", "healthWalks", "staticWalks"}
 	for i, want := range wantFields {
 		if typ.Field(i).Name != want {
 			t.Fatalf("field %d = %q, want %q", i, typ.Field(i).Name, want)
@@ -401,10 +919,31 @@ func TestStaticCollectorPoll_RecordsBulkWalkMetrics(t *testing.T) {
 			},
 		},
 		bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
-			snmp.OidIfTable: {
+			snmp.OidHrProcessorLoad: {
+				{Name: snmp.OidHrProcessorLoad + ".1", Type: gosnmp.Integer, Value: 30},
+			},
+			snmp.OidHrStorageType: {
+				{Name: snmp.OidHrStorageType + ".1", Type: gosnmp.ObjectIdentifier, Value: snmp.OidHrStorageRam},
+			},
+			snmp.OidHrStorageAllocUnits: {
+				{Name: snmp.OidHrStorageAllocUnits + ".1", Type: gosnmp.Integer, Value: 1},
+			},
+			snmp.OidHrStorageSize: {
+				{Name: snmp.OidHrStorageSize + ".1", Type: gosnmp.Integer, Value: 200},
+			},
+			snmp.OidHrStorageUsed: {
+				{Name: snmp.OidHrStorageUsed + ".1", Type: gosnmp.Integer, Value: 100},
+			},
+			snmp.OidEntPhySensorType: {
+				{Name: snmp.OidEntPhySensorType + ".1", Type: gosnmp.Integer, Value: 8},
+			},
+			snmp.OidEntPhySensorValue: {
+				{Name: snmp.OidEntPhySensorValue + ".1", Type: gosnmp.Integer, Value: 47},
+			},
+			snmp.OidIfDescr: {
 				{Name: snmp.OidIfDescr + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 			},
-			snmp.OidIfXTable: {
+			snmp.OidIfName: {
 				{Name: snmp.OidIfName + ".1", Type: gosnmp.OctetString, Value: []byte("ether1")},
 			},
 		},
@@ -430,11 +969,31 @@ func TestStaticCollectorPoll_RecordsBulkWalkMetrics(t *testing.T) {
 	}
 
 	body := string(metrics.MarshalPrometheus())
-	if !strings.Contains(body, `theia_snmp_collector_operations_total{collector="static",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing static bulk_walk counter\n%s", body)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_descr_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_descr_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_speed_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_speed_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_admin_status_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_admin_status_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_oper_status_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_oper_status_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_name_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_name_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="if_high_speed_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="if_high_speed_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="cpu_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="cpu_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="memory_type_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="memory_alloc_units_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="memory_size_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="memory_used_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="temperature_sensor_type_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="static",operation="temperature_sensor_value_walk",result="success"} 1`)
+	if strings.Contains(body, `collector="static",operation="if_table_walk"`) || strings.Contains(body, `collector="static",operation="if_x_table_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded full interface table walks:\n%s", body)
 	}
-	if !strings.Contains(body, `theia_snmp_collector_operation_seconds_count{collector="static",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing static bulk_walk histogram\n%s", body)
+	if strings.Contains(body, `collector="static",operation="bulk_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped static walks:\n%s", body)
 	}
 	if strings.Contains(body, `collector="static",operation="sysuptime_probe"`) {
 		t.Fatalf("metrics output unexpectedly recorded static sysuptime_probe:\n%s", body)

@@ -99,6 +99,40 @@ func TestPipelineRuntimeStatePrunePrometheusHostnamesDropsExpiredEntries(t *test
 	}
 }
 
+func TestPipelineRuntimeStateCounterCooldownPolicy(t *testing.T) {
+	deviceID := uuid.New()
+	operation := "if_hc_in_octets_walk"
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	runtime := newPipelineRuntimeState(ws.PrometheusStatusPayload{})
+
+	runtime.RecordCounterWalkResult(deviceID, operation, "timeout", now, 30*time.Second)
+	if runtime.ShouldSkipCounterWalk(deviceID, operation, now.Add(time.Second)) {
+		t.Fatal("single timeout should not start counter walk cooldown")
+	}
+
+	runtime.RecordCounterWalkResult(deviceID, operation, "error", now.Add(2*time.Second), 30*time.Second)
+	runtime.RecordCounterWalkResult(deviceID, operation, "timeout", now.Add(3*time.Second), 30*time.Second)
+	if runtime.ShouldSkipCounterWalk(deviceID, operation, now.Add(4*time.Second)) {
+		t.Fatal("non-timeout error should break the timeout streak")
+	}
+
+	runtime.RecordCounterWalkResult(deviceID, operation, "timeout", now.Add(5*time.Second), 30*time.Second)
+	if !runtime.ShouldSkipCounterWalk(deviceID, operation, now.Add(6*time.Second)) {
+		t.Fatal("two consecutive timeouts should start counter walk cooldown")
+	}
+	if runtime.ShouldSkipCounterWalk(deviceID, operation, now.Add(2*time.Minute)) {
+		t.Fatal("counter walk cooldown should expire after the backoff window")
+	}
+
+	runtime.RecordCounterWalkResult(deviceID, operation, "success", now.Add(3*time.Minute), 30*time.Second)
+	runtime.mu.RLock()
+	_, ok := runtime.counterWalkCooldowns[deviceID][operation]
+	runtime.mu.RUnlock()
+	if ok {
+		t.Fatal("success should clear counter walk cooldown state")
+	}
+}
+
 func TestPipelineOrchestratorResetDeviceRuntimeClearsVolatileDeviceState(t *testing.T) {
 	deviceID := uuid.New()
 	store := state.NewStore()
@@ -156,5 +190,25 @@ func TestPipelineOrchestratorResetDeviceRuntimeClearsVolatileDeviceState(t *test
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("expected reset to emit a state change")
+	}
+}
+
+func TestPipelineOrchestratorResetDeviceRuntimeClearsStaticPersistenceDedupe(t *testing.T) {
+	deviceID := uuid.New()
+	pipeline := &PipelineOrchestrator{
+		runtime:                newPipelineRuntimeState(ws.PrometheusStatusPayload{}),
+		staticPersistenceCache: make(map[uuid.UUID]staticPersistenceCacheEntry),
+	}
+	pipeline.staticPersistenceCache[deviceID] = staticPersistenceCacheEntry{
+		fingerprint: "old-fingerprint",
+		persistedAt: time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
+	}
+
+	pipeline.ResetDeviceRuntime(deviceID)
+
+	pipeline.staticPersistenceMu.Lock()
+	defer pipeline.staticPersistenceMu.Unlock()
+	if _, ok := pipeline.staticPersistenceCache[deviceID]; ok {
+		t.Fatal("expected reset to clear static persistence dedupe entry")
 	}
 }

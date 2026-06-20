@@ -8,10 +8,11 @@ import "time"
 type Lane string
 
 const (
-	LaneEssential  Lane = "essential"
-	LaneBackground Lane = "background"
-	LaneBootstrap  Lane = "bootstrap"
-	LaneQuarantine Lane = "quarantine"
+	LaneEssential               Lane = "essential"
+	LaneBackground              Lane = "background"
+	LanePerformanceCounterWalks Lane = "performance_counter_walks"
+	LaneBootstrap               Lane = "bootstrap"
+	LaneQuarantine              Lane = "quarantine"
 )
 
 // TaskKind represents task kind data used by the package.

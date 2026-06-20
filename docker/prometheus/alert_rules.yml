@@ -116,17 +116,17 @@ groups:
           summary: "Scheduler {{ $labels.volatility_class }} task duration is high"
 
       - alert: SNMPBulkWalkErrors
-        expr: sum by (job, instance, collector, result) (increase(theia_snmp_collector_operations_total{operation="bulk_walk",result=~"timeout|error"}[5m])) > 3
+        expr: sum by (job, instance, collector, operation, result) (increase(theia_snmp_collector_operations_total{operation=~".*_walk",result=~"timeout|error"}[5m])) > 3
         for: 60s
         labels:
           severity: warning
         annotations:
-          summary: "SNMP bulk walk failures detected for {{ $labels.collector }}"
+          summary: "SNMP {{ $labels.operation }} failures detected for {{ $labels.collector }}"
 
       - alert: SNMPBulkWalkSlow
-        expr: histogram_quantile(0.95, sum by (job, instance, collector, le) (rate(theia_snmp_collector_operation_seconds_bucket{operation="bulk_walk"}[5m]))) > 2
+        expr: histogram_quantile(0.95, sum by (job, instance, collector, operation, le) (rate(theia_snmp_collector_operation_seconds_bucket{operation=~".*_walk"}[5m]))) > 2
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "SNMP bulk walk latency is high for {{ $labels.collector }}"
+          summary: "SNMP {{ $labels.operation }} latency is high for {{ $labels.collector }}"

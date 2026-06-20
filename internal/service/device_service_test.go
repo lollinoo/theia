@@ -17,19 +17,26 @@ import (
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/scheduler"
 	"github.com/lollinoo/theia/internal/snmp"
+	"github.com/lollinoo/theia/internal/topology"
 )
 
 // --- Mock Device Repository ---
 
 type mockDeviceRepo struct {
-	mu                       sync.Mutex
-	devices                  map[uuid.UUID]*domain.Device
-	updateHook               func(*domain.Device) error
-	findIPConflictCalls      int
-	getByIDsCalls            int
-	getByIDsForTopologyCalls int
-	failGetAll               bool
-	failGetByIDs             bool
+	mu                        sync.Mutex
+	devices                   map[uuid.UUID]*domain.Device
+	updateHook                func(*domain.Device) error
+	updateCalls               int
+	updateCallsByDevice       map[uuid.UUID]int
+	updateStaticCalls         int
+	updateStaticCallsByDevice map[uuid.UUID]int
+	findIPConflictCalls       int
+	getByIDCalls              int
+	getByIDsCalls             int
+	getByIDsForTopologyCalls  int
+	failGetByID               bool
+	failGetAll                bool
+	failGetByIDs              bool
 }
 
 func newMockDeviceRepo() *mockDeviceRepo {
@@ -53,6 +60,10 @@ func (r *mockDeviceRepo) Create(device *domain.Device) error {
 func (r *mockDeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.getByIDCalls++
+	if r.failGetByID {
+		return nil, fmt.Errorf("full device path should not be used")
+	}
 	d, ok := r.devices[id]
 	if !ok {
 		return nil, fmt.Errorf("device not found: %s", id)
@@ -219,6 +230,11 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 	if _, ok := r.devices[device.ID]; !ok {
 		return fmt.Errorf("device not found: %s", device.ID)
 	}
+	r.updateCalls++
+	if r.updateCallsByDevice == nil {
+		r.updateCallsByDevice = make(map[uuid.UUID]int)
+	}
+	r.updateCallsByDevice[device.ID]++
 	if r.updateHook != nil {
 		if err := r.updateHook(device); err != nil {
 			return err
@@ -228,6 +244,58 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 	device.UpdatedAt = time.Now().UTC()
 	r.devices[device.ID] = device
 	return nil
+}
+
+func (r *mockDeviceRepo) UpdateStaticDiscovery(device *domain.Device) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	existing, ok := r.devices[device.ID]
+	if !ok {
+		return fmt.Errorf("device not found: %s", device.ID)
+	}
+	r.updateStaticCalls++
+	if r.updateStaticCallsByDevice == nil {
+		r.updateStaticCallsByDevice = make(map[uuid.UUID]int)
+	}
+	r.updateStaticCallsByDevice[device.ID]++
+	if r.updateHook != nil {
+		if err := r.updateHook(device); err != nil {
+			return err
+		}
+	}
+
+	cp := *existing
+	cp.Hostname = device.Hostname
+	cp.SysName = device.SysName
+	cp.SysDescr = device.SysDescr
+	cp.SysObjectID = device.SysObjectID
+	cp.HardwareModel = device.HardwareModel
+	cp.OSVersion = device.OSVersion
+	cp.Vendor = device.Vendor
+	cp.DeviceType = device.DeviceType
+	cp.PollClass = device.PollClass
+	cp.Interfaces = append([]domain.Interface(nil), device.Interfaces...)
+	cp.UpdatedAt = time.Now().UTC()
+	r.devices[device.ID] = &cp
+	return nil
+}
+
+func (r *mockDeviceRepo) UpdateCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.updateCalls
+}
+
+func (r *mockDeviceRepo) UpdateCountFor(deviceID uuid.UUID) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.updateCallsByDevice[deviceID]
+}
+
+func (r *mockDeviceRepo) StaticUpdateCountFor(deviceID uuid.UUID) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.updateStaticCallsByDevice[deviceID]
 }
 
 func (r *mockDeviceRepo) Delete(id uuid.UUID) error {
@@ -409,6 +477,66 @@ func (r *mockLinkRepo) UpsertDetailed(link *domain.Link) (domain.LinkUpsertResul
 	result := domain.LinkUpsertResult{Created: true, Changed: true, Kind: domain.LinkUpsertKindCreated}
 	observability.Default().IncLinkUpsert(link.DiscoveryProtocol, result.Kind)
 	return result, nil
+}
+
+type recordingTopologyObservationStore struct {
+	mu                  sync.Mutex
+	upsertObservations  int
+	pruneObservations   int
+	listObservations    int
+	upsertUnresolved    int
+	resolveUnresolved   int
+	unresolvedLookups   int
+	observations        []topology.Observation
+	unresolvedNeighbors []topology.UnresolvedNeighbor
+}
+
+func (s *recordingTopologyObservationStore) UpsertObservation(observation *topology.Observation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.upsertObservations++
+	if observation != nil {
+		s.observations = append(s.observations, *observation)
+	}
+	return nil
+}
+
+func (s *recordingTopologyObservationStore) PruneLocalObservations(uuid.UUID, []domain.DiscoveryProtocol, []topology.Observation) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneObservations++
+	return 0, nil
+}
+
+func (s *recordingTopologyObservationStore) ListObservationsForDevices([]uuid.UUID) ([]topology.Observation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listObservations++
+	return append([]topology.Observation(nil), s.observations...), nil
+}
+
+func (s *recordingTopologyObservationStore) UpsertUnresolvedNeighbor(neighbor *topology.UnresolvedNeighbor) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.upsertUnresolved++
+	if neighbor != nil {
+		s.unresolvedNeighbors = append(s.unresolvedNeighbors, *neighbor)
+	}
+	return nil
+}
+
+func (s *recordingTopologyObservationStore) ResolveUnresolvedNeighbor(uuid.UUID, string, domain.DiscoveryProtocol, time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolveUnresolved++
+	return nil
+}
+
+func (s *recordingTopologyObservationStore) GetUnresolvedNeighborsByDeviceID(uuid.UUID) ([]topology.UnresolvedNeighbor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unresolvedLookups++
+	return append([]topology.UnresolvedNeighbor(nil), s.unresolvedNeighbors...), nil
 }
 
 func mockEquivalentManualLink(existing, candidate *domain.Link, browserLocalStorageMigration bool) bool {
@@ -1973,6 +2101,274 @@ func TestApplyStaticDiscovery_CompletesBootstrapOnceDuringRegularStaticPersisten
 	}
 	if updated.LastTopologyDiscoveryResult != "neighbors_found" {
 		t.Fatalf("expected last_topology_discovery_result neighbors_found, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
+func TestApplyStaticDiscovery_UsesTopologyProjectionAndStaticUpdateWhenSupported(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	deviceID := uuid.New()
+	device := &domain.Device{
+		ID:                    deviceID,
+		Hostname:              "192.0.2.51",
+		IP:                    "192.0.2.51",
+		SysName:               "edge-old",
+		Status:                domain.DeviceStatusUp,
+		Managed:               true,
+		DeviceType:            domain.DeviceTypeRouter,
+		ProbePorts:            []int{161, 1161},
+		Tags:                  map[string]string{"role": "edge"},
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeOff,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "cached-secret"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+	deviceRepo.failGetByID = true
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	result, err := svc.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:       "edge-01",
+		SysDescr:      "SwitchOS",
+		SysObjectID:   ".1.3.6.1.4.1.14988.1",
+		HardwareModel: "CRS328-24P-4S+",
+		OSVersion:     "7.16",
+		Vendor:        "mikrotik",
+		DeviceType:    domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+	if !result.TopologyChanged {
+		t.Fatal("TopologyChanged = false, want true because static interfaces changed")
+	}
+	if got := deviceRepo.getByIDCalls; got != 0 {
+		t.Fatalf("GetByID calls = %d, want 0 when topology projection/static update are supported", got)
+	}
+	if got := deviceRepo.getByIDsForTopologyCalls; got != 1 {
+		t.Fatalf("GetByIDsForTopology calls = %d, want 1", got)
+	}
+	if got := deviceRepo.StaticUpdateCountFor(deviceID); got != 1 {
+		t.Fatalf("UpdateStaticDiscovery calls = %d, want 1", got)
+	}
+	if got := deviceRepo.UpdateCountFor(deviceID); got != 0 {
+		t.Fatalf("Update calls = %d, want 0 for static persistence projection path", got)
+	}
+
+	deviceRepo.mu.Lock()
+	updated := *deviceRepo.devices[deviceID]
+	deviceRepo.mu.Unlock()
+	if updated.Hostname != "edge-01" {
+		t.Fatalf("hostname = %q, want promoted sysName", updated.Hostname)
+	}
+	if updated.ProbePorts[0] != 161 || updated.ProbePorts[1] != 1161 {
+		t.Fatalf("probe ports = %#v, want unchanged", updated.ProbePorts)
+	}
+	if updated.SNMPCredentials.V2c == nil || updated.SNMPCredentials.V2c.Community != "cached-secret" {
+		t.Fatalf("SNMP credentials = %#v, want preserved existing credentials", updated.SNMPCredentials)
+	}
+}
+
+func TestApplyStaticDiscovery_SkipsTopologyObservationStoreWhenRequested(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	topologyStore := &recordingTopologyObservationStore{}
+
+	deviceID := uuid.New()
+	device := &domain.Device{
+		ID:            deviceID,
+		Hostname:      "edge-01",
+		IP:            "192.0.2.51",
+		SysName:       "edge-01",
+		Status:        domain.DeviceStatusUp,
+		Managed:       true,
+		DeviceType:    domain.DeviceTypeSwitch,
+		MetricsSource: domain.MetricsSourceSNMP,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil, WithTopologyObservationStore(topologyStore))
+	result, err := svc.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:    "edge-01",
+		DeviceType: domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 10_000_000_000, OperStatus: "up"},
+		},
+		Neighbors: []snmp.NeighborInfo{
+			{
+				RemoteSysName: "core-01",
+				LocalIfName:   "ether1",
+				RemotePortID:  "ether48",
+				Protocol:      domain.DiscoveryProtocolLLDP,
+			},
+		},
+		NeighborDiscoveryProtocols:  []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		SkipTopologyMaterialization: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+	if !result.TopologyChanged {
+		t.Fatal("TopologyChanged = false, want true because interface speed changed")
+	}
+	if result.TopologyMaterialized {
+		t.Fatal("TopologyMaterialized = true, want false when materialization is skipped")
+	}
+
+	updated, err := deviceRepo.GetByID(deviceID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if got := updated.Interfaces[0].Speed; got != 10_000_000_000 {
+		t.Fatalf("interface speed = %d, want updated static speed", got)
+	}
+
+	topologyStore.mu.Lock()
+	defer topologyStore.mu.Unlock()
+	if topologyStore.upsertObservations != 0 || topologyStore.pruneObservations != 0 ||
+		topologyStore.listObservations != 0 || topologyStore.upsertUnresolved != 0 ||
+		topologyStore.resolveUnresolved != 0 || topologyStore.unresolvedLookups != 0 {
+		t.Fatalf("topology store calls = upsert:%d prune:%d list:%d unresolved:%d resolve:%d lookup:%d, want all zero",
+			topologyStore.upsertObservations,
+			topologyStore.pruneObservations,
+			topologyStore.listObservations,
+			topologyStore.upsertUnresolved,
+			topologyStore.resolveUnresolved,
+			topologyStore.unresolvedLookups,
+		)
+	}
+}
+
+func TestApplyStaticDiscovery_UnchangedStaticDataWithTopologyOffSkipsDeviceUpdates(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	deviceID := uuid.New()
+	device := &domain.Device{
+		ID:                    deviceID,
+		Hostname:              "edge-01",
+		IP:                    "192.0.2.51",
+		SysName:               "edge-01",
+		SysDescr:              "SwitchOS",
+		SysObjectID:           ".1.3.6.1.4.1.14988.1",
+		HardwareModel:         "CRS328-24P-4S+",
+		OSVersion:             "7.16",
+		Vendor:                "mikrotik",
+		Status:                domain.DeviceStatusUp,
+		Managed:               true,
+		DeviceType:            domain.DeviceTypeSwitch,
+		PollClass:             domain.PollClassCore,
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeOff,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	result, err := svc.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:       "edge-01",
+		SysDescr:      "SwitchOS",
+		SysObjectID:   ".1.3.6.1.4.1.14988.1",
+		HardwareModel: "CRS328-24P-4S+",
+		OSVersion:     "7.16",
+		Vendor:        "mikrotik",
+		DeviceType:    domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+	if result.TopologyChanged {
+		t.Fatal("TopologyChanged = true, want false for unchanged static data")
+	}
+	if got := deviceRepo.UpdateCount(); got != 0 {
+		t.Fatalf("device repo updates = %d, want 0 for unchanged topology-off static discovery", got)
+	}
+}
+
+func TestApplyStaticDiscovery_UnchangedStaticDataWithTopologyEnabledOnlyUpdatesDiscoveryMetadata(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	deviceID := uuid.New()
+	device := &domain.Device{
+		ID:                    deviceID,
+		Hostname:              "edge-01",
+		IP:                    "192.0.2.51",
+		SysName:               "edge-01",
+		SysDescr:              "SwitchOS",
+		SysObjectID:           ".1.3.6.1.4.1.14988.1",
+		HardwareModel:         "CRS328-24P-4S+",
+		OSVersion:             "7.16",
+		Vendor:                "mikrotik",
+		Status:                domain.DeviceStatusUp,
+		Managed:               true,
+		DeviceType:            domain.DeviceTypeSwitch,
+		PollClass:             domain.PollClassCore,
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeLLDP,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	result, err := svc.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:       "edge-01",
+		SysDescr:      "SwitchOS",
+		SysObjectID:   ".1.3.6.1.4.1.14988.1",
+		HardwareModel: "CRS328-24P-4S+",
+		OSVersion:     "7.16",
+		Vendor:        "mikrotik",
+		DeviceType:    domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+	if result.TopologyChanged {
+		t.Fatal("TopologyChanged = true, want false for unchanged static data")
+	}
+	if got := deviceRepo.UpdateCountFor(deviceID); got != 1 {
+		t.Fatalf("device updates for %s = %d, want only the topology metadata update", deviceID, got)
+	}
+	updated, err := deviceRepo.GetByID(deviceID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.LastTopologyDiscoveryAt == nil {
+		t.Fatal("expected topology discovery metadata update to set last_topology_discovery_at")
+	}
+	if updated.LastTopologyDiscoveryResult != "no_neighbors" {
+		t.Fatalf("LastTopologyDiscoveryResult = %q, want no_neighbors", updated.LastTopologyDiscoveryResult)
 	}
 }
 

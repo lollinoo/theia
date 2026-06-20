@@ -182,24 +182,13 @@ func networkReachabilityEvidence(results []polling.NetworkProbeResult) polling.T
 		return polling.TriStateUnknown
 	}
 
-	allReachable := true
-	allUnreachable := true
 	for _, result := range results {
 		if result.Reachable {
-			allUnreachable = false
-		} else {
-			allReachable = false
+			return polling.TriStateTrue
 		}
 	}
 
-	switch {
-	case allReachable:
-		return polling.TriStateTrue
-	case allUnreachable:
-		return polling.TriStateFalse
-	default:
-		return polling.TriStateUnknown
-	}
+	return polling.TriStateFalse
 }
 
 func essentialMetricsHaveSuccessfulRead(metrics snmp.EssentialMetricsResult) bool {

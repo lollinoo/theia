@@ -5,6 +5,7 @@ package collector
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"strings"
@@ -41,8 +42,10 @@ func captureCollectorDebugLogs(t *testing.T) *bytes.Buffer {
 type scriptedPerformanceClient struct {
 	getResponses      map[string][]gosnmp.SnmpPDU
 	bulkWalkResponses map[string][]gosnmp.SnmpPDU
+	bulkWalkErrs      map[string]error
 	getErr            error
 	bulkWalkErr       error
+	getCalls          []string
 	bulkWalkCalls     []string
 	connectErr        error
 	connectCalls      int
@@ -50,6 +53,7 @@ type scriptedPerformanceClient struct {
 }
 
 func (c *scriptedPerformanceClient) Get(oids []string) ([]gosnmp.SnmpPDU, error) {
+	c.getCalls = append(c.getCalls, oids...)
 	if c.getErr != nil {
 		return nil, c.getErr
 	}
@@ -62,6 +66,9 @@ func (c *scriptedPerformanceClient) Get(oids []string) ([]gosnmp.SnmpPDU, error)
 
 func (c *scriptedPerformanceClient) BulkWalk(rootOID string) ([]gosnmp.SnmpPDU, error) {
 	c.bulkWalkCalls = append(c.bulkWalkCalls, rootOID)
+	if err := c.bulkWalkErrs[rootOID]; err != nil {
+		return nil, err
+	}
 	if c.bulkWalkErr != nil {
 		return nil, c.bulkWalkErr
 	}
@@ -114,8 +121,9 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 					V2c:     &domain.SNMPv2cCredentials{Community: "public"},
 				},
 				Interfaces: []domain.Interface{
-					{IfName: "ether1", Speed: 1_000_000_000},
-					{IfName: "port-2", IfDescr: "Ethernet2", Speed: 2_000_000_000},
+					{IfIndex: 1, IfName: "ether1", Speed: 1_000_000_000},
+					{IfIndex: 2, IfDescr: "Ethernet2", Speed: 2_000_000_000},
+					{IfIndex: 3, IfName: "loopback0"},
 				},
 			},
 			newClient: func() *scriptedPerformanceClient {
@@ -145,10 +153,25 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 				if result.Err != nil {
 					t.Fatalf("Err = %v, want nil", result.Err)
 				}
-				assertFloatPtrEqual(t, result.Metrics.CPUPercent, 30, "CPUPercent")
-				assertFloatPtrEqual(t, result.Metrics.MemPercent, 50, "MemPercent")
-				assertFloatPtrEqual(t, result.Metrics.TempCelsius, 48, "TempCelsius")
-				assertFloatPtrEqual(t, result.Metrics.UptimeSecs, 1234, "UptimeSecs")
+				if result.Metrics.UptimeSecs != nil {
+					t.Fatalf("UptimeSecs = %v, want nil", *result.Metrics.UptimeSecs)
+				}
+				if len(client.getCalls) != 0 {
+					t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
+				}
+				for _, oid := range []string{
+					snmp.OidHrProcessorLoad,
+					snmp.OidHrStorageType,
+					snmp.OidHrStorageAllocUnits,
+					snmp.OidHrStorageSize,
+					snmp.OidHrStorageUsed,
+					snmp.OidEntPhySensorType,
+					snmp.OidEntPhySensorValue,
+				} {
+					if containsString(client.bulkWalkCalls, oid) {
+						t.Fatalf("BulkWalk calls = %v, want no performance device-health walk %s", client.bulkWalkCalls, oid)
+					}
+				}
 				if len(result.Counters) != 3 {
 					t.Fatalf("counter count = %d, want 3", len(result.Counters))
 				}
@@ -199,7 +222,9 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 				if result.Metrics.TempCelsius != nil {
 					t.Fatalf("TempCelsius = %v, want nil", *result.Metrics.TempCelsius)
 				}
-				assertFloatPtrEqual(t, result.Metrics.UptimeSecs, 1234, "UptimeSecs")
+				if result.Metrics.UptimeSecs != nil {
+					t.Fatalf("UptimeSecs = %v, want nil", *result.Metrics.UptimeSecs)
+				}
 				if client.closeCalls != 1 {
 					t.Fatalf("close calls = %d, want 1", client.closeCalls)
 				}
@@ -246,10 +271,12 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 					Version: domain.SNMPVersionV2c,
 					V2c:     &domain.SNMPv2cCredentials{Community: "public"},
 				},
+				Interfaces: []domain.Interface{
+					{IfIndex: 1, IfName: "ether1"},
+				},
 			},
 			newClient: func() *scriptedPerformanceClient {
 				return &scriptedPerformanceClient{
-					getErr:      errors.New("get timeout"),
 					bulkWalkErr: errors.New("walk timeout"),
 				}
 			},
@@ -265,8 +292,11 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 				if len(result.Counters) != 0 {
 					t.Fatalf("counter count = %d, want 0", len(result.Counters))
 				}
-				if len(client.bulkWalkCalls) != 0 {
-					t.Fatalf("BulkWalk calls = %v, want none after uptime probe failure", client.bulkWalkCalls)
+				if len(client.getCalls) != 0 {
+					t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
+				}
+				if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+					t.Fatalf("BulkWalk calls = %v, want counter walk attempts", client.bulkWalkCalls)
 				}
 				if client.closeCalls != 1 {
 					t.Fatalf("close calls = %d, want 1", client.closeCalls)
@@ -354,7 +384,78 @@ func TestInstrumentedSNMPBulkWalkClient_DebugLogsFailedOperation(t *testing.T) {
 	}
 }
 
-func TestPerformanceCollectorPoll_RecordsSysUpTimeEarlyExitMetrics(t *testing.T) {
+func TestInstrumentedSNMPBulkWalkClient_RecordsDeviceOperationMetrics(t *testing.T) {
+	metrics := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	client := instrumentedSNMPBulkWalkClient{
+		delegate: &scriptedPerformanceClient{
+			bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+				".1.3.6.1.2.1.2.2.1.10": {{Name: ".1.3.6.1.2.1.2.2.1.10.1", Value: uint64(42)}},
+			},
+		},
+		collector:          "performance",
+		bulkWalkOperations: map[string]string{".1.3.6.1.2.1.2.2.1.10": "if_hc_in_octets_walk"},
+		deviceLabels: snmpCollectorDeviceLabels{
+			ID:     "4f1eedbe-fd7d-4de4-ab30-68f2cf4c78c9",
+			Name:   "edge-router-01",
+			Target: "192.0.2.31",
+		},
+		slowThreshold: time.Nanosecond,
+	}
+
+	if _, err := client.BulkWalk(".1.3.6.1.2.1.2.2.1.10"); err != nil {
+		t.Fatalf("BulkWalk() error = %v", err)
+	}
+
+	body := string(metrics.MarshalPrometheus())
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_device_operation_last_duration_seconds{collector="performance",device="edge-router-01",device_id="4f1eedbe-fd7d-4de4-ab30-68f2cf4c78c9",operation="if_hc_in_octets_walk",result="success",target="192.0.2.31"}`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_device_slow_operations_total{collector="performance",device="edge-router-01",device_id="4f1eedbe-fd7d-4de4-ab30-68f2cf4c78c9",operation="if_hc_in_octets_walk",result="success",target="192.0.2.31"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="if_hc_in_octets_walk",result="success"} 1`)
+}
+
+func TestInstrumentedSNMPBulkWalkClient_BulkWalkEachRecordsDeviceOperationMetrics(t *testing.T) {
+	metrics := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	client := instrumentedSNMPBulkWalkClient{
+		delegate: &scriptedPerformanceClient{
+			bulkWalkResponses: map[string][]gosnmp.SnmpPDU{
+				".1.3.6.1.2.1.2.2.1.10": {{Name: ".1.3.6.1.2.1.2.2.1.10.1", Value: uint64(42)}},
+			},
+		},
+		collector:          "performance",
+		bulkWalkOperations: map[string]string{".1.3.6.1.2.1.2.2.1.10": "if_hc_in_octets_walk"},
+		deviceLabels: snmpCollectorDeviceLabels{
+			ID:     "4f1eedbe-fd7d-4de4-ab30-68f2cf4c78c9",
+			Name:   "edge-router-01",
+			Target: "192.0.2.31",
+		},
+		slowThreshold: time.Nanosecond,
+	}
+
+	visited := 0
+	if err := client.BulkWalkEach(".1.3.6.1.2.1.2.2.1.10", func(gosnmp.SnmpPDU) error {
+		visited++
+		return nil
+	}); err != nil {
+		t.Fatalf("BulkWalkEach() error = %v", err)
+	}
+	if visited != 1 {
+		t.Fatalf("visited PDUs = %d, want 1", visited)
+	}
+
+	body := string(metrics.MarshalPrometheus())
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_device_operation_last_duration_seconds{collector="performance",device="edge-router-01",device_id="4f1eedbe-fd7d-4de4-ab30-68f2cf4c78c9",operation="if_hc_in_octets_walk",result="success",target="192.0.2.31"}`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_device_slow_operations_total{collector="performance",device="edge-router-01",device_id="4f1eedbe-fd7d-4de4-ab30-68f2cf4c78c9",operation="if_hc_in_octets_walk",result="success",target="192.0.2.31"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="if_hc_in_octets_walk",result="success"} 1`)
+}
+
+func TestPerformanceCollectorPoll_DoesNotProbeSysUpTime(t *testing.T) {
 	registry, err := vendor.LoadRegistryFromEmbedded()
 	if err != nil {
 		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
@@ -364,9 +465,7 @@ func TestPerformanceCollectorPoll_RecordsSysUpTimeEarlyExitMetrics(t *testing.T)
 		observability.ResetDefaultForTest()
 	})
 
-	client := &scriptedPerformanceClient{
-		getErr: errors.New("get timeout"),
-	}
+	client := newMetricsClient(registry, false)
 	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
 		return client, nil
 	})
@@ -379,25 +478,29 @@ func TestPerformanceCollectorPoll_RecordsSysUpTimeEarlyExitMetrics(t *testing.T)
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
 		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1"},
+		},
 	}, time.Second, 1)
 
-	if result.Err == nil {
-		t.Fatal("Err = nil, want sysUpTime probe failure")
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
 	}
-	if len(client.bulkWalkCalls) != 0 {
-		t.Fatalf("BulkWalk calls = %v, want none after sysUpTime early exit", client.bulkWalkCalls)
+	if len(client.getCalls) != 0 {
+		t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
 	}
 
 	body := string(metrics.MarshalPrometheus())
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="sysuptime_probe",result="timeout"} 1`)
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="sysuptime_probe",result="timeout"} 1`)
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_early_exit_total{collector="performance",reason="sysuptime_probe_failed"} 1`)
-	if strings.Contains(body, `operation="bulk_walk"`) {
-		t.Fatalf("metrics output unexpectedly recorded bulk_walk after sysUpTime early exit:\n%s", body)
+	if strings.Contains(body, `collector="performance",operation="sysuptime_probe"`) {
+		t.Fatalf("metrics output unexpectedly recorded performance sysuptime_probe:\n%s", body)
 	}
+	if strings.Contains(body, `theia_snmp_collector_early_exit_total{collector="performance",reason="sysuptime_probe_failed"}`) {
+		t.Fatalf("metrics output unexpectedly recorded performance sysUpTime early exit:\n%s", body)
+	}
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="if_hc_in_octets_walk",result="success"} 1`)
 }
 
-func TestPerformanceCollectorPoll_RecordsBulkWalkMetricsAfterSysUpTimeSuccess(t *testing.T) {
+func TestPerformanceCollectorPoll_RecordsBulkWalkMetrics(t *testing.T) {
 	registry, err := vendor.LoadRegistryFromEmbedded()
 	if err != nil {
 		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
@@ -420,6 +523,11 @@ func TestPerformanceCollectorPoll_RecordsBulkWalkMetricsAfterSysUpTimeSuccess(t 
 			Version: domain.SNMPVersionV2c,
 			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
 		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1"},
+			{IfIndex: 2, IfName: "Ethernet2"},
+			{IfIndex: 3, IfName: "loopback0"},
+		},
 	}, time.Second, 1)
 
 	if result.Err != nil {
@@ -430,13 +538,428 @@ func TestPerformanceCollectorPoll_RecordsBulkWalkMetricsAfterSysUpTimeSuccess(t 
 	}
 
 	body := string(metrics.MarshalPrometheus())
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="sysuptime_probe",result="success"} 1`)
-	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="sysuptime_probe",result="success"} 1`)
-	if !strings.Contains(body, `theia_snmp_collector_operations_total{collector="performance",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing successful bulk_walk counter\n%s", body)
+	if strings.Contains(body, `collector="performance",operation="sysuptime_probe"`) {
+		t.Fatalf("metrics output unexpectedly recorded performance sysuptime_probe:\n%s", body)
 	}
-	if !strings.Contains(body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="bulk_walk",result="success"}`) {
-		t.Fatalf("metrics output missing successful bulk_walk histogram\n%s", body)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="if_hc_in_octets_walk",result="success"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operation_seconds_count{collector="performance",operation="if_hc_in_octets_walk",result="success"} 1`)
+	if strings.Contains(body, `collector="performance",operation="bulk_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped performance walks:\n%s", body)
+	}
+}
+
+func TestPerformanceCollectorPoll_SkipsResolvedCPUWalkOperation(t *testing.T) {
+	const customCPUOID = ".1.3.6.1.4.1.9999.100.1"
+
+	registry := performanceTestRegistry(t, "custom", vendor.PerformanceOIDs{
+		CPUOID: customCPUOID,
+	})
+	metrics := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	client := newMetricsClientForVendor(registry, "custom", false)
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.32",
+		Vendor: "custom",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}, time.Second, 1)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if containsString(client.bulkWalkCalls, customCPUOID) {
+		t.Fatalf("BulkWalk calls = %v, want no custom CPU walk in performance", client.bulkWalkCalls)
+	}
+	if result.Metrics.CPUPercent != nil || result.Metrics.MemPercent != nil || result.Metrics.TempCelsius != nil {
+		t.Fatalf("device-health metrics = %#v, want nil values from performance poll", result.Metrics)
+	}
+
+	body := string(metrics.MarshalPrometheus())
+	if strings.Contains(body, `collector="performance",operation="cpu_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded performance cpu_walk:\n%s", body)
+	}
+	if strings.Contains(body, `collector="performance",operation="bulk_walk"`) {
+		t.Fatalf("metrics output unexpectedly recorded bulk_walk for mapped performance walks:\n%s", body)
+	}
+}
+
+func TestPerformanceCollectorPoll_UsesCachedInterfaceNamesForCounters(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := newMetricsClient(registry, false)
+	delete(client.bulkWalkResponses, snmp.OidIfName)
+	delete(client.bulkWalkResponses, snmp.OidIfDescr)
+	client.bulkWalkResponses[snmp.OidIfHCInOctets] = []gosnmp.SnmpPDU{
+		{Name: snmp.OidIfHCInOctets + ".7", Value: uint64(777)},
+		{Name: snmp.OidIfHCInOctets + ".9", Value: uint64(999)},
+	}
+	client.bulkWalkResponses[snmp.OidIfHCOutOctets] = []gosnmp.SnmpPDU{
+		{Name: snmp.OidIfHCOutOctets + ".7", Value: uint64(1777)},
+		{Name: snmp.OidIfHCOutOctets + ".9", Value: uint64(1999)},
+	}
+
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.33",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 7, IfName: "sfp7", Speed: 10_000_000_000},
+			{IfIndex: 9, IfDescr: "ether9", Speed: 1_000_000_000},
+		},
+	}, time.Second, 1)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if containsString(client.bulkWalkCalls, snmp.OidIfName) || containsString(client.bulkWalkCalls, snmp.OidIfDescr) {
+		t.Fatalf("BulkWalk calls = %v, want cached interface names without ifName/ifDescr walks", client.bulkWalkCalls)
+	}
+	if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+		t.Fatalf("BulkWalk calls = %v, want octet counter walks", client.bulkWalkCalls)
+	}
+	if len(result.Counters) != 2 {
+		t.Fatalf("counter count = %d, want 2", len(result.Counters))
+	}
+	countersByName := make(map[string]InterfaceCounterSnapshot, len(result.Counters))
+	for _, counter := range result.Counters {
+		countersByName[counter.IfName] = counter
+	}
+	if countersByName["sfp7"].InOctets != 777 || countersByName["sfp7"].OutOctets != 1777 || countersByName["sfp7"].SpeedBps != 10_000_000_000 {
+		t.Fatalf("sfp7 counter = %#v, want cached name, counters, and speed", countersByName["sfp7"])
+	}
+	if countersByName["ether9"].InOctets != 999 || countersByName["ether9"].OutOctets != 1999 || countersByName["ether9"].SpeedBps != 1_000_000_000 {
+		t.Fatalf("ether9 counter = %#v, want cached descr fallback, counters, and speed", countersByName["ether9"])
+	}
+}
+
+func TestPerformanceCollectorPoll_SkipsInterfaceCountersWithoutCachedIndexes(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := newMetricsClient(registry, false)
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.34",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfName: "ether1", Speed: 1_000_000_000},
+			{IfDescr: "ether2", Speed: 1_000_000_000},
+		},
+	}, time.Second, 1)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil from counter-only no-op", result.Err)
+	}
+	if len(result.Counters) != 0 {
+		t.Fatalf("counter count = %d, want none without cached ifIndex mappings", len(result.Counters))
+	}
+	for _, oid := range []string{snmp.OidIfName, snmp.OidIfDescr, snmp.OidIfHCInOctets, snmp.OidIfHCOutOctets} {
+		if containsString(client.bulkWalkCalls, oid) {
+			t.Fatalf("BulkWalk calls = %v, want no interface walks without cached ifIndex mappings", client.bulkWalkCalls)
+		}
+	}
+}
+
+func TestPerformanceCollectorPoll_SkipsDeviceHealthWalksWhenCountersAreAvailable(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := newMetricsClient(registry, true)
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.Poll(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.35",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", Speed: 1_000_000_000},
+		},
+	}, time.Second, 1)
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil from counter data", result.Err)
+	}
+	if result.Metrics.CPUPercent != nil || result.Metrics.MemPercent != nil || result.Metrics.TempCelsius != nil {
+		t.Fatalf("device-health metrics = %#v, want nil values from performance poll", result.Metrics)
+	}
+	for _, oid := range []string{
+		snmp.OidHrProcessorLoad,
+		snmp.OidHrStorageType,
+		snmp.OidHrStorageAllocUnits,
+		snmp.OidHrStorageSize,
+		snmp.OidHrStorageUsed,
+		snmp.OidEntPhySensorType,
+		snmp.OidEntPhySensorValue,
+	} {
+		if containsString(client.bulkWalkCalls, oid) {
+			t.Fatalf("BulkWalk calls = %v, want no performance device-health walk %s", client.bulkWalkCalls, oid)
+		}
+	}
+	if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+		t.Fatalf("BulkWalk calls = %v, want interface counter walks to remain in performance", client.bulkWalkCalls)
+	}
+}
+
+type scriptedCounterCooldownPolicy struct {
+	skipOperations map[string]bool
+	shouldSkipOps  []string
+	records        []counterCooldownRecord
+}
+
+type counterCooldownRecord struct {
+	deviceID         uuid.UUID
+	operation        string
+	result           string
+	expectedInterval time.Duration
+}
+
+func (p *scriptedCounterCooldownPolicy) ShouldSkipCounterWalk(_ uuid.UUID, operation string, _ time.Time) bool {
+	p.shouldSkipOps = append(p.shouldSkipOps, operation)
+	return p.skipOperations[operation]
+}
+
+func (p *scriptedCounterCooldownPolicy) RecordCounterWalkResult(deviceID uuid.UUID, operation string, result string, _ time.Time, expectedInterval time.Duration) {
+	p.records = append(p.records, counterCooldownRecord{
+		deviceID:         deviceID,
+		operation:        operation,
+		result:           result,
+		expectedInterval: expectedInterval,
+	})
+}
+
+func TestPerformanceCollectorPollWithOptions_CounterTimeoutArmsCooldown(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	client := newMetricsClient(registry, false)
+	client.bulkWalkErrs = map[string]error{
+		snmp.OidIfHCInOctets:  errors.New("timeout waiting for ifHCInOctets"),
+		snmp.OidIfHCOutOctets: errors.New("timeout waiting for ifHCOutOctets"),
+	}
+	policy := &scriptedCounterCooldownPolicy{}
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.PollWithOptions(context.Background(), counterCooldownTestDevice(deviceID), time.Second, 1, PerformancePollOptions{
+		ExpectedInterval: 30 * time.Second,
+		CounterCooldown:  policy,
+	})
+
+	if result.Err == nil {
+		t.Fatal("Err = nil, want timeout error")
+	}
+	if len(result.Counters) != 0 {
+		t.Fatalf("counter count = %d, want 0 after failed counter walks", len(result.Counters))
+	}
+	if len(client.getCalls) != 0 {
+		t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
+	}
+	if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+		t.Fatalf("BulkWalk calls = %v, want both HC counter walks attempted", client.bulkWalkCalls)
+	}
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_in_octets_walk", "timeout", 30*time.Second)
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_out_octets_walk", "timeout", 30*time.Second)
+}
+
+func TestPerformanceCollectorPollWithOptions_CooldownSkipReturnsSuccessWithoutReads(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+	metrics := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+
+	deviceID := uuid.New()
+	client := newMetricsClient(registry, false)
+	policy := &scriptedCounterCooldownPolicy{
+		skipOperations: map[string]bool{
+			"if_hc_in_octets_walk": true,
+		},
+	}
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.PollWithOptions(context.Background(), counterCooldownTestDevice(deviceID), time.Second, 1, PerformancePollOptions{
+		ExpectedInterval: 30 * time.Second,
+		CounterCooldown:  policy,
+	})
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil during cooldown skip", result.Err)
+	}
+	if len(result.Counters) != 0 {
+		t.Fatalf("counter count = %d, want 0 during cooldown skip", len(result.Counters))
+	}
+	if len(client.getCalls) != 0 {
+		t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
+	}
+	if len(client.bulkWalkCalls) != 0 {
+		t.Fatalf("BulkWalk calls = %v, want no HC walks during cooldown", client.bulkWalkCalls)
+	}
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_in_octets_walk", "skipped_cooldown", 30*time.Second)
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_out_octets_walk", "skipped_cooldown", 30*time.Second)
+
+	body := string(metrics.MarshalPrometheus())
+	if strings.Contains(body, `collector="performance",operation="sysuptime_probe"`) {
+		t.Fatalf("metrics output unexpectedly recorded performance sysuptime_probe:\n%s", body)
+	}
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="if_hc_in_octets_walk",result="skipped_cooldown"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_operations_total{collector="performance",operation="if_hc_out_octets_walk",result="skipped_cooldown"} 1`)
+	assertContainsCollectorMetric(t, body, `theia_snmp_collector_early_exit_total{collector="performance",reason="if_hc_counter_walk_cooldown"} 1`)
+}
+
+func TestPerformanceCollectorPollWithOptions_CounterSuccessClearsCooldown(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	client := newMetricsClient(registry, false)
+	policy := &scriptedCounterCooldownPolicy{}
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.PollWithOptions(context.Background(), counterCooldownTestDevice(deviceID), time.Second, 1, PerformancePollOptions{
+		ExpectedInterval: 30 * time.Second,
+		CounterCooldown:  policy,
+	})
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil", result.Err)
+	}
+	if len(result.Counters) != 1 {
+		t.Fatalf("counter count = %d, want 1", len(result.Counters))
+	}
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_in_octets_walk", "success", 30*time.Second)
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_out_octets_walk", "success", 30*time.Second)
+}
+
+func TestPerformanceCollectorPollWithOptions_NonTimeoutErrorDoesNotArmCooldown(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	deviceID := uuid.New()
+	client := newMetricsClient(registry, false)
+	client.bulkWalkErrs = map[string]error{
+		snmp.OidIfHCInOctets: errors.New("authorization failed"),
+	}
+	policy := &scriptedCounterCooldownPolicy{}
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.PollWithOptions(context.Background(), counterCooldownTestDevice(deviceID), time.Second, 1, PerformancePollOptions{
+		ExpectedInterval: 30 * time.Second,
+		CounterCooldown:  policy,
+	})
+
+	if result.Err == nil {
+		t.Fatal("Err = nil, want non-timeout walk error")
+	}
+	if len(result.Counters) != 0 {
+		t.Fatalf("counter count = %d, want 0 after failed counter walk", len(result.Counters))
+	}
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_in_octets_walk", "error", 30*time.Second)
+	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_out_octets_walk", "success", 30*time.Second)
+}
+
+func TestPerformanceCollectorPollWithOptions_NoCachedIndexesDoesNotUseCooldown(t *testing.T) {
+	registry, err := vendor.LoadRegistryFromEmbedded()
+	if err != nil {
+		t.Fatalf("LoadRegistryFromEmbedded() error = %v", err)
+	}
+
+	client := newMetricsClient(registry, false)
+	policy := &scriptedCounterCooldownPolicy{
+		skipOperations: map[string]bool{
+			"if_hc_in_octets_walk":  true,
+			"if_hc_out_octets_walk": true,
+		},
+	}
+	collector := NewPerformanceCollector(registry, func(string, domain.SNMPCredentials, time.Duration, int) (SNMPClient, error) {
+		return client, nil
+	})
+
+	result := collector.PollWithOptions(context.Background(), domain.Device{
+		ID:     uuid.New(),
+		IP:     "192.0.2.41",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfName: "ether1", Speed: 1_000_000_000},
+		},
+	}, time.Second, 1, PerformancePollOptions{
+		ExpectedInterval: 30 * time.Second,
+		CounterCooldown:  policy,
+	})
+
+	if result.Err != nil {
+		t.Fatalf("Err = %v, want nil from counter-only no-op", result.Err)
+	}
+	if len(result.Counters) != 0 {
+		t.Fatalf("counter count = %d, want 0 without cached indexes", len(result.Counters))
+	}
+	if len(policy.shouldSkipOps) != 0 || len(policy.records) != 0 {
+		t.Fatalf("cooldown policy used without cached indexes: shouldSkip=%v records=%v", policy.shouldSkipOps, policy.records)
+	}
+	if len(client.getCalls) != 0 {
+		t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
+	}
+	if len(client.bulkWalkCalls) != 0 {
+		t.Fatalf("BulkWalk calls = %v, want no interface walks without cached indexes", client.bulkWalkCalls)
 	}
 }
 
@@ -447,8 +970,40 @@ func assertContainsCollectorMetric(t *testing.T, body, needle string) {
 	}
 }
 
+func assertCounterCooldownRecord(t *testing.T, records []counterCooldownRecord, deviceID uuid.UUID, operation string, result string, expectedInterval time.Duration) {
+	t.Helper()
+	for _, record := range records {
+		if record.deviceID == deviceID &&
+			record.operation == operation &&
+			record.result == result &&
+			record.expectedInterval == expectedInterval {
+			return
+		}
+	}
+	t.Fatalf("cooldown records = %#v, want device=%s operation=%s result=%s expectedInterval=%s", records, deviceID, operation, result, expectedInterval)
+}
+
+func counterCooldownTestDevice(deviceID uuid.UUID) domain.Device {
+	return domain.Device{
+		ID:     deviceID,
+		IP:     "192.0.2.40",
+		Vendor: "default",
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", Speed: 1_000_000_000},
+		},
+	}
+}
+
 func newMetricsClient(registry *vendor.Registry, includeTemperature bool) *scriptedPerformanceClient {
-	perfOIDs := registry.ResolvePerformanceOIDs("default")
+	return newMetricsClientForVendor(registry, "default", includeTemperature)
+}
+
+func newMetricsClientForVendor(registry *vendor.Registry, vendorName string, includeTemperature bool) *scriptedPerformanceClient {
+	perfOIDs := registry.ResolvePerformanceOIDs(vendorName)
 	cpuOID := perfOIDs.CPUOID
 	if cpuOID == "" {
 		cpuOID = snmp.OidHrProcessorLoad
@@ -505,6 +1060,50 @@ func newMetricsClient(registry *vendor.Registry, includeTemperature bool) *scrip
 	}
 
 	return client
+}
+
+func performanceTestRegistry(t *testing.T, vendorName string, perfOIDs vendor.PerformanceOIDs) *vendor.Registry {
+	t.Helper()
+
+	defaultConfig := vendor.VendorConfig{
+		Vendor: vendor.VendorInfo{Name: "default", DisplayName: "Default"},
+		SNMP: vendor.SNMPConfig{
+			Performance: vendor.PerformanceOIDs{
+				CPUOID: snmp.OidHrProcessorLoad,
+			},
+		},
+	}
+	vendorConfig := vendor.VendorConfig{
+		Vendor: vendor.VendorInfo{Name: vendorName, DisplayName: "Custom"},
+		SNMP: vendor.SNMPConfig{
+			Performance: perfOIDs,
+		},
+	}
+	defaultJSON, err := json.Marshal(defaultConfig)
+	if err != nil {
+		t.Fatalf("Marshal default registry config error = %v", err)
+	}
+	vendorJSON, err := json.Marshal(vendorConfig)
+	if err != nil {
+		t.Fatalf("Marshal vendor registry config error = %v", err)
+	}
+	registry, err := vendor.LoadRegistryFromDB([]vendor.DBVendorRecord{
+		{Name: "default", ConfigJSON: string(defaultJSON)},
+		{Name: vendorName, ConfigJSON: string(vendorJSON)},
+	})
+	if err != nil {
+		t.Fatalf("LoadRegistryFromDB() error = %v", err)
+	}
+	return registry
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func newPartialMetricsClient(registry *vendor.Registry) *scriptedPerformanceClient {

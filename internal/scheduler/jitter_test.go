@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/polling"
 )
 
 func TestInitialOffset_DeterministicAndBounded(t *testing.T) {
@@ -57,6 +60,52 @@ func TestInitialOffset_DistributionAcrossBuckets(t *testing.T) {
 		if count < 16 || count > 48 {
 			t.Fatalf("bucket %d count = %d, want between 16 and 48; counts=%v", bucket, count, counts)
 		}
+	}
+}
+
+func TestInitialOffsetForKeySpreadsSameDeviceTaskKinds(t *testing.T) {
+	deviceID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	interval := 30 * time.Second
+	keys := []TaskKey{
+		NewBackgroundTaskKey(deviceID, domain.VolatilityClassPerformance),
+		NewBackgroundTaskKey(deviceID, domain.VolatilityClassOperational),
+		NewBackgroundTaskKey(deviceID, domain.VolatilityClassStatic),
+		{
+			DeviceID:        deviceID,
+			Kind:            polling.TaskKindEssential,
+			VolatilityClass: domain.VolatilityClassPerformance,
+		},
+		{
+			DeviceID:        deviceID,
+			Kind:            polling.TaskKindBootstrap,
+			VolatilityClass: domain.VolatilityClassStatic,
+		},
+	}
+	offsets := make(map[time.Duration]struct{}, len(keys))
+
+	for _, key := range keys {
+		offset := initialOffsetForKey(key, interval)
+		if offset < 0 || offset >= interval {
+			t.Fatalf("initialOffsetForKey(%+v) = %v, want within [0, %v)", key, offset, interval)
+		}
+		offsets[offset] = struct{}{}
+	}
+
+	if len(offsets) < 3 {
+		t.Fatalf("initialOffsetForKey() produced %d unique offsets, want at least 3", len(offsets))
+	}
+}
+
+func TestInitialOffsetForKeyIsDeterministic(t *testing.T) {
+	deviceID := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	key := NewBackgroundTaskKey(deviceID, domain.VolatilityClassPerformance)
+	interval := 30 * time.Second
+
+	first := initialOffsetForKey(key, interval)
+	second := initialOffsetForKey(key, interval)
+
+	if first != second {
+		t.Fatalf("initialOffsetForKey() not deterministic: first=%v second=%v", first, second)
 	}
 }
 

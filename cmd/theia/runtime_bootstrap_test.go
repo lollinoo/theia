@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -418,13 +419,87 @@ func TestProductionMetricsStackUsesComposeNetworkAndMetricsSecret(t *testing.T) 
 	}
 }
 
+func TestRuntimeHTTPHandlerServesPprofWithMetricsToken(t *testing.T) {
+	routerHit := false
+	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		routerHit = true
+		http.NotFound(w, r)
+	})
+	metrics := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("metrics-ok"))
+	})
+	handler := runtimeHTTPHandler(router, metrics, "0123456789abcdef0123456789abcdef")
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/goroutine?debug=1", nil)
+	req.Header.Set("Authorization", "Bearer 0123456789abcdef0123456789abcdef")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pprof status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if routerHit {
+		t.Fatal("pprof request reached main API router")
+	}
+	if !strings.Contains(rec.Body.String(), "goroutine profile") {
+		t.Fatalf("pprof body = %q, want goroutine profile", rec.Body.String())
+	}
+}
+
+func TestRuntimeHTTPHandlerRejectsPprofWithoutMetricsToken(t *testing.T) {
+	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("unauthorized pprof request reached main API router")
+	})
+	metrics := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("unauthorized pprof request reached metrics handler")
+	})
+	handler := runtimeHTTPHandler(router, metrics, "0123456789abcdef0123456789abcdef")
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("pprof status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer realm="theia-metrics"` {
+		t.Fatalf("WWW-Authenticate = %q, want metrics bearer challenge", got)
+	}
+}
+
+func TestRuntimeHTTPHandlerStillServesMetricsWithMetricsToken(t *testing.T) {
+	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("metrics request reached main API router")
+	})
+	metrics := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("metrics-ok"))
+	})
+	handler := runtimeHTTPHandler(router, metrics, "0123456789abcdef0123456789abcdef")
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer 0123456789abcdef0123456789abcdef")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.Body.String() != "metrics-ok" {
+		t.Fatalf("metrics body = %q, want metrics-ok", rec.Body.String())
+	}
+}
+
 func TestPrometheusAlertRulesCoverRuntimePerformanceSignals(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	rules := readPrometheusRules(t, filepath.Join(repoRoot, "docker/prometheus/alert_rules.yml"))
 	tests := []struct {
-		alert         string
-		wantSeverity  string
-		wantFragments []string
+		alert                string
+		wantSeverity         string
+		wantFragments        []string
+		wantSummaryFragments []string
 	}{
 		{
 			alert:        "BulkOperationRejections",
@@ -512,7 +587,24 @@ func TestPrometheusAlertRulesCoverRuntimePerformanceSignals(t *testing.T) {
 			wantSeverity: "warning",
 			wantFragments: []string{
 				"theia_snmp_collector_operations_total",
-				`operation="bulk_walk"`,
+				`operation=~".*_walk"`,
+				"collector, operation, result",
+			},
+			wantSummaryFragments: []string{
+				"{{ $labels.operation }}",
+			},
+		},
+		{
+			alert:        "SNMPBulkWalkSlow",
+			wantSeverity: "warning",
+			wantFragments: []string{
+				"theia_snmp_collector_operation_seconds_bucket",
+				`operation=~".*_walk"`,
+				"histogram_quantile",
+				"collector, operation, le",
+			},
+			wantSummaryFragments: []string{
+				"{{ $labels.operation }}",
 			},
 		},
 	}
@@ -536,6 +628,11 @@ func TestPrometheusAlertRulesCoverRuntimePerformanceSignals(t *testing.T) {
 			}
 			if rule.Annotations["summary"] == "" {
 				t.Fatalf("%s must define a summary annotation", tt.alert)
+			}
+			for _, fragment := range tt.wantSummaryFragments {
+				if !strings.Contains(rule.Annotations["summary"], fragment) {
+					t.Fatalf("%s summary = %q, want fragment %q", tt.alert, rule.Annotations["summary"], fragment)
+				}
 			}
 		})
 	}
