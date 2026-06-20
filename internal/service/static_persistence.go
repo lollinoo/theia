@@ -44,8 +44,13 @@ type linkUpsertReporter interface {
 	UpsertDetailed(link *domain.Link) (domain.LinkUpsertResult, error)
 }
 
+type staticDiscoveryDeviceRepository interface {
+	GetByIDsForTopology([]uuid.UUID) ([]domain.Device, error)
+	UpdateStaticDiscovery(*domain.Device) error
+}
+
 func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDiscoveryInput) (result StaticPersistenceResult, err error) {
-	fresh, err := s.deviceRepo.GetByID(deviceID)
+	fresh, staticRepo, err := s.getDeviceForStaticDiscovery(deviceID)
 	if err != nil {
 		return StaticPersistenceResult{}, fmt.Errorf("re-fetch device: %w", err)
 	}
@@ -74,7 +79,7 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	}
 
 	if staticPersistenceDeviceChanged(previousStatic, *fresh) {
-		if err := s.deviceRepo.Update(fresh); err != nil {
+		if err := s.updateStaticDiscoveryDevice(staticRepo, fresh); err != nil {
 			return StaticPersistenceResult{}, fmt.Errorf("update device: %w", err)
 		}
 	}
@@ -165,10 +170,38 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	if result.UnresolvedNeighbors == 0 {
 		result.UnresolvedNeighbors = countUnknownNeighbors(unknownNeighbors)
 	}
-	s.syncTopologyDiscoveryMetadata(fresh.ID, len(neighbors), false, snmp.HasCriticalNeighborDiscoveryFailure(input.NeighborDiscoveryFailures))
+	if domain.ResolveTopologyDiscoveryMode(fresh, s.defaultTopologyDiscoveryMode()) != domain.TopologyDiscoveryModeOff {
+		s.syncTopologyDiscoveryMetadata(fresh.ID, len(neighbors), false, snmp.HasCriticalNeighborDiscoveryFailure(input.NeighborDiscoveryFailures))
+	}
 	s.reconcileResolvedBootstrapPeers(fresh.ID)
 
 	return result, nil
+}
+
+func (s *DeviceService) getDeviceForStaticDiscovery(deviceID uuid.UUID) (*domain.Device, staticDiscoveryDeviceRepository, error) {
+	if repo, ok := s.deviceRepo.(staticDiscoveryDeviceRepository); ok {
+		devices, err := repo.GetByIDsForTopology([]uuid.UUID{deviceID})
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(devices) == 0 {
+			return nil, nil, fmt.Errorf("device not found: %s", deviceID)
+		}
+		return &devices[0], repo, nil
+	}
+
+	fresh, err := s.deviceRepo.GetByID(deviceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return fresh, nil, nil
+}
+
+func (s *DeviceService) updateStaticDiscoveryDevice(repo staticDiscoveryDeviceRepository, device *domain.Device) error {
+	if repo != nil {
+		return repo.UpdateStaticDiscovery(device)
+	}
+	return s.deviceRepo.Update(device)
 }
 
 func shouldPromoteDiscoveredHostname(currentHostname string, deviceIP string, discoveredSysName string) bool {
@@ -546,18 +579,32 @@ func (s *DeviceService) lookupDeviceLabel(deviceID uuid.UUID, cache map[uuid.UUI
 	if value := strings.TrimSpace(cache[deviceID]); value != "" {
 		return value
 	}
+	if repo, ok := s.deviceRepo.(staticDiscoveryDeviceRepository); ok {
+		devices, err := repo.GetByIDsForTopology([]uuid.UUID{deviceID})
+		if err != nil || len(devices) == 0 {
+			return deviceID.String()
+		}
+		label := staticDiscoveryDeviceLabel(devices[0], deviceID)
+		cache[deviceID] = label
+		return label
+	}
 	device, err := s.deviceRepo.GetByID(deviceID)
 	if err != nil || device == nil {
 		return deviceID.String()
 	}
+	label := staticDiscoveryDeviceLabel(*device, deviceID)
+	cache[deviceID] = label
+	return label
+}
+
+func staticDiscoveryDeviceLabel(device domain.Device, fallbackID uuid.UUID) string {
 	label := strings.TrimSpace(device.SysName)
 	if label == "" {
 		label = strings.TrimSpace(device.Hostname)
 	}
 	if label == "" {
-		label = deviceID.String()
+		label = fallbackID.String()
 	}
-	cache[deviceID] = label
 	return label
 }
 

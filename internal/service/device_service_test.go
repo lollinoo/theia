@@ -23,16 +23,20 @@ import (
 // --- Mock Device Repository ---
 
 type mockDeviceRepo struct {
-	mu                       sync.Mutex
-	devices                  map[uuid.UUID]*domain.Device
-	updateHook               func(*domain.Device) error
-	updateCalls              int
-	updateCallsByDevice      map[uuid.UUID]int
-	findIPConflictCalls      int
-	getByIDsCalls            int
-	getByIDsForTopologyCalls int
-	failGetAll               bool
-	failGetByIDs             bool
+	mu                        sync.Mutex
+	devices                   map[uuid.UUID]*domain.Device
+	updateHook                func(*domain.Device) error
+	updateCalls               int
+	updateCallsByDevice       map[uuid.UUID]int
+	updateStaticCalls         int
+	updateStaticCallsByDevice map[uuid.UUID]int
+	findIPConflictCalls       int
+	getByIDCalls              int
+	getByIDsCalls             int
+	getByIDsForTopologyCalls  int
+	failGetByID               bool
+	failGetAll                bool
+	failGetByIDs              bool
 }
 
 func newMockDeviceRepo() *mockDeviceRepo {
@@ -56,6 +60,10 @@ func (r *mockDeviceRepo) Create(device *domain.Device) error {
 func (r *mockDeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.getByIDCalls++
+	if r.failGetByID {
+		return nil, fmt.Errorf("full device path should not be used")
+	}
 	d, ok := r.devices[id]
 	if !ok {
 		return nil, fmt.Errorf("device not found: %s", id)
@@ -238,6 +246,40 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 	return nil
 }
 
+func (r *mockDeviceRepo) UpdateStaticDiscovery(device *domain.Device) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	existing, ok := r.devices[device.ID]
+	if !ok {
+		return fmt.Errorf("device not found: %s", device.ID)
+	}
+	r.updateStaticCalls++
+	if r.updateStaticCallsByDevice == nil {
+		r.updateStaticCallsByDevice = make(map[uuid.UUID]int)
+	}
+	r.updateStaticCallsByDevice[device.ID]++
+	if r.updateHook != nil {
+		if err := r.updateHook(device); err != nil {
+			return err
+		}
+	}
+
+	cp := *existing
+	cp.Hostname = device.Hostname
+	cp.SysName = device.SysName
+	cp.SysDescr = device.SysDescr
+	cp.SysObjectID = device.SysObjectID
+	cp.HardwareModel = device.HardwareModel
+	cp.OSVersion = device.OSVersion
+	cp.Vendor = device.Vendor
+	cp.DeviceType = device.DeviceType
+	cp.PollClass = device.PollClass
+	cp.Interfaces = append([]domain.Interface(nil), device.Interfaces...)
+	cp.UpdatedAt = time.Now().UTC()
+	r.devices[device.ID] = &cp
+	return nil
+}
+
 func (r *mockDeviceRepo) UpdateCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -248,6 +290,12 @@ func (r *mockDeviceRepo) UpdateCountFor(deviceID uuid.UUID) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.updateCallsByDevice[deviceID]
+}
+
+func (r *mockDeviceRepo) StaticUpdateCountFor(deviceID uuid.UUID) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.updateStaticCallsByDevice[deviceID]
 }
 
 func (r *mockDeviceRepo) Delete(id uuid.UUID) error {
@@ -2053,6 +2101,80 @@ func TestApplyStaticDiscovery_CompletesBootstrapOnceDuringRegularStaticPersisten
 	}
 	if updated.LastTopologyDiscoveryResult != "neighbors_found" {
 		t.Fatalf("expected last_topology_discovery_result neighbors_found, got %q", updated.LastTopologyDiscoveryResult)
+	}
+}
+
+func TestApplyStaticDiscovery_UsesTopologyProjectionAndStaticUpdateWhenSupported(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	deviceID := uuid.New()
+	device := &domain.Device{
+		ID:                    deviceID,
+		Hostname:              "192.0.2.51",
+		IP:                    "192.0.2.51",
+		SysName:               "edge-old",
+		Status:                domain.DeviceStatusUp,
+		Managed:               true,
+		DeviceType:            domain.DeviceTypeRouter,
+		ProbePorts:            []int{161, 1161},
+		Tags:                  map[string]string{"role": "edge"},
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeOff,
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "cached-secret"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+	deviceRepo.failGetByID = true
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	result, err := svc.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:       "edge-01",
+		SysDescr:      "SwitchOS",
+		SysObjectID:   ".1.3.6.1.4.1.14988.1",
+		HardwareModel: "CRS328-24P-4S+",
+		OSVersion:     "7.16",
+		Vendor:        "mikrotik",
+		DeviceType:    domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+	if !result.TopologyChanged {
+		t.Fatal("TopologyChanged = false, want true because static interfaces changed")
+	}
+	if got := deviceRepo.getByIDCalls; got != 0 {
+		t.Fatalf("GetByID calls = %d, want 0 when topology projection/static update are supported", got)
+	}
+	if got := deviceRepo.getByIDsForTopologyCalls; got != 1 {
+		t.Fatalf("GetByIDsForTopology calls = %d, want 1", got)
+	}
+	if got := deviceRepo.StaticUpdateCountFor(deviceID); got != 1 {
+		t.Fatalf("UpdateStaticDiscovery calls = %d, want 1", got)
+	}
+	if got := deviceRepo.UpdateCountFor(deviceID); got != 0 {
+		t.Fatalf("Update calls = %d, want 0 for static persistence projection path", got)
+	}
+
+	deviceRepo.mu.Lock()
+	updated := *deviceRepo.devices[deviceID]
+	deviceRepo.mu.Unlock()
+	if updated.Hostname != "edge-01" {
+		t.Fatalf("hostname = %q, want promoted sysName", updated.Hostname)
+	}
+	if updated.ProbePorts[0] != 161 || updated.ProbePorts[1] != 1161 {
+		t.Fatalf("probe ports = %#v, want unchanged", updated.ProbePorts)
+	}
+	if updated.SNMPCredentials.V2c == nil || updated.SNMPCredentials.V2c.Community != "cached-secret" {
+		t.Fatalf("SNMP credentials = %#v, want preserved existing credentials", updated.SNMPCredentials)
 	}
 }
 
