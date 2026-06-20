@@ -121,7 +121,7 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			return
 		}
 
-		profile := r.timeoutProfile(polling.LaneBackground)
+		profile := r.timeoutProfile(polling.LanePerformanceCounterWalks)
 		result := p.performance.PollWithOptions(ctx, task.Device, profile.Timeout, profile.Retries, collector.PerformancePollOptions{
 			ExpectedInterval: task.ExpectedInterval,
 			CounterCooldown:  p.runtime,

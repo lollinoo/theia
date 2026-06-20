@@ -71,6 +71,40 @@ func TestPolicyFromSettingsUsesConfiguredBackgroundSNMPProfile(t *testing.T) {
 	}
 }
 
+func TestPolicyFromSettingsDerivesPerformanceCounterWalksProfileFromBackground(t *testing.T) {
+	settings := fakeSettings{
+		domain.SettingSNMPTimeout: "10",
+		domain.SettingSNMPRetries: "2",
+	}
+
+	policy, _ := PolicyFromSettings(settings, 0, 300*time.Millisecond, 30*time.Second)
+	profile := policy.Timeouts[LanePerformanceCounterWalks]
+
+	if profile.Timeout != 2*time.Second {
+		t.Fatalf("performance counter timeout = %v, want capped 2s", profile.Timeout)
+	}
+	if profile.Retries != 0 {
+		t.Fatalf("performance counter retries = %d, want 0", profile.Retries)
+	}
+}
+
+func TestPolicyFromSettingsPreservesLowerBackgroundTimeoutForPerformanceCounterWalks(t *testing.T) {
+	settings := fakeSettings{
+		domain.SettingSNMPTimeout: "1",
+		domain.SettingSNMPRetries: "0",
+	}
+
+	policy, _ := PolicyFromSettings(settings, 0, 300*time.Millisecond, 30*time.Second)
+	profile := policy.Timeouts[LanePerformanceCounterWalks]
+
+	if profile.Timeout != time.Second {
+		t.Fatalf("performance counter timeout = %v, want configured lower 1s", profile.Timeout)
+	}
+	if profile.Retries != 0 {
+		t.Fatalf("performance counter retries = %d, want 0", profile.Retries)
+	}
+}
+
 func TestPolicyWarnsWhenIntervalCannotOutrunTimeout(t *testing.T) {
 	settings := fakeSettings{
 		domain.SettingPollingEssentialTimeoutMillis: "10000",

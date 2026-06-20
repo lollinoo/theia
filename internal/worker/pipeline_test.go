@@ -871,7 +871,7 @@ func TestPipelineRunsEssentialTaskWithEssentialTimeoutProfile(t *testing.T) {
 	}
 }
 
-func TestPipelineRunsPerformanceTaskWithBackgroundTimeoutProfile(t *testing.T) {
+func TestPipelineRunsPerformanceTaskWithPerformanceCounterTimeoutProfile(t *testing.T) {
 	device := domain.Device{
 		ID:            uuid.New(),
 		Hostname:      "edge-performance",
@@ -908,11 +908,62 @@ func TestPipelineRunsPerformanceTaskWithBackgroundTimeoutProfile(t *testing.T) {
 	}
 
 	pipeline.runTask(context.Background(), task)
-	if gotTimeout != 10*time.Second {
-		t.Fatalf("performance timeout = %v, want configured 10s background profile", gotTimeout)
+	if gotTimeout != 2*time.Second {
+		t.Fatalf("performance timeout = %v, want capped 2s performance counter profile", gotTimeout)
 	}
-	if gotRetries != 2 {
-		t.Fatalf("performance retries = %d, want configured 2 background retries", gotRetries)
+	if gotRetries != 0 {
+		t.Fatalf("performance retries = %d, want 0 performance counter retries", gotRetries)
+	}
+}
+
+func TestPipelineRunsOperationalAndStaticTasksWithBackgroundTimeoutProfile(t *testing.T) {
+	stateStore := state.NewStore()
+	settingsRepo := newMockWorkerSettingsRepo()
+	_ = settingsRepo.Set(domain.SettingSNMPTimeout, "10")
+	_ = settingsRepo.Set(domain.SettingSNMPRetries, "2")
+
+	gotProfiles := map[domain.VolatilityClass]polling.TimeoutProfile{}
+	operational := collector.NewOperationalCollector(buildEmptyVendorRegistry(), func(_ string, _ domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
+		gotProfiles[domain.VolatilityClassOperational] = polling.TimeoutProfile{Timeout: timeout, Retries: retries}
+		return &fakeSNMPClient{}, nil
+	})
+	staticCollector := collector.NewStaticCollector(buildEmptyVendorRegistry(), func(_ string, _ domain.SNMPCredentials, timeout time.Duration, retries int) (collector.SNMPClient, error) {
+		gotProfiles[domain.VolatilityClassStatic] = polling.TimeoutProfile{Timeout: timeout, Retries: retries}
+		return &fakeSNMPClient{}, nil
+	})
+	pipeline := NewPipelineOrchestrator(nil, stateStore, nil, nil, nil, nil, operational, staticCollector, nil, nil, settingsRepo, nil, nil, nil)
+
+	for _, volatilityClass := range []domain.VolatilityClass{domain.VolatilityClassOperational, domain.VolatilityClassStatic} {
+		device := domain.Device{
+			ID:            uuid.New(),
+			Hostname:      "edge-" + string(volatilityClass),
+			IP:            "10.0.0.3",
+			Managed:       true,
+			PollClass:     domain.PollClassCore,
+			MetricsSource: domain.MetricsSourceSNMP,
+			Vendor:        "default",
+		}
+		pipeline.runTask(context.Background(), scheduler.PollTask{
+			Key:              scheduler.NewTaskKey(device.ID, volatilityClass),
+			Kind:             polling.TaskKindBackground,
+			Lane:             polling.LaneBackground,
+			VolatilityClass:  volatilityClass,
+			Device:           device,
+			ExpectedInterval: 30 * time.Second,
+		})
+	}
+
+	for _, volatilityClass := range []domain.VolatilityClass{domain.VolatilityClassOperational, domain.VolatilityClassStatic} {
+		profile, ok := gotProfiles[volatilityClass]
+		if !ok {
+			t.Fatalf("%s task did not create SNMP client", volatilityClass)
+		}
+		if profile.Timeout != 10*time.Second {
+			t.Fatalf("%s timeout = %v, want configured 10s background profile", volatilityClass, profile.Timeout)
+		}
+		if profile.Retries != 2 {
+			t.Fatalf("%s retries = %d, want configured 2 background retries", volatilityClass, profile.Retries)
+		}
 	}
 }
 

@@ -47,6 +47,16 @@ type Policy struct {
 }
 
 func PolicyFromSettings(repo SettingsGetter, deviceCount int, observedP95 time.Duration, shortestInterval time.Duration) (Policy, []CapacityWarning) {
+	backgroundProfile := TimeoutProfile{
+		Timeout: durationSecondsSetting(repo, domain.SettingSNMPTimeout, 5*time.Second),
+		Retries: nonNegativeIntSetting(repo, domain.SettingSNMPRetries, 0),
+	}
+	performanceCounterWalksProfile := backgroundProfile
+	if performanceCounterWalksProfile.Timeout > 2*time.Second {
+		performanceCounterWalksProfile.Timeout = 2 * time.Second
+	}
+	performanceCounterWalksProfile.Retries = 0
+
 	policy := Policy{
 		EssentialWorkers:      intSetting(repo, domain.SettingPollingEssentialWorkers, 64),
 		MaxWorkersPerSite:     intSetting(repo, domain.SettingPollingMaxWorkersPerSite, 16),
@@ -62,12 +72,10 @@ func PolicyFromSettings(repo SettingsGetter, deviceCount int, observedP95 time.D
 				Timeout: durationMSSetting(repo, domain.SettingPollingEssentialTimeoutMillis, 1200*time.Millisecond),
 				Retries: nonNegativeIntSetting(repo, domain.SettingPollingEssentialRetries, 1),
 			},
-			LaneBackground: {
-				Timeout: durationSecondsSetting(repo, domain.SettingSNMPTimeout, 5*time.Second),
-				Retries: nonNegativeIntSetting(repo, domain.SettingSNMPRetries, 0),
-			},
-			LaneBootstrap:  {Timeout: 10 * time.Second, Retries: 1},
-			LaneQuarantine: {Timeout: time.Second, Retries: 0},
+			LaneBackground:              backgroundProfile,
+			LanePerformanceCounterWalks: performanceCounterWalksProfile,
+			LaneBootstrap:               {Timeout: 10 * time.Second, Retries: 1},
+			LaneQuarantine:              {Timeout: time.Second, Retries: 0},
 		},
 	}
 
