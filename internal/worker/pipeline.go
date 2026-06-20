@@ -494,6 +494,133 @@ func mergeSnapshotPayload(base *ws.SnapshotPayload, delta *ws.SnapshotPayload) *
 	return merged
 }
 
+func applySnapshotDeltaToRuntime(base *ws.SnapshotPayload, hashes *sectionHashes, delta *ws.SnapshotPayload) (*ws.SnapshotPayload, *sectionHashes) {
+	if base == nil {
+		base = ws.EmptySnapshot()
+	}
+	ensureSnapshotRuntimeMaps(base)
+	if hashes == nil {
+		hashes = computeSnapshotHashes(base)
+	}
+	ensureSectionHashMaps(hashes)
+	if delta == nil {
+		return base, hashes
+	}
+
+	for key, value := range delta.Devices {
+		value = cloneDeviceRuntimeForSnapshot(value)
+		base.Devices[key] = value
+		base.DeviceMetrics[key] = value
+		base.DeviceStatuses[key] = compatibilityOperationalStatus(value.OperationalStatus)
+
+		deviceHash, statusHash := computeDeviceRuntimeHashes(value)
+		hashes.devices[key] = deviceHash
+		hashes.deviceMetrics[key] = deviceHash
+		hashes.deviceStatuses[key] = statusHash
+	}
+
+	for key, value := range delta.Links {
+		previous := base.Links[key]
+		removeLinkRuntimeFromCompatibility(base.LinkMetrics, previous, key)
+		base.Links[key] = value
+		compatibilityValue := value
+		if compatibilityValue.DeviceID == "" {
+			compatibilityValue.DeviceID = compatibilityValue.SourceDeviceID
+		}
+		base.LinkMetrics[compatibilityValue.DeviceID] = append(base.LinkMetrics[compatibilityValue.DeviceID], compatibilityValue)
+
+		linkHash := computeLinkRuntimeHash(value)
+		hashes.links[key] = linkHash
+		hashes.linkMetrics[key] = linkHash
+	}
+
+	return base, hashes
+}
+
+func ensureSnapshotRuntimeMaps(snapshot *ws.SnapshotPayload) {
+	if snapshot.Devices == nil {
+		snapshot.Devices = make(map[string]ws.DeviceRuntimeDTO)
+	}
+	if snapshot.Links == nil {
+		snapshot.Links = make(map[string]ws.LinkRuntimeDTO)
+	}
+	if snapshot.DeviceMetrics == nil || snapshot.LinkMetrics == nil || snapshot.DeviceStatuses == nil {
+		syncSnapshotCompatibility(snapshot)
+		return
+	}
+}
+
+func ensureSectionHashMaps(hashes *sectionHashes) {
+	if hashes.devices == nil {
+		hashes.devices = make(map[string]uint64)
+	}
+	if hashes.links == nil {
+		hashes.links = make(map[string]uint64)
+	}
+	if hashes.deviceMetrics == nil {
+		hashes.deviceMetrics = make(map[string]uint64)
+	}
+	if hashes.linkMetrics == nil {
+		hashes.linkMetrics = make(map[string]uint64)
+	}
+	if hashes.deviceStatuses == nil {
+		hashes.deviceStatuses = make(map[string]uint64)
+	}
+}
+
+func cloneDeviceRuntimeForSnapshot(value ws.DeviceRuntimeDTO) ws.DeviceRuntimeDTO {
+	value.RuntimeFlags = append([]string(nil), value.RuntimeFlags...)
+	if value.FieldStates != nil {
+		cloned := make(map[string]string, len(value.FieldStates))
+		for key, state := range value.FieldStates {
+			cloned[key] = state
+		}
+		value.FieldStates = cloned
+	}
+	return value
+}
+
+func removeLinkRuntimeFromCompatibility(metrics map[string][]ws.LinkRuntimeDTO, previous ws.LinkRuntimeDTO, linkID string) {
+	if len(metrics) == 0 {
+		return
+	}
+	if previous.LinkID != "" {
+		deviceID := previous.DeviceID
+		if deviceID == "" {
+			deviceID = previous.SourceDeviceID
+		}
+		if removeLinkRuntimeFromCompatibilityBucket(metrics, deviceID, linkID) {
+			return
+		}
+	}
+	for deviceID := range metrics {
+		if removeLinkRuntimeFromCompatibilityBucket(metrics, deviceID, linkID) {
+			return
+		}
+	}
+}
+
+func removeLinkRuntimeFromCompatibilityBucket(metrics map[string][]ws.LinkRuntimeDTO, deviceID string, linkID string) bool {
+	if deviceID == "" {
+		return false
+	}
+	links := metrics[deviceID]
+	for index, link := range links {
+		if link.LinkID != linkID {
+			continue
+		}
+		copy(links[index:], links[index+1:])
+		links = links[:len(links)-1]
+		if len(links) == 0 {
+			delete(metrics, deviceID)
+		} else {
+			metrics[deviceID] = links
+		}
+		return true
+	}
+	return false
+}
+
 func drainBroadcastLoopInputs(
 	stateChanges <-chan []uuid.UUID,
 	deviceChanges <-chan domain.DeviceChangeEvent,

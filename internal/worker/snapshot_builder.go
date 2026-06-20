@@ -279,53 +279,62 @@ func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 	}
 
 	for id, dm := range snapshot.Devices {
-		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
-			dm.DeviceID,
-			dm.OperationalStatus,
-			dm.PrimaryHealth,
-			strings.Join(dm.RuntimeFlags, ","),
-			fieldStateHashPart(dm.FieldStates),
-			dm.NetworkReachable,
-			dm.SNMPReachable,
-			dm.Reachability,
-			dm.Health,
-			dm.Freshness,
-			dm.PrimaryReason,
-			dm.MetricsStatus,
-			dm.MetricsReason,
-			dm.AlertStatus,
-			dm.FiringAlertCount,
-			formatStringPtr(dm.LastCollectedAt),
-			formatStringPtr(dm.LastPolledAt),
-			formatFloatPtr(dm.ExpectedPollIntervalSeconds),
-			formatFloatPtr(dm.CPUPercent),
-			formatFloatPtr(dm.MemPercent),
-			formatFloatPtr(dm.TempCelsius),
-			formatFloatPtr(dm.UptimeSecs),
-		)
-		sh.devices[id] = computeSectionHash(key)
+		deviceHash, statusHash := computeDeviceRuntimeHashes(dm)
+		sh.devices[id] = deviceHash
 		sh.deviceMetrics[id] = sh.devices[id]
-		sh.deviceStatuses[id] = computeSectionHash(compatibilityOperationalStatus(dm.OperationalStatus))
+		sh.deviceStatuses[id] = statusHash
 	}
 
 	for id, lm := range snapshot.Links {
-		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s",
-			lm.LinkID,
-			lm.SourceDeviceID,
-			lm.TargetDeviceID,
-			lm.SourceIfName,
-			lm.TargetIfName,
-			lm.MetricsStatus,
-			lm.MetricsReason,
-			formatStringPtr(lm.LastCollectedAt),
-			formatFloatPtr(lm.TxBps),
-			formatFloatPtr(lm.RxBps)+"|"+formatFloatPtr(lm.Utilization),
-		)
-		sh.links[id] = computeSectionHash(key)
+		sh.links[id] = computeLinkRuntimeHash(lm)
 		sh.linkMetrics[id] = sh.links[id]
 	}
 
 	return sh
+}
+
+func computeDeviceRuntimeHashes(dm ws.DeviceRuntimeDTO) (uint64, uint64) {
+	key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
+		dm.DeviceID,
+		dm.OperationalStatus,
+		dm.PrimaryHealth,
+		strings.Join(dm.RuntimeFlags, ","),
+		fieldStateHashPart(dm.FieldStates),
+		dm.NetworkReachable,
+		dm.SNMPReachable,
+		dm.Reachability,
+		dm.Health,
+		dm.Freshness,
+		dm.PrimaryReason,
+		dm.MetricsStatus,
+		dm.MetricsReason,
+		dm.AlertStatus,
+		dm.FiringAlertCount,
+		formatStringPtr(dm.LastCollectedAt),
+		formatStringPtr(dm.LastPolledAt),
+		formatFloatPtr(dm.ExpectedPollIntervalSeconds),
+		formatFloatPtr(dm.CPUPercent),
+		formatFloatPtr(dm.MemPercent),
+		formatFloatPtr(dm.TempCelsius),
+		formatFloatPtr(dm.UptimeSecs),
+	)
+	return computeSectionHash(key), computeSectionHash(compatibilityOperationalStatus(dm.OperationalStatus))
+}
+
+func computeLinkRuntimeHash(lm ws.LinkRuntimeDTO) uint64 {
+	key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s",
+		lm.LinkID,
+		lm.SourceDeviceID,
+		lm.TargetDeviceID,
+		lm.SourceIfName,
+		lm.TargetIfName,
+		lm.MetricsStatus,
+		lm.MetricsReason,
+		formatStringPtr(lm.LastCollectedAt),
+		formatFloatPtr(lm.TxBps),
+		formatFloatPtr(lm.RxBps)+"|"+formatFloatPtr(lm.Utilization),
+	)
+	return computeSectionHash(key)
 }
 
 func fieldStateHashPart(fields map[string]string) string {

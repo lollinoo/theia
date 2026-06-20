@@ -309,9 +309,9 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 		return nil
 	}
 	baseVersion := p.runtime.overviewVersion
-	merged := mergeSnapshotPayload(p.runtime.lastSnapshot, delta)
+	merged, currentHashes := applySnapshotDeltaToRuntime(p.runtime.lastSnapshot, p.runtime.prevHashes, delta)
 	p.runtime.lastSnapshot = merged
-	p.runtime.prevHashes = computeSnapshotHashes(merged)
+	p.runtime.prevHashes = currentHashes
 	p.runtime.previousAlertRuntime = alertRuntimeSummaryFromSnapshot(merged)
 	p.runtime.overviewVersion++
 	version := p.runtime.overviewVersion

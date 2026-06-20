@@ -3290,6 +3290,120 @@ func TestMergeSnapshotPayload_RefreshesCompatibilityViewsAfterDelta(t *testing.T
 	}
 }
 
+func TestApplySnapshotDeltaToRuntime_UpdatesSnapshotAndHashesIncrementally(t *testing.T) {
+	deviceAID := uuid.New().String()
+	deviceBID := uuid.New().String()
+	linkAID := uuid.New().String()
+	linkBID := uuid.New().String()
+	updatedCollectedAt := "2026-04-20T10:30:00Z"
+
+	base := ws.EmptySnapshot()
+	base.Devices[deviceAID] = ws.DeviceRuntimeDTO{
+		DeviceID:          deviceAID,
+		OperationalStatus: string(domain.DeviceStatusDown),
+		MetricsStatus:     "missing",
+	}
+	base.Devices[deviceBID] = ws.DeviceRuntimeDTO{
+		DeviceID:          deviceBID,
+		OperationalStatus: string(domain.DeviceStatusUp),
+		RuntimeFlags:      []string{},
+		MetricsStatus:     "available",
+	}
+	base.Links[linkAID] = ws.LinkRuntimeDTO{
+		LinkID:         linkAID,
+		SourceDeviceID: deviceAID,
+		TargetDeviceID: deviceBID,
+		DeviceID:       deviceAID,
+		SourceIfName:   "ether1",
+		MetricsStatus:  "missing",
+	}
+	base.Links[linkBID] = ws.LinkRuntimeDTO{
+		LinkID:         linkBID,
+		SourceDeviceID: deviceBID,
+		TargetDeviceID: deviceAID,
+		DeviceID:       deviceBID,
+		SourceIfName:   "ether2",
+		MetricsStatus:  "available",
+	}
+	syncSnapshotCompatibility(base)
+	baseHashes := computeSnapshotHashes(base)
+	expectedBase := ws.CloneSnapshot(base)
+
+	delta := ws.EmptySnapshot()
+	delta.Devices[deviceAID] = ws.DeviceRuntimeDTO{
+		DeviceID:          deviceAID,
+		OperationalStatus: string(domain.DeviceStatusUp),
+		MetricsStatus:     "available",
+	}
+	delta.Links[linkAID] = ws.LinkRuntimeDTO{
+		LinkID:          linkAID,
+		SourceDeviceID:  deviceAID,
+		TargetDeviceID:  deviceBID,
+		DeviceID:        deviceAID,
+		SourceIfName:    "ether1",
+		MetricsStatus:   "available",
+		LastCollectedAt: &updatedCollectedAt,
+	}
+
+	expected := mergeSnapshotPayload(expectedBase, delta)
+	expectedHashes := computeSnapshotHashes(expected)
+
+	got, gotHashes := applySnapshotDeltaToRuntime(base, baseHashes, delta)
+
+	if got != base {
+		t.Fatal("expected runtime snapshot to be updated in place")
+	}
+	if gotHashes != baseHashes {
+		t.Fatal("expected section hashes to be updated in place")
+	}
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("incremental snapshot mismatch\n got: %#v\nwant: %#v", got, expected)
+	}
+	if !reflect.DeepEqual(gotHashes, expectedHashes) {
+		t.Fatalf("incremental hashes mismatch\n got: %#v\nwant: %#v", gotHashes, expectedHashes)
+	}
+}
+
+func TestRemoveLinkRuntimeFromCompatibility_UsesPreviousBucketAndFallbackSourceDevice(t *testing.T) {
+	linkID := uuid.New().String()
+	oldDeviceID := uuid.New().String()
+	otherDeviceID := uuid.New().String()
+	sourceDeviceID := uuid.New().String()
+	sourceFallbackLinkID := uuid.New().String()
+
+	metrics := map[string][]ws.LinkRuntimeDTO{
+		oldDeviceID: {
+			{LinkID: linkID, DeviceID: oldDeviceID},
+			{LinkID: "keep-old", DeviceID: oldDeviceID},
+		},
+		otherDeviceID: {
+			{LinkID: "keep-other", DeviceID: otherDeviceID},
+		},
+		sourceDeviceID: {
+			{LinkID: sourceFallbackLinkID, SourceDeviceID: sourceDeviceID},
+		},
+	}
+
+	removeLinkRuntimeFromCompatibility(metrics, ws.LinkRuntimeDTO{LinkID: linkID, DeviceID: oldDeviceID}, linkID)
+
+	if len(metrics[oldDeviceID]) != 1 || metrics[oldDeviceID][0].LinkID != "keep-old" {
+		t.Fatalf("old bucket after targeted removal = %#v, want only keep-old", metrics[oldDeviceID])
+	}
+	if len(metrics[otherDeviceID]) != 1 || metrics[otherDeviceID][0].LinkID != "keep-other" {
+		t.Fatalf("other bucket changed during targeted removal: %#v", metrics[otherDeviceID])
+	}
+
+	removeLinkRuntimeFromCompatibility(
+		metrics,
+		ws.LinkRuntimeDTO{LinkID: sourceFallbackLinkID, SourceDeviceID: sourceDeviceID},
+		sourceFallbackLinkID,
+	)
+
+	if _, exists := metrics[sourceDeviceID]; exists {
+		t.Fatalf("source fallback bucket still exists after removing its only link: %#v", metrics[sourceDeviceID])
+	}
+}
+
 func TestPipelineOrchestratorBroadcastLoop_LinkChangeBroadcastsTopologyInvalidationOnly(t *testing.T) {
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
 	pipeline.broadcastCoalesceWindow = 10 * time.Millisecond
