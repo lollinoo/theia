@@ -5,7 +5,6 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -308,15 +307,6 @@ func (p *PipelineOrchestrator) shouldPersistStaticDiscovery(deviceID uuid.UUID, 
 	if p == nil || deviceID == uuid.Nil || fingerprint == "" {
 		return true, ""
 	}
-	now := p.staticPersistenceClock().UTC()
-	maxAge := p.staticPersistenceMaxAge
-	if maxAge <= 0 {
-		maxAge = staticPersistenceSelfHealInterval
-	}
-	spread := p.staticPersistenceSelfHealSpread
-	if spread <= 0 {
-		spread = staticPersistenceSelfHealSpread
-	}
 
 	p.staticPersistenceMu.Lock()
 	defer p.staticPersistenceMu.Unlock()
@@ -324,15 +314,7 @@ func (p *PipelineOrchestrator) shouldPersistStaticDiscovery(deviceID uuid.UUID, 
 	if !ok || entry.fingerprint != fingerprint || entry.persistedAt.IsZero() {
 		return true, ""
 	}
-	selfHealEligibleAt := entry.persistedAt.Add(maxAge)
-	if now.Before(selfHealEligibleAt) {
-		return false, "unchanged"
-	}
-	selfHealDeadline := selfHealEligibleAt.Add(staticPersistenceSelfHealJitter(deviceID, spread))
-	if now.Before(selfHealDeadline) {
-		return false, "self_heal_deferred"
-	}
-	return true, ""
+	return false, "unchanged"
 }
 
 func (p *PipelineOrchestrator) staticTopologyFingerprintUnchanged(deviceID uuid.UUID, topologyFingerprint string) bool {
@@ -350,14 +332,6 @@ func (p *PipelineOrchestrator) staticTopologyFingerprintUnchanged(deviceID uuid.
 		return false
 	}
 	return true
-}
-
-func staticPersistenceSelfHealJitter(deviceID uuid.UUID, spread time.Duration) time.Duration {
-	if deviceID == uuid.Nil || spread <= 0 {
-		return 0
-	}
-	sum := sha256.Sum256(deviceID[:])
-	return time.Duration(binary.BigEndian.Uint64(sum[:8]) % uint64(spread))
 }
 
 func (p *PipelineOrchestrator) rememberStaticDiscoveryPersistence(
