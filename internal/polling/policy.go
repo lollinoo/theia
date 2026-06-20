@@ -56,6 +56,10 @@ func PolicyFromSettings(repo SettingsGetter, deviceCount int, observedP95 time.D
 		performanceCounterWalksProfile.Timeout = 2 * time.Second
 	}
 	performanceCounterWalksProfile.Retries = 0
+	performanceCounterWalksProfile = TimeoutProfile{
+		Timeout: durationMSSetting(repo, domain.SettingSNMPPerformanceCounterTimeoutMillis, performanceCounterWalksProfile.Timeout),
+		Retries: nonNegativeIntSetting(repo, domain.SettingSNMPPerformanceCounterRetries, performanceCounterWalksProfile.Retries),
+	}
 
 	policy := Policy{
 		EssentialWorkers:      intSetting(repo, domain.SettingPollingEssentialWorkers, 64),

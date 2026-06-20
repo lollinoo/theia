@@ -75,6 +75,8 @@ interface WorkerSetting {
 type SNMPDebugSettingKey =
   | 'snmp_timeout_seconds'
   | 'snmp_retries'
+  | 'snmp_performance_counter_timeout_ms'
+  | 'snmp_performance_counter_retries'
   | 'polling_essential_timeout_ms'
   | 'polling_essential_retries'
   | 'snmp_worker_pool_size'
@@ -187,6 +189,21 @@ const SNMP_DEBUG_SETTING_GROUPS: readonly SNMPDebugSettingGroup[] = [
         key: 'snmp_retries',
         label: 'Background Retries',
         defaultValue: '2',
+        min: 0,
+        max: 10,
+      },
+      {
+        key: 'snmp_performance_counter_timeout_ms',
+        label: 'Performance Counter Timeout',
+        defaultValue: '2000',
+        min: 100,
+        max: 30000,
+        unit: 'ms',
+      },
+      {
+        key: 'snmp_performance_counter_retries',
+        label: 'Performance Counter Retries',
+        defaultValue: '0',
         min: 0,
         max: 10,
       },

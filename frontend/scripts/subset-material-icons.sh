@@ -63,6 +63,7 @@ ICON_NAMES=(
   speed
   sync
   terminal
+  tune
   visibility
   visibility_off
   zoom_in

@@ -772,6 +772,8 @@ describe('SettingsPanel — SNMP Debug settings', () => {
     expect(screen.getByText('Worker Pools')).toBeInTheDocument();
     expect(screen.getByText('Isolation Limits')).toBeInTheDocument();
     expect(screen.getByLabelText('Background Timeout')).toBeInTheDocument();
+    expect(screen.getByLabelText('Performance Counter Timeout')).toBeInTheDocument();
+    expect(screen.getByLabelText('Performance Counter Retries')).toBeInTheDocument();
     expect(screen.getByLabelText('Essential Timeout')).toBeInTheDocument();
     expect(screen.getByLabelText('Max Inflight Per SNMP Profile')).toBeInTheDocument();
     expect(screen.getByText('GETBULK Max Repetitions')).toBeInTheDocument();
@@ -784,6 +786,8 @@ describe('SettingsPanel — SNMP Debug settings', () => {
       data: {
         snmp_timeout_seconds: '5',
         snmp_retries: '2',
+        snmp_performance_counter_timeout_ms: '3500',
+        snmp_performance_counter_retries: '1',
         polling_essential_timeout_ms: '900',
         polling_essential_retries: '0',
         snmp_worker_pool_size: '9',
@@ -809,6 +813,8 @@ describe('SettingsPanel — SNMP Debug settings', () => {
     await waitFor(() => {
       expect(screen.getByLabelText('Background Timeout')).toHaveValue(5);
       expect(screen.getByLabelText('Background Retries')).toHaveValue(2);
+      expect(screen.getByLabelText('Performance Counter Timeout')).toHaveValue(3500);
+      expect(screen.getByLabelText('Performance Counter Retries')).toHaveValue(1);
       expect(screen.getByLabelText('Essential Timeout')).toHaveValue(900);
       expect(screen.getByLabelText('Essential Retries')).toHaveValue(0);
       expect(screen.getByLabelText('Legacy Total Pool')).toHaveValue(9);
@@ -843,6 +849,28 @@ describe('SettingsPanel — SNMP Debug settings', () => {
     expect(updateSetting).toHaveBeenCalledWith('snmp_retries', '3');
   });
 
+  it('saves a valid performance counter SNMP setting after the debounce window', async () => {
+    vi.useFakeTimers();
+    const { updateSetting } = await import('../api/client');
+    await renderSettingsPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /snmp debug parameters/i }));
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByLabelText('Performance Counter Timeout'), {
+      target: { value: '3500' },
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+      await Promise.resolve();
+    });
+
+    expect(updateSetting).toHaveBeenCalledWith('snmp_performance_counter_timeout_ms', '3500');
+  });
+
   it('rejects out-of-range SNMP debug settings and does not save them', async () => {
     vi.useFakeTimers();
     const { updateSetting } = await import('../api/client');
@@ -865,6 +893,33 @@ describe('SettingsPanel — SNMP Debug settings', () => {
     expect(debugSection).not.toBeNull();
     expect(
       within(debugSection as HTMLElement).getByText('Must be between 1 and 120'),
+    ).toBeInTheDocument();
+  });
+
+  it('rejects out-of-range performance counter SNMP settings and does not save them', async () => {
+    vi.useFakeTimers();
+    const { updateSetting } = await import('../api/client');
+    await renderSettingsPanel();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /snmp debug parameters/i }));
+      await Promise.resolve();
+    });
+
+    const debugSection = screen.getByText('SNMP Debug Parameters').closest('div');
+    fireEvent.change(screen.getByLabelText('Performance Counter Timeout'), {
+      target: { value: '99' },
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+      await Promise.resolve();
+    });
+
+    expect(updateSetting).not.toHaveBeenCalledWith('snmp_performance_counter_timeout_ms', '99');
+    expect(debugSection).not.toBeNull();
+    expect(
+      within(debugSection as HTMLElement).getByText('Must be between 100 and 30000'),
     ).toBeInTheDocument();
   });
 

@@ -41,6 +41,7 @@ const REQUIRED_ADMIN_SETTINGS_ICONS = [
   'info',
   'settings_ethernet',
   'speed',
+  'tune',
 ] as const;
 
 function iconNamesFromScript(): Set<string> {
