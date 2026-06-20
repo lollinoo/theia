@@ -339,15 +339,6 @@ func (p *PipelineOrchestrator) staticTopologyFingerprintUnchanged(deviceID uuid.
 	if p == nil || deviceID == uuid.Nil || topologyFingerprint == "" {
 		return false
 	}
-	now := p.staticPersistenceClock().UTC()
-	maxAge := p.staticPersistenceMaxAge
-	if maxAge <= 0 {
-		maxAge = staticPersistenceSelfHealInterval
-	}
-	spread := p.staticPersistenceSelfHealSpread
-	if spread <= 0 {
-		spread = staticPersistenceSelfHealSpread
-	}
 
 	p.staticPersistenceMu.Lock()
 	defer p.staticPersistenceMu.Unlock()
@@ -358,10 +349,7 @@ func (p *PipelineOrchestrator) staticTopologyFingerprintUnchanged(deviceID uuid.
 		entry.topologyUnresolvedNeighbors > 0 {
 		return false
 	}
-	selfHealDeadline := entry.topologyMaterializedAt.
-		Add(maxAge).
-		Add(staticPersistenceSelfHealJitter(deviceID, spread))
-	return now.Before(selfHealDeadline)
+	return true
 }
 
 func staticPersistenceSelfHealJitter(deviceID uuid.UUID, spread time.Duration) time.Duration {

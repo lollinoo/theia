@@ -338,8 +338,8 @@ func TestPipelineTaskRunnerPersistStaticDiscoverySelfHealsUnchangedResultAfterMa
 	if len(topologyService.inputs) != 2 {
 		t.Fatalf("captured inputs = %d, want 2", len(topologyService.inputs))
 	}
-	if topologyService.inputs[1].SkipTopologyMaterialization {
-		t.Fatal("unchanged self-heal skipped topology materialization")
+	if !topologyService.inputs[1].SkipTopologyMaterialization {
+		t.Fatal("unchanged self-heal rematerialized topology")
 	}
 }
 
