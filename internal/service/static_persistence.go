@@ -49,6 +49,7 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 	if err != nil {
 		return StaticPersistenceResult{}, fmt.Errorf("re-fetch device: %w", err)
 	}
+	previousStatic := cloneStaticPersistenceDevice(*fresh)
 
 	mergedInterfaces := mergeStaticInterfaces(fresh.Interfaces, input.Interfaces)
 	interfaceChanged := staticInterfaceSetChanged(fresh.Interfaces, mergedInterfaces)
@@ -72,8 +73,10 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 		fresh.PollClass = domain.ClassifyPollClass(fresh.DeviceType)
 	}
 
-	if err := s.deviceRepo.Update(fresh); err != nil {
-		return StaticPersistenceResult{}, fmt.Errorf("update device: %w", err)
+	if staticPersistenceDeviceChanged(previousStatic, *fresh) {
+		if err := s.deviceRepo.Update(fresh); err != nil {
+			return StaticPersistenceResult{}, fmt.Errorf("update device: %w", err)
+		}
 	}
 
 	neighbors := dedupePreferredDiscoveredNeighbors(input.Neighbors)
@@ -672,6 +675,84 @@ type interfaceMaterialSignature struct {
 	IfName  string
 	IfDescr string
 	Speed   int64
+}
+
+type interfacePersistenceSignature struct {
+	IfIndex     int
+	IfName      string
+	IfDescr     string
+	Speed       int64
+	AdminStatus string
+	OperStatus  string
+}
+
+func cloneStaticPersistenceDevice(device domain.Device) domain.Device {
+	device.Interfaces = append([]domain.Interface(nil), device.Interfaces...)
+	return device
+}
+
+func staticPersistenceDeviceChanged(before, after domain.Device) bool {
+	if before.Hostname != after.Hostname ||
+		before.SysName != after.SysName ||
+		before.SysDescr != after.SysDescr ||
+		before.SysObjectID != after.SysObjectID ||
+		before.HardwareModel != after.HardwareModel ||
+		before.OSVersion != after.OSVersion ||
+		before.Vendor != after.Vendor ||
+		before.DeviceType != after.DeviceType ||
+		before.PollClass != after.PollClass {
+		return true
+	}
+
+	return interfacePersistenceSetChanged(before.Interfaces, after.Interfaces)
+}
+
+func interfacePersistenceSetChanged(before, after []domain.Interface) bool {
+	if len(before) != len(after) {
+		return true
+	}
+
+	beforeSignatures := interfacePersistenceSignatures(before)
+	afterSignatures := interfacePersistenceSignatures(after)
+	for i := range beforeSignatures {
+		if beforeSignatures[i] != afterSignatures[i] {
+			return true
+		}
+	}
+	return false
+}
+
+func interfacePersistenceSignatures(interfaces []domain.Interface) []interfacePersistenceSignature {
+	signatures := make([]interfacePersistenceSignature, 0, len(interfaces))
+	for _, iface := range interfaces {
+		signatures = append(signatures, interfacePersistenceSignature{
+			IfIndex:     iface.IfIndex,
+			IfName:      iface.IfName,
+			IfDescr:     iface.IfDescr,
+			Speed:       iface.Speed,
+			AdminStatus: iface.AdminStatus,
+			OperStatus:  iface.OperStatus,
+		})
+	}
+	sort.Slice(signatures, func(i, j int) bool {
+		if signatures[i].IfIndex != signatures[j].IfIndex {
+			return signatures[i].IfIndex < signatures[j].IfIndex
+		}
+		if signatures[i].IfName != signatures[j].IfName {
+			return signatures[i].IfName < signatures[j].IfName
+		}
+		if signatures[i].IfDescr != signatures[j].IfDescr {
+			return signatures[i].IfDescr < signatures[j].IfDescr
+		}
+		if signatures[i].Speed != signatures[j].Speed {
+			return signatures[i].Speed < signatures[j].Speed
+		}
+		if signatures[i].AdminStatus != signatures[j].AdminStatus {
+			return signatures[i].AdminStatus < signatures[j].AdminStatus
+		}
+		return signatures[i].OperStatus < signatures[j].OperStatus
+	})
+	return signatures
 }
 
 func mergeStaticInterfaces(existing, observed []domain.Interface) []domain.Interface {

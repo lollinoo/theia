@@ -26,6 +26,8 @@ type mockDeviceRepo struct {
 	mu                       sync.Mutex
 	devices                  map[uuid.UUID]*domain.Device
 	updateHook               func(*domain.Device) error
+	updateCalls              int
+	updateCallsByDevice      map[uuid.UUID]int
 	findIPConflictCalls      int
 	getByIDsCalls            int
 	getByIDsForTopologyCalls int
@@ -220,6 +222,11 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 	if _, ok := r.devices[device.ID]; !ok {
 		return fmt.Errorf("device not found: %s", device.ID)
 	}
+	r.updateCalls++
+	if r.updateCallsByDevice == nil {
+		r.updateCallsByDevice = make(map[uuid.UUID]int)
+	}
+	r.updateCallsByDevice[device.ID]++
 	if r.updateHook != nil {
 		if err := r.updateHook(device); err != nil {
 			return err
@@ -229,6 +236,18 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 	device.UpdatedAt = time.Now().UTC()
 	r.devices[device.ID] = device
 	return nil
+}
+
+func (r *mockDeviceRepo) UpdateCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.updateCalls
+}
+
+func (r *mockDeviceRepo) UpdateCountFor(deviceID uuid.UUID) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.updateCallsByDevice[deviceID]
 }
 
 func (r *mockDeviceRepo) Delete(id uuid.UUID) error {
@@ -2110,6 +2129,124 @@ func TestApplyStaticDiscovery_SkipsTopologyObservationStoreWhenRequested(t *test
 			topologyStore.resolveUnresolved,
 			topologyStore.unresolvedLookups,
 		)
+	}
+}
+
+func TestApplyStaticDiscovery_UnchangedStaticDataWithTopologyOffSkipsDeviceUpdates(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	deviceID := uuid.New()
+	device := &domain.Device{
+		ID:                    deviceID,
+		Hostname:              "edge-01",
+		IP:                    "192.0.2.51",
+		SysName:               "edge-01",
+		SysDescr:              "SwitchOS",
+		SysObjectID:           ".1.3.6.1.4.1.14988.1",
+		HardwareModel:         "CRS328-24P-4S+",
+		OSVersion:             "7.16",
+		Vendor:                "mikrotik",
+		Status:                domain.DeviceStatusUp,
+		Managed:               true,
+		DeviceType:            domain.DeviceTypeSwitch,
+		PollClass:             domain.PollClassCore,
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeOff,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	result, err := svc.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:       "edge-01",
+		SysDescr:      "SwitchOS",
+		SysObjectID:   ".1.3.6.1.4.1.14988.1",
+		HardwareModel: "CRS328-24P-4S+",
+		OSVersion:     "7.16",
+		Vendor:        "mikrotik",
+		DeviceType:    domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+	if result.TopologyChanged {
+		t.Fatal("TopologyChanged = true, want false for unchanged static data")
+	}
+	if got := deviceRepo.UpdateCount(); got != 0 {
+		t.Fatalf("device repo updates = %d, want 0 for unchanged topology-off static discovery", got)
+	}
+}
+
+func TestApplyStaticDiscovery_UnchangedStaticDataWithTopologyEnabledOnlyUpdatesDiscoveryMetadata(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+
+	deviceID := uuid.New()
+	device := &domain.Device{
+		ID:                    deviceID,
+		Hostname:              "edge-01",
+		IP:                    "192.0.2.51",
+		SysName:               "edge-01",
+		SysDescr:              "SwitchOS",
+		SysObjectID:           ".1.3.6.1.4.1.14988.1",
+		HardwareModel:         "CRS328-24P-4S+",
+		OSVersion:             "7.16",
+		Vendor:                "mikrotik",
+		Status:                domain.DeviceStatusUp,
+		Managed:               true,
+		DeviceType:            domain.DeviceTypeSwitch,
+		PollClass:             domain.PollClassCore,
+		MetricsSource:         domain.MetricsSourceSNMP,
+		TopologyDiscoveryMode: domain.TopologyDiscoveryModeLLDP,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+	}
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("Create device failed: %v", err)
+	}
+
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+	result, err := svc.ApplyStaticDiscovery(deviceID, StaticDiscoveryInput{
+		SysName:       "edge-01",
+		SysDescr:      "SwitchOS",
+		SysObjectID:   ".1.3.6.1.4.1.14988.1",
+		HardwareModel: "CRS328-24P-4S+",
+		OSVersion:     "7.16",
+		Vendor:        "mikrotik",
+		DeviceType:    domain.DeviceTypeSwitch,
+		Interfaces: []domain.Interface{
+			{IfIndex: 1, IfName: "ether1", IfDescr: "ether1", Speed: 1_000_000_000, AdminStatus: "up", OperStatus: "up"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery failed: %v", err)
+	}
+	if result.TopologyChanged {
+		t.Fatal("TopologyChanged = true, want false for unchanged static data")
+	}
+	if got := deviceRepo.UpdateCountFor(deviceID); got != 1 {
+		t.Fatalf("device updates for %s = %d, want only the topology metadata update", deviceID, got)
+	}
+	updated, err := deviceRepo.GetByID(deviceID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if updated.LastTopologyDiscoveryAt == nil {
+		t.Fatal("expected topology discovery metadata update to set last_topology_discovery_at")
+	}
+	if updated.LastTopologyDiscoveryResult != "no_neighbors" {
+		t.Fatalf("LastTopologyDiscoveryResult = %q, want no_neighbors", updated.LastTopologyDiscoveryResult)
 	}
 }
 

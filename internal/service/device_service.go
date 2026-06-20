@@ -330,14 +330,42 @@ func (s *DeviceService) updateTopologyDiscoveryState(deviceID uuid.UUID, mutate 
 		log.Printf("Failed to load device %s for topology discovery state update: %v", deviceID, err)
 		return
 	}
+	beforeDevice := *device
+	beforeDevice.TopologyDiscoveryMode = domain.NormalizeTopologyDiscoveryMode(beforeDevice.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
+	beforeDevice.TopologyBootstrapState = domain.NormalizeTopologyBootstrapState(beforeDevice.TopologyBootstrapState)
+	before := topologyDiscoveryStateSignatureFor(beforeDevice)
 	if mutate != nil {
 		mutate(device)
 	}
 	device.TopologyDiscoveryMode = domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
 	device.TopologyBootstrapState = domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState)
+	if topologyDiscoveryStateSignatureFor(*device) == before {
+		return
+	}
 	if err := s.deviceRepo.Update(device); err != nil {
 		log.Printf("Failed to update topology discovery state for %s: %v", deviceID, err)
 	}
+}
+
+type topologyDiscoveryStateSignature struct {
+	Mode      domain.TopologyDiscoveryMode
+	Bootstrap domain.TopologyBootstrapState
+	LastAtSet bool
+	LastAt    time.Time
+	Result    string
+}
+
+func topologyDiscoveryStateSignatureFor(device domain.Device) topologyDiscoveryStateSignature {
+	signature := topologyDiscoveryStateSignature{
+		Mode:      device.TopologyDiscoveryMode,
+		Bootstrap: device.TopologyBootstrapState,
+		Result:    device.LastTopologyDiscoveryResult,
+	}
+	if device.LastTopologyDiscoveryAt != nil {
+		signature.LastAtSet = true
+		signature.LastAt = *device.LastTopologyDiscoveryAt
+	}
+	return signature
 }
 
 func topologyDiscoveryResultLabel(neighborCount int, followupScheduled bool, criticalFailure bool) string {
