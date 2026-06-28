@@ -445,6 +445,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		backupJobRepo, backupFileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
 		vendorRegistry, sshDialer, encryptionKeyring, paths.backupDir, knownHostsStore.HostKeyCallback(),
 		service.WithBulkBackupRunRepo(bulkBackupRunRepo),
+		service.WithSSHHostKeyStore(knownHostsStore),
 	)
 	configureBackupServiceBulkOperationLimits(backupService, cfg)
 	bridgeRepo := postgres.NewBridgeRepo(db)

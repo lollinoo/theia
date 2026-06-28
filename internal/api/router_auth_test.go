@@ -111,6 +111,7 @@ func TestRequiredPermissionsForRegisteredProtectedRoutes(t *testing.T) {
 		{name: "device topology discovery", method: http.MethodPost, path: "/api/v1/devices/" + id + "/topology-discovery", want: []string{domain.PermissionTopologyUpdate}},
 		{name: "device address reachability", method: http.MethodPost, path: "/api/v1/devices/" + id + "/addresses/reachability", want: []string{domain.PermissionDevicesUpdate}},
 		{name: "device ssh test", method: http.MethodPost, path: "/api/v1/devices/" + id + "/ssh-credentials/test", want: []string{domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate}},
+		{name: "device ssh host key reset", method: http.MethodPost, path: "/api/v1/devices/" + id + "/ssh-host-key/reset", want: []string{domain.PermissionBackupsUpdate}},
 		{name: "device backup list", method: http.MethodGet, path: "/api/v1/devices/" + id + "/backups", want: []string{domain.PermissionBackupsRead}},
 		{name: "device backup trigger", method: http.MethodPost, path: "/api/v1/devices/" + id + "/backups", want: []string{domain.PermissionBackupsUpdate}},
 		{name: "device backup latest", method: http.MethodGet, path: "/api/v1/devices/" + id + "/backups/latest", want: []string{domain.PermissionBackupsRead}},

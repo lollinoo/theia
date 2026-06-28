@@ -7,6 +7,7 @@ import {
   fetchBackupFileContent,
   fetchBackupJobs,
   fetchBulkOperationStatus,
+  resetSSHHostKey,
   startBulkBackupRun,
 } from './backup';
 
@@ -40,6 +41,7 @@ describe('backup client', () => {
               id: 'job-1',
               device_id: 'dev-1',
               status: 'success',
+              error_code: 'ssh_host_key_mismatch',
               created_at: '2026-01-01T00:00:00Z',
               files: [{ id: 'file-1', file_name: 'router.rsc' }],
             },
@@ -59,6 +61,35 @@ describe('backup client', () => {
       file_hash: '',
       size_bytes: 0,
       created_at: '',
+    });
+    expect(jobs[0].error_code).toBe('ssh_host_key_mismatch');
+  });
+
+  it('resets a device SSH host key with CSRF headers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse({
+        data: {
+          target: '10.8.20.1',
+          port: 22,
+          removed: true,
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(resetSSHHostKey('dev-1')).resolves.toEqual({
+      target: '10.8.20.1',
+      port: 22,
+      removed: true,
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/devices/dev-1/ssh-host-key/reset', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': 'backup-csrf',
+      },
+      body: undefined,
     });
   });
 

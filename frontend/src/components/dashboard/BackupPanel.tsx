@@ -3,7 +3,12 @@
  * Keeps table, backup, and device-management responsibilities isolated by module.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchBackupJob, fetchLatestBackupJob, triggerBackup } from '../../api/client';
+import {
+  fetchBackupJob,
+  fetchLatestBackupJob,
+  resetSSHHostKey,
+  triggerBackup,
+} from '../../api/client';
 import { type BackupJob, type Device } from '../../types/api';
 
 interface BackupPanelProps {
@@ -16,6 +21,9 @@ export function BackupPanel({ device }: BackupPanelProps) {
   const [triggering, setTriggering] = useState(false);
   const [triggerResult, setTriggerResult] = useState<BackupJob | null>(null);
   const [error, setError] = useState('');
+  const [hostKeyResetMessage, setHostKeyResetMessage] = useState('');
+  const [hostKeyResetError, setHostKeyResetError] = useState('');
+  const [resettingHostKey, setResettingHostKey] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const backupSupported = device.backup_supported;
@@ -59,6 +67,8 @@ export function BackupPanel({ device }: BackupPanelProps) {
   const handleBackup = async () => {
     setTriggering(true);
     setError('');
+    setHostKeyResetMessage('');
+    setHostKeyResetError('');
     setTriggerResult(null);
     try {
       const result = await triggerBackup(device.id);
@@ -68,6 +78,25 @@ export function BackupPanel({ device }: BackupPanelProps) {
       setError(err instanceof Error ? err.message : 'Backup failed');
     } finally {
       setTriggering(false);
+    }
+  };
+
+  const handleResetSSHHostKey = async () => {
+    const confirmed = window.confirm(
+      'Reset the saved SSH host key for this device? Continue only if the node was intentionally replaced.',
+    );
+    if (!confirmed) return;
+
+    setResettingHostKey(true);
+    setHostKeyResetMessage('');
+    setHostKeyResetError('');
+    try {
+      await resetSSHHostKey(device.id);
+      setHostKeyResetMessage('SSH host key reset. Run backup again to trust the new key.');
+    } catch (err) {
+      setHostKeyResetError(err instanceof Error ? err.message : 'Failed to reset SSH host key');
+    } finally {
+      setResettingHostKey(false);
     }
   };
 
@@ -88,6 +117,8 @@ export function BackupPanel({ device }: BackupPanelProps) {
   };
 
   const totalSize = latest?.files?.reduce((sum, f) => sum + f.size_bytes, 0) ?? 0;
+  const hasHostKeyMismatch =
+    triggerResult?.status === 'failed' && triggerResult.error_code === 'ssh_host_key_mismatch';
 
   return (
     <div className="space-y-4 transition-colors duration-200">
@@ -162,6 +193,28 @@ export function BackupPanel({ device }: BackupPanelProps) {
           {triggerResult.error_message && (
             <div className="text-[10px] text-on-bg-secondary mt-1">
               {triggerResult.error_message}
+            </div>
+          )}
+          {hasHostKeyMismatch && (
+            <div className="mt-3 rounded-md border border-warning/30 bg-warning/10 p-3">
+              <div className="text-xs font-medium text-warning">SSH host key changed</div>
+              <div className="mt-1 text-[10px] text-on-bg-secondary">
+                Reset the saved key only after confirming this device was replaced.
+              </div>
+              <button
+                type="button"
+                onClick={handleResetSSHHostKey}
+                disabled={resettingHostKey}
+                className="mt-2 rounded px-2 py-1 text-[10px] font-medium text-warning border border-warning/40 hover:bg-warning/10 disabled:opacity-50 transition-colors"
+              >
+                {resettingHostKey ? 'Resetting...' : 'Reset SSH host key'}
+              </button>
+              {hostKeyResetMessage && (
+                <div className="mt-2 text-[10px] text-status-up">{hostKeyResetMessage}</div>
+              )}
+              {hostKeyResetError && (
+                <div className="mt-2 text-[10px] text-status-down">{hostKeyResetError}</div>
+              )}
             </div>
           )}
         </div>

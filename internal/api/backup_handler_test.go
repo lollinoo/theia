@@ -618,6 +618,37 @@ func (d *mockSSHDialerForBackup) Dial(addr string, config *gossh.ClientConfig) (
 	return nil, nil
 }
 
+type backupProfileRepoForHostKeyReset struct {
+	*mockCredentialProfileRepo
+	profile *domain.CredentialProfile
+}
+
+func (r *backupProfileRepoForHostKeyReset) GetBackupProfileForDevice(uuid.UUID) (*domain.CredentialProfile, error) {
+	if r.profile == nil {
+		return nil, fmt.Errorf("no credential profile assigned")
+	}
+	cp := *r.profile
+	return &cp, nil
+}
+
+type backupHostKeyStoreForHandler struct {
+	host    string
+	port    int
+	removed bool
+	err     error
+	calls   int
+}
+
+func (s *backupHostKeyStoreForHandler) RemoveHost(host string, port int) (bool, error) {
+	s.host = host
+	s.port = port
+	s.calls++
+	if s.err != nil {
+		return false, s.err
+	}
+	return s.removed, nil
+}
+
 func decodeBackupContentData(t *testing.T, body io.Reader) map[string]interface{} {
 	t.Helper()
 
@@ -840,6 +871,37 @@ func TestBackupHandlerGetBackupJob_HappyPath(t *testing.T) {
 	}
 }
 
+func TestBackupHandlerGetBackupJobIncludesHostKeyMismatchErrorCode(t *testing.T) {
+	handler, jobRepo, _ := setupBackupHandler(t)
+
+	job := &domain.BackupJob{
+		ID:           uuid.New(),
+		DeviceID:     uuid.New(),
+		Status:       domain.BackupStatusFailed,
+		ErrorMessage: "SSH connection to 10.8.20.1 failed: SSH dial 10.8.20.1:22: ssh: handshake failed: SSH host key mismatch for 10.8.20.1:22 (possible MITM attack; delete old entry from known_hosts)",
+	}
+	jobRepo.Create(job)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-jobs/"+job.ID.String(), nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetBackupJob(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ErrorCode string `json:"error_code"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Data.ErrorCode != "ssh_host_key_mismatch" {
+		t.Fatalf("error_code = %q, want ssh_host_key_mismatch", resp.Data.ErrorCode)
+	}
+}
+
 func TestBackupHandlerGetBackupJob_NotFound(t *testing.T) {
 	handler, _, _ := setupBackupHandler(t)
 
@@ -881,6 +943,85 @@ func TestBackupHandlerTriggerBackup_InvalidID(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestBackupHandlerResetSSHHostKeyResetsBackupTargetAndAudits(t *testing.T) {
+	jobRepo := newBackupJobRepoForHandler()
+	fileRepo := newBackupFileRepoForHandler()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockSettingsRepo()
+	hostKeyStore := &backupHostKeyStoreForHandler{removed: true}
+	auditRepo := newBackupAuditRepoForHandler()
+	deviceID := uuid.New()
+	profile := &domain.CredentialProfile{
+		ID:         uuid.New(),
+		Name:       "backup-profile",
+		Username:   "admin",
+		Port:       2222,
+		AuthMethod: domain.SSHAuthPassword,
+		Role:       "Admin",
+	}
+	credentialProfileRepo := &backupProfileRepoForHostKeyReset{
+		mockCredentialProfileRepo: newMockCredentialProfileRepo(),
+		profile:                   profile,
+	}
+	if err := deviceRepo.Create(&domain.Device{
+		ID: deviceID,
+		IP: "192.0.2.10",
+		Addresses: []domain.DeviceAddress{{
+			Address:  "10.8.20.1",
+			Role:     domain.DeviceAddressRoleBackup,
+			Priority: 10,
+		}},
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	backupSvc := service.NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		nil, &mockSSHDialerForBackup{}, crypto.DeriveKey("test-host-key-reset"), t.TempDir(),
+		gossh.InsecureIgnoreHostKey(),
+		service.WithSSHHostKeyStore(hostKeyStore),
+	)
+	handler := NewBackupHandler(backupSvc, settingsRepo, WithBackupAuditLogs(auditRepo))
+
+	req := withTestOperator(httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID.String()+"/ssh-host-key/reset", nil))
+	rec := httptest.NewRecorder()
+	handler.HandleResetSSHHostKey(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Target  string `json:"target"`
+			Port    int    `json:"port"`
+			Removed bool   `json:"removed"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Data.Target != "10.8.20.1" || resp.Data.Port != 2222 || !resp.Data.Removed {
+		t.Fatalf("response data = %+v, want target 10.8.20.1 port 2222 removed true", resp.Data)
+	}
+	if hostKeyStore.calls != 1 || hostKeyStore.host != "10.8.20.1" || hostKeyStore.port != 2222 {
+		t.Fatalf("RemoveHost call = (%q, %d) x%d, want (10.8.20.1, 2222) x1",
+			hostKeyStore.host, hostKeyStore.port, hostKeyStore.calls)
+	}
+	logEntry, ok := findBackupAuditAction(auditRepo.auditLogs(), "backup.ssh_host_key_reset")
+	if !ok {
+		t.Fatalf("expected backup.ssh_host_key_reset audit log, got %#v", auditRepo.auditLogs())
+	}
+	if logEntry.Resource != "device" || logEntry.ResourceID != deviceID.String() {
+		t.Fatalf("audit resource = %q/%q, want device/%s", logEntry.Resource, logEntry.ResourceID, deviceID)
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntry.MetadataJSON), &metadata); err != nil {
+		t.Fatalf("decode audit metadata: %v", err)
+	}
+	if metadata["target"] != "10.8.20.1" || metadata["port"] != float64(2222) || metadata["removed"] != true {
+		t.Fatalf("audit metadata = %#v, want target/port/removed", metadata)
 	}
 }
 

@@ -612,6 +612,24 @@ func (r *mockCredentialProfileRepo) GetBackupProfileForDevice(deviceID uuid.UUID
 	return nil, fmt.Errorf("no credential profile assigned to device %s", deviceID)
 }
 
+type recordingSSHHostKeyStore struct {
+	host    string
+	port    int
+	removed bool
+	err     error
+	calls   int
+}
+
+func (s *recordingSSHHostKeyStore) RemoveHost(host string, port int) (bool, error) {
+	s.host = host
+	s.port = port
+	s.calls++
+	if s.err != nil {
+		return false, s.err
+	}
+	return s.removed, nil
+}
+
 // mockBackupSettingsRepo implements domain.SettingsRepository for backup tests.
 type mockBackupSettingsRepo struct {
 	settings map[string]string
@@ -2855,6 +2873,59 @@ func TestTriggerBackup_NoCredentialProfileAssigned(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no credential profile") {
 		t.Errorf("expected error to contain %q, got %q", "no credential profile", err.Error())
+	}
+}
+
+func TestResetSSHHostKeyRemovesBackupAddressWithProfilePort(t *testing.T) {
+	credentialProfileRepo := newMockCredentialProfileRepo()
+	deviceRepo := newMockDeviceRepo()
+	hostKeyStore := &recordingSSHHostKeyStore{removed: true}
+	deviceID := uuid.New()
+
+	if err := credentialProfileRepo.Create(&domain.CredentialProfile{
+		ID:         uuid.New(),
+		Name:       "backup-profile",
+		Username:   "admin",
+		Port:       2222,
+		AuthMethod: domain.SSHAuthPassword,
+		Role:       "Admin",
+	}); err != nil {
+		t.Fatalf("Create profile: %v", err)
+	}
+	if err := deviceRepo.Create(&domain.Device{
+		ID:     deviceID,
+		IP:     "192.0.2.10",
+		Vendor: "testvendor",
+		Addresses: []domain.DeviceAddress{{
+			Address:  "10.8.20.1",
+			Role:     domain.DeviceAddressRoleBackup,
+			Priority: 10,
+		}},
+	}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	svc := NewBackupService(
+		nil, nil, credentialProfileRepo, deviceRepo, nil,
+		nil, nil, nil, "", nil,
+		WithSSHHostKeyStore(hostKeyStore),
+	)
+
+	result, err := svc.ResetSSHHostKey(context.Background(), deviceID)
+	if err != nil {
+		t.Fatalf("ResetSSHHostKey: %v", err)
+	}
+	if result.Target != "10.8.20.1" {
+		t.Fatalf("Target = %q, want backup address", result.Target)
+	}
+	if result.Port != 2222 {
+		t.Fatalf("Port = %d, want 2222", result.Port)
+	}
+	if !result.Removed {
+		t.Fatal("Removed = false, want true")
+	}
+	if hostKeyStore.calls != 1 || hostKeyStore.host != "10.8.20.1" || hostKeyStore.port != 2222 {
+		t.Fatalf("RemoveHost call = (%q, %d) x%d, want (10.8.20.1, 2222) x1",
+			hostKeyStore.host, hostKeyStore.port, hostKeyStore.calls)
 	}
 }
 

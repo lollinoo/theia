@@ -27,6 +27,27 @@ export async function triggerBackup(deviceId: string): Promise<BackupJob> {
   return parseBackupJob(data);
 }
 
+/** Describes the SSH host-key reset response for a device backup target. */
+export type SSHHostKeyResetResult = {
+  target: string;
+  port: number;
+  removed: boolean;
+};
+
+// resetSSHHostKey removes the remembered SSH host key for a device backup target.
+export async function resetSSHHostKey(deviceId: string): Promise<SSHHostKeyResetResult> {
+  const response = await requestJSONWithBody(
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/ssh-host-key/reset`,
+    'POST',
+  );
+  const data = (response as Record<string, unknown>)?.data as Record<string, unknown>;
+  return {
+    target: typeof data?.target === 'string' ? data.target : '',
+    port: typeof data?.port === 'number' ? data.port : 0,
+    removed: data?.removed === true,
+  };
+}
+
 // startBulkBackupRun starts a tracked bulk backup run and accepts conflict payloads as current state.
 export async function startBulkBackupRun(deviceIds: string[]): Promise<BulkBackupRun> {
   const payload = await requestBulkJSON(
