@@ -1303,7 +1303,20 @@ func seedAuthSystemRolesAndPermissions(db *sql.DB) error {
 
 	for _, roleName := range domain.SystemRoleNames() {
 		roleID := roleIDs[roleName]
-		for _, permissionKey := range domain.SystemRolePermissionKeys(roleName) {
+		permissionKeys := domain.SystemRolePermissionKeys(roleName)
+		if roleName != domain.RoleSuperAdmin {
+			var assignedCount int
+			if err := queryDB.QueryRow(
+				`SELECT COUNT(*) FROM role_permissions WHERE role_id = ?`,
+				roleID,
+			).Scan(&assignedCount); err != nil {
+				return fmt.Errorf("counting auth role %q permissions: %w", roleName, err)
+			}
+			if assignedCount > 0 {
+				continue
+			}
+		}
+		for _, permissionKey := range permissionKeys {
 			permissionID, ok := permissionIDs[permissionKey]
 			if !ok {
 				return fmt.Errorf("seeding auth role %q: unknown permission %q", roleName, permissionKey)

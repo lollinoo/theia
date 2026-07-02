@@ -242,7 +242,9 @@ type UserRepository interface {
 type RoleRepository interface {
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListPermissions(ctx context.Context) ([]Permission, error)
+	ListRolePermissions(ctx context.Context, roleID string) ([]Permission, error)
 	GetRoleByName(ctx context.Context, name string) (*Role, error)
+	ReplaceRolePermissions(ctx context.Context, roleID string, permissionKeys []string) error
 	AssignRole(ctx context.Context, userID uuid.UUID, roleID string, createdBy *uuid.UUID) error
 	RemoveRole(ctx context.Context, userID uuid.UUID, roleID string) error
 	RemoveRolePreservingLastActiveSuperAdmin(ctx context.Context, userID uuid.UUID, roleID string) error
