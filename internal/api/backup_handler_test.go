@@ -612,9 +612,14 @@ func setupBackupHandler(t *testing.T) (*BackupHandler, *backupJobRepoForHandler,
 	return handler, jobRepo, fileRepo
 }
 
-type mockSSHDialerForBackup struct{}
+type mockSSHDialerForBackup struct {
+	err error
+}
 
 func (d *mockSSHDialerForBackup) Dial(addr string, config *gossh.ClientConfig) (*gossh.Client, error) {
+	if d.err != nil {
+		return nil, d.err
+	}
 	return nil, nil
 }
 
@@ -943,6 +948,61 @@ func TestBackupHandlerTriggerBackup_InvalidID(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestBackupHandlerTestSSHIncludesHostKeyMismatchErrorCode(t *testing.T) {
+	jobRepo := newBackupJobRepoForHandler()
+	fileRepo := newBackupFileRepoForHandler()
+	deviceRepo := newMockDeviceRepo()
+	settingsRepo := newMockSettingsRepo()
+	deviceID := uuid.New()
+	profile := &domain.CredentialProfile{
+		ID:         uuid.New(),
+		Name:       "backup-profile",
+		Username:   "admin",
+		Port:       22,
+		AuthMethod: domain.SSHAuthPassword,
+		Role:       "Admin",
+	}
+	credentialProfileRepo := &backupProfileRepoForHostKeyReset{
+		mockCredentialProfileRepo: newMockCredentialProfileRepo(),
+		profile:                   profile,
+	}
+	if err := deviceRepo.Create(&domain.Device{ID: deviceID, IP: "10.8.20.1"}); err != nil {
+		t.Fatalf("Create device: %v", err)
+	}
+	backupSvc := service.NewBackupService(
+		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
+		nil, &mockSSHDialerForBackup{err: fmt.Errorf("ssh: handshake failed: SSH host key mismatch for 10.8.20.1:22")},
+		crypto.DeriveKey("test-ssh-host-key-mismatch"), t.TempDir(),
+		gossh.InsecureIgnoreHostKey(),
+	)
+	handler := NewBackupHandler(backupSvc, settingsRepo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID.String()+"/ssh-credentials/test", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleTestSSH(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Success   bool   `json:"success"`
+		Error     string `json:"error"`
+		ErrorCode string `json:"error_code"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Success {
+		t.Fatal("success = true, want false")
+	}
+	if resp.ErrorCode != service.BackupJobErrorCodeSSHHostKeyMismatch {
+		t.Fatalf("error_code = %q, want %q", resp.ErrorCode, service.BackupJobErrorCodeSSHHostKeyMismatch)
+	}
+	if !strings.Contains(resp.Error, "SSH host key mismatch") {
+		t.Fatalf("error = %q, want host-key mismatch detail", resp.Error)
 	}
 }
 

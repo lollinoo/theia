@@ -92,8 +92,9 @@ func (h *BackupHandler) HandleTestSSH(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.svc.TestSSHConnection(r.Context(), deviceID); err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
+			"success":    false,
+			"error":      err.Error(),
+			"error_code": service.BackupJobErrorCode(err.Error()),
 		})
 		return
 	}

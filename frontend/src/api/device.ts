@@ -416,10 +416,15 @@ export async function createBridgeLaunchRequest(
   };
 }
 
+/** Describes the backend SSH credential probe result for one device. */
+export type SSHConnectionTestResult = {
+  success: boolean;
+  error?: string;
+  error_code?: string;
+};
+
 // testSSHConnection runs the backend SSH credential probe for one device.
-export async function testSSHConnection(
-  deviceId: string,
-): Promise<{ success: boolean; error?: string }> {
+export async function testSSHConnection(deviceId: string): Promise<SSHConnectionTestResult> {
   const response = await requestJSONWithBody(
     `/api/v1/devices/${encodeURIComponent(deviceId)}/ssh-credentials/test`,
     'POST',
@@ -428,5 +433,6 @@ export async function testSSHConnection(
   return {
     success: data.success === true,
     error: typeof data.error === 'string' ? data.error : undefined,
+    error_code: typeof data.error_code === 'string' ? data.error_code : undefined,
   };
 }

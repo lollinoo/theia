@@ -10,6 +10,7 @@ import {
   fetchDevices,
   fetchLinks,
   testSNMPConnection,
+  testSSHConnection,
 } from './device';
 import { ValidationError } from './errors';
 
@@ -181,6 +182,25 @@ describe('device client', () => {
       target_ip: '10.0.0.1',
       snmp_version: '2c',
       error: undefined,
+    });
+  });
+
+  it('parses SSH test host-key mismatch error codes', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse({
+          success: false,
+          error: 'SSH connection to 10.8.20.1 failed: SSH host key mismatch for 10.8.20.1:22',
+          error_code: 'ssh_host_key_mismatch',
+        }),
+      ),
+    );
+
+    await expect(testSSHConnection('device-1')).resolves.toEqual({
+      success: false,
+      error: 'SSH connection to 10.8.20.1 failed: SSH host key mismatch for 10.8.20.1:22',
+      error_code: 'ssh_host_key_mismatch',
     });
   });
 });
