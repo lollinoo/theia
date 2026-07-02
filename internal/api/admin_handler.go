@@ -29,6 +29,7 @@ type adminProvider interface {
 	RemoveAdminUserRole(rctx context.Context, actor *service.AuthenticatedUser, input service.AdminUserRoleInput) (*domain.UserWithRolesAndPermissions, error)
 	CreateAdminPasswordResetToken(rctx context.Context, actor *service.AuthenticatedUser, userID uuid.UUID) (*service.PasswordResetTokenResult, error)
 	ListAdminRoles(rctx context.Context, actor *service.AuthenticatedUser) ([]service.AdminRole, error)
+	UpdateAdminRolePermissions(rctx context.Context, actor *service.AuthenticatedUser, input service.AdminRolePermissionsInput) (*service.AdminRole, error)
 	ListAdminPermissions(rctx context.Context, actor *service.AuthenticatedUser) ([]domain.Permission, error)
 	ListAdminAuditLogs(rctx context.Context, actor *service.AuthenticatedUser, filter domain.AuditLogFilter) ([]domain.AuditLog, error)
 }
@@ -107,6 +108,10 @@ func (h *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/v1/admin/users/") {
 		h.handleUserRoute(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/v1/admin/roles/") {
+		h.handleRoleRoute(w, r)
 		return
 	}
 	if r.URL.Path == "/api/v1/admin/roles" {
@@ -378,6 +383,45 @@ func (h *AdminHandler) handlePasswordReset(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+func (h *AdminHandler) handleRoleRoute(w http.ResponseWriter, r *http.Request) {
+	roleID, action, ok := parseAdminRoleRoute(r.URL.Path)
+	if !ok {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if action != "permissions" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if r.Method != http.MethodPatch {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	h.handleUpdateRolePermissions(w, r, roleID)
+}
+
+func (h *AdminHandler) handleUpdateRolePermissions(w http.ResponseWriter, r *http.Request, roleID string) {
+	actor, ok := h.requireActor(w, r)
+	if !ok || !requirePermission(w, h.auth, actor, domain.PermissionRolesUpdate) {
+		return
+	}
+	var req struct {
+		Permissions []string `json:"permissions"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	role, err := h.auth.UpdateAdminRolePermissions(r.Context(), actor, service.AdminRolePermissionsInput{
+		RoleID:      roleID,
+		Permissions: req.Permissions,
+	})
+	if err != nil {
+		writeAdminError(w, err)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"role": adminRoleFromService(*role)})
+}
+
 func (h *AdminHandler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 	actor, ok := h.requireActor(w, r)
 	if !ok || !requirePermission(w, h.auth, actor, domain.PermissionRolesRead) {
@@ -390,13 +434,7 @@ func (h *AdminHandler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]adminRoleResponse, 0, len(roles))
 	for _, role := range roles {
-		out = append(out, adminRoleResponse{
-			ID:           role.Role.ID,
-			Name:         role.Role.Name,
-			Description:  role.Role.Description,
-			IsSystemRole: role.Role.IsSystemRole,
-			Permissions:  append([]string(nil), role.PermissionKeys...),
-		})
+		out = append(out, adminRoleFromService(role))
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"roles": out})
 }
@@ -463,6 +501,25 @@ func parseAdminUserRoute(path string) (uuid.UUID, string, bool) {
 	return userID, strings.Join(parts[1:], "/"), true
 }
 
+func parseAdminRoleRoute(path string) (string, string, bool) {
+	const prefix = "/api/v1/admin/roles/"
+	suffix, ok := strings.CutPrefix(path, prefix)
+	if !ok || suffix == "" {
+		return "", "", false
+	}
+	parts := strings.SplitN(suffix, "/", 2)
+	if strings.TrimSpace(parts[0]) == "" {
+		return "", "", false
+	}
+	if len(parts) == 1 {
+		return parts[0], "", true
+	}
+	if strings.TrimSpace(parts[1]) == "" || strings.Contains(parts[1], "//") {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
 func parseUserListFilter(r *http.Request) domain.UserListFilter {
 	values := r.URL.Query()
 	return domain.UserListFilter{
@@ -504,6 +561,16 @@ func parseOptionalUUID(value string) *uuid.UUID {
 		return nil
 	}
 	return &parsed
+}
+
+func adminRoleFromService(role service.AdminRole) adminRoleResponse {
+	return adminRoleResponse{
+		ID:           role.Role.ID,
+		Name:         role.Role.Name,
+		Description:  role.Role.Description,
+		IsSystemRole: role.Role.IsSystemRole,
+		Permissions:  append([]string(nil), role.PermissionKeys...),
+	}
 }
 
 func adminDashboardStatsFromDomain(stats *domain.AdminDashboardStats) adminDashboardStatsResponse {
