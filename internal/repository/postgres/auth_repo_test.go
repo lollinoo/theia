@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -272,6 +273,68 @@ func TestAuthSeedPreservesManualEditableRolePermissionRemoval(t *testing.T) {
 	}
 	if len(superPermissions) != len(domain.SystemPermissions()) {
 		t.Fatalf("super_admin permission count after reseed = %d, want %d", len(superPermissions), len(domain.SystemPermissions()))
+	}
+}
+
+func TestAuthSeedRollsBackRoleExistenceSignalOnPermissionFailure(t *testing.T) {
+	db := setupTestDB(t)
+	if _, err := db.Exec(`
+		CREATE OR REPLACE FUNCTION fail_auth_seed_permission_insert()
+		RETURNS trigger
+		LANGUAGE plpgsql
+		AS $$
+		BEGIN
+			RAISE EXCEPTION 'intentional auth seed permission failure';
+		END;
+		$$;
+
+		CREATE TRIGGER fail_auth_seed_permission_insert
+		BEFORE INSERT ON permissions
+		FOR EACH ROW
+		EXECUTE FUNCTION fail_auth_seed_permission_insert();
+	`); err != nil {
+		t.Fatalf("installing permission insert failure trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`
+			DROP TRIGGER IF EXISTS fail_auth_seed_permission_insert ON permissions;
+			DROP FUNCTION IF EXISTS fail_auth_seed_permission_insert();
+		`)
+	})
+
+	err := seedAuthSystemRolesAndPermissions(db)
+	if err == nil {
+		t.Fatal("seed with failing permission insert returned nil error")
+	}
+	if !strings.Contains(err.Error(), "seeding auth system permission") {
+		t.Fatalf("seed error = %v, want permission seeding context", err)
+	}
+
+	var roleCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM roles`).Scan(&roleCount); err != nil {
+		t.Fatalf("counting roles after failed seed: %v", err)
+	}
+	if roleCount != 0 {
+		t.Fatalf("roles after failed seed = %d, want 0", roleCount)
+	}
+
+	if _, err := db.Exec(`
+		DROP TRIGGER IF EXISTS fail_auth_seed_permission_insert ON permissions;
+		DROP FUNCTION IF EXISTS fail_auth_seed_permission_insert();
+	`); err != nil {
+		t.Fatalf("dropping permission insert failure trigger: %v", err)
+	}
+	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
+		t.Fatalf("retry seed: %v", err)
+	}
+
+	repo := NewAuthRepo(db)
+	userPermissions, err := repo.ListRolePermissions(context.Background(), domain.RoleUser)
+	if err != nil {
+		t.Fatalf("ListRolePermissions user after retry: %v", err)
+	}
+	if len(userPermissions) != len(domain.SystemRolePermissionKeys(domain.RoleUser)) {
+		t.Fatalf("user permission count after retry = %d, want %d", len(userPermissions), len(domain.SystemRolePermissionKeys(domain.RoleUser)))
 	}
 }
 

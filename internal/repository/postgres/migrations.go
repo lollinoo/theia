@@ -1253,6 +1253,12 @@ func seedDefaultSettings(db *sql.DB) error {
 
 func seedAuthSystemRolesAndPermissions(db *sql.DB) error {
 	queryDB := wrapDB(db)
+	tx, err := queryDB.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning auth system roles and permissions seed transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	now := time.Now().UTC()
 
 	roleIDs := make(map[string]string, len(domain.SystemRoleNames()))
@@ -1260,7 +1266,7 @@ func seedAuthSystemRolesAndPermissions(db *sql.DB) error {
 	for _, roleName := range domain.SystemRoleNames() {
 		description := authSystemRoleDescription(roleName)
 		var existed bool
-		if err := queryDB.QueryRow(
+		if err := tx.QueryRow(
 			`SELECT EXISTS (SELECT 1 FROM roles WHERE name = ?)`,
 			roleName,
 		).Scan(&existed); err != nil {
@@ -1269,7 +1275,7 @@ func seedAuthSystemRolesAndPermissions(db *sql.DB) error {
 		roleExisted[roleName] = existed
 
 		var roleID string
-		if err := queryDB.QueryRow(
+		if err := tx.QueryRow(
 			`INSERT INTO roles (id, name, description, is_system_role, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(name) DO UPDATE SET
@@ -1292,7 +1298,7 @@ func seedAuthSystemRolesAndPermissions(db *sql.DB) error {
 	permissionIDs := make(map[string]string, len(domain.SystemPermissions()))
 	for _, permission := range domain.SystemPermissions() {
 		var permissionID string
-		if err := queryDB.QueryRow(
+		if err := tx.QueryRow(
 			`INSERT INTO permissions (id, key, description, resource, action)
 			 VALUES (?, ?, ?, ?, ?)
 			 ON CONFLICT(key) DO UPDATE SET
@@ -1322,7 +1328,7 @@ func seedAuthSystemRolesAndPermissions(db *sql.DB) error {
 			if !ok {
 				return fmt.Errorf("seeding auth role %q: unknown permission %q", roleName, permissionKey)
 			}
-			if _, err := queryDB.Exec(
+			if _, err := tx.Exec(
 				`INSERT INTO role_permissions (role_id, permission_id)
 				 VALUES (?, ?)
 				 ON CONFLICT(role_id, permission_id) DO NOTHING`,
@@ -1334,6 +1340,9 @@ func seedAuthSystemRolesAndPermissions(db *sql.DB) error {
 		}
 	}
 
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing auth system roles and permissions seed transaction: %w", err)
+	}
 	return nil
 }
 
