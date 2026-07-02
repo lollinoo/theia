@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   fetchBackupJob,
+  fetchBackupJobs,
   fetchLatestBackupJob,
   resetSSHHostKey,
   triggerBackup,
@@ -13,6 +14,10 @@ import { type BackupJob, type Device } from '../../types/api';
 
 interface BackupPanelProps {
   device: Device;
+}
+
+function isActiveBackupJob(job: BackupJob): boolean {
+  return job.status === 'pending' || job.status === 'running';
 }
 
 /** Renders the BackupPanel component within the operations dashboard. */
@@ -63,6 +68,36 @@ export function BackupPanel({ device }: BackupPanelProps) {
     },
     [loadLatest],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    setTriggerResult(null);
+    setError('');
+    setHostKeyResetMessage('');
+    setHostKeyResetError('');
+
+    const loadActiveBackupJob = async () => {
+      try {
+        const jobs = await fetchBackupJobs(device.id);
+        if (cancelled) return;
+        const activeJob = jobs.find(isActiveBackupJob);
+        if (!activeJob) return;
+        setTriggerResult(activeJob);
+        startPolling(activeJob.id);
+      } catch {
+        // The latest-successful backup section is still useful if active-job loading fails.
+      }
+    };
+
+    void loadActiveBackupJob();
+    return () => {
+      cancelled = true;
+    };
+  }, [device.id, startPolling]);
 
   const handleBackup = async () => {
     setTriggering(true);
@@ -117,6 +152,7 @@ export function BackupPanel({ device }: BackupPanelProps) {
   };
 
   const totalSize = latest?.files?.reduce((sum, f) => sum + f.size_bytes, 0) ?? 0;
+  const activeBackupInProgress = triggerResult ? isActiveBackupJob(triggerResult) : false;
   const hasHostKeyMismatch =
     triggerResult?.status === 'failed' && triggerResult.error_code === 'ssh_host_key_mismatch';
 
@@ -156,10 +192,14 @@ export function BackupPanel({ device }: BackupPanelProps) {
           <button
             type="button"
             onClick={handleBackup}
-            disabled={triggering}
+            disabled={triggering || activeBackupInProgress}
             className="w-full rounded-md bg-primary px-3 py-2.5 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
-            {triggering ? 'Starting backup...' : 'Backup Now'}
+            {triggering
+              ? 'Starting backup...'
+              : activeBackupInProgress
+                ? 'Backup in progress...'
+                : 'Backup Now'}
           </button>
         </>
       )}

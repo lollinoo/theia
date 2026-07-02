@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchBackupJob,
+  fetchBackupJobs,
   fetchLatestBackupJob,
   resetSSHHostKey,
   triggerBackup,
@@ -14,6 +15,7 @@ import { BackupPanel } from './BackupPanel';
 
 vi.mock('../../api/client', () => ({
   fetchBackupJob: vi.fn(),
+  fetchBackupJobs: vi.fn(),
   fetchLatestBackupJob: vi.fn(),
   resetSSHHostKey: vi.fn(),
   triggerBackup: vi.fn(),
@@ -53,9 +55,17 @@ function mockBackupJob(overrides: Partial<BackupJob> = {}): BackupJob {
   };
 }
 
+async function flushPromises() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
+  vi.mocked(fetchBackupJobs).mockResolvedValue([]);
   vi.mocked(fetchLatestBackupJob).mockResolvedValue(null);
   vi.mocked(triggerBackup).mockResolvedValue(mockBackupJob({ status: 'pending' }));
   vi.mocked(resetSSHHostKey).mockResolvedValue({
@@ -68,6 +78,35 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+describe('BackupPanel active job rehydration', () => {
+  it('restores and polls an active backup job after the panel is reopened', async () => {
+    vi.mocked(fetchBackupJobs).mockResolvedValue([
+      mockBackupJob({ id: 'job-active', status: 'running' }),
+      mockBackupJob({ id: 'job-old', status: 'success' }),
+    ]);
+    vi.mocked(fetchBackupJob).mockResolvedValue(
+      mockBackupJob({ id: 'job-active', status: 'success' }),
+    );
+
+    const firstView = render(<BackupPanel device={mockDevice()} />);
+
+    await flushPromises();
+    expect(screen.getAllByText('Backup in progress...').length).toBeGreaterThan(0);
+
+    firstView.unmount();
+    render(<BackupPanel device={mockDevice()} />);
+
+    await flushPromises();
+    expect(screen.getAllByText('Backup in progress...').length).toBeGreaterThan(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(fetchBackupJob).toHaveBeenCalledWith('job-active');
+  });
 });
 
 describe('BackupPanel host-key mismatch recovery', () => {
