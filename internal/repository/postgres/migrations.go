@@ -1256,8 +1256,18 @@ func seedAuthSystemRolesAndPermissions(db *sql.DB) error {
 	now := time.Now().UTC()
 
 	roleIDs := make(map[string]string, len(domain.SystemRoleNames()))
+	roleExisted := make(map[string]bool, len(domain.SystemRoleNames()))
 	for _, roleName := range domain.SystemRoleNames() {
 		description := authSystemRoleDescription(roleName)
+		var existed bool
+		if err := queryDB.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM roles WHERE name = ?)`,
+			roleName,
+		).Scan(&existed); err != nil {
+			return fmt.Errorf("checking auth system role %q existence: %w", roleName, err)
+		}
+		roleExisted[roleName] = existed
+
 		var roleID string
 		if err := queryDB.QueryRow(
 			`INSERT INTO roles (id, name, description, is_system_role, created_at, updated_at)
@@ -1304,17 +1314,8 @@ func seedAuthSystemRolesAndPermissions(db *sql.DB) error {
 	for _, roleName := range domain.SystemRoleNames() {
 		roleID := roleIDs[roleName]
 		permissionKeys := domain.SystemRolePermissionKeys(roleName)
-		if roleName != domain.RoleSuperAdmin {
-			var assignedCount int
-			if err := queryDB.QueryRow(
-				`SELECT COUNT(*) FROM role_permissions WHERE role_id = ?`,
-				roleID,
-			).Scan(&assignedCount); err != nil {
-				return fmt.Errorf("counting auth role %q permissions: %w", roleName, err)
-			}
-			if assignedCount > 0 {
-				continue
-			}
+		if roleName != domain.RoleSuperAdmin && roleExisted[roleName] {
+			continue
 		}
 		for _, permissionKey := range permissionKeys {
 			permissionID, ok := permissionIDs[permissionKey]

@@ -246,11 +246,25 @@ func TestAuthSeedPreservesManualEditableRolePermissionRemoval(t *testing.T) {
 		t.Fatalf("user permissions after reseed = %#v, want only account:manage", userPermissions)
 	}
 
+	if _, err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, []string{}); err != nil {
+		t.Fatalf("ReplaceRolePermissions empty user before reseed: %v", err)
+	}
+	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
+		t.Fatalf("third seed: %v", err)
+	}
+	userPermissions, err = repo.ListRolePermissions(ctx, domain.RoleUser)
+	if err != nil {
+		t.Fatalf("ListRolePermissions empty user after reseed: %v", err)
+	}
+	if len(userPermissions) != 0 {
+		t.Fatalf("user permissions after empty reseed = %#v, want none", userPermissions)
+	}
+
 	if _, err := repo.ReplaceRolePermissions(ctx, domain.RoleSuperAdmin, []string{domain.PermissionAccountManage}); err != nil {
 		t.Fatalf("ReplaceRolePermissions super_admin before reseed: %v", err)
 	}
 	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
-		t.Fatalf("third seed: %v", err)
+		t.Fatalf("fourth seed: %v", err)
 	}
 	superPermissions, err := repo.ListRolePermissions(ctx, domain.RoleSuperAdmin)
 	if err != nil {
