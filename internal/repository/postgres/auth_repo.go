@@ -361,11 +361,7 @@ func (r *AuthRepo) ListRolePermissions(ctx context.Context, roleID string) ([]do
 		return nil, err
 	}
 	rows, err := r.queryContext(ctx,
-		`SELECT p.id, p.key, p.description, p.resource, p.action
-		 FROM permissions p
-		 JOIN role_permissions rp ON rp.permission_id = p.id
-		 WHERE rp.role_id = ?
-		 ORDER BY p.key ASC`,
+		rolePermissionsSelectSQL(),
 		roleID,
 	)
 	if err != nil {
@@ -388,19 +384,24 @@ func (r *AuthRepo) ListRolePermissions(ctx context.Context, roleID string) ([]do
 }
 
 // ReplaceRolePermissions replaces one role's permission grants transactionally.
-func (r *AuthRepo) ReplaceRolePermissions(ctx context.Context, roleID string, permissionKeys []string) error {
+func (r *AuthRepo) ReplaceRolePermissions(ctx context.Context, roleID string, permissionKeys []string) (*domain.RolePermissionReplacement, error) {
 	tx, err := r.db.raw.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("beginning replace auth role permissions transaction: %w", err)
+		return nil, fmt.Errorf("beginning replace auth role permissions transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	var roleExists bool
-	if err := tx.QueryRowContext(ctx, rebindQuery(`SELECT EXISTS(SELECT 1 FROM roles WHERE id = ?)`), roleID).Scan(&roleExists); err != nil {
-		return fmt.Errorf("checking auth role existence: %w", err)
+	var lockedRoleID string
+	if err := tx.QueryRowContext(ctx, rebindQuery(`SELECT id FROM roles WHERE id = ? FOR UPDATE`), roleID).Scan(&lockedRoleID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, domain.ErrAuthRoleNotFound
+		}
+		return nil, fmt.Errorf("locking auth role for permission replacement: %w", err)
 	}
-	if !roleExists {
-		return domain.ErrAuthRoleNotFound
+
+	oldPermissions, err := listRolePermissionsTx(ctx, tx, roleID)
+	if err != nil {
+		return nil, err
 	}
 
 	permissionIDs := make([]string, 0, len(permissionKeys))
@@ -408,15 +409,15 @@ func (r *AuthRepo) ReplaceRolePermissions(ctx context.Context, roleID string, pe
 		var permissionID string
 		if err := tx.QueryRowContext(ctx, rebindQuery(`SELECT id FROM permissions WHERE key = ?`), key).Scan(&permissionID); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return domain.ErrAuthRoleNotFound
+				return nil, domain.ErrAuthRoleNotFound
 			}
-			return fmt.Errorf("checking auth permission %q: %w", key, err)
+			return nil, fmt.Errorf("checking auth permission %q: %w", key, err)
 		}
 		permissionIDs = append(permissionIDs, permissionID)
 	}
 
 	if _, err := tx.ExecContext(ctx, rebindQuery(`DELETE FROM role_permissions WHERE role_id = ?`), roleID); err != nil {
-		return fmt.Errorf("clearing auth role permissions: %w", err)
+		return nil, fmt.Errorf("clearing auth role permissions: %w", err)
 	}
 	for _, permissionID := range permissionIDs {
 		if _, err := tx.ExecContext(ctx, rebindQuery(
@@ -426,14 +427,51 @@ func (r *AuthRepo) ReplaceRolePermissions(ctx context.Context, roleID string, pe
 			roleID,
 			permissionID,
 		); err != nil {
-			return fmt.Errorf("assigning auth role permission: %w", err)
+			return nil, fmt.Errorf("assigning auth role permission: %w", err)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing replace auth role permissions transaction: %w", err)
+	newPermissions, err := listRolePermissionsTx(ctx, tx, roleID)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing replace auth role permissions transaction: %w", err)
+	}
+	return &domain.RolePermissionReplacement{
+		OldPermissions: oldPermissions,
+		NewPermissions: newPermissions,
+	}, nil
+}
+
+func rolePermissionsSelectSQL() string {
+	return `SELECT p.id, p.key, p.description, p.resource, p.action
+	        FROM permissions p
+	        JOIN role_permissions rp ON rp.permission_id = p.id
+	        WHERE rp.role_id = ?
+	        ORDER BY p.key ASC`
+}
+
+func listRolePermissionsTx(ctx context.Context, tx *sql.Tx, roleID string) ([]domain.Permission, error) {
+	rows, err := tx.QueryContext(ctx, rebindQuery(rolePermissionsSelectSQL()), roleID)
+	if err != nil {
+		return nil, fmt.Errorf("listing auth role permissions: %w", err)
+	}
+	defer rows.Close()
+
+	var permissions []domain.Permission
+	for rows.Next() {
+		permission, err := scanPermissionRows(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning auth role permission: %w", err)
+		}
+		permissions = append(permissions, *permission)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating auth role permissions: %w", err)
+	}
+	return permissions, nil
 }
 
 func (r *AuthRepo) ensureRoleExists(ctx context.Context, roleID string) error {

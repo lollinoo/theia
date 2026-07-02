@@ -411,22 +411,17 @@ func (s *AuthService) UpdateAdminRolePermissions(ctx context.Context, actor *Aut
 	if len(permissionKeys) == 0 {
 		return nil, ErrAdminInvalidInput
 	}
-	oldPermissions, err := s.roles.ListRolePermissions(ctx, role.ID)
+	replacement, err := s.roles.ReplaceRolePermissions(ctx, role.ID, permissionKeys)
 	if err != nil {
-		return nil, fmt.Errorf("listing previous admin role permissions: %w", err)
-	}
-	oldKeys := permissionKeysFromPermissions(oldPermissions)
-	if err := s.roles.ReplaceRolePermissions(ctx, role.ID, permissionKeys); err != nil {
 		return nil, fmt.Errorf("updating admin role permissions: %w", err)
 	}
-	newPermissions, err := s.roles.ListRolePermissions(ctx, role.ID)
-	if err != nil {
-		return nil, fmt.Errorf("listing updated admin role permissions: %w", err)
-	}
-	newKeys := permissionKeysFromPermissions(newPermissions)
+	oldKeys := permissionKeysFromPermissions(replacement.OldPermissions)
+	newKeys := permissionKeysFromPermissions(replacement.NewPermissions)
 	metadata, err := json.Marshal(map[string]interface{}{
 		"added_permissions":   stringSetDifference(newKeys, oldKeys),
 		"removed_permissions": stringSetDifference(oldKeys, newKeys),
+		"old_permissions":     oldKeys,
+		"new_permissions":     newKeys,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encoding role permission audit metadata: %w", err)

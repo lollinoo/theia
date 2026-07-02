@@ -136,8 +136,20 @@ func TestAuthRepoListAndReplaceRolePermissions(t *testing.T) {
 		domain.PermissionDevicesRead,
 		domain.PermissionBridgeTokenCreate,
 	}
-	if err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, nextKeys); err != nil {
+	replacement, err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, nextKeys)
+	if err != nil {
 		t.Fatalf("ReplaceRolePermissions: %v", err)
+	}
+	if !containsPermissionKey(permissionKeys(replacement.OldPermissions), domain.PermissionAccountManage) {
+		t.Fatalf("old permissions missing account manage: %#v", replacement.OldPermissions)
+	}
+	for _, key := range nextKeys {
+		if !containsPermissionKey(permissionKeys(replacement.NewPermissions), key) {
+			t.Fatalf("new permission snapshot missing %q: %#v", key, replacement.NewPermissions)
+		}
+	}
+	if len(replacement.NewPermissions) != len(nextKeys) {
+		t.Fatalf("new permission snapshot count = %d, want %d: %#v", len(replacement.NewPermissions), len(nextKeys), replacement.NewPermissions)
 	}
 	replaced, err := repo.ListRolePermissions(ctx, domain.RoleUser)
 	if err != nil {
@@ -153,13 +165,62 @@ func TestAuthRepoListAndReplaceRolePermissions(t *testing.T) {
 	}
 }
 
+func TestAuthRepoReplaceRolePermissionsWaitsForRoleRowLock(t *testing.T) {
+	db := setupTestDB(t)
+	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
+		t.Fatalf("seeding auth roles and permissions: %v", err)
+	}
+	repo := NewAuthRepo(db)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	lockTx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin lock transaction: %v", err)
+	}
+	var roleID string
+	if err := lockTx.QueryRowContext(ctx, rebindQuery(`SELECT id FROM roles WHERE id = ? FOR UPDATE`), domain.RoleUser).Scan(&roleID); err != nil {
+		_ = lockTx.Rollback()
+		t.Fatalf("locking role row: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, nil)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		_ = lockTx.Rollback()
+		if err != nil {
+			t.Fatalf("ReplaceRolePermissions completed before lock release with error: %v", err)
+		}
+		t.Fatal("ReplaceRolePermissions completed while the role row lock was still held")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := lockTx.Commit(); err != nil {
+		t.Fatalf("releasing role row lock: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ReplaceRolePermissions after lock release: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReplaceRolePermissions did not complete after releasing the role row lock")
+	}
+}
+
 func TestAuthRepoReplaceRolePermissionsRejectsUnknownReferences(t *testing.T) {
 	repo, ctx := newAuthRepoForTest(t)
 
-	if err := repo.ReplaceRolePermissions(ctx, "missing-role", []string{domain.PermissionAccountManage}); !errors.Is(err, domain.ErrAuthRoleNotFound) {
+	if _, err := repo.ReplaceRolePermissions(ctx, "missing-role", []string{domain.PermissionAccountManage}); !errors.Is(err, domain.ErrAuthRoleNotFound) {
 		t.Fatalf("unknown role error = %v, want ErrAuthRoleNotFound", err)
 	}
-	if err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, []string{"missing:permission"}); !errors.Is(err, domain.ErrAuthRoleNotFound) {
+	if _, err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, []string{"missing:permission"}); !errors.Is(err, domain.ErrAuthRoleNotFound) {
 		t.Fatalf("unknown permission error = %v, want ErrAuthRoleNotFound", err)
 	}
 }
@@ -171,7 +232,7 @@ func TestAuthSeedPreservesManualEditableRolePermissionRemoval(t *testing.T) {
 	}
 	repo := NewAuthRepo(db)
 	ctx := context.Background()
-	if err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, []string{domain.PermissionAccountManage}); err != nil {
+	if _, err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, []string{domain.PermissionAccountManage}); err != nil {
 		t.Fatalf("ReplaceRolePermissions before reseed: %v", err)
 	}
 	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
@@ -185,7 +246,7 @@ func TestAuthSeedPreservesManualEditableRolePermissionRemoval(t *testing.T) {
 		t.Fatalf("user permissions after reseed = %#v, want only account:manage", userPermissions)
 	}
 
-	if err := repo.ReplaceRolePermissions(ctx, domain.RoleSuperAdmin, []string{domain.PermissionAccountManage}); err != nil {
+	if _, err := repo.ReplaceRolePermissions(ctx, domain.RoleSuperAdmin, []string{domain.PermissionAccountManage}); err != nil {
 		t.Fatalf("ReplaceRolePermissions super_admin before reseed: %v", err)
 	}
 	if err := seedAuthSystemRolesAndPermissions(db); err != nil {

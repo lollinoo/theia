@@ -1158,6 +1158,17 @@ func TestAuthServiceUpdatesAdminRolePermissionsAndAudits(t *testing.T) {
 		domain.PermissionDevicesRead,
 		domain.PermissionDevicesUpdate,
 		domain.PermissionBackupsRead,
+	}, []string{
+		domain.PermissionAccountManage,
+		domain.PermissionSettingsRead,
+		domain.PermissionTopologyRead,
+		domain.PermissionTopologyUpdate,
+		domain.PermissionDevicesRead,
+		domain.PermissionDevicesUpdate,
+		domain.PermissionBackupsRead,
+	}, []string{
+		domain.PermissionAccountManage,
+		domain.PermissionBridgeTokenCreate,
 	})
 }
 
@@ -1651,6 +1662,31 @@ func (s *fakeAuthStore) ListRolePermissions(_ context.Context, roleID string) ([
 	if _, ok := s.roles[roleID]; !ok {
 		return nil, domain.ErrAuthRoleNotFound
 	}
+	return s.rolePermissionsLocked(roleID), nil
+}
+
+func (s *fakeAuthStore) ReplaceRolePermissions(_ context.Context, roleID string, permissionKeys []string) (*domain.RolePermissionReplacement, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.roles[roleID]; !ok {
+		return nil, domain.ErrAuthRoleNotFound
+	}
+	for _, key := range permissionKeys {
+		if _, ok := s.permissions[key]; !ok {
+			return nil, domain.ErrAuthRoleNotFound
+		}
+	}
+	oldPermissions := s.rolePermissionsLocked(roleID)
+	s.replaceRolePermissionsLocked(roleID, permissionKeys)
+	newPermissions := s.rolePermissionsLocked(roleID)
+	return &domain.RolePermissionReplacement{
+		OldPermissions: oldPermissions,
+		NewPermissions: newPermissions,
+	}, nil
+}
+
+func (s *fakeAuthStore) rolePermissionsLocked(roleID string) []domain.Permission {
 	permissions := make([]domain.Permission, 0, len(s.rolePermissions[roleID]))
 	for key := range s.rolePermissions[roleID] {
 		permissions = append(permissions, s.permissions[key])
@@ -1658,23 +1694,7 @@ func (s *fakeAuthStore) ListRolePermissions(_ context.Context, roleID string) ([
 	sort.Slice(permissions, func(i, j int) bool {
 		return permissions[i].Key < permissions[j].Key
 	})
-	return permissions, nil
-}
-
-func (s *fakeAuthStore) ReplaceRolePermissions(_ context.Context, roleID string, permissionKeys []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.roles[roleID]; !ok {
-		return domain.ErrAuthRoleNotFound
-	}
-	for _, key := range permissionKeys {
-		if _, ok := s.permissions[key]; !ok {
-			return domain.ErrAuthRoleNotFound
-		}
-	}
-	s.replaceRolePermissionsLocked(roleID, permissionKeys)
-	return nil
+	return permissions
 }
 
 func (s *fakeAuthStore) replaceRolePermissionsLocked(roleID string, permissionKeys []string) {
@@ -2011,7 +2031,7 @@ func assertAuditAction(t *testing.T, logs []domain.AuditLog, action string) {
 	t.Fatalf("audit action %q not found in %#v", action, logs)
 }
 
-func assertRolePermissionsUpdatedMetadata(t *testing.T, metadataJSON string, wantAdded []string, wantRemoved []string) {
+func assertRolePermissionsUpdatedMetadata(t *testing.T, metadataJSON string, wantAdded []string, wantRemoved []string, wantOld []string, wantNew []string) {
 	t.Helper()
 
 	raw := make(map[string]json.RawMessage)
@@ -2024,15 +2044,25 @@ func assertRolePermissionsUpdatedMetadata(t *testing.T, metadataJSON string, wan
 	if _, ok := raw["removed_permissions"]; !ok {
 		t.Fatalf("audit metadata missing removed_permissions: %s", metadataJSON)
 	}
+	if _, ok := raw["old_permissions"]; !ok {
+		t.Fatalf("audit metadata missing old_permissions: %s", metadataJSON)
+	}
+	if _, ok := raw["new_permissions"]; !ok {
+		t.Fatalf("audit metadata missing new_permissions: %s", metadataJSON)
+	}
 	var metadata struct {
 		AddedPermissions   []string `json:"added_permissions"`
 		RemovedPermissions []string `json:"removed_permissions"`
+		OldPermissions     []string `json:"old_permissions"`
+		NewPermissions     []string `json:"new_permissions"`
 	}
 	if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
 		t.Fatalf("decoding role permission audit metadata: %v", err)
 	}
 	assertStringSet(t, metadata.AddedPermissions, wantAdded)
 	assertStringSet(t, metadata.RemovedPermissions, wantRemoved)
+	assertStringSet(t, metadata.OldPermissions, wantOld)
+	assertStringSet(t, metadata.NewPermissions, wantNew)
 }
 
 func assertStringSet(t *testing.T, got []string, want []string) {
