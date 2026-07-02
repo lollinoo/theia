@@ -15,6 +15,7 @@ import {
   fetchSettings,
   removeAdminUserRole,
   setAdminUserStatus,
+  updateAdminRolePermissions,
   updateAdminUser,
 } from '../api/client';
 import { AdminDashboard } from './AdminDashboard';
@@ -32,6 +33,7 @@ vi.mock('../api/client', () => ({
   createAdminUser: vi.fn(),
   updateAdminUser: vi.fn(),
   setAdminUserStatus: vi.fn(),
+  updateAdminRolePermissions: vi.fn(),
   assignAdminUserRole: vi.fn(),
   removeAdminUserRole: vi.fn(),
   createAdminPasswordReset: vi.fn(),
@@ -103,6 +105,7 @@ describe('AdminDashboard', () => {
     vi.mocked(createAdminUser).mockReset();
     vi.mocked(updateAdminUser).mockReset();
     vi.mocked(setAdminUserStatus).mockReset();
+    vi.mocked(updateAdminRolePermissions).mockReset();
     vi.mocked(assignAdminUserRole).mockReset();
     vi.mocked(removeAdminUserRole).mockReset();
     vi.mocked(createAdminPasswordReset).mockReset();
@@ -115,6 +118,7 @@ describe('AdminDashboard', () => {
       'users:disable',
       'roles:read',
       'roles:assign',
+      'roles:update',
       'audit_logs:read',
       'settings:read',
       'settings:update',
@@ -185,6 +189,84 @@ describe('AdminDashboard', () => {
     expect(await screen.findByText('user.update')).toBeInTheDocument();
     expect(screen.getByText('Administrator')).toBeInTheDocument();
     expect(screen.getByText('User: Alice')).toBeInTheDocument();
+  });
+
+  it('keeps roles read-only without roles update permission', async () => {
+    grantPermissions('admin:dashboard:read', 'roles:read');
+    vi.mocked(fetchAdminRoles).mockResolvedValue([
+      { ...adminRole, id: 'user', name: 'user', permissions: ['account:manage'] },
+    ]);
+    vi.mocked(fetchAdminPermissions).mockResolvedValue(['account:manage', 'bridge:token:create']);
+
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
+
+    expect(await screen.findByText('user')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'bridge:token:create' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Save role permissions/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('saves editable role permissions and refreshes the displayed role', async () => {
+    grantPermissions('admin:dashboard:read', 'roles:read', 'roles:update');
+    vi.mocked(fetchAdminRoles).mockResolvedValue([
+      { ...adminRole, id: 'user', name: 'user', permissions: ['account:manage'] },
+    ]);
+    vi.mocked(fetchAdminPermissions).mockResolvedValue(['account:manage', 'bridge:token:create']);
+    vi.mocked(updateAdminRolePermissions).mockResolvedValue({
+      ...adminRole,
+      id: 'user',
+      name: 'user',
+      permissions: ['account:manage', 'bridge:token:create'],
+    });
+
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'bridge:token:create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save role permissions for user' }));
+
+    await waitFor(() => {
+      expect(updateAdminRolePermissions).toHaveBeenCalledWith('user', [
+        'account:manage',
+        'bridge:token:create',
+      ]);
+    });
+    expect(await screen.findByText('Role permissions saved.')).toBeInTheDocument();
+  });
+
+  it('shows super admin as protected in the roles editor', async () => {
+    grantPermissions('admin:dashboard:read', 'roles:read', 'roles:update');
+    vi.mocked(fetchAdminRoles).mockResolvedValue([
+      { ...adminRole, id: 'super_admin', name: 'super_admin', permissions: ['roles:update'] },
+    ]);
+    vi.mocked(fetchAdminPermissions).mockResolvedValue(['roles:update']);
+
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
+
+    expect(await screen.findByText('Protected recovery role')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Save role permissions/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps edited role permissions visible when save fails', async () => {
+    grantPermissions('admin:dashboard:read', 'roles:read', 'roles:update');
+    vi.mocked(fetchAdminRoles).mockResolvedValue([
+      { ...adminRole, id: 'user', name: 'user', permissions: ['account:manage'] },
+    ]);
+    vi.mocked(fetchAdminPermissions).mockResolvedValue(['account:manage', 'bridge:token:create']);
+    vi.mocked(updateAdminRolePermissions).mockRejectedValue(new Error('permission denied'));
+
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
+    const bridgeCheckbox = await screen.findByRole('checkbox', { name: 'bridge:token:create' });
+    fireEvent.click(bridgeCheckbox);
+    fireEvent.click(screen.getByRole('button', { name: 'Save role permissions for user' }));
+
+    expect(await screen.findByText('permission denied')).toBeInTheDocument();
+    expect(bridgeCheckbox).toBeChecked();
   });
 
   it('renders audit names and normalizes audit times with the configured timezone', async () => {

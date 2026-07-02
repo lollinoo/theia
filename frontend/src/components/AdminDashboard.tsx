@@ -19,6 +19,7 @@ import {
   fetchSettings,
   removeAdminUserRole,
   setAdminUserStatus,
+  updateAdminRolePermissions,
   updateAdminUser,
 } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
@@ -154,6 +155,9 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [roles, setRoles] = useState<AdminRole[]>([]);
   const [permissions, setPermissions] = useState<string[]>([]);
+  const [rolePermissionDrafts, setRolePermissionDrafts] = useState<Record<string, string[]>>({});
+  const [savingRoleId, setSavingRoleId] = useState<string | null>(null);
+  const [roleSaveMessage, setRoleSaveMessage] = useState<string | null>(null);
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([]);
   const [timezone, setTimezone] = useState('UTC');
   const [loading, setLoading] = useState(true);
@@ -181,6 +185,7 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   const canDisableUsers = hasPermission('users:disable');
   const canReadRoles = hasPermission('roles:read');
   const canAssignRoles = hasPermission('roles:assign');
+  const canUpdateRoles = hasPermission('roles:update');
   const canReadAuditLogs = hasPermission('audit_logs:read');
   const canReadSettings = hasPermission('settings:read');
   const canManageSettings = canReadSettings && hasPermission('settings:update');
@@ -219,6 +224,9 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
       setDashboard(nextDashboard);
       setUsers(nextUsers);
       setRoles(nextRoles);
+      setRolePermissionDrafts(
+        Object.fromEntries(nextRoles.map((role) => [role.id, [...role.permissions]])),
+      );
       setPermissions(nextPermissions);
       setAuditLogs(nextAuditLogs);
       setTimezone(timezoneFromSettings(nextSettings));
@@ -416,6 +424,43 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
       setError(errorMessage(resetError, 'Failed to create reset token'));
     } finally {
       setSavingUserId(null);
+    }
+  }
+
+  function toggleRolePermission(roleId: string, permission: string) {
+    setRoleSaveMessage(null);
+    setRolePermissionDrafts((current) => {
+      const currentPermissions = current[roleId] ?? [];
+      const hasPermissionKey = currentPermissions.includes(permission);
+      const nextPermissions = hasPermissionKey
+        ? currentPermissions.filter((candidate) => candidate !== permission)
+        : [...currentPermissions, permission];
+      return { ...current, [roleId]: nextPermissions };
+    });
+  }
+
+  async function saveRolePermissions(role: AdminRole) {
+    if (!canUpdateRoles || role.id === 'super_admin') {
+      return;
+    }
+    const nextPermissions = rolePermissionDrafts[role.id] ?? [];
+    setSavingRoleId(role.id);
+    setError(null);
+    setRoleSaveMessage(null);
+    try {
+      const updatedRole = await updateAdminRolePermissions(role.id, nextPermissions);
+      setRoles((current) =>
+        current.map((candidate) => (candidate.id === updatedRole.id ? updatedRole : candidate)),
+      );
+      setRolePermissionDrafts((current) => ({
+        ...current,
+        [updatedRole.id]: [...updatedRole.permissions],
+      }));
+      setRoleSaveMessage('Role permissions saved.');
+    } catch (roleError) {
+      setError(errorMessage(roleError, 'Failed to update role permissions'));
+    } finally {
+      setSavingRoleId(null);
     }
   }
 
@@ -639,7 +684,18 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
               </section>
             )}
 
-            {activeTab === 'roles' && <RolesTable roles={roles} permissions={permissions} />}
+            {activeTab === 'roles' && (
+              <RolesTable
+                roles={roles}
+                permissions={permissions}
+                canUpdateRoles={canUpdateRoles}
+                drafts={rolePermissionDrafts}
+                savingRoleId={savingRoleId}
+                saveMessage={roleSaveMessage}
+                onTogglePermission={toggleRolePermission}
+                onSaveRole={saveRolePermissions}
+              />
+            )}
             {activeTab === 'audit' && (
               <AuditTable logs={auditLogs} usersById={usersById} timezone={timezone} />
             )}
@@ -868,68 +924,163 @@ function UserTable({
   );
 }
 
-function RolesTable({ roles, permissions }: { roles: AdminRole[]; permissions: string[] }) {
+function RolesTable({
+  roles,
+  permissions,
+  canUpdateRoles,
+  drafts,
+  savingRoleId,
+  saveMessage,
+  onTogglePermission,
+  onSaveRole,
+}: {
+  roles: AdminRole[];
+  permissions: string[];
+  canUpdateRoles: boolean;
+  drafts: Record<string, string[]>;
+  savingRoleId: string | null;
+  saveMessage: string | null;
+  onTogglePermission: (roleId: string, permission: string) => void;
+  onSaveRole: (role: AdminRole) => void;
+}) {
+  const groupedPermissions = groupPermissionKeys(permissions);
+
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-      <div className="overflow-hidden rounded-lg border border-outline-subtle bg-surface">
-        {roles.length === 0 ? (
-          <div className="p-6 text-sm text-on-bg-secondary">No roles returned by the server.</div>
-        ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-surface-container text-left text-xs uppercase text-on-bg-secondary">
-              <tr>
-                <th className="px-3 py-2 font-semibold">Role</th>
-                <th className="px-3 py-2 font-semibold">Type</th>
-                <th className="px-3 py-2 font-semibold">Permissions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {roles.map((role) => (
-                <tr key={role.id} className="border-t border-outline-subtle">
-                  <td className="px-3 py-3 align-top">
-                    <div className="font-semibold text-on-bg">{role.name}</div>
-                    <div className="text-xs text-on-bg-secondary">{role.description}</div>
-                  </td>
-                  <td className="px-3 py-3 align-top text-on-bg-secondary">
-                    {role.is_system_role ? 'System' : 'Custom'}
-                  </td>
-                  <td className="px-3 py-3 align-top">
-                    <div className="flex flex-wrap gap-1">
-                      {role.permissions.map((permission) => (
-                        <span
-                          key={permission}
-                          className="rounded-md bg-surface-container px-2 py-1 text-xs text-on-bg"
-                        >
-                          {permission}
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-      <div className="rounded-lg border border-outline-subtle bg-surface p-4">
-        <div className="mb-3 text-sm font-semibold text-on-bg">Permissions</div>
-        <div className="flex flex-wrap gap-1">
-          {permissions.length === 0 ? (
-            <span className="text-sm text-on-bg-secondary">No permissions returned.</span>
+    <div className="flex flex-col gap-3">
+      {saveMessage && (
+        <div className="rounded-md border border-status-up/30 bg-status-up/10 px-3 py-2 text-sm text-status-up">
+          {saveMessage}
+        </div>
+      )}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="overflow-hidden rounded-lg border border-outline-subtle bg-surface">
+          {roles.length === 0 ? (
+            <div className="p-6 text-sm text-on-bg-secondary">No roles returned by the server.</div>
           ) : (
-            permissions.map((permission) => (
-              <span
-                key={permission}
-                className="rounded-md bg-surface-container px-2 py-1 text-xs text-on-bg"
-              >
-                {permission}
-              </span>
-            ))
+            <table className="min-w-full text-sm">
+              <thead className="bg-surface-container text-left text-xs uppercase text-on-bg-secondary">
+                <tr>
+                  <th className="px-3 py-2 font-semibold">Role</th>
+                  <th className="px-3 py-2 font-semibold">Type</th>
+                  <th className="px-3 py-2 font-semibold">Permissions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roles.map((role) => {
+                  const draft = drafts[role.id] ?? role.permissions;
+                  const isProtected = role.id === 'super_admin';
+                  const isDirty = !samePermissionSet(draft, role.permissions);
+
+                  return (
+                    <tr key={role.id} className="border-t border-outline-subtle">
+                      <td className="px-3 py-3 align-top">
+                        <div className="font-semibold text-on-bg">{role.name}</div>
+                        <div className="text-xs text-on-bg-secondary">{role.description}</div>
+                      </td>
+                      <td className="px-3 py-3 align-top text-on-bg-secondary">
+                        {role.is_system_role ? 'System' : 'Custom'}
+                      </td>
+                      <td className="px-3 py-3 align-top">
+                        {canUpdateRoles && !isProtected ? (
+                          <div className="grid gap-3">
+                            {groupedPermissions.map(([resource, keys]) => (
+                              <fieldset
+                                key={resource}
+                                className="rounded-md border border-outline-subtle p-2"
+                              >
+                                <legend className="px-1 text-xs font-semibold text-on-bg-secondary">
+                                  {resource}
+                                </legend>
+                                <div className="grid gap-1 sm:grid-cols-2">
+                                  {keys.map((permission) => (
+                                    <label
+                                      key={permission}
+                                      className="flex items-center gap-2 text-xs text-on-bg"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={draft.includes(permission)}
+                                        onChange={() => onTogglePermission(role.id, permission)}
+                                      />
+                                      <span>{permission}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </fieldset>
+                            ))}
+                            <button
+                              type="button"
+                              aria-label={`Save role permissions for ${role.name}`}
+                              disabled={!isDirty || savingRoleId === role.id || draft.length === 0}
+                              onClick={() => onSaveRole(role)}
+                              className="inline-flex w-fit items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <MaterialIcon name="check_circle" className="text-sm" />
+                              {savingRoleId === role.id ? 'Saving...' : 'Save'}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {role.permissions.map((permission) => (
+                              <span
+                                key={permission}
+                                className="rounded-md bg-surface-container px-2 py-1 text-xs text-on-bg"
+                              >
+                                {permission}
+                              </span>
+                            ))}
+                            {isProtected && (
+                              <span className="rounded-md bg-surface-container-high px-2 py-1 text-xs text-on-bg-secondary">
+                                Protected recovery role
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
+        </div>
+        <div className="rounded-lg border border-outline-subtle bg-surface p-4">
+          <div className="mb-3 text-sm font-semibold text-on-bg">Permissions</div>
+          <div className="flex flex-wrap gap-1">
+            {permissions.length === 0 ? (
+              <span className="text-sm text-on-bg-secondary">No permissions returned.</span>
+            ) : (
+              permissions.map((permission) => (
+                <span
+                  key={permission}
+                  className="rounded-md bg-surface-container px-2 py-1 text-xs text-on-bg"
+                >
+                  {permission}
+                </span>
+              ))
+            )}
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function groupPermissionKeys(permissions: string[]): Array<[string, string[]]> {
+  const groups = new Map<string, string[]>();
+  for (const permission of permissions) {
+    const resource = permission.split(':').slice(0, -1).join(':') || permission;
+    const values = groups.get(resource) ?? [];
+    values.push(permission);
+    groups.set(resource, values);
+  }
+  return [...groups.entries()].map(([resource, values]) => [resource, values.sort()]);
+}
+
+function samePermissionSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((value) => rightSet.has(value));
 }
 
 function AuditTable({
