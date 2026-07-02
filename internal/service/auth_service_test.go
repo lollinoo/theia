@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1142,11 +1143,22 @@ func TestAuthServiceUpdatesAdminRolePermissionsAndAudits(t *testing.T) {
 	if len(stored) != 2 {
 		t.Fatalf("stored permission count = %d, want 2: %#v", len(stored), stored)
 	}
+	assertStringSet(t, permissionKeysFromPermissions(stored), []string{
+		domain.PermissionAccountManage,
+		domain.PermissionBridgeTokenCreate,
+	})
 	logs := h.store.auditLogs()
 	assertAuditAction(t, logs, "role.permissions_updated")
-	if !strings.Contains(logs[len(logs)-1].MetadataJSON, domain.PermissionBridgeTokenCreate) {
-		t.Fatalf("audit metadata = %s, want bridge token permission", logs[len(logs)-1].MetadataJSON)
-	}
+	assertRolePermissionsUpdatedMetadata(t, logs[len(logs)-1].MetadataJSON, []string{
+		domain.PermissionBridgeTokenCreate,
+	}, []string{
+		domain.PermissionSettingsRead,
+		domain.PermissionTopologyRead,
+		domain.PermissionTopologyUpdate,
+		domain.PermissionDevicesRead,
+		domain.PermissionDevicesUpdate,
+		domain.PermissionBackupsRead,
+	})
 }
 
 func TestAuthServiceUpdateAdminRolePermissionsRejectsUnsafeInputs(t *testing.T) {
@@ -1161,6 +1173,18 @@ func TestAuthServiceUpdateAdminRolePermissionsRejectsUnsafeInputs(t *testing.T) 
 			actor: []string{domain.PermissionRolesRead},
 			input: AdminRolePermissionsInput{RoleID: domain.RoleUser, Permissions: []string{domain.PermissionAccountManage}},
 			want:  ErrPermissionDenied,
+		},
+		{
+			name:  "empty_role_id",
+			actor: []string{domain.PermissionRolesUpdate},
+			input: AdminRolePermissionsInput{RoleID: " ", Permissions: []string{domain.PermissionAccountManage}},
+			want:  ErrAdminInvalidInput,
+		},
+		{
+			name:  "unknown_role",
+			actor: []string{domain.PermissionRolesUpdate},
+			input: AdminRolePermissionsInput{RoleID: "missing_role", Permissions: []string{domain.PermissionAccountManage}},
+			want:  domain.ErrAuthRoleNotFound,
 		},
 		{
 			name:  "super_admin",
@@ -1196,6 +1220,35 @@ func TestAuthServiceUpdateAdminRolePermissionsRejectsUnsafeInputs(t *testing.T) 
 				t.Fatalf("UpdateAdminRolePermissions error = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestFakeAuthStoreListRolePermissionsSortsByKey(t *testing.T) {
+	store := newFakeAuthStore()
+	store.replaceRolePermissionsLocked(domain.RoleUser, []string{
+		domain.PermissionTopologyUpdate,
+		domain.PermissionSettingsRead,
+		domain.PermissionDevicesRead,
+		domain.PermissionBridgeTokenCreate,
+		domain.PermissionBackupsRead,
+		domain.PermissionAccountManage,
+	})
+
+	permissions, err := store.ListRolePermissions(context.Background(), domain.RoleUser)
+	if err != nil {
+		t.Fatalf("ListRolePermissions: %v", err)
+	}
+	got := permissionKeysFromPermissions(permissions)
+	want := []string{
+		domain.PermissionAccountManage,
+		domain.PermissionBackupsRead,
+		domain.PermissionBridgeTokenCreate,
+		domain.PermissionDevicesRead,
+		domain.PermissionSettingsRead,
+		domain.PermissionTopologyUpdate,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("permission keys = %#v, want sorted %#v", got, want)
 	}
 }
 
@@ -1602,6 +1655,9 @@ func (s *fakeAuthStore) ListRolePermissions(_ context.Context, roleID string) ([
 	for key := range s.rolePermissions[roleID] {
 		permissions = append(permissions, s.permissions[key])
 	}
+	sort.Slice(permissions, func(i, j int) bool {
+		return permissions[i].Key < permissions[j].Key
+	})
 	return permissions, nil
 }
 
@@ -1953,6 +2009,42 @@ func assertAuditAction(t *testing.T, logs []domain.AuditLog, action string) {
 		}
 	}
 	t.Fatalf("audit action %q not found in %#v", action, logs)
+}
+
+func assertRolePermissionsUpdatedMetadata(t *testing.T, metadataJSON string, wantAdded []string, wantRemoved []string) {
+	t.Helper()
+
+	raw := make(map[string]json.RawMessage)
+	if err := json.Unmarshal([]byte(metadataJSON), &raw); err != nil {
+		t.Fatalf("audit metadata is not JSON: %v", err)
+	}
+	if _, ok := raw["added_permissions"]; !ok {
+		t.Fatalf("audit metadata missing added_permissions: %s", metadataJSON)
+	}
+	if _, ok := raw["removed_permissions"]; !ok {
+		t.Fatalf("audit metadata missing removed_permissions: %s", metadataJSON)
+	}
+	var metadata struct {
+		AddedPermissions   []string `json:"added_permissions"`
+		RemovedPermissions []string `json:"removed_permissions"`
+	}
+	if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+		t.Fatalf("decoding role permission audit metadata: %v", err)
+	}
+	assertStringSet(t, metadata.AddedPermissions, wantAdded)
+	assertStringSet(t, metadata.RemovedPermissions, wantRemoved)
+}
+
+func assertStringSet(t *testing.T, got []string, want []string) {
+	t.Helper()
+
+	got = append([]string(nil), got...)
+	want = append([]string(nil), want...)
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("string set = %#v, want %#v", got, want)
+	}
 }
 
 func auditMetadataContainsSecretKey(metadata string) bool {
