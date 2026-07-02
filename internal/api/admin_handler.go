@@ -406,14 +406,18 @@ func (h *AdminHandler) handleUpdateRolePermissions(w http.ResponseWriter, r *htt
 		return
 	}
 	var req struct {
-		Permissions []string `json:"permissions"`
+		Permissions *[]string `json:"permissions"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	if req.Permissions == nil {
+		writeAdminError(w, service.ErrAdminInvalidInput)
+		return
+	}
 	role, err := h.auth.UpdateAdminRolePermissions(r.Context(), actor, service.AdminRolePermissionsInput{
 		RoleID:      roleID,
-		Permissions: req.Permissions,
+		Permissions: *req.Permissions,
 	})
 	if err != nil {
 		writeAdminError(w, err)

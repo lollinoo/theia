@@ -574,6 +574,73 @@ func TestAdminRolePermissionsUpdateReturnsUpdatedRole(t *testing.T) {
 	}
 }
 
+func TestAdminRolePermissionsUpdateAcceptsExplicitEmptyPermissions(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("admin", false, domain.PermissionRolesUpdate))
+	auth.updatedAdminRole = &service.AdminRole{
+		Role:           domain.Role{ID: domain.RoleUser, Name: domain.RoleUser, Description: "Standard operator access", IsSystemRole: true},
+		PermissionKeys: []string{},
+	}
+	router := newAuthTestRouter(auth)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/v1/admin/roles/user/permissions",
+		strings.NewReader(`{"permissions":[]}`),
+	)
+	addSessionCookie(req, testSessionToken)
+	addCSRFCookieAndHeader(req, testCSRFToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !auth.updateAdminRolePermissionsCalled {
+		t.Fatal("UpdateAdminRolePermissions was not called")
+	}
+	if auth.updatedAdminRolePermissionsInput.Permissions == nil {
+		t.Fatal("permissions input = nil, want empty non-nil slice")
+	}
+	if len(auth.updatedAdminRolePermissionsInput.Permissions) != 0 {
+		t.Fatalf("permissions input = %#v, want empty slice", auth.updatedAdminRolePermissionsInput.Permissions)
+	}
+}
+
+func TestAdminRolePermissionsUpdateRejectsMissingPermissionsPayload(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing", body: `{}`},
+		{name: "null", body: `{"permissions":null}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth := newFakeAPIAuthProvider()
+			auth.setSession(testSessionToken, testCSRFToken, testAPIUser("admin", false, domain.PermissionRolesUpdate))
+			auth.updatedAdminRole = &service.AdminRole{
+				Role:           domain.Role{ID: domain.RoleUser, Name: domain.RoleUser, Description: "Standard operator access", IsSystemRole: true},
+				PermissionKeys: []string{domain.PermissionAccountManage},
+			}
+			router := newAuthTestRouter(auth)
+
+			req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/roles/user/permissions", strings.NewReader(tt.body))
+			addSessionCookie(req, testSessionToken)
+			addCSRFCookieAndHeader(req, testCSRFToken)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if auth.updateAdminRolePermissionsCalled {
+				t.Fatal("UpdateAdminRolePermissions was called")
+			}
+		})
+	}
+}
+
 func TestAdminRolePermissionsUpdateMapsErrors(t *testing.T) {
 	tests := []struct {
 		name string

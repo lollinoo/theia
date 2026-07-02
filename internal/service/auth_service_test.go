@@ -1242,6 +1242,12 @@ func TestAuthServiceUpdateAdminRolePermissionsRejectsUnsafeInputs(t *testing.T) 
 			want:  ErrAdminInvalidInput,
 		},
 		{
+			name:  "nil_permissions",
+			actor: []string{domain.PermissionRolesUpdate},
+			input: AdminRolePermissionsInput{RoleID: domain.RoleUser, Permissions: nil},
+			want:  ErrAdminInvalidInput,
+		},
+		{
 			name:  "unknown_role",
 			actor: []string{domain.PermissionRolesUpdate},
 			input: AdminRolePermissionsInput{RoleID: "missing_role", Permissions: []string{domain.PermissionAccountManage}},

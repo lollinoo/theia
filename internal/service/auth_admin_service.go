@@ -404,6 +404,9 @@ func (s *AuthService) UpdateAdminRolePermissions(ctx context.Context, actor *Aut
 	if err != nil {
 		return nil, err
 	}
+	if input.Permissions == nil {
+		return nil, ErrAdminInvalidInput
+	}
 	permissionKeys, err := s.normalizeAdminRolePermissionKeys(ctx, input.Permissions)
 	if err != nil {
 		return nil, err
