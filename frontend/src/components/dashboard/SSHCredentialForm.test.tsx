@@ -1,7 +1,7 @@
 /**
  * Exercises sshcredential form operations dashboard behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CredentialProfile } from '../../types/api';
 import { SSHCredentialForm } from './SSHCredentialForm';
@@ -14,6 +14,7 @@ vi.mock('../../api/client', () => ({
   assignCredentialProfile: vi.fn(),
   unassignCredentialProfile: vi.fn(),
   testSSHConnection: vi.fn(),
+  resetSSHHostKey: vi.fn(),
 }));
 
 function mockProfile(overrides: Partial<CredentialProfile> = {}): CredentialProfile {
@@ -173,5 +174,48 @@ describe('SSHCredentialForm — Save calls assignCredentialProfile not updateDev
       expect(unassignCredentialProfile).toHaveBeenCalledWith('dev-1', 'profile-1');
       expect(assignCredentialProfile).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('SSHCredentialForm — SSH host-key mismatch recovery', () => {
+  it('offers a confirmed SSH host key reset from the Test button result', async () => {
+    const { fetchCredentialProfiles, resetSSHHostKey, testSSHConnection } = await import(
+      '../../api/client'
+    );
+    (fetchCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+      mockProfile({ id: 'profile-1', name: 'Admin Profile' }),
+    ]);
+    (testSSHConnection as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: false,
+      error: 'SSH connection to 10.8.20.1 failed: SSH host key mismatch for 10.8.20.1:22',
+      error_code: 'ssh_host_key_mismatch',
+    });
+    (resetSSHHostKey as ReturnType<typeof vi.fn>).mockResolvedValue({
+      target: '10.8.20.1',
+      port: 22,
+      removed: true,
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<SSHCredentialForm deviceId="dev-1" currentProfileId="profile-1" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Admin Profile (admin:22)')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+    });
+
+    expect(await screen.findByText('SSH host key changed')).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /reset ssh host key/i }));
+    });
+
+    expect(resetSSHHostKey).toHaveBeenCalledWith('dev-1');
+    expect(
+      screen.getByText('SSH host key reset. Run Test again to trust the new key.'),
+    ).toBeInTheDocument();
   });
 });

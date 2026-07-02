@@ -932,6 +932,7 @@ export interface BackupJob {
   device_id: string;
   status: BackupStatus;
   error_message: string;
+  error_code?: string;
   created_at: string;
   files: BackupFile[];
 }

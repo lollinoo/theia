@@ -237,6 +237,10 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 				backupHandler.HandleTestSSH(w, r)
 				return
 			}
+			if strings.HasSuffix(r.URL.Path, "/ssh-host-key/reset") && r.Method == http.MethodPost {
+				backupHandler.HandleResetSSHHostKey(w, r)
+				return
+			}
 			if strings.HasSuffix(r.URL.Path, "/backups/latest") && r.Method == http.MethodGet {
 				backupHandler.HandleGetLatestBackup(w, r)
 				return

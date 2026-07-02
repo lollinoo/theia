@@ -34,6 +34,21 @@ var ErrBackupJobActive = errors.New("backup job is active")
 // ErrBackupJobReferencedByActiveBulkRun prevents deletion while a bulk-run item still owns the job.
 var ErrBackupJobReferencedByActiveBulkRun = errors.New("backup job is referenced by an active bulk backup run")
 
+// ErrSSHHostKeyStoreUnavailable means this runtime cannot mutate the SSH known_hosts store.
+var ErrSSHHostKeyStoreUnavailable = errors.New("ssh host key store unavailable")
+
+// SSHHostKeyStore resets remembered SSH host-key trust for one target.
+type SSHHostKeyStore interface {
+	RemoveHost(host string, port int) (bool, error)
+}
+
+// SSHHostKeyResetResult describes a device host-key reset.
+type SSHHostKeyResetResult struct {
+	Target  string
+	Port    int
+	Removed bool
+}
+
 // BackupService orchestrates credential profile management and config backups.
 type BackupService struct {
 	jobRepo               domain.BackupJobRepository
@@ -47,6 +62,7 @@ type BackupService struct {
 	legacyEncryptionKey   []byte
 	backupDir             string
 	hostKeyCallback       gossh.HostKeyCallback
+	hostKeyStore          SSHHostKeyStore
 	deviceLocks           sync.Map // per-device mutex: map[uuid.UUID]*sync.Mutex
 	bulkLimits            BulkOperationLimits
 	bulkRunRepo           domain.BulkBackupRunRepository
@@ -59,6 +75,13 @@ type BackupServiceOption func(*BackupService)
 func WithBulkBackupRunRepo(repo domain.BulkBackupRunRepository) BackupServiceOption {
 	return func(s *BackupService) {
 		s.bulkRunRepo = repo
+	}
+}
+
+// WithSSHHostKeyStore enables explicit operator resets for remembered SSH host keys.
+func WithSSHHostKeyStore(store SSHHostKeyStore) BackupServiceOption {
+	return func(s *BackupService) {
+		s.hostKeyStore = store
 	}
 }
 

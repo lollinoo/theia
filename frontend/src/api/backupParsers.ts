@@ -39,6 +39,7 @@ export function parseBackupJob(data: Record<string, unknown>): BackupJob {
       ? status
       : 'pending') as BackupStatus,
     error_message: typeof data.error_message === 'string' ? data.error_message : '',
+    error_code: typeof data.error_code === 'string' ? data.error_code : undefined,
     created_at: typeof data.created_at === 'string' ? data.created_at : '',
     files: filesRaw.map((file) => parseBackupFile(file as Record<string, unknown>)),
   };

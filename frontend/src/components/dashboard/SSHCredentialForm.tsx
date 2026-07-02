@@ -7,6 +7,7 @@ import {
   assignCredentialProfile,
   createCredentialProfile,
   fetchCredentialProfiles,
+  resetSSHHostKey,
   testSSHConnection,
   unassignCredentialProfile,
 } from '../../api/client';
@@ -33,7 +34,12 @@ export function SSHCredentialForm({
   const [selectedProfileId, setSelectedProfileId] = useState(currentProfileId || '');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
+  const [testResult, setTestResult] = useState<Awaited<
+    ReturnType<typeof testSSHConnection>
+  > | null>(null);
+  const [hostKeyResetMessage, setHostKeyResetMessage] = useState('');
+  const [hostKeyResetError, setHostKeyResetError] = useState('');
+  const [resettingHostKey, setResettingHostKey] = useState(false);
   const [message, setMessage] = useState('');
   const [showCreate, setShowCreate] = useState(false);
 
@@ -96,6 +102,8 @@ export function SSHCredentialForm({
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
+    setHostKeyResetMessage('');
+    setHostKeyResetError('');
     try {
       const result = await testSSHConnection(deviceId);
       setTestResult(result);
@@ -103,6 +111,25 @@ export function SSHCredentialForm({
       setTestResult({ success: false, error: err instanceof Error ? err.message : 'Test failed' });
     } finally {
       setTesting(false);
+    }
+  };
+
+  const handleResetSSHHostKey = async () => {
+    const confirmed = window.confirm(
+      'Reset the saved SSH host key for this device? Continue only if the node was intentionally replaced.',
+    );
+    if (!confirmed) return;
+
+    setResettingHostKey(true);
+    setHostKeyResetMessage('');
+    setHostKeyResetError('');
+    try {
+      await resetSSHHostKey(deviceId);
+      setHostKeyResetMessage('SSH host key reset. Run Test again to trust the new key.');
+    } catch (err) {
+      setHostKeyResetError(err instanceof Error ? err.message : 'Failed to reset SSH host key');
+    } finally {
+      setResettingHostKey(false);
     }
   };
 
@@ -146,6 +173,8 @@ export function SSHCredentialForm({
   };
 
   const selectedProfile = profiles.find((p) => p.id === selectedProfileId);
+  const hasHostKeyMismatch =
+    testResult?.success === false && testResult.error_code === 'ssh_host_key_mismatch';
 
   if (showCreate) {
     return (
@@ -372,6 +401,31 @@ export function SSHCredentialForm({
           }`}
         >
           {testResult.success ? 'Connection successful' : `Connection failed: ${testResult.error}`}
+        </div>
+      )}
+
+      {hasHostKeyMismatch && (
+        <div className="rounded-md border border-warning/30 bg-warning/10 p-3">
+          <div className="text-xs font-medium text-warning">SSH host key changed</div>
+          <div className="mt-1 text-[10px] text-on-bg-secondary">
+            Reset the saved key only after confirming this device was replaced.
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void handleResetSSHHostKey();
+            }}
+            disabled={resettingHostKey}
+            className="mt-2 rounded px-2 py-1 text-[10px] font-medium text-warning border border-warning/40 hover:bg-warning/10 disabled:opacity-50 transition-colors"
+          >
+            {resettingHostKey ? 'Resetting...' : 'Reset SSH host key'}
+          </button>
+          {hostKeyResetMessage && (
+            <div className="mt-2 text-[10px] text-status-up">{hostKeyResetMessage}</div>
+          )}
+          {hostKeyResetError && (
+            <div className="mt-2 text-[10px] text-status-down">{hostKeyResetError}</div>
+          )}
         </div>
       )}
 

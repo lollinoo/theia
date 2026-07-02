@@ -130,6 +130,64 @@ func TestKnownHostsStoreChangedKey(t *testing.T) {
 	}
 }
 
+func TestKnownHostsStoreRemoveHostAllowsRetrustChangedKeyAndKeepsOtherHosts(t *testing.T) {
+	dir := t.TempDir()
+	khPath := filepath.Join(dir, "known_hosts")
+
+	store, err := NewKnownHostsStore(khPath)
+	if err != nil {
+		t.Fatalf("NewKnownHostsStore: %v", err)
+	}
+
+	keyA := generateTestKey(t)
+	keyB := generateTestKey(t)
+	otherKey := generateTestKey(t)
+	addr := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 22}
+	otherAddr := &net.TCPAddr{IP: net.ParseIP("192.168.1.2"), Port: 22}
+
+	cb := store.HostKeyCallback()
+	if err := cb("192.168.1.1:22", addr, keyA); err != nil {
+		t.Fatalf("TOFU callback failed: %v", err)
+	}
+	if err := cb("192.168.1.2:22", otherAddr, otherKey); err != nil {
+		t.Fatalf("other TOFU callback failed: %v", err)
+	}
+
+	if err := cb("192.168.1.1:22", addr, keyB); err == nil {
+		t.Fatal("expected changed key to fail before host reset")
+	}
+
+	removed, err := store.RemoveHost("192.168.1.1", 22)
+	if err != nil {
+		t.Fatalf("RemoveHost: %v", err)
+	}
+	if !removed {
+		t.Fatal("RemoveHost removed = false, want true")
+	}
+
+	data, err := os.ReadFile(khPath)
+	if err != nil {
+		t.Fatalf("reading known_hosts after remove: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "192.168.1.1") {
+		t.Fatalf("removed host still present in known_hosts: %s", content)
+	}
+	if !strings.Contains(content, "192.168.1.2") {
+		t.Fatalf("unrelated host removed from known_hosts: %s", content)
+	}
+	if err := cb("192.168.1.2:22", otherAddr, otherKey); err != nil {
+		t.Fatalf("other host should still be trusted, got: %v", err)
+	}
+
+	if err := cb("192.168.1.1:22", addr, keyB); err != nil {
+		t.Fatalf("changed key should be trusted after host reset, got: %v", err)
+	}
+	if err := cb("192.168.1.1:22", addr, keyA); err == nil {
+		t.Fatal("old key should not remain trusted after re-trust")
+	}
+}
+
 func TestKnownHostsStoreFileCreatedOnDemand(t *testing.T) {
 	dir := t.TempDir()
 	khPath := filepath.Join(dir, "subdir", "known_hosts")

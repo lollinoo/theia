@@ -92,14 +92,54 @@ func (h *BackupHandler) HandleTestSSH(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.svc.TestSSHConnection(r.Context(), deviceID); err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
+			"success":    false,
+			"error":      err.Error(),
+			"error_code": service.BackupJobErrorCode(err.Error()),
 		})
 		return
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
+	})
+}
+
+// HandleResetSSHHostKey handles POST /api/v1/devices/{id}/ssh-host-key/reset.
+func (h *BackupHandler) HandleResetSSHHostKey(w http.ResponseWriter, r *http.Request) {
+	deviceID, err := extractDeviceIDForBackup(r.URL.Path, "/ssh-host-key/reset")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid device ID")
+		return
+	}
+
+	result, err := h.svc.ResetSSHHostKey(r.Context(), deviceID)
+	if err != nil {
+		if errors.Is(err, service.ErrSSHHostKeyStoreUnavailable) {
+			writeError(w, http.StatusNotImplemented, "SSH host key reset is not configured")
+			return
+		}
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no credential profile") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+
+	if err := h.appendBackupAuditLog(r, "backup.ssh_host_key_reset", "device", deviceID.String(), map[string]interface{}{
+		"target":  result.Target,
+		"port":    result.Port,
+		"removed": result.Removed,
+	}); err != nil {
+		log.Printf("backup: failed to append SSH host key reset audit log: %v", err)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"data": map[string]interface{}{
+			"target":  result.Target,
+			"port":    result.Port,
+			"removed": result.Removed,
+		},
 	})
 }
 
@@ -1124,6 +1164,7 @@ func jobToMap(j domain.BackupJob) map[string]interface{} {
 		"device_id":     j.DeviceID.String(),
 		"status":        string(j.Status),
 		"error_message": j.ErrorMessage,
+		"error_code":    service.BackupJobErrorCode(j.ErrorMessage),
 		"created_at":    j.CreatedAt,
 		"files":         files,
 	}
