@@ -58,6 +58,7 @@ import {
   setCanvasMapPrimary,
   startBulkBackupRun,
   triggerBulkDownload,
+  updateAdminRolePermissions,
   updateAdminUser,
   updateCanvasMap,
   updateCanvasMapArea,
@@ -493,6 +494,17 @@ describe('admin API', () => {
       .mockResolvedValueOnce(
         mockResponse(null, { ok: true, status: 204, statusText: 'No Content' }),
       )
+      .mockResolvedValueOnce(
+        mockResponse({
+          role: {
+            id: 'user',
+            name: 'user',
+            description: 'Standard operator access',
+            is_system_role: true,
+            permissions: ['account:manage', 'bridge:token:create'],
+          },
+        }),
+      )
       .mockResolvedValueOnce(mockResponse({ reset_token: 'one-time-token' }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -501,8 +513,17 @@ describe('admin API', () => {
     await setAdminUserStatus('user-1', 'disabled');
     await assignAdminUserRole('user-1', 'role-1');
     await removeAdminUserRole('user-1', 'role-1');
+    const role = await updateAdminRolePermissions('user', [
+      'account:manage',
+      'bridge:token:create',
+    ]);
     const reset = await createAdminPasswordReset('user-1');
 
+    expect(role.permissions).toEqual(['account:manage', 'bridge:token:create']);
+    expect(fetchMock.mock.calls[5][0]).toBe('/api/v1/admin/roles/user/permissions');
+    expect(JSON.parse(fetchMock.mock.calls[5][1]?.body as string)).toEqual({
+      permissions: ['account:manage', 'bridge:token:create'],
+    });
     expect(reset.reset_token).toBe('one-time-token');
     for (const [, options] of fetchMock.mock.calls) {
       expect(options?.headers).toEqual(expect.objectContaining({ 'X-CSRF-Token': 'admin-csrf' }));
