@@ -202,7 +202,9 @@ describe('AdminDashboard', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
 
     expect(await screen.findByText('user')).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: 'bridge:token:create' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('checkbox', { name: 'bridge:token:create for user' }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /Save role permissions/i }),
     ).not.toBeInTheDocument();
@@ -218,13 +220,18 @@ describe('AdminDashboard', () => {
       ...adminRole,
       id: 'user',
       name: 'user',
-      permissions: ['account:manage', 'bridge:token:create'],
+      permissions: ['bridge:token:create'],
     });
 
     render(<AdminDashboard />);
     fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'bridge:token:create' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save role permissions for user' }));
+    const bridgeCheckbox = await screen.findByRole('checkbox', {
+      name: 'bridge:token:create for user',
+    });
+    const accountCheckbox = screen.getByRole('checkbox', { name: 'account:manage for user' });
+    fireEvent.click(bridgeCheckbox);
+    const saveButton = screen.getByRole('button', { name: 'Save role permissions for user' });
+    fireEvent.click(saveButton);
 
     await waitFor(() => {
       expect(updateAdminRolePermissions).toHaveBeenCalledWith('user', [
@@ -233,6 +240,37 @@ describe('AdminDashboard', () => {
       ]);
     });
     expect(await screen.findByText('Role permissions saved.')).toBeInTheDocument();
+    expect(accountCheckbox).not.toBeChecked();
+    expect(bridgeCheckbox).toBeChecked();
+    expect(saveButton).toBeDisabled();
+  });
+
+  it('clears role permission save feedback when refreshing admin data', async () => {
+    grantPermissions('admin:dashboard:read', 'roles:read', 'roles:update');
+    vi.mocked(fetchAdminRoles).mockResolvedValue([
+      { ...adminRole, id: 'user', name: 'user', permissions: ['account:manage'] },
+    ]);
+    vi.mocked(fetchAdminPermissions).mockResolvedValue(['account:manage', 'bridge:token:create']);
+    vi.mocked(updateAdminRolePermissions).mockResolvedValue({
+      ...adminRole,
+      id: 'user',
+      name: 'user',
+      permissions: ['account:manage', 'bridge:token:create'],
+    });
+
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'bridge:token:create for user' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save role permissions for user' }));
+
+    expect(await screen.findByText('Role permissions saved.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => {
+      expect(fetchAdminRoles).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText('user')).toBeInTheDocument();
+    expect(screen.queryByText('Role permissions saved.')).not.toBeInTheDocument();
   });
 
   it('shows super admin as protected in the roles editor', async () => {
@@ -261,12 +299,77 @@ describe('AdminDashboard', () => {
 
     render(<AdminDashboard />);
     fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
-    const bridgeCheckbox = await screen.findByRole('checkbox', { name: 'bridge:token:create' });
+    const bridgeCheckbox = await screen.findByRole('checkbox', {
+      name: 'bridge:token:create for user',
+    });
     fireEvent.click(bridgeCheckbox);
     fireEvent.click(screen.getByRole('button', { name: 'Save role permissions for user' }));
 
     expect(await screen.findByText('permission denied')).toBeInTheDocument();
     expect(bridgeCheckbox).toBeChecked();
+  });
+
+  it('keeps the roles editor horizontally scrollable on narrow screens', async () => {
+    grantPermissions('admin:dashboard:read', 'roles:read', 'roles:update');
+    vi.mocked(fetchAdminRoles).mockResolvedValue([
+      { ...adminRole, id: 'user', name: 'user', permissions: ['account:manage'] },
+    ]);
+    vi.mocked(fetchAdminPermissions).mockResolvedValue([
+      'account:manage',
+      'bridge:token:create',
+      'very:long:permission:key:that:needs:room:on:narrow:screens',
+    ]);
+
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
+
+    const rolesTable = await screen.findByRole('table');
+    expect(rolesTable.parentElement?.className).toContain('overflow-x-auto');
+    expect(rolesTable.parentElement?.className).not.toContain('overflow-hidden');
+  });
+
+  it('disables all role save buttons while one role is saving', async () => {
+    grantPermissions('admin:dashboard:read', 'roles:read', 'roles:update');
+    vi.mocked(fetchAdminRoles).mockResolvedValue([
+      { ...adminRole, id: 'user', name: 'user', permissions: ['account:manage'] },
+      {
+        ...adminRole,
+        id: 'operator',
+        name: 'operator',
+        permissions: ['account:manage'],
+      },
+    ]);
+    vi.mocked(fetchAdminPermissions).mockResolvedValue(['account:manage', 'bridge:token:create']);
+    let resolveSave!: (role: typeof adminRole) => void;
+    const savePromise = new Promise<typeof adminRole>((resolve) => {
+      resolveSave = resolve;
+    });
+    vi.mocked(updateAdminRolePermissions).mockReturnValue(savePromise);
+
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'bridge:token:create for user' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'bridge:token:create for operator' }));
+    const userSave = screen.getByRole('button', { name: 'Save role permissions for user' });
+    const operatorSave = screen.getByRole('button', {
+      name: 'Save role permissions for operator',
+    });
+    fireEvent.click(userSave);
+
+    await waitFor(() => {
+      expect(userSave).toBeDisabled();
+    });
+    expect(operatorSave).toBeDisabled();
+
+    await act(async () => {
+      resolveSave({
+        ...adminRole,
+        id: 'user',
+        name: 'user',
+        permissions: ['account:manage', 'bridge:token:create'],
+      });
+      await savePromise;
+    });
   });
 
   it('renders audit names and normalizes audit times with the configured timezone', async () => {

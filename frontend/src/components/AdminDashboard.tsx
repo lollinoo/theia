@@ -211,6 +211,7 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
     setLoading(true);
     setError(null);
     setResetToken(null);
+    setRoleSaveMessage(null);
     try {
       const [nextDashboard, nextUsers, nextRoles, nextPermissions, nextAuditLogs, nextSettings] =
         await Promise.all([
@@ -440,7 +441,7 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   }
 
   async function saveRolePermissions(role: AdminRole) {
-    if (!canUpdateRoles || role.id === 'super_admin') {
+    if (!canUpdateRoles || role.id === 'super_admin' || savingRoleId !== null) {
       return;
     }
     const nextPermissions = rolePermissionDrafts[role.id] ?? [];
@@ -953,11 +954,11 @@ function RolesTable({
         </div>
       )}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="overflow-hidden rounded-lg border border-outline-subtle bg-surface">
+        <div className="overflow-x-auto rounded-lg border border-outline-subtle bg-surface">
           {roles.length === 0 ? (
             <div className="p-6 text-sm text-on-bg-secondary">No roles returned by the server.</div>
           ) : (
-            <table className="min-w-full text-sm">
+            <table className="min-w-[48rem] text-sm">
               <thead className="bg-surface-container text-left text-xs uppercase text-on-bg-secondary">
                 <tr>
                   <th className="px-3 py-2 font-semibold">Role</th>
@@ -995,14 +996,15 @@ function RolesTable({
                                   {keys.map((permission) => (
                                     <label
                                       key={permission}
-                                      className="flex items-center gap-2 text-xs text-on-bg"
+                                      className="flex min-w-0 items-center gap-2 text-xs text-on-bg"
                                     >
                                       <input
                                         type="checkbox"
+                                        aria-label={`${permission} for ${role.name}`}
                                         checked={draft.includes(permission)}
                                         onChange={() => onTogglePermission(role.id, permission)}
                                       />
-                                      <span>{permission}</span>
+                                      <span className="break-all">{permission}</span>
                                     </label>
                                   ))}
                                 </div>
@@ -1011,7 +1013,7 @@ function RolesTable({
                             <button
                               type="button"
                               aria-label={`Save role permissions for ${role.name}`}
-                              disabled={!isDirty || savingRoleId === role.id || draft.length === 0}
+                              disabled={!isDirty || savingRoleId !== null || draft.length === 0}
                               onClick={() => onSaveRole(role)}
                               className="inline-flex w-fit items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-50"
                             >
