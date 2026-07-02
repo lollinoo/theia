@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -1085,6 +1086,128 @@ func TestAuthServiceAdminSuperAdminCanAssignRoleAndAudits(t *testing.T) {
 	assertAuditAction(t, h.store.auditLogs(), "admin.user_role_assigned")
 }
 
+func TestAuthServiceListAdminRolesUsesPersistedPermissions(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, actorUser.ID, domain.RoleSuperAdmin)
+	h.store.replaceRolePermissionsLocked(domain.RoleUser, []string{domain.PermissionAccountManage})
+
+	roles, err := h.service.ListAdminRoles(ctx, h.authenticatedUser(t, actorUser.ID))
+	if err != nil {
+		t.Fatalf("ListAdminRoles: %v", err)
+	}
+	var userRole *AdminRole
+	for i := range roles {
+		if roles[i].Role.ID == domain.RoleUser {
+			userRole = &roles[i]
+			break
+		}
+	}
+	if userRole == nil {
+		t.Fatal("user role missing from ListAdminRoles")
+	}
+	if len(userRole.PermissionKeys) != 1 || userRole.PermissionKeys[0] != domain.PermissionAccountManage {
+		t.Fatalf("user role permissions = %#v, want only account:manage", userRole.PermissionKeys)
+	}
+}
+
+func TestAuthServiceUpdatesAdminRolePermissionsAndAudits(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, actorUser.ID, domain.RoleSuperAdmin)
+
+	updated, err := h.service.UpdateAdminRolePermissions(ctx, h.authenticatedUser(t, actorUser.ID), AdminRolePermissionsInput{
+		RoleID: domain.RoleUser,
+		Permissions: []string{
+			" " + domain.PermissionAccountManage + " ",
+			domain.PermissionBridgeTokenCreate,
+			domain.PermissionBridgeTokenCreate,
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateAdminRolePermissions: %v", err)
+	}
+	if updated.Role.ID != domain.RoleUser {
+		t.Fatalf("updated role ID = %q, want user", updated.Role.ID)
+	}
+	if !hasPermissionKey(updated.PermissionKeys, domain.PermissionBridgeTokenCreate) {
+		t.Fatalf("updated permissions missing bridge token create: %#v", updated.PermissionKeys)
+	}
+	stored, err := h.store.ListRolePermissions(ctx, domain.RoleUser)
+	if err != nil {
+		t.Fatalf("ListRolePermissions: %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stored permission count = %d, want 2: %#v", len(stored), stored)
+	}
+	logs := h.store.auditLogs()
+	assertAuditAction(t, logs, "role.permissions_updated")
+	if !strings.Contains(logs[len(logs)-1].MetadataJSON, domain.PermissionBridgeTokenCreate) {
+		t.Fatalf("audit metadata = %s, want bridge token permission", logs[len(logs)-1].MetadataJSON)
+	}
+}
+
+func TestAuthServiceUpdateAdminRolePermissionsRejectsUnsafeInputs(t *testing.T) {
+	tests := []struct {
+		name  string
+		actor []string
+		input AdminRolePermissionsInput
+		want  error
+	}{
+		{
+			name:  "missing_roles_update",
+			actor: []string{domain.PermissionRolesRead},
+			input: AdminRolePermissionsInput{RoleID: domain.RoleUser, Permissions: []string{domain.PermissionAccountManage}},
+			want:  ErrPermissionDenied,
+		},
+		{
+			name:  "super_admin",
+			actor: []string{domain.PermissionRolesUpdate},
+			input: AdminRolePermissionsInput{RoleID: domain.RoleSuperAdmin, Permissions: []string{domain.PermissionAccountManage}},
+			want:  ErrPermissionDenied,
+		},
+		{
+			name:  "empty_permissions",
+			actor: []string{domain.PermissionRolesUpdate},
+			input: AdminRolePermissionsInput{RoleID: domain.RoleUser, Permissions: []string{}},
+			want:  ErrAdminInvalidInput,
+		},
+		{
+			name:  "unknown_permission",
+			actor: []string{domain.PermissionRolesUpdate},
+			input: AdminRolePermissionsInput{RoleID: domain.RoleUser, Permissions: []string{"missing:permission"}},
+			want:  ErrAdminInvalidInput,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newAuthServiceHarness(t)
+			ctx := context.Background()
+			actorUser := h.addUser(t, "actor", "actor@example.test", testAuthPassword, domain.UserStatusActive)
+			h.store.roles["test_actor"] = domain.Role{ID: "test_actor", Name: "test_actor"}
+			h.store.userRoles[actorUser.ID] = map[string]struct{}{"test_actor": {}}
+			h.store.replaceRolePermissionsLocked("test_actor", tt.actor)
+
+			_, err := h.service.UpdateAdminRolePermissions(ctx, h.authenticatedUser(t, actorUser.ID), tt.input)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("UpdateAdminRolePermissions error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+func hasPermissionKey(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAuthServiceAdminNonSuperCannotCreateResetTokenForSuperAdmin(t *testing.T) {
 	h := newAuthServiceHarness(t)
 	ctx := context.Background()
@@ -1275,18 +1398,19 @@ func TestAuthServiceAdminLastActiveSuperAdminMutationsUseRepositoryGuard(t *test
 }
 
 type fakeAuthStore struct {
-	mu             sync.Mutex
-	users          map[uuid.UUID]domain.User
-	usersByLogin   map[string]uuid.UUID
-	roles          map[string]domain.Role
-	permissions    map[string]domain.Permission
-	userRoles      map[uuid.UUID]map[string]struct{}
-	sessions       map[uuid.UUID]domain.AuthSession
-	sessionsByHash map[string]uuid.UUID
-	resets         map[uuid.UUID]domain.PasswordResetToken
-	resetsByHash   map[string]uuid.UUID
-	audit          []domain.AuditLog
-	auditErr       error
+	mu              sync.Mutex
+	users           map[uuid.UUID]domain.User
+	usersByLogin    map[string]uuid.UUID
+	roles           map[string]domain.Role
+	permissions     map[string]domain.Permission
+	rolePermissions map[string]map[string]struct{}
+	userRoles       map[uuid.UUID]map[string]struct{}
+	sessions        map[uuid.UUID]domain.AuthSession
+	sessionsByHash  map[string]uuid.UUID
+	resets          map[uuid.UUID]domain.PasswordResetToken
+	resetsByHash    map[string]uuid.UUID
+	audit           []domain.AuditLog
+	auditErr        error
 
 	protectedRoleRemovals int
 	protectedUserUpdates  int
@@ -1315,6 +1439,10 @@ func newFakeAuthStore() *fakeAuthStore {
 			Resource:    permission.Resource,
 			Action:      permission.Action,
 		}
+	}
+	store.rolePermissions = make(map[string]map[string]struct{}, len(domain.SystemRoleNames()))
+	for _, roleName := range domain.SystemRoleNames() {
+		store.replaceRolePermissionsLocked(roleName, domain.SystemRolePermissionKeys(roleName))
 	}
 	return store
 }
@@ -1461,6 +1589,44 @@ func (s *fakeAuthStore) ListPermissions(_ context.Context) ([]domain.Permission,
 		permissions = append(permissions, permission)
 	}
 	return permissions, nil
+}
+
+func (s *fakeAuthStore) ListRolePermissions(_ context.Context, roleID string) ([]domain.Permission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.roles[roleID]; !ok {
+		return nil, domain.ErrAuthRoleNotFound
+	}
+	permissions := make([]domain.Permission, 0, len(s.rolePermissions[roleID]))
+	for key := range s.rolePermissions[roleID] {
+		permissions = append(permissions, s.permissions[key])
+	}
+	return permissions, nil
+}
+
+func (s *fakeAuthStore) ReplaceRolePermissions(_ context.Context, roleID string, permissionKeys []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.roles[roleID]; !ok {
+		return domain.ErrAuthRoleNotFound
+	}
+	for _, key := range permissionKeys {
+		if _, ok := s.permissions[key]; !ok {
+			return domain.ErrAuthRoleNotFound
+		}
+	}
+	s.replaceRolePermissionsLocked(roleID, permissionKeys)
+	return nil
+}
+
+func (s *fakeAuthStore) replaceRolePermissionsLocked(roleID string, permissionKeys []string) {
+	next := make(map[string]struct{}, len(permissionKeys))
+	for _, key := range permissionKeys {
+		next[key] = struct{}{}
+	}
+	s.rolePermissions[roleID] = next
 }
 
 func (s *fakeAuthStore) GetRoleByName(_ context.Context, name string) (*domain.Role, error) {
@@ -1735,7 +1901,7 @@ func (s *fakeAuthStore) aggregateLocked(user domain.User) domain.UserWithRolesAn
 	for roleID := range s.userRoles[user.ID] {
 		role := s.roles[roleID]
 		roles = append(roles, role)
-		for _, key := range domain.SystemRolePermissionKeys(roleID) {
+		for key := range s.rolePermissions[roleID] {
 			permissionsByKey[key] = s.permissions[key]
 		}
 	}
@@ -1780,11 +1946,42 @@ func assertAuditAction(t *testing.T, logs []domain.AuditLog, action string) {
 
 	for _, log := range logs {
 		if log.Action == action {
-			if strings.Contains(log.MetadataJSON, "password") || strings.Contains(log.MetadataJSON, "token") {
+			if auditMetadataContainsSecretKey(log.MetadataJSON) {
 				t.Fatalf("audit log %q metadata contains a secret-bearing key: %s", action, log.MetadataJSON)
 			}
 			return
 		}
 	}
 	t.Fatalf("audit action %q not found in %#v", action, logs)
+}
+
+func auditMetadataContainsSecretKey(metadata string) bool {
+	var decoded interface{}
+	if err := json.Unmarshal([]byte(metadata), &decoded); err != nil {
+		metadata = strings.ToLower(metadata)
+		return strings.Contains(metadata, `"password`) || strings.Contains(metadata, `"token`)
+	}
+	return auditValueContainsSecretKey(decoded)
+}
+
+func auditValueContainsSecretKey(value interface{}) bool {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, nested := range typed {
+			key = strings.ToLower(key)
+			if strings.Contains(key, "password") || strings.Contains(key, "token") {
+				return true
+			}
+			if auditValueContainsSecretKey(nested) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, nested := range typed {
+			if auditValueContainsSecretKey(nested) {
+				return true
+			}
+		}
+	}
+	return false
 }

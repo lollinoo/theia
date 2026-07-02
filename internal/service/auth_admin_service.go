@@ -58,6 +58,12 @@ type AdminUserRoleInput struct {
 	RoleID string
 }
 
+// AdminRolePermissionsInput contains a full replacement permission set for one role.
+type AdminRolePermissionsInput struct {
+	RoleID      string
+	Permissions []string
+}
+
 // AdminRole contains a role with the permissions currently known for that role.
 type AdminRole struct {
 	Role           domain.Role
@@ -359,7 +365,7 @@ func (s *AuthService) CreateAdminPasswordResetToken(ctx context.Context, actor *
 	})
 }
 
-// ListAdminRoles returns roles with built-in permission-key mappings.
+// ListAdminRoles returns roles with persisted permission-key mappings.
 func (s *AuthService) ListAdminRoles(ctx context.Context, actor *AuthenticatedUser) ([]AdminRole, error) {
 	if err := s.RequirePermission(actor, domain.PermissionRolesRead); err != nil {
 		return nil, err
@@ -370,12 +376,65 @@ func (s *AuthService) ListAdminRoles(ctx context.Context, actor *AuthenticatedUs
 	}
 	out := make([]AdminRole, 0, len(roles))
 	for _, role := range roles {
+		permissions, err := s.roles.ListRolePermissions(ctx, role.ID)
+		if err != nil {
+			return nil, fmt.Errorf("listing admin role permissions: %w", err)
+		}
 		out = append(out, AdminRole{
 			Role:           role,
-			PermissionKeys: domain.SystemRolePermissionKeys(role.ID),
+			PermissionKeys: permissionKeysFromPermissions(permissions),
 		})
 	}
 	return out, nil
+}
+
+// UpdateAdminRolePermissions replaces permissions for an editable role.
+func (s *AuthService) UpdateAdminRolePermissions(ctx context.Context, actor *AuthenticatedUser, input AdminRolePermissionsInput) (*AdminRole, error) {
+	if err := s.RequirePermission(actor, domain.PermissionRolesUpdate); err != nil {
+		return nil, err
+	}
+	roleID := strings.TrimSpace(input.RoleID)
+	if roleID == "" {
+		return nil, ErrAdminInvalidInput
+	}
+	if roleID == domain.RoleSuperAdmin {
+		return nil, ErrPermissionDenied
+	}
+	role, err := s.roleByID(ctx, roleID)
+	if err != nil {
+		return nil, err
+	}
+	permissionKeys, err := s.normalizeAdminRolePermissionKeys(ctx, input.Permissions)
+	if err != nil {
+		return nil, err
+	}
+	if len(permissionKeys) == 0 {
+		return nil, ErrAdminInvalidInput
+	}
+	oldPermissions, err := s.roles.ListRolePermissions(ctx, role.ID)
+	if err != nil {
+		return nil, fmt.Errorf("listing previous admin role permissions: %w", err)
+	}
+	oldKeys := permissionKeysFromPermissions(oldPermissions)
+	if err := s.roles.ReplaceRolePermissions(ctx, role.ID, permissionKeys); err != nil {
+		return nil, fmt.Errorf("updating admin role permissions: %w", err)
+	}
+	newPermissions, err := s.roles.ListRolePermissions(ctx, role.ID)
+	if err != nil {
+		return nil, fmt.Errorf("listing updated admin role permissions: %w", err)
+	}
+	newKeys := permissionKeysFromPermissions(newPermissions)
+	metadata, err := json.Marshal(map[string]interface{}{
+		"added_permissions":   stringSetDifference(newKeys, oldKeys),
+		"removed_permissions": stringSetDifference(oldKeys, newKeys),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encoding role permission audit metadata: %w", err)
+	}
+	if err := s.appendAuditLog(ctx, actorUserID(actor), nil, "role.permissions_updated", "role", role.ID, string(metadata)); err != nil {
+		return nil, err
+	}
+	return &AdminRole{Role: *role, PermissionKeys: newKeys}, nil
 }
 
 // ListAdminPermissions returns known RBAC permissions.
@@ -433,6 +492,69 @@ func (s *AuthService) validateAdminRoleID(ctx context.Context, actor *Authentica
 		}
 	}
 	return "", domain.ErrAuthRoleNotFound
+}
+
+func (s *AuthService) roleByID(ctx context.Context, roleID string) (*domain.Role, error) {
+	roles, err := s.roles.ListRoles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing roles: %w", err)
+	}
+	for _, role := range roles {
+		if role.ID == roleID {
+			return &role, nil
+		}
+	}
+	return nil, domain.ErrAuthRoleNotFound
+}
+
+func (s *AuthService) normalizeAdminRolePermissionKeys(ctx context.Context, raw []string) ([]string, error) {
+	known, err := s.roles.ListPermissions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing permissions for role update: %w", err)
+	}
+	knownByKey := make(map[string]struct{}, len(known))
+	for _, permission := range known {
+		knownByKey[permission.Key] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		key := strings.TrimSpace(value)
+		if key == "" {
+			return nil, ErrAdminInvalidInput
+		}
+		if _, ok := knownByKey[key]; !ok {
+			return nil, ErrAdminInvalidInput
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	return out, nil
+}
+
+func permissionKeysFromPermissions(permissions []domain.Permission) []string {
+	keys := make([]string, 0, len(permissions))
+	for _, permission := range permissions {
+		keys = append(keys, permission.Key)
+	}
+	return keys
+}
+
+func stringSetDifference(left []string, right []string) []string {
+	rightSet := make(map[string]struct{}, len(right))
+	for _, value := range right {
+		rightSet[value] = struct{}{}
+	}
+	out := make([]string, 0)
+	for _, value := range left {
+		if _, ok := rightSet[value]; !ok {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func (s *AuthService) canChangeAdminUserStatus(ctx context.Context, actor *AuthenticatedUser, target *domain.UserWithRolesAndPermissions, status domain.UserStatus) error {
