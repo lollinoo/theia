@@ -1172,6 +1172,56 @@ func TestAuthServiceUpdatesAdminRolePermissionsAndAudits(t *testing.T) {
 	})
 }
 
+func TestAuthServiceUpdatesAdminRolePermissionsAllowsEmptyReplacement(t *testing.T) {
+	h := newAuthServiceHarness(t)
+	ctx := context.Background()
+	actorUser := h.addUser(t, "root", "root@example.test", testAuthPassword, domain.UserStatusActive)
+	h.assignRole(t, actorUser.ID, domain.RoleSuperAdmin)
+	h.store.replaceRolePermissionsLocked(domain.RoleUser, []string{
+		domain.PermissionAccountManage,
+		domain.PermissionBridgeTokenCreate,
+	})
+
+	updated, err := h.service.UpdateAdminRolePermissions(ctx, h.authenticatedUser(t, actorUser.ID), AdminRolePermissionsInput{
+		RoleID:      domain.RoleUser,
+		Permissions: []string{},
+	})
+	if err != nil {
+		t.Fatalf("UpdateAdminRolePermissions: %v", err)
+	}
+	if updated.Role.ID != domain.RoleUser {
+		t.Fatalf("updated role ID = %q, want user", updated.Role.ID)
+	}
+	if len(updated.PermissionKeys) != 0 {
+		t.Fatalf("updated permissions = %#v, want none", updated.PermissionKeys)
+	}
+	stored, err := h.store.ListRolePermissions(ctx, domain.RoleUser)
+	if err != nil {
+		t.Fatalf("ListRolePermissions: %v", err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("stored permissions = %#v, want none", stored)
+	}
+	logs := h.store.auditLogs()
+	assertAuditAction(t, logs, "role.permissions_updated")
+	metadataJSON := logs[len(logs)-1].MetadataJSON
+	assertRolePermissionsUpdatedMetadata(t, metadataJSON, []string{}, []string{
+		domain.PermissionAccountManage,
+		domain.PermissionBridgeTokenCreate,
+	}, []string{
+		domain.PermissionAccountManage,
+		domain.PermissionBridgeTokenCreate,
+	}, []string{})
+
+	raw := make(map[string]json.RawMessage)
+	if err := json.Unmarshal([]byte(metadataJSON), &raw); err != nil {
+		t.Fatalf("audit metadata is not JSON: %v", err)
+	}
+	if string(raw["new_permissions"]) != "[]" {
+		t.Fatalf("new_permissions JSON = %s, want []", raw["new_permissions"])
+	}
+}
+
 func TestAuthServiceUpdateAdminRolePermissionsRejectsUnsafeInputs(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -1204,9 +1254,9 @@ func TestAuthServiceUpdateAdminRolePermissionsRejectsUnsafeInputs(t *testing.T) 
 			want:  ErrPermissionDenied,
 		},
 		{
-			name:  "empty_permissions",
+			name:  "blank_permission",
 			actor: []string{domain.PermissionRolesUpdate},
-			input: AdminRolePermissionsInput{RoleID: domain.RoleUser, Permissions: []string{}},
+			input: AdminRolePermissionsInput{RoleID: domain.RoleUser, Permissions: []string{" "}},
 			want:  ErrAdminInvalidInput,
 		},
 		{

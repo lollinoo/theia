@@ -408,9 +408,6 @@ func (s *AuthService) UpdateAdminRolePermissions(ctx context.Context, actor *Aut
 	if err != nil {
 		return nil, err
 	}
-	if len(permissionKeys) == 0 {
-		return nil, ErrAdminInvalidInput
-	}
 	replacement, err := s.roles.ReplaceRolePermissions(ctx, role.ID, permissionKeys)
 	if err != nil {
 		return nil, fmt.Errorf("updating admin role permissions: %w", err)

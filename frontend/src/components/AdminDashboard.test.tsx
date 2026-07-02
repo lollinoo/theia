@@ -245,6 +245,42 @@ describe('AdminDashboard', () => {
     expect(saveButton).toBeDisabled();
   });
 
+  it('saves an empty role permission set after unchecking the last permission', async () => {
+    grantPermissions('admin:dashboard:read', 'roles:read', 'roles:update');
+    vi.mocked(fetchAdminRoles).mockResolvedValue([
+      { ...adminRole, id: 'user', name: 'user', permissions: ['account:manage'] },
+    ]);
+    vi.mocked(fetchAdminPermissions).mockResolvedValue(['account:manage']);
+    vi.mocked(updateAdminRolePermissions).mockResolvedValue({
+      ...adminRole,
+      id: 'user',
+      name: 'user',
+      permissions: [],
+    });
+
+    render(<AdminDashboard />);
+    act(() => {
+      fireEvent.click(screen.getByRole('tab', { name: 'Roles' }));
+    });
+    const accountCheckbox = await screen.findByRole('checkbox', {
+      name: 'account:manage for user',
+    });
+    act(() => {
+      fireEvent.click(accountCheckbox);
+    });
+    expect(accountCheckbox).not.toBeChecked();
+    const saveButton = screen.getByRole('button', { name: 'Save role permissions for user' });
+    expect(saveButton).toBeEnabled();
+
+    act(() => {
+      fireEvent.click(saveButton);
+    });
+
+    await waitFor(() => {
+      expect(updateAdminRolePermissions).toHaveBeenCalledWith('user', []);
+    });
+  });
+
   it('clears role permission save feedback when refreshing admin data', async () => {
     grantPermissions('admin:dashboard:read', 'roles:read', 'roles:update');
     vi.mocked(fetchAdminRoles).mockResolvedValue([
@@ -348,8 +384,14 @@ describe('AdminDashboard', () => {
 
     render(<AdminDashboard />);
     fireEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'bridge:token:create for user' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'bridge:token:create for operator' }));
+    const userBridgeCheckbox = await screen.findByRole('checkbox', {
+      name: 'bridge:token:create for user',
+    });
+    const operatorBridgeCheckbox = screen.getByRole('checkbox', {
+      name: 'bridge:token:create for operator',
+    });
+    fireEvent.click(userBridgeCheckbox);
+    fireEvent.click(operatorBridgeCheckbox);
     const userSave = screen.getByRole('button', { name: 'Save role permissions for user' });
     const operatorSave = screen.getByRole('button', {
       name: 'Save role permissions for operator',
@@ -360,6 +402,8 @@ describe('AdminDashboard', () => {
       expect(userSave).toBeDisabled();
     });
     expect(operatorSave).toBeDisabled();
+    expect(userBridgeCheckbox).toBeDisabled();
+    expect(operatorBridgeCheckbox).toBeDisabled();
 
     await act(async () => {
       resolveSave({

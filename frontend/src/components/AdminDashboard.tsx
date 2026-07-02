@@ -1002,6 +1002,7 @@ function RolesTable({
                                         type="checkbox"
                                         aria-label={`${permission} for ${role.name}`}
                                         checked={draft.includes(permission)}
+                                        disabled={savingRoleId !== null}
                                         onChange={() => onTogglePermission(role.id, permission)}
                                       />
                                       <span className="break-all">{permission}</span>
@@ -1013,7 +1014,7 @@ function RolesTable({
                             <button
                               type="button"
                               aria-label={`Save role permissions for ${role.name}`}
-                              disabled={!isDirty || savingRoleId !== null || draft.length === 0}
+                              disabled={!isDirty || savingRoleId !== null}
                               onClick={() => onSaveRole(role)}
                               className="inline-flex w-fit items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-50"
                             >
