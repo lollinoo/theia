@@ -22,6 +22,7 @@ export function AreaSummaryCard({
   onCreateMapFromArea,
 }: AreaSummaryCardProps) {
   const { area } = areaModel;
+  const needsAttention = areaModel.degradedDeviceCount > 0 || areaModel.degradedLinkCount > 0;
 
   return (
     <article className="rounded-lg border border-outline bg-surface p-4 shadow-panel transition-colors">
@@ -55,11 +56,7 @@ export function AreaSummaryCard({
         <div>
           <dt className="text-on-bg-secondary">Health</dt>
           <dd
-            className={
-              areaModel.degradedDeviceCount > 0
-                ? 'font-medium text-critical'
-                : 'font-medium text-status-up'
-            }
+            className={needsAttention ? 'font-medium text-critical' : 'font-medium text-status-up'}
           >
             {areaModel.healthLabel}
           </dd>
