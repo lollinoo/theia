@@ -910,17 +910,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                       {headerState.label}
                     </span>
                   </div>
-                ) : (
-                  <div
-                    data-testid="virtual-node-low-zoom-status-badge"
-                    role="img"
-                    aria-label={headerState.label}
-                    className={`topology-semantic-low-zoom-only topology-semantic-status-badge shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusStyles.badgeClass}`}
-                    style={mergeReadableFontStyle(statusStyles.badgeStyle, 10)}
-                  >
-                    <StatusDot status={headerState.dotStatus} />
-                  </div>
-                )}
+                ) : null}
               </div>
 
               {renderModel.showVirtualAddressChip ? (

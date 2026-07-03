@@ -209,7 +209,7 @@ describe('DeviceCard zoom readability', () => {
     expect(screen.getByTestId('device-node-card')).toHaveClass('min-w-[292px]', 'max-w-[430px]');
   });
 
-  it('keeps a low-zoom status dot available for unmonitored virtual cards', () => {
+  it('omits status dots for unmonitored virtual cards', () => {
     renderDeviceCard({
       device: mockDevice({
         id: 'virtual-unmonitored',
@@ -222,19 +222,14 @@ describe('DeviceCard zoom readability', () => {
       metrics: null,
     });
 
-    const fallbackStatus = screen.getByTestId('virtual-node-low-zoom-status-badge');
-
     expect(screen.getByTestId('device-node-card')).toHaveAttribute(
       'data-topology-node-variant',
       'virtual-unmonitored',
     );
     expect(screen.getByTestId('device-node-card')).toHaveClass('min-w-[242px]', 'max-w-[350px]');
     expect(screen.queryByTestId('virtual-node-status-badge')).not.toBeInTheDocument();
-    expect(fallbackStatus).toHaveClass(
-      'topology-semantic-low-zoom-only',
-      'topology-semantic-status-badge',
-    );
-    expect(fallbackStatus).toHaveAttribute('aria-label', 'Unmonitored');
+    expect(screen.queryByTestId('virtual-node-low-zoom-status-badge')).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Unmonitored' })).not.toBeInTheDocument();
   });
 
   it('keeps ghost cards on the same semantic identity path', () => {
