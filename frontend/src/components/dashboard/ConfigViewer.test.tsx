@@ -141,6 +141,66 @@ describe('ConfigViewer', () => {
     expect(screen.getByText('Preview unavailable')).toBeInTheDocument();
   });
 
+  it('infers restored generic text backup tabs from filenames', async () => {
+    vi.mocked(fetchLatestBackupJob).mockResolvedValue({
+      id: 'job-restored',
+      device_id: 'dev-1',
+      status: 'success',
+      error_message: '',
+      created_at: '2026-01-01T00:00:00Z',
+      files: [
+        {
+          id: 'f-default',
+          job_id: 'job-restored',
+          file_type: 'rsc',
+          file_name: '20260703_120000_router.rsc',
+          file_hash: 'default123',
+          size_bytes: 100,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'f-verbose',
+          job_id: 'job-restored',
+          file_type: 'rsc',
+          file_name: '20260703_120000_router_verbose.rsc',
+          file_hash: 'verbose123',
+          size_bytes: 120,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'f-compact',
+          job_id: 'job-restored',
+          file_type: 'rsc',
+          file_name: '20260703_120000_router_compact.rsc',
+          file_hash: 'compact123',
+          size_bytes: 80,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    vi.mocked(fetchBackupFileContent).mockImplementation((fileId: string) =>
+      Promise.resolve({
+        content: `# ${fileId} config`,
+        inline: true,
+        download_url: `/api/v1/backup-files/${fileId}/download`,
+        size_bytes: 100,
+        max_inline_size_bytes: 1048576,
+      }),
+    );
+
+    render(<ConfigViewer deviceId="dev-1" />);
+
+    expect(await screen.findByRole('button', { name: 'Default' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Verbose' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Compact' })).toBeInTheDocument();
+    expect(await screen.findByText('# f-default config')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Verbose' }));
+
+    expect(await screen.findByText('# f-verbose config')).toBeInTheDocument();
+    expect(fetchBackupFileContent).toHaveBeenCalledWith('f-verbose');
+  });
+
   it('ignores stale content responses after switching text tabs', async () => {
     const runningContent = deferred<Awaited<ReturnType<typeof fetchBackupFileContent>>>();
 

@@ -357,12 +357,10 @@ func (h *BackupHandler) HandleGetBackupFileContent(w http.ResponseWriter, r *htt
 }
 
 func isInlineBackupTextFile(file *domain.BackupFile) bool {
-	switch file.FileType {
-	case "running", "verbose", "compact":
-		return filepath.Ext(file.FileName) == ".rsc"
-	default:
+	if file == nil || strings.ToLower(filepath.Ext(file.FileName)) != ".rsc" {
 		return false
 	}
+	return strings.ToLower(strings.TrimSpace(file.FileType)) != "binary"
 }
 
 func writeBackupContentMetadata(w http.ResponseWriter, id uuid.UUID, inline bool, content string, sizeBytes int64, reason string) {

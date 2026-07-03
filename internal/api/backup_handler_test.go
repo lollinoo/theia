@@ -714,6 +714,45 @@ func TestBackupContent_SmallTextReturnsInlineContent(t *testing.T) {
 	}
 }
 
+func TestBackupContent_LegacyRSCFileTypeReturnsInlineContent(t *testing.T) {
+	handler, _, fileRepo := setupBackupHandler(t)
+
+	dir := t.TempDir()
+	content := "/export compact\n"
+	path := filepath.Join(dir, "router_compact.rsc")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("creating backup file: %v", err)
+	}
+
+	fileID := uuid.New()
+	fileRepo.Create(&domain.BackupFile{
+		ID:       fileID,
+		JobID:    uuid.New(),
+		FileType: "rsc",
+		FileName: "router_compact.rsc",
+		FilePath: path,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-files/"+fileID.String()+"/content", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetBackupFileContent(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	data := decodeBackupContentData(t, rec.Body)
+
+	if got := data["inline"]; got != true {
+		t.Fatalf("expected inline true, got %#v", got)
+	}
+	if got := data["content"]; got != content {
+		t.Fatalf("expected content %q, got %#v", content, got)
+	}
+	if got := data["download_url"]; got != "/api/v1/backup-files/"+fileID.String()+"/download" {
+		t.Fatalf("unexpected download_url: %#v", got)
+	}
+}
+
 func TestBackupContent_LargeTextReturnsDownloadMetadata(t *testing.T) {
 	handler, _, fileRepo := setupBackupHandler(t)
 

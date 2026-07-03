@@ -1245,6 +1245,86 @@ func TestBackupGetFileContent_TextFile(t *testing.T) {
 	}
 }
 
+func TestBackupGetFileResolvesRestoredAbsolutePathUnderCurrentBackupDir(t *testing.T) {
+	fileRepo := newMockBackupFileRepo()
+
+	backupDir := t.TempDir()
+	deviceDir := uuid.New().String()
+	fileName := "20260626_router.rsc"
+	actualDir := filepath.Join(backupDir, deviceDir)
+	if err := os.MkdirAll(actualDir, 0700); err != nil {
+		t.Fatalf("creating restored backup dir: %v", err)
+	}
+	actualPath := filepath.Join(actualDir, fileName)
+	if err := os.WriteFile(actualPath, []byte("# restored export\n"), 0600); err != nil {
+		t.Fatalf("writing restored backup file: %v", err)
+	}
+
+	fileID := uuid.New()
+	fileRepo.Create(&domain.BackupFile{
+		ID:       fileID,
+		JobID:    uuid.New(),
+		FileType: "running",
+		FileName: fileName,
+		FilePath: filepath.Join("/data/backups", deviceDir, fileName),
+	})
+
+	svc := &BackupService{fileRepo: fileRepo, backupDir: backupDir}
+	file, err := svc.GetBackupFile(context.Background(), fileID)
+	if err != nil {
+		t.Fatalf("GetBackupFile returned error: %v", err)
+	}
+	if file == nil {
+		t.Fatal("GetBackupFile returned nil")
+	}
+	if file.FilePath != actualPath {
+		t.Fatalf("FilePath = %q, want %q", file.FilePath, actualPath)
+	}
+}
+
+func TestBackupGetFileContentResolvesRestoredAbsolutePathUnderCurrentBackupDir(t *testing.T) {
+	fileRepo := newMockBackupFileRepo()
+
+	backupDir := t.TempDir()
+	deviceDir := uuid.New().String()
+	fileName := "20260626_router.rsc"
+	content := "# restored export\n"
+	actualDir := filepath.Join(backupDir, deviceDir)
+	if err := os.MkdirAll(actualDir, 0700); err != nil {
+		t.Fatalf("creating restored backup dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(actualDir, fileName), []byte(content), 0600); err != nil {
+		t.Fatalf("writing restored backup file: %v", err)
+	}
+
+	fileID := uuid.New()
+	fileRepo.Create(&domain.BackupFile{
+		ID:       fileID,
+		JobID:    uuid.New(),
+		FileType: "running",
+		FileName: fileName,
+		FilePath: filepath.Join("/data/backups", deviceDir, fileName),
+	})
+
+	svc := &BackupService{fileRepo: fileRepo, backupDir: backupDir}
+	rc, fileName, err := svc.GetBackupFileContent(context.Background(), fileID)
+	if err != nil {
+		t.Fatalf("GetBackupFileContent returned error: %v", err)
+	}
+	t.Cleanup(func() { rc.Close() })
+
+	if fileName != "20260626_router.rsc" {
+		t.Fatalf("fileName = %q, want %q", fileName, "20260626_router.rsc")
+	}
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("reading content: %v", err)
+	}
+	if string(data) != content {
+		t.Fatalf("content = %q, want %q", string(data), content)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test 6: TestBackupGetFileContent_NotFound (TEST-02 gap: text export flow)
 // ---------------------------------------------------------------------------

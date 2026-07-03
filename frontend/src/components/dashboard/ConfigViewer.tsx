@@ -28,6 +28,20 @@ type LoadedBackupContent = {
   value: BackupFileContent;
 };
 
+function displayFileType(file: BackupFile): string {
+  const fileType = file.file_type.trim().toLowerCase();
+  if (fileType === 'default') return 'running';
+  if (fileType === 'backup') return 'binary';
+  if (FILE_TYPE_LABELS[fileType]) return fileType;
+
+  const fileName = file.file_name.trim().toLowerCase();
+  if (fileName.endsWith('.backup')) return 'binary';
+  if (!fileName.endsWith('.rsc')) return fileType;
+  if (/(^|[_\-.])verbose($|[_\-.])/.test(fileName)) return 'verbose';
+  if (/(^|[_\-.])compact($|[_\-.])/.test(fileName)) return 'compact';
+  return 'running';
+}
+
 /** Renders the ConfigViewer component within the operations dashboard. */
 export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   const [job, setJob] = useState<BackupJob | null>(null);
@@ -53,7 +67,9 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
         setJob(data);
         // Default to first available file type
         if (data?.files?.length) {
-          const firstType = FILE_TYPE_ORDER.find((t) => data.files.some((f) => f.file_type === t));
+          const firstType = FILE_TYPE_ORDER.find((t) =>
+            data.files.some((f) => displayFileType(f) === t),
+          );
           if (firstType) setActiveTab(firstType);
         }
       })
@@ -73,7 +89,9 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
     };
   }, [deviceId]);
 
-  const activeFile: BackupFile | undefined = job?.files?.find((f) => f.file_type === activeTab);
+  const activeFile: BackupFile | undefined = job?.files?.find(
+    (f) => displayFileType(f) === activeTab,
+  );
   const activeContent = content && content.fileId === activeFile?.id ? content.value : null;
   const contentText = activeContent?.inline ? activeContent.content : '';
   const activeDownloadUrl =
@@ -173,7 +191,9 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
     return <div className="text-xs text-on-bg-secondary">No configuration backup available</div>;
   }
 
-  const availableTypes = FILE_TYPE_ORDER.filter((t) => job.files.some((f) => f.file_type === t));
+  const availableTypes = FILE_TYPE_ORDER.filter((t) =>
+    job.files.some((f) => displayFileType(f) === t),
+  );
 
   return (
     <div className="space-y-3 transition-colors duration-200">
