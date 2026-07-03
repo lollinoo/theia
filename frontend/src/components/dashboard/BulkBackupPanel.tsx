@@ -449,17 +449,34 @@ function bulkDownloadBatchFilename(batchIndex: number, batchCount: number): stri
   return `THEIA_BACKUPS_batch-${batchIndex + 1}-of-${batchCount}_${timestamp}.zip`;
 }
 
+function bulkBackupExclusionReason(device: Device): string | null {
+  if (device.status === 'down') return 'Offline';
+  if (device.polling_enabled === false) return 'Polling off';
+  return null;
+}
+
+function selectableBulkBackupDeviceIds(devices: Device[]): Set<string> {
+  return new Set(
+    devices
+      .filter((device) => bulkBackupExclusionReason(device) === null)
+      .map((device) => device.id),
+  );
+}
+
 /** Renders the BulkBackupPanel component within the operations dashboard. */
 export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   const devices = useMemo(
     () => allDevices.filter((d) => d.device_type !== 'virtual'),
     [allDevices],
   );
-  const deviceIdsKey = devices.map((d) => d.id).join('\0');
+  const selectableDeviceIds = useMemo(() => selectableBulkBackupDeviceIds(devices), [devices]);
+  const deviceIdsKey = devices
+    .map((d) => `${d.id}:${d.status}:${d.polling_enabled === false ? 'polling-off' : 'polling-on'}`)
+    .join('\0');
   const [session, setSession] = useState<BulkBackupSession>(() => bulkBackupSession);
   const { phase, entries, error, downloading } = session;
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<string>>(
-    () => new Set(devices.map((d) => d.id)),
+    () => new Set(selectableDeviceIds),
   );
   const [bulkOperationStatus, setBulkOperationStatus] = useState<BulkOperationStatus | null>(null);
   const [controlBusy, setControlBusy] = useState<'pause' | 'resume' | 'stop' | null>(null);
@@ -542,8 +559,8 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
 
   useEffect(() => {
     if (phase !== 'idle') return;
-    setSelectedDeviceIds(new Set(devices.map((d) => d.id)));
-  }, [deviceIdsKey, phase]);
+    setSelectedDeviceIds(new Set(selectableDeviceIds));
+  }, [deviceIdsKey, phase, selectableDeviceIds]);
 
   // Cleanup on unmount
   useEffect(
@@ -572,15 +589,17 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     }
   }, [entries, phase, session.runId, session.runStatus, startPolling]);
 
-  const selectedDevices = devices.filter((device) => selectedDeviceIds.has(device.id));
-  const selectedCount = selectedDeviceIds.size;
+  const selectedDevices = devices.filter(
+    (device) => selectedDeviceIds.has(device.id) && selectableDeviceIds.has(device.id),
+  );
+  const selectedCount = selectedDevices.length;
   const bulkBackupMaxDeviceCount = positiveIntegerOrFallback(
     bulkOperationStatus?.bulk_backup_run.max_devices,
     0,
   );
 
   const setAllDevicesSelected = () => {
-    setSelectedDeviceIds(new Set(devices.map((device) => device.id)));
+    setSelectedDeviceIds(new Set(selectableDeviceIds));
   };
 
   const clearSelectedDevices = () => {
@@ -588,6 +607,9 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   };
 
   const toggleSelectedDevice = (deviceID: string) => {
+    if (!selectableDeviceIds.has(deviceID)) {
+      return;
+    }
     setSelectedDeviceIds((prev) => {
       const next = new Set(prev);
       if (next.has(deviceID)) {
@@ -817,19 +839,28 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
           <div className="max-h-48 space-y-1 overflow-y-auto">
             {devices.map((device) => {
               const name = getDeviceName(device);
+              const exclusionReason = bulkBackupExclusionReason(device);
               return (
                 <label
                   key={device.id}
-                  className="flex items-center gap-2 rounded-md px-2 py-1 text-xs text-on-bg hover:bg-surface-high"
+                  className={`flex items-center gap-2 rounded-md px-2 py-1 text-xs ${
+                    exclusionReason ? 'text-on-bg-muted' : 'text-on-bg hover:bg-surface-high'
+                  }`}
                 >
                   <input
                     type="checkbox"
-                    checked={selectedDeviceIds.has(device.id)}
+                    checked={selectedDeviceIds.has(device.id) && !exclusionReason}
                     onChange={() => toggleSelectedDevice(device.id)}
+                    disabled={exclusionReason !== null}
                     aria-label={`Select ${name}`}
                     className="h-3.5 w-3.5"
                   />
                   <span className="truncate">{name}</span>
+                  {exclusionReason && (
+                    <span className="ml-auto shrink-0 text-[10px] text-on-bg-muted">
+                      {exclusionReason}
+                    </span>
+                  )}
                 </label>
               );
             })}

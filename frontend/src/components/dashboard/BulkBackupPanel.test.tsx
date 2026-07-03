@@ -432,6 +432,52 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     });
   });
 
+  it('leaves offline and polling-off devices unchecked for bulk backup', async () => {
+    const { startBulkBackupRun } = await import('../../api/client');
+
+    render(
+      <BulkBackupPanel
+        devices={[
+          mockDevice({
+            id: 'dev-online',
+            sys_name: 'online-router',
+            status: 'up',
+            polling_enabled: true,
+          }),
+          mockDevice({
+            id: 'dev-offline',
+            sys_name: 'offline-router',
+            status: 'down',
+            polling_enabled: true,
+          }),
+          mockDevice({
+            id: 'dev-polling-off',
+            sys_name: 'polling-off-router',
+            status: 'up',
+            polling_enabled: false,
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('1 of 3 selected')).toBeInTheDocument();
+    expect(screen.getByLabelText('Select online-router')).toBeChecked();
+    expect(screen.getByLabelText('Select offline-router')).not.toBeChecked();
+    expect(screen.getByLabelText('Select offline-router')).toBeDisabled();
+    expect(screen.getByText('Offline')).toBeInTheDocument();
+    expect(screen.getByLabelText('Select polling-off-router')).not.toBeChecked();
+    expect(screen.getByLabelText('Select polling-off-router')).toBeDisabled();
+    expect(screen.getByText('Polling off')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Select all'));
+    expect(screen.getByText('1 of 3 selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Backup Selected Devices'));
+
+    await waitFor(() => {
+      expect(startBulkBackupRun).toHaveBeenCalledWith(['dev-online']);
+    });
+  });
+
   it('hydrates a running bulk backup after a page refresh', async () => {
     const { fetchLatestBulkBackupRun } = await import('../../api/client');
     (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
@@ -685,8 +731,8 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     render(
       <BulkBackupPanel
         devices={[
-          mockDevice({ id: 'dev-1', sys_name: 'router-01', status: 'down' }),
-          mockDevice({ id: 'dev-2', sys_name: 'router-02', status: 'down' }),
+          mockDevice({ id: 'dev-1', sys_name: 'router-01' }),
+          mockDevice({ id: 'dev-2', sys_name: 'router-02' }),
         ]}
       />,
     );
