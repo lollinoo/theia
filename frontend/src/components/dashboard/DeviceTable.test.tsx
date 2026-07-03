@@ -136,7 +136,7 @@ describe('DeviceTable', () => {
     expect(screen.getByTestId('device-row-dev-3')).toBeInTheDocument();
   });
 
-  it('renders no-ip virtual nodes in a separate section after regular devices', () => {
+  it('renders virtual nodes with and without IP in separate sections after regular devices', () => {
     const devices = [
       mockDevice({
         id: 'dev-virtual-no-ip',
@@ -157,12 +157,14 @@ describe('DeviceTable', () => {
     const { container } = renderTable(devices);
 
     const bodyRows = Array.from(container.querySelectorAll('tbody tr'));
-    expect(bodyRows).toHaveLength(4);
-    expect(bodyRows[0]?.textContent).toContain('bbb-virtual-with-ip');
-    expect(bodyRows[1]?.textContent).toContain('zzz-router');
-    expect(bodyRows[2]?.textContent).toContain('Virtual nodes without IP');
-    expect(bodyRows[2]?.textContent).toContain('1');
-    expect(bodyRows[3]?.textContent).toContain('aaa-virtual-no-ip');
+    expect(bodyRows).toHaveLength(5);
+    expect(bodyRows[0]?.textContent).toContain('zzz-router');
+    expect(bodyRows[1]?.textContent).toContain('Virtual nodes with IP');
+    expect(bodyRows[1]?.textContent).toContain('1');
+    expect(bodyRows[2]?.textContent).toContain('bbb-virtual-with-ip');
+    expect(bodyRows[3]?.textContent).toContain('Virtual nodes without IP');
+    expect(bodyRows[3]?.textContent).toContain('1');
+    expect(bodyRows[4]?.textContent).toContain('aaa-virtual-no-ip');
   });
 
   it('area column header is present and clickable for sorting', () => {

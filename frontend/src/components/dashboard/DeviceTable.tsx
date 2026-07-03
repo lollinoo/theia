@@ -34,6 +34,10 @@ function isVirtualNodeWithoutIp(row: RuntimeDeviceRow): boolean {
   return row.deviceType === 'virtual' && row.ip.trim() === '';
 }
 
+function isVirtualNodeWithIp(row: RuntimeDeviceRow): boolean {
+  return row.deviceType === 'virtual' && row.ip.trim() !== '';
+}
+
 /** Renders the DeviceTable component within the operations dashboard. */
 export function DeviceTable({
   rows,
@@ -94,7 +98,10 @@ export function DeviceTable({
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
-  const regularRows = sorted.filter((row) => !isVirtualNodeWithoutIp(row));
+  const regularRows = sorted.filter(
+    (row) => !isVirtualNodeWithIp(row) && !isVirtualNodeWithoutIp(row),
+  );
+  const virtualRowsWithIp = sorted.filter(isVirtualNodeWithIp);
   const virtualRowsWithoutIp = sorted.filter(isVirtualNodeWithoutIp);
 
   const columns: { key: SortKey; label: string; className?: string }[] = [
@@ -153,6 +160,17 @@ export function DeviceTable({
         </thead>
         <tbody>
           {regularRows.map(renderDeviceRow)}
+          {virtualRowsWithIp.length > 0 && (
+            <tr className="border-y border-outline/70 bg-surface-high/40">
+              <td colSpan={columns.length + 1} className="px-3 py-2">
+                <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.16em] text-on-bg-secondary">
+                  <span>Virtual nodes with IP</span>
+                  <span className="font-mono">{virtualRowsWithIp.length}</span>
+                </div>
+              </td>
+            </tr>
+          )}
+          {virtualRowsWithIp.map(renderDeviceRow)}
           {virtualRowsWithoutIp.length > 0 && (
             <tr className="border-y border-outline/70 bg-surface-high/40">
               <td colSpan={columns.length + 1} className="px-3 py-2">
