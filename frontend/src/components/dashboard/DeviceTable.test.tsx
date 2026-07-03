@@ -136,6 +136,35 @@ describe('DeviceTable', () => {
     expect(screen.getByTestId('device-row-dev-3')).toBeInTheDocument();
   });
 
+  it('renders no-ip virtual nodes in a separate section after regular devices', () => {
+    const devices = [
+      mockDevice({
+        id: 'dev-virtual-no-ip',
+        hostname: 'aaa-virtual-no-ip',
+        device_type: 'virtual',
+        ip: '',
+        status: 'down',
+      }),
+      mockDevice({
+        id: 'dev-virtual-with-ip',
+        hostname: 'bbb-virtual-with-ip',
+        device_type: 'virtual',
+        ip: '10.0.0.20',
+      }),
+      mockDevice({ id: 'dev-router', hostname: 'zzz-router', ip: '10.0.0.10' }),
+    ];
+
+    const { container } = renderTable(devices);
+
+    const bodyRows = Array.from(container.querySelectorAll('tbody tr'));
+    expect(bodyRows).toHaveLength(4);
+    expect(bodyRows[0]?.textContent).toContain('bbb-virtual-with-ip');
+    expect(bodyRows[1]?.textContent).toContain('zzz-router');
+    expect(bodyRows[2]?.textContent).toContain('Virtual nodes without IP');
+    expect(bodyRows[2]?.textContent).toContain('1');
+    expect(bodyRows[3]?.textContent).toContain('aaa-virtual-no-ip');
+  });
+
   it('area column header is present and clickable for sorting', () => {
     renderTable();
 
@@ -157,7 +186,7 @@ describe('DeviceTable', () => {
     expect(screen.getByText('OS Version')).toBeInTheDocument();
   });
 
-  it('sorts unmonitored no-ip virtual nodes separately from down nodes', () => {
+  it('keeps no-ip virtual nodes in their split section when sorting by status', () => {
     const devices = [
       mockDevice({
         id: 'dev-virtual',
@@ -175,7 +204,8 @@ describe('DeviceTable', () => {
 
     const rows = Array.from(container.querySelectorAll('tbody tr'));
     expect(rows[0]?.textContent).toContain('router-down');
-    expect(rows[1]?.textContent).toContain('virtual-cloud');
+    expect(rows[1]?.textContent).toContain('Virtual nodes without IP');
+    expect(rows[2]?.textContent).toContain('virtual-cloud');
   });
 
   it('sorts by row-model hostname instead of raw device hostname', () => {

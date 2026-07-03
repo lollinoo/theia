@@ -30,6 +30,10 @@ interface DeviceTableProps {
   onDeletePermanently?: (device: Device) => void;
 }
 
+function isVirtualNodeWithoutIp(row: RuntimeDeviceRow): boolean {
+  return row.deviceType === 'virtual' && row.ip.trim() === '';
+}
+
 /** Renders the DeviceTable component within the operations dashboard. */
 export function DeviceTable({
   rows,
@@ -90,6 +94,9 @@ export function DeviceTable({
     return sortDir === 'asc' ? cmp : -cmp;
   });
 
+  const regularRows = sorted.filter((row) => !isVirtualNodeWithoutIp(row));
+  const virtualRowsWithoutIp = sorted.filter(isVirtualNodeWithoutIp);
+
   const columns: { key: SortKey; label: string; className?: string }[] = [
     { key: 'hostname', label: 'Name' },
     { key: 'ip', label: 'IP Address' },
@@ -100,6 +107,20 @@ export function DeviceTable({
     { key: 'os_version', label: 'OS Version' },
     { key: 'uptime', label: 'Uptime' },
   ];
+
+  const renderDeviceRow = (row: RuntimeDeviceRow) => (
+    <DeviceRow
+      key={row.id}
+      row={row}
+      areaMap={areaMap}
+      resolvedTheme={resolvedTheme}
+      onSSHCredentials={() => onSSHCredentials(row.device)}
+      onBackup={() => onBackup(row.device)}
+      onBackupHistory={() => onBackupHistory(row.device)}
+      onViewConfig={() => onViewConfig(row.device)}
+      onDeletePermanently={onDeletePermanently ? () => onDeletePermanently(row.device) : undefined}
+    />
+  );
 
   return (
     <div className="overflow-x-auto">
@@ -131,21 +152,18 @@ export function DeviceTable({
           </tr>
         </thead>
         <tbody>
-          {sorted.map((row) => (
-            <DeviceRow
-              key={row.id}
-              row={row}
-              areaMap={areaMap}
-              resolvedTheme={resolvedTheme}
-              onSSHCredentials={() => onSSHCredentials(row.device)}
-              onBackup={() => onBackup(row.device)}
-              onBackupHistory={() => onBackupHistory(row.device)}
-              onViewConfig={() => onViewConfig(row.device)}
-              onDeletePermanently={
-                onDeletePermanently ? () => onDeletePermanently(row.device) : undefined
-              }
-            />
-          ))}
+          {regularRows.map(renderDeviceRow)}
+          {virtualRowsWithoutIp.length > 0 && (
+            <tr className="border-y border-outline/70 bg-surface-high/40">
+              <td colSpan={columns.length + 1} className="px-3 py-2">
+                <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.16em] text-on-bg-secondary">
+                  <span>Virtual nodes without IP</span>
+                  <span className="font-mono">{virtualRowsWithoutIp.length}</span>
+                </div>
+              </td>
+            </tr>
+          )}
+          {virtualRowsWithoutIp.map(renderDeviceRow)}
         </tbody>
       </table>
     </div>
