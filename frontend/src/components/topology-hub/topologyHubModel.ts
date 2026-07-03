@@ -25,6 +25,7 @@ export interface TopologyHubAreaModel {
   deviceCount: number;
   activeLinkCount: number;
   degradedDeviceCount: number;
+  degradedLinkCount: number;
   healthPercentage: number;
   healthLabel: 'Healthy' | 'Needs attention';
 }
@@ -73,10 +74,25 @@ function healthPercentage(deviceCount: number, degradedDeviceCount: number): num
   return Math.round(((deviceCount - degradedDeviceCount) / deviceCount) * 100);
 }
 
-function countAreaLinks(links: Link[], areaDeviceIds: Set<string>): number {
+function areaLinks(links: Link[], areaDeviceIds: Set<string>): Link[] {
   return links.filter(
     (link) => areaDeviceIds.has(link.source_device_id) || areaDeviceIds.has(link.target_device_id),
-  ).length;
+  );
+}
+
+function isKnownInterfaceDegraded(status: string | undefined): boolean {
+  const normalized = status?.trim().toLowerCase();
+  return Boolean(normalized && normalized !== 'unknown' && normalized !== 'up');
+}
+
+function isLinkDegraded(link: Link, snapshot: SnapshotPayload | null): boolean {
+  const runtimeLink = snapshot?.links?.[link.id];
+  return (
+    runtimeLink?.metrics_status === 'partial' ||
+    runtimeLink?.metrics_status === 'unavailable' ||
+    isKnownInterfaceDegraded(link.source_if_oper_status) ||
+    isKnownInterfaceDegraded(link.target_if_oper_status)
+  );
 }
 
 /** Builds topology hub model for the topology hub. */
@@ -96,14 +112,19 @@ export function buildTopologyHubModel({
     const degradedDeviceCount = areaDevices.filter((device) =>
       isDeviceDegraded(device, snapshot),
     ).length;
+    const activeAreaLinks = areaLinks(links, areaDeviceIds);
+    const degradedLinkCount = activeAreaLinks.filter((link) =>
+      isLinkDegraded(link, snapshot),
+    ).length;
     const healthLabel: TopologyHubAreaModel['healthLabel'] =
-      degradedDeviceCount > 0 ? 'Needs attention' : 'Healthy';
+      degradedDeviceCount > 0 || degradedLinkCount > 0 ? 'Needs attention' : 'Healthy';
 
     return {
       area,
       deviceCount,
-      activeLinkCount: countAreaLinks(links, areaDeviceIds),
+      activeLinkCount: activeAreaLinks.length,
       degradedDeviceCount,
+      degradedLinkCount,
       healthPercentage: healthPercentage(deviceCount, degradedDeviceCount),
       healthLabel,
     };

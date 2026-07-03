@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Area, CanvasMap, Device, Link } from '../../types/api';
-import type { DeviceRuntimeDTO, SnapshotPayload } from '../../types/metrics';
+import type { DeviceRuntimeDTO, LinkRuntimeDTO, SnapshotPayload } from '../../types/metrics';
 import { buildTopologyHubModel } from './topologyHubModel';
 
 function mockArea(overrides: Partial<Area> = {}): Area {
@@ -109,6 +109,23 @@ function mockDeviceRuntime(overrides: Partial<DeviceRuntimeDTO> = {}): DeviceRun
     mem_percent: 25,
     temp_celsius: null,
     uptime_secs: 86400,
+    ...overrides,
+  };
+}
+
+function mockLinkRuntime(overrides: Partial<LinkRuntimeDTO> = {}): LinkRuntimeDTO {
+  return {
+    link_id: 'link-1',
+    source_device_id: 'device-1',
+    target_device_id: 'device-2',
+    source_if_name: 'ether1',
+    target_if_name: 'ether2',
+    metrics_status: 'available',
+    metrics_reason: 'ok',
+    last_collected_at: '2026-01-01T00:00:00Z',
+    tx_bps: 1000,
+    rx_bps: 1000,
+    utilization: 0.1,
     ...overrides,
   };
 }
@@ -334,5 +351,95 @@ describe('buildTopologyHubModel', () => {
       ['area-1', 2],
       ['area-2', 1],
     ]);
+  });
+
+  it('marks multi-area and cross-area link degradation as area attention', () => {
+    const regionA = mockArea({ id: 'region-a', name: 'Region A', device_count: 2 });
+    const regionB = mockArea({ id: 'region-b', name: 'Region B', device_count: 2 });
+    const interconnectArea = mockArea({
+      id: 'interconnect',
+      name: 'Interconnect',
+      device_count: 1,
+    });
+    const devices = [
+      mockDevice({
+        id: 'region-a-router',
+        hostname: '192.0.2.1',
+        ip: '192.0.2.1',
+        area_ids: ['region-a'],
+      }),
+      mockDevice({
+        id: 'region-b-router',
+        hostname: '192.0.2.2',
+        ip: '192.0.2.2',
+        area_ids: ['region-b'],
+      }),
+      mockDevice({
+        id: 'shared-router',
+        hostname: '192.0.2.3',
+        ip: '192.0.2.3',
+        area_ids: ['region-a', 'region-b', 'interconnect'],
+      }),
+    ];
+    const links = [
+      mockLink({
+        id: 'link-region-a-region-b',
+        source_device_id: 'region-a-router',
+        target_device_id: 'region-b-router',
+        source_if_oper_status: 'down',
+        target_if_oper_status: 'up',
+      }),
+      mockLink({
+        id: 'link-region-a-shared',
+        source_device_id: 'region-a-router',
+        target_device_id: 'shared-router',
+      }),
+      mockLink({
+        id: 'link-region-b-shared',
+        source_device_id: 'region-b-router',
+        target_device_id: 'shared-router',
+      }),
+    ];
+    const snapshot: SnapshotPayload = {
+      devices: {},
+      links: {
+        'link-region-a-shared': mockLinkRuntime({
+          link_id: 'link-region-a-shared',
+          source_device_id: 'region-a-router',
+          target_device_id: 'shared-router',
+          metrics_status: 'partial',
+        }),
+        'link-region-b-shared': mockLinkRuntime({
+          link_id: 'link-region-b-shared',
+          source_device_id: 'region-b-router',
+          target_device_id: 'shared-router',
+          metrics_status: 'unavailable',
+          metrics_reason: 'upstream_unavailable',
+          utilization: null,
+        }),
+      },
+    };
+
+    const model = buildTopologyHubModel({
+      areas: [regionA, regionB, interconnectArea],
+      devices,
+      links,
+      snapshot,
+      maps: [],
+    });
+
+    expect(model.areas.map((areaModel) => [areaModel.area.id, areaModel.healthLabel])).toEqual([
+      ['region-a', 'Needs attention'],
+      ['region-b', 'Needs attention'],
+      ['interconnect', 'Needs attention'],
+    ]);
+    expect(
+      model.areas.map((areaModel) => [areaModel.area.id, areaModel.degradedLinkCount]),
+    ).toEqual([
+      ['region-a', 3],
+      ['region-b', 3],
+      ['interconnect', 2],
+    ]);
+    expect(model.areas.every((areaModel) => areaModel.degradedDeviceCount === 0)).toBe(true);
   });
 });

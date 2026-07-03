@@ -161,6 +161,7 @@ interface AreaManagerProps {
       healthLabel: string;
       activeLinkCount: number;
       degradedDeviceCount: number;
+      degradedLinkCount: number;
     }
   >;
   onOpenArea?: (areaId: string) => void;
@@ -470,6 +471,9 @@ export function AreaManager({
       {!loading &&
         areas.map((area) => {
           const metrics = areaMetrics?.[area.id];
+          const needsAttention =
+            metrics !== undefined &&
+            (metrics.degradedDeviceCount > 0 || metrics.degradedLinkCount > 0);
 
           return (
             <div
@@ -496,7 +500,7 @@ export function AreaManager({
                         <dt className="text-on-bg-secondary">Health</dt>
                         <dd
                           className={
-                            metrics.degradedDeviceCount > 0
+                            needsAttention
                               ? 'font-medium text-critical'
                               : 'font-medium text-status-up'
                           }

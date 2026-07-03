@@ -101,6 +101,7 @@ export function TopologyHub({
         healthLabel: areaModel.healthLabel,
         activeLinkCount: areaModel.activeLinkCount,
         degradedDeviceCount: areaModel.degradedDeviceCount,
+        degradedLinkCount: areaModel.degradedLinkCount,
       },
     ]),
   );
