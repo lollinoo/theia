@@ -225,6 +225,12 @@ type AuditLogFilter struct {
 	Offset       int
 }
 
+// RolePermissionReplacement contains permission snapshots from a committed role permission replacement.
+type RolePermissionReplacement struct {
+	OldPermissions []Permission
+	NewPermissions []Permission
+}
+
 // UserRepository persists users and user aggregates.
 type UserRepository interface {
 	CreateUser(ctx context.Context, user *User) error
@@ -242,7 +248,9 @@ type UserRepository interface {
 type RoleRepository interface {
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListPermissions(ctx context.Context) ([]Permission, error)
+	ListRolePermissions(ctx context.Context, roleID string) ([]Permission, error)
 	GetRoleByName(ctx context.Context, name string) (*Role, error)
+	ReplaceRolePermissions(ctx context.Context, roleID string, permissionKeys []string) (*RolePermissionReplacement, error)
 	AssignRole(ctx context.Context, userID uuid.UUID, roleID string, createdBy *uuid.UUID) error
 	RemoveRole(ctx context.Context, userID uuid.UUID, roleID string) error
 	RemoveRolePreservingLastActiveSuperAdmin(ctx context.Context, userID uuid.UUID, roleID string) error

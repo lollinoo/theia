@@ -595,6 +595,7 @@ var apiRouteSpecs = []apiRouteSpec{
 		methodPolicy(http.MethodHead, domain.PermissionUsersRead),
 		methodPolicy(http.MethodPatch, domain.PermissionUsersUpdate),
 	)),
+	protectedRoute("admin role permissions", "/api/v1/admin/roles/{roleID}/permissions", "/api/v1/admin/", routeHandlerAdmin, routeMiddlewareNormalJSON, patchPolicy(domain.PermissionRolesUpdate)),
 	protectedRoute("admin roles", "/api/v1/admin/roles", "/api/v1/admin/", routeHandlerAdmin, routeMiddlewareNormalJSON, readPolicy(domain.PermissionRolesRead)),
 	protectedRoute("admin permissions", "/api/v1/admin/permissions", "/api/v1/admin/", routeHandlerAdmin, routeMiddlewareNormalJSON, readPolicy(domain.PermissionRolesRead)),
 	protectedRoute("admin audit logs", "/api/v1/admin/audit-logs", "/api/v1/admin/", routeHandlerAdmin, routeMiddlewareNormalJSON, readPolicy(domain.PermissionAuditLogsRead)),

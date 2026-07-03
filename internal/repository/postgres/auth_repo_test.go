@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,6 +119,231 @@ func TestAuthRepoListsSeededRolesAndPermissions(t *testing.T) {
 	if role.ID != domain.RoleSuperAdmin || !role.IsSystemRole {
 		t.Fatalf("GetRoleByName returned %#v", role)
 	}
+}
+
+func TestAuthRepoListAndReplaceRolePermissions(t *testing.T) {
+	repo, ctx := newAuthRepoForTest(t)
+
+	initial, err := repo.ListRolePermissions(ctx, domain.RoleUser)
+	if err != nil {
+		t.Fatalf("ListRolePermissions initial: %v", err)
+	}
+	if containsPermissionKey(permissionKeys(initial), domain.PermissionBridgeTokenCreate) {
+		t.Fatalf("user role initially has %q, want absent", domain.PermissionBridgeTokenCreate)
+	}
+
+	nextKeys := []string{
+		domain.PermissionAccountManage,
+		domain.PermissionDevicesRead,
+		domain.PermissionBridgeTokenCreate,
+	}
+	replacement, err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, nextKeys)
+	if err != nil {
+		t.Fatalf("ReplaceRolePermissions: %v", err)
+	}
+	if !containsPermissionKey(permissionKeys(replacement.OldPermissions), domain.PermissionAccountManage) {
+		t.Fatalf("old permissions missing account manage: %#v", replacement.OldPermissions)
+	}
+	for _, key := range nextKeys {
+		if !containsPermissionKey(permissionKeys(replacement.NewPermissions), key) {
+			t.Fatalf("new permission snapshot missing %q: %#v", key, replacement.NewPermissions)
+		}
+	}
+	if len(replacement.NewPermissions) != len(nextKeys) {
+		t.Fatalf("new permission snapshot count = %d, want %d: %#v", len(replacement.NewPermissions), len(nextKeys), replacement.NewPermissions)
+	}
+	replaced, err := repo.ListRolePermissions(ctx, domain.RoleUser)
+	if err != nil {
+		t.Fatalf("ListRolePermissions replaced: %v", err)
+	}
+	for _, key := range nextKeys {
+		if !containsPermissionKey(permissionKeys(replaced), key) {
+			t.Fatalf("replaced permissions missing %q: %#v", key, replaced)
+		}
+	}
+	if len(replaced) != len(nextKeys) {
+		t.Fatalf("replaced permission count = %d, want %d: %#v", len(replaced), len(nextKeys), replaced)
+	}
+}
+
+func TestAuthRepoReplaceRolePermissionsWaitsForRoleRowLock(t *testing.T) {
+	db := setupTestDB(t)
+	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
+		t.Fatalf("seeding auth roles and permissions: %v", err)
+	}
+	repo := NewAuthRepo(db)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	lockTx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin lock transaction: %v", err)
+	}
+	var roleID string
+	if err := lockTx.QueryRowContext(ctx, rebindQuery(`SELECT id FROM roles WHERE id = ? FOR UPDATE`), domain.RoleUser).Scan(&roleID); err != nil {
+		_ = lockTx.Rollback()
+		t.Fatalf("locking role row: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, nil)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		_ = lockTx.Rollback()
+		if err != nil {
+			t.Fatalf("ReplaceRolePermissions completed before lock release with error: %v", err)
+		}
+		t.Fatal("ReplaceRolePermissions completed while the role row lock was still held")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := lockTx.Commit(); err != nil {
+		t.Fatalf("releasing role row lock: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ReplaceRolePermissions after lock release: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReplaceRolePermissions did not complete after releasing the role row lock")
+	}
+}
+
+func TestAuthRepoReplaceRolePermissionsRejectsUnknownReferences(t *testing.T) {
+	repo, ctx := newAuthRepoForTest(t)
+
+	if _, err := repo.ReplaceRolePermissions(ctx, "missing-role", []string{domain.PermissionAccountManage}); !errors.Is(err, domain.ErrAuthRoleNotFound) {
+		t.Fatalf("unknown role error = %v, want ErrAuthRoleNotFound", err)
+	}
+	if _, err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, []string{"missing:permission"}); !errors.Is(err, domain.ErrAuthRoleNotFound) {
+		t.Fatalf("unknown permission error = %v, want ErrAuthRoleNotFound", err)
+	}
+}
+
+func TestAuthSeedPreservesManualEditableRolePermissionRemoval(t *testing.T) {
+	db := setupTestDB(t)
+	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
+		t.Fatalf("initial seed: %v", err)
+	}
+	repo := NewAuthRepo(db)
+	ctx := context.Background()
+	if _, err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, []string{domain.PermissionAccountManage}); err != nil {
+		t.Fatalf("ReplaceRolePermissions before reseed: %v", err)
+	}
+	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
+		t.Fatalf("second seed: %v", err)
+	}
+	userPermissions, err := repo.ListRolePermissions(ctx, domain.RoleUser)
+	if err != nil {
+		t.Fatalf("ListRolePermissions user after reseed: %v", err)
+	}
+	if len(userPermissions) != 1 || userPermissions[0].Key != domain.PermissionAccountManage {
+		t.Fatalf("user permissions after reseed = %#v, want only account:manage", userPermissions)
+	}
+
+	if _, err := repo.ReplaceRolePermissions(ctx, domain.RoleUser, []string{}); err != nil {
+		t.Fatalf("ReplaceRolePermissions empty user before reseed: %v", err)
+	}
+	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
+		t.Fatalf("third seed: %v", err)
+	}
+	userPermissions, err = repo.ListRolePermissions(ctx, domain.RoleUser)
+	if err != nil {
+		t.Fatalf("ListRolePermissions empty user after reseed: %v", err)
+	}
+	if len(userPermissions) != 0 {
+		t.Fatalf("user permissions after empty reseed = %#v, want none", userPermissions)
+	}
+
+	if _, err := repo.ReplaceRolePermissions(ctx, domain.RoleSuperAdmin, []string{domain.PermissionAccountManage}); err != nil {
+		t.Fatalf("ReplaceRolePermissions super_admin before reseed: %v", err)
+	}
+	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
+		t.Fatalf("fourth seed: %v", err)
+	}
+	superPermissions, err := repo.ListRolePermissions(ctx, domain.RoleSuperAdmin)
+	if err != nil {
+		t.Fatalf("ListRolePermissions super_admin after reseed: %v", err)
+	}
+	if len(superPermissions) != len(domain.SystemPermissions()) {
+		t.Fatalf("super_admin permission count after reseed = %d, want %d", len(superPermissions), len(domain.SystemPermissions()))
+	}
+}
+
+func TestAuthSeedRollsBackRoleExistenceSignalOnPermissionFailure(t *testing.T) {
+	db := setupTestDB(t)
+	if _, err := db.Exec(`
+		CREATE OR REPLACE FUNCTION fail_auth_seed_permission_insert()
+		RETURNS trigger
+		LANGUAGE plpgsql
+		AS $$
+		BEGIN
+			RAISE EXCEPTION 'intentional auth seed permission failure';
+		END;
+		$$;
+
+		CREATE TRIGGER fail_auth_seed_permission_insert
+		BEFORE INSERT ON permissions
+		FOR EACH ROW
+		EXECUTE FUNCTION fail_auth_seed_permission_insert();
+	`); err != nil {
+		t.Fatalf("installing permission insert failure trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`
+			DROP TRIGGER IF EXISTS fail_auth_seed_permission_insert ON permissions;
+			DROP FUNCTION IF EXISTS fail_auth_seed_permission_insert();
+		`)
+	})
+
+	err := seedAuthSystemRolesAndPermissions(db)
+	if err == nil {
+		t.Fatal("seed with failing permission insert returned nil error")
+	}
+	if !strings.Contains(err.Error(), "seeding auth system permission") {
+		t.Fatalf("seed error = %v, want permission seeding context", err)
+	}
+
+	var roleCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM roles`).Scan(&roleCount); err != nil {
+		t.Fatalf("counting roles after failed seed: %v", err)
+	}
+	if roleCount != 0 {
+		t.Fatalf("roles after failed seed = %d, want 0", roleCount)
+	}
+
+	if _, err := db.Exec(`
+		DROP TRIGGER IF EXISTS fail_auth_seed_permission_insert ON permissions;
+		DROP FUNCTION IF EXISTS fail_auth_seed_permission_insert();
+	`); err != nil {
+		t.Fatalf("dropping permission insert failure trigger: %v", err)
+	}
+	if err := seedAuthSystemRolesAndPermissions(db); err != nil {
+		t.Fatalf("retry seed: %v", err)
+	}
+
+	repo := NewAuthRepo(db)
+	userPermissions, err := repo.ListRolePermissions(context.Background(), domain.RoleUser)
+	if err != nil {
+		t.Fatalf("ListRolePermissions user after retry: %v", err)
+	}
+	if len(userPermissions) != len(domain.SystemRolePermissionKeys(domain.RoleUser)) {
+		t.Fatalf("user permission count after retry = %d, want %d", len(userPermissions), len(domain.SystemRolePermissionKeys(domain.RoleUser)))
+	}
+}
+
+func permissionKeys(permissions []domain.Permission) []string {
+	keys := make([]string, 0, len(permissions))
+	for _, permission := range permissions {
+		keys = append(keys, permission.Key)
+	}
+	return keys
 }
 
 func TestAuthRepoNotFoundErrorsMatchDomainSentinels(t *testing.T) {

@@ -7,6 +7,7 @@ import {
   parseAdminDashboard,
   parseAdminPasswordResetResponse,
   parseAdminPermissionsEnvelope,
+  parseAdminRole,
   parseAdminRolesEnvelope,
   parseAdminUserEnvelope,
   parseAdminUsersEnvelope,
@@ -140,6 +141,21 @@ export async function removeAdminUserRole(userId: string, roleId: string): Promi
     `/api/v1/admin/users/${encodeURIComponent(userId)}/roles/${encodeURIComponent(roleId)}`,
     'DELETE',
   );
+}
+
+// updateAdminRolePermissions replaces all permission keys for one role.
+export async function updateAdminRolePermissions(
+  roleId: string,
+  permissions: string[],
+): Promise<AdminRole> {
+  const payload = await requestJSONWithBody(
+    `/api/v1/admin/roles/${encodeURIComponent(roleId)}/permissions`,
+    'PATCH',
+    { permissions },
+  );
+  const record =
+    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  return parseAdminRole(record.role);
 }
 
 // createAdminPasswordReset creates a reset token while preserving the legacy token fallback.

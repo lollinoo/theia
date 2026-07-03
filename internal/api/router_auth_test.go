@@ -194,6 +194,7 @@ func TestRequiredPermissionsForRegisteredProtectedRoutes(t *testing.T) {
 		{name: "admin user role remove", method: http.MethodDelete, path: "/api/v1/admin/users/" + id + "/roles/" + roleID, want: []string{domain.PermissionRolesAssign}},
 		{name: "admin user password reset", method: http.MethodPost, path: "/api/v1/admin/users/" + id + "/password-reset", want: []string{domain.PermissionUsersUpdate}},
 		{name: "admin roles list", method: http.MethodGet, path: "/api/v1/admin/roles", want: []string{domain.PermissionRolesRead}},
+		{name: "admin role permissions update", method: http.MethodPatch, path: "/api/v1/admin/roles/" + roleID + "/permissions", want: []string{domain.PermissionRolesUpdate}},
 		{name: "admin permissions list", method: http.MethodGet, path: "/api/v1/admin/permissions", want: []string{domain.PermissionRolesRead}},
 		{name: "admin audit logs", method: http.MethodGet, path: "/api/v1/admin/audit-logs", want: []string{domain.PermissionAuditLogsRead}},
 	}
@@ -534,6 +535,139 @@ func TestAdminUsersCreateReturnsClearPasswordPolicyError(t *testing.T) {
 	}
 	if !strings.Contains(body, "Password must be 10 to 24 characters") {
 		t.Fatalf("body = %s, want password policy detail", body)
+	}
+}
+
+func TestAdminRolePermissionsUpdateReturnsUpdatedRole(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("admin", false, domain.PermissionRolesUpdate))
+	auth.updatedAdminRole = &service.AdminRole{
+		Role:           domain.Role{ID: domain.RoleUser, Name: domain.RoleUser, Description: "Standard operator access", IsSystemRole: true},
+		PermissionKeys: []string{domain.PermissionAccountManage, domain.PermissionBridgeTokenCreate},
+	}
+	router := newAuthTestRouter(auth)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/v1/admin/roles/user/permissions",
+		strings.NewReader(`{"permissions":["account:manage","bridge:token:create"]}`),
+	)
+	addSessionCookie(req, testSessionToken)
+	addCSRFCookieAndHeader(req, testCSRFToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !auth.updateAdminRolePermissionsCalled {
+		t.Fatal("UpdateAdminRolePermissions was not called")
+	}
+	if auth.updatedAdminRolePermissionsInput.RoleID != domain.RoleUser {
+		t.Fatalf("RoleID = %q, want user", auth.updatedAdminRolePermissionsInput.RoleID)
+	}
+	if !sameStringSlice(auth.updatedAdminRolePermissionsInput.Permissions, []string{domain.PermissionAccountManage, domain.PermissionBridgeTokenCreate}) {
+		t.Fatalf("permissions input = %#v", auth.updatedAdminRolePermissionsInput.Permissions)
+	}
+	if !strings.Contains(rec.Body.String(), domain.PermissionBridgeTokenCreate) {
+		t.Fatalf("response body = %s, want bridge token permission", rec.Body.String())
+	}
+}
+
+func TestAdminRolePermissionsUpdateAcceptsExplicitEmptyPermissions(t *testing.T) {
+	auth := newFakeAPIAuthProvider()
+	auth.setSession(testSessionToken, testCSRFToken, testAPIUser("admin", false, domain.PermissionRolesUpdate))
+	auth.updatedAdminRole = &service.AdminRole{
+		Role:           domain.Role{ID: domain.RoleUser, Name: domain.RoleUser, Description: "Standard operator access", IsSystemRole: true},
+		PermissionKeys: []string{},
+	}
+	router := newAuthTestRouter(auth)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/v1/admin/roles/user/permissions",
+		strings.NewReader(`{"permissions":[]}`),
+	)
+	addSessionCookie(req, testSessionToken)
+	addCSRFCookieAndHeader(req, testCSRFToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !auth.updateAdminRolePermissionsCalled {
+		t.Fatal("UpdateAdminRolePermissions was not called")
+	}
+	if auth.updatedAdminRolePermissionsInput.Permissions == nil {
+		t.Fatal("permissions input = nil, want empty non-nil slice")
+	}
+	if len(auth.updatedAdminRolePermissionsInput.Permissions) != 0 {
+		t.Fatalf("permissions input = %#v, want empty slice", auth.updatedAdminRolePermissionsInput.Permissions)
+	}
+}
+
+func TestAdminRolePermissionsUpdateRejectsMissingPermissionsPayload(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing", body: `{}`},
+		{name: "null", body: `{"permissions":null}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth := newFakeAPIAuthProvider()
+			auth.setSession(testSessionToken, testCSRFToken, testAPIUser("admin", false, domain.PermissionRolesUpdate))
+			auth.updatedAdminRole = &service.AdminRole{
+				Role:           domain.Role{ID: domain.RoleUser, Name: domain.RoleUser, Description: "Standard operator access", IsSystemRole: true},
+				PermissionKeys: []string{domain.PermissionAccountManage},
+			}
+			router := newAuthTestRouter(auth)
+
+			req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/roles/user/permissions", strings.NewReader(tt.body))
+			addSessionCookie(req, testSessionToken)
+			addCSRFCookieAndHeader(req, testCSRFToken)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if auth.updateAdminRolePermissionsCalled {
+				t.Fatal("UpdateAdminRolePermissions was called")
+			}
+		})
+	}
+}
+
+func TestAdminRolePermissionsUpdateMapsErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "invalid", err: service.ErrAdminInvalidInput, want: http.StatusBadRequest},
+		{name: "forbidden", err: service.ErrPermissionDenied, want: http.StatusForbidden},
+		{name: "not_found", err: domain.ErrAuthRoleNotFound, want: http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth := newFakeAPIAuthProvider()
+			auth.setSession(testSessionToken, testCSRFToken, testAPIUser("admin", false, domain.PermissionRolesUpdate))
+			auth.updateAdminRolePermissionsErr = tt.err
+			router := newAuthTestRouter(auth)
+
+			req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/roles/user/permissions", strings.NewReader(`{"permissions":["account:manage"]}`))
+			addSessionCookie(req, testSessionToken)
+			addCSRFCookieAndHeader(req, testCSRFToken)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tt.want, rec.Body.String())
+			}
+		})
 	}
 }
 
@@ -938,22 +1072,26 @@ func newAuthTestRouter(auth *fakeAPIAuthProvider) http.Handler {
 }
 
 type fakeAPIAuthProvider struct {
-	login                       *service.LoginResult
-	loginErr                    error
-	changeErr                   error
-	completePasswordResetErr    error
-	usersByToken                map[string]*service.AuthenticatedUser
-	csrfByToken                 map[string]string
-	logoutTokens                []string
-	changePasswordCalled        bool
-	completePasswordResetCalled bool
-	completedPasswordReset      service.PasswordResetCompleteInput
-	adminUsers                  []domain.UserWithRolesAndPermissions
-	createdAdminUser            *domain.UserWithRolesAndPermissions
-	createdAdminUserInput       service.AdminCreateUserInput
-	createAdminUserErr          error
-	listAdminUsersCalled        bool
-	createAdminUserCalled       bool
+	login                            *service.LoginResult
+	loginErr                         error
+	changeErr                        error
+	completePasswordResetErr         error
+	usersByToken                     map[string]*service.AuthenticatedUser
+	csrfByToken                      map[string]string
+	logoutTokens                     []string
+	changePasswordCalled             bool
+	completePasswordResetCalled      bool
+	completedPasswordReset           service.PasswordResetCompleteInput
+	adminUsers                       []domain.UserWithRolesAndPermissions
+	createdAdminUser                 *domain.UserWithRolesAndPermissions
+	createdAdminUserInput            service.AdminCreateUserInput
+	createAdminUserErr               error
+	updateAdminRolePermissionsCalled bool
+	updatedAdminRolePermissionsInput service.AdminRolePermissionsInput
+	updateAdminRolePermissionsErr    error
+	updatedAdminRole                 *service.AdminRole
+	listAdminUsersCalled             bool
+	createAdminUserCalled            bool
 }
 
 func newFakeAPIAuthProvider() *fakeAPIAuthProvider {
@@ -1101,6 +1239,18 @@ func (f *fakeAPIAuthProvider) CreateAdminPasswordResetToken(context.Context, *se
 
 func (f *fakeAPIAuthProvider) ListAdminRoles(context.Context, *service.AuthenticatedUser) ([]service.AdminRole, error) {
 	return nil, nil
+}
+
+func (f *fakeAPIAuthProvider) UpdateAdminRolePermissions(_ context.Context, _ *service.AuthenticatedUser, input service.AdminRolePermissionsInput) (*service.AdminRole, error) {
+	f.updateAdminRolePermissionsCalled = true
+	f.updatedAdminRolePermissionsInput = input
+	if f.updateAdminRolePermissionsErr != nil {
+		return nil, f.updateAdminRolePermissionsErr
+	}
+	if f.updatedAdminRole == nil {
+		return nil, domain.ErrAuthRoleNotFound
+	}
+	return f.updatedAdminRole, nil
 }
 
 func (f *fakeAPIAuthProvider) ListAdminPermissions(context.Context, *service.AuthenticatedUser) ([]domain.Permission, error) {
