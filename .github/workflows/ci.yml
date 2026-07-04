@@ -175,7 +175,7 @@ jobs:
 
       - name: Upload Playwright artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-artifacts
           path: |
@@ -244,7 +244,7 @@ jobs:
           go build -ldflags="${{ matrix.ldflags }}" -o "bridge_binaries/winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/winbox-bridge/
 
       - name: Upload bridge artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}
           path: bridge_binaries/winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
