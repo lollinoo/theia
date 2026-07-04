@@ -333,6 +333,43 @@ func TestCIImageJobsCheckoutRepositoryBeforeBuildPush(t *testing.T) {
 	}
 }
 
+func TestCIImageJobsUseGitHubTokenForGHCRLogin(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	workflow := readGitHubWorkflow(t, filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
+
+	for _, jobName := range []string{"master-images", "branch-images", "release-images"} {
+		t.Run(jobName, func(t *testing.T) {
+			job := requireWorkflowJob(t, workflow, jobName)
+			login := requireWorkflowStepByUses(t, job, "docker/login-action@v4")
+			if login.With["registry"] != "ghcr.io" {
+				t.Fatalf("docker login registry = %q, want ghcr.io", login.With["registry"])
+			}
+			if login.With["password"] != "${{ secrets.GITHUB_TOKEN }}" {
+				t.Fatalf("docker login password = %q, want GitHub token", login.With["password"])
+			}
+		})
+	}
+}
+
+func TestDockerfileUsesPostgres17ClientTools(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	content, err := os.ReadFile(filepath.Join(repoRoot, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	dockerfile := string(content)
+
+	if !strings.Contains(dockerfile, "FROM postgres:17-bookworm AS postgres-tools") {
+		t.Fatalf("Dockerfile postgres-tools stage must use PostgreSQL 17 client tools")
+	}
+	for _, tool := range []string{"pg_dump", "pg_restore", "psql"} {
+		want := "/usr/lib/postgresql/17/bin/" + tool
+		if !strings.Contains(dockerfile, want) {
+			t.Fatalf("Dockerfile must copy %s from PostgreSQL 17 tools", tool)
+		}
+	}
+}
+
 func TestPrometheusConfigsScrapeBackendMetrics(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	tests := []struct {
@@ -927,6 +964,17 @@ func requireWorkflowStepByName(t *testing.T, job githubWorkflowJob, name string)
 	return githubWorkflowStep{}
 }
 
+func requireWorkflowStepByUses(t *testing.T, job githubWorkflowJob, uses string) githubWorkflowStep {
+	t.Helper()
+	for _, step := range job.Steps {
+		if step.Uses == uses {
+			return step
+		}
+	}
+	t.Fatalf("missing workflow step uses %q", uses)
+	return githubWorkflowStep{}
+}
+
 func requireWorkflowDockerMetadataTags(t *testing.T, step githubWorkflowStep, image string) {
 	t.Helper()
 	if step.Uses != "docker/metadata-action@v6" {
@@ -968,7 +1016,7 @@ func requireWorkflowCheckoutBeforeBuildPush(t *testing.T, job githubWorkflowJob)
 	firstBuildIndex := -1
 	for i, step := range job.Steps {
 		switch step.Uses {
-		case "actions/checkout@v4":
+		case "actions/checkout@v7":
 			if checkoutIndex == -1 {
 				checkoutIndex = i
 			}
@@ -982,10 +1030,10 @@ func requireWorkflowCheckoutBeforeBuildPush(t *testing.T, job githubWorkflowJob)
 		t.Fatalf("missing docker/build-push-action@v7 step")
 	}
 	if checkoutIndex == -1 {
-		t.Fatalf("missing actions/checkout@v4 step before docker/build-push-action@v7")
+		t.Fatalf("missing actions/checkout@v7 step before docker/build-push-action@v7")
 	}
 	if checkoutIndex > firstBuildIndex {
-		t.Fatalf("actions/checkout@v4 step index = %d, want before first docker/build-push-action@v7 step index %d", checkoutIndex, firstBuildIndex)
+		t.Fatalf("actions/checkout@v7 step index = %d, want before first docker/build-push-action@v7 step index %d", checkoutIndex, firstBuildIndex)
 	}
 }
 
