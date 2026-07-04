@@ -42,5 +42,5 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/common v0.66.1
 	golang.org/x/crypto v0.52.0
-	golang.org/x/sys v0.45.0
+	golang.org/x/sys v0.46.0
 )
