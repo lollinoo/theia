@@ -10,7 +10,7 @@
 # ---------------------------------------------------------------------------
 # Stage: postgres-tools — PostgreSQL 17 client binaries
 # ---------------------------------------------------------------------------
-FROM postgres:18-bookworm AS postgres-tools
+FROM postgres:17-bookworm AS postgres-tools
 
 # ---------------------------------------------------------------------------
 # Stage: dev — Development with Air hot-reload
