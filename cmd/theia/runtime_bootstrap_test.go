@@ -351,6 +351,25 @@ func TestCIImageJobsUseGitHubTokenForGHCRLogin(t *testing.T) {
 	}
 }
 
+func TestDockerfileUsesPostgres17ClientTools(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	content, err := os.ReadFile(filepath.Join(repoRoot, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	dockerfile := string(content)
+
+	if !strings.Contains(dockerfile, "FROM postgres:17-bookworm AS postgres-tools") {
+		t.Fatalf("Dockerfile postgres-tools stage must use PostgreSQL 17 client tools")
+	}
+	for _, tool := range []string{"pg_dump", "pg_restore", "psql"} {
+		want := "/usr/lib/postgresql/17/bin/" + tool
+		if !strings.Contains(dockerfile, want) {
+			t.Fatalf("Dockerfile must copy %s from PostgreSQL 17 tools", tool)
+		}
+	}
+}
+
 func TestPrometheusConfigsScrapeBackendMetrics(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	tests := []struct {
