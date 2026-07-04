@@ -28,7 +28,7 @@ write_readme() {
   esac
 
   cat >"$OUTPUT_DIR/README.md" <<EOF
-# Phase 4 Validation Evidence
+# Scale-Lab Validation Evidence
 
 - Mode: ${MODE}
 - API base: ${API_BASE}
@@ -86,4 +86,4 @@ do
   fi
 done
 
-echo "Saved Phase 4 ${MODE} evidence to ${OUTPUT_DIR}"
+echo "Saved scale-lab ${MODE} evidence to ${OUTPUT_DIR}"

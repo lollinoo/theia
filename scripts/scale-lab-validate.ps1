@@ -21,7 +21,7 @@ $scaleFiles = if ($Mode -eq "synthetic") {
 }
 
 @"
-# Phase 4 Validation Evidence
+# Scale-Lab Validation Evidence
 
 - Mode: $Mode
 - API base: $ApiBase
@@ -67,4 +67,4 @@ foreach ($metric in @("theia_refresh_snapshot_build_seconds", "theia_refresh_top
   }
 }
 
-Write-Output "Saved Phase 4 $Mode evidence to $OutputDir"
+Write-Output "Saved scale-lab $Mode evidence to $OutputDir"

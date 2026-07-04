@@ -1,17 +1,16 @@
 # =============================================================================
 # Theia - Staging Docker Compose (GHCR Pull)
 # =============================================================================
-# Auto-updates via Watchtower: new :master images are pulled every 30 seconds.
-#
 # Profiles:
-#   (default) -- Backend + PostgreSQL + frontend + watchtower
+#   (default) -- Backend + PostgreSQL + frontend
 #
 # Usage:
 #   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 #   IMAGE_TAG=v1.9.0 docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 #
 # First-time setup:
-#   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
+#   1. Optional GHCR login if authenticated pulls are needed for rate limits:
+#      echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
 #   2. Copy env file:           cp .env.staging.example .env.staging
 #   3. Set THEIA_ENCRYPTION_KEY_ID, THEIA_ENCRYPTION_KEYS, THEIA_SESSION_SECRET, THEIA_METRICS_TOKEN, THEIA_DB_DSN, and POSTGRES_PASSWORD in .env.staging
 #   4. Start the stack:         docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
@@ -64,8 +63,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
 
   postgres:
     image: postgres:17
@@ -104,22 +101,3 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-
-  # ---------------------------------------------------------------------------
-  # Watchtower — Auto-pulls new images for the configured IMAGE_TAG every 30s
-  # ---------------------------------------------------------------------------
-  watchtower:
-    image: ghcr.io/nicholas-fedor/watchtower:latest
-    container_name: theia-staging-watchtower
-    restart: unless-stopped
-    environment:
-      - WATCHTOWER_LABEL_ENABLE=true
-      - WATCHTOWER_POLL_INTERVAL=30
-      - WATCHTOWER_CLEANUP=true
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${DOCKER_CONFIG_PATH:-/root/.docker/config.json}:/config.json:ro
-    networks:
-      - theia-staging-net

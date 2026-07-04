@@ -47,8 +47,8 @@ const (
 
 // Performance-class polling intervals — the cadence each PollClass uses
 // for the performance volatility group. Hardcoded per D-06/D-07; making
-// these configurable is deferred to a future milestone (same pattern as
-// the Phase 38 state-engine threshold constants).
+// these configurable is deferred to a future milestone, matching the
+// state-engine threshold constants.
 const (
 	PollClassCoreInterval     = 30 * time.Second
 	PollClassStandardInterval = 60 * time.Second

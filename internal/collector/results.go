@@ -140,8 +140,8 @@ func (r PerformanceResult) GetCollectedAt() time.Time {
 	return r.CollectedAt
 }
 
-// ToStoreUpdate adapts the performance result to the current Phase 38 state
-// engine update shape without redesigning the store contract.
+// ToStoreUpdate adapts the performance result to the current state-engine
+// update shape without redesigning the store contract.
 func (r PerformanceResult) ToStoreUpdate(expectedInterval time.Duration) state.StateUpdate {
 	pollSuccess := r.Err == nil
 	var metrics *domain.DeviceMetrics
@@ -189,8 +189,8 @@ func (r OperationalResult) GetCollectedAt() time.Time {
 	return r.CollectedAt
 }
 
-// ToStoreUpdate adapts the operational result to the current Phase 38 state
-// engine update shape while preserving reachability semantics.
+// ToStoreUpdate adapts the operational result to the current state-engine
+// update shape while preserving reachability semantics.
 func (r OperationalResult) ToStoreUpdate(expectedInterval time.Duration) state.StateUpdate {
 	var metrics *domain.DeviceMetrics
 	if r.UptimeSecs != nil {

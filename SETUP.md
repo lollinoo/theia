@@ -261,13 +261,13 @@ The production stack uses compiled images — no hot-reload, no source mounts, n
 
 Production startup runs strict secret validation because `THEIA_DEPLOYMENT_ENV=production` is set. The backend rejects missing or example secret values before opening the database.
 
-Production pulls the `master` image channel by default:
+Production pulls the stable release image channel by default:
 
 ```text
-IMAGE_TAG=master
+IMAGE_TAG=latest
 ```
 
-The CI workflow publishes the `master` image channel from the `master` branch. For every non-`master` branch push, CI publishes branch and `sha-<shortsha>` image tags for both backend and frontend. Branch image tags are generated from the branch name and sanitized by Docker metadata-action for Docker tag compatibility.
+The CI workflow publishes the `master` image channel from the `master` branch for internal validation. For public production deployments, prefer `latest` for the newest stable GitHub Release or a pinned version tag such as `v1.6.0`. For every non-`master` branch push, CI publishes branch and `sha-<shortsha>` image tags for both backend and frontend. Branch image tags are generated from the branch name and sanitized by Docker metadata-action for Docker tag compatibility.
 
 Publishing a stable GitHub Release builds backend and frontend images for the release tag, for example `v1.6.0`, and also updates the `latest` image tag.
 
@@ -301,7 +301,7 @@ For bundled PostgreSQL, use this DSN shape:
 postgres://<postgres-user>:<postgres-password>@postgres:5432/<postgres-db>?sslmode=disable
 ```
 
-The DSN user, password, and database placeholders must match `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`.
+Unix Makefile targets derive `THEIA_DB_DSN` from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` when `THEIA_DB_DSN` is blank and the bundled PostgreSQL service is used. Direct `docker compose` commands require `THEIA_DB_DSN` to be set explicitly. If the password contains URL-reserved characters or you use an external PostgreSQL service, set `THEIA_DB_DSN` explicitly with a URL-encoded password.
 
 ```bash
 cp .env.prod.example .env.prod
@@ -315,6 +315,14 @@ make prod
 ```
 
 `make prod` starts the standard production stack on PostgreSQL using the bundled `postgres` service from `docker-compose.prod.yml`. If you need an external PostgreSQL service, use a custom compose override and provide `THEIA_DB_DSN`.
+
+To build the production images from the checked-out source tree instead of pulling GHCR images:
+
+```bash
+make prod-build
+```
+
+This uses `docker-compose.prod-build.yml` as an override and preserves the same production runtime shape.
 
 Or with the metrics stack (Prometheus + SNMP exporter):
 
@@ -364,6 +372,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics
 
 ```bash
 make prod           # Start backend + frontend
+make prod-build     # Build backend + frontend locally, then start production
 make prod-metrics   # Start with Prometheus + SNMP exporter
 make prod-down      # Stop all production containers
 make prod-logs      # Follow backend logs
@@ -374,7 +383,7 @@ make prod-clean     # Stop + delete volumes (resets database)
 
 ## Staging Environment
 
-The staging stack pulls pre-built images from GHCR and keeps them updated with Watchtower. It uses different default ports so it can run next to production.
+The staging stack pulls pre-built images from GHCR and uses different default ports so it can run next to production.
 
 ### 1. Configure environment
 
@@ -414,7 +423,7 @@ For bundled PostgreSQL, use this DSN shape:
 postgres://<postgres-user>:<postgres-password>@postgres:5432/<postgres-db>?sslmode=disable
 ```
 
-The DSN user, password, and database placeholders must match `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`.
+Unix Makefile targets derive `THEIA_DB_DSN` from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` when `THEIA_DB_DSN` is blank and the bundled PostgreSQL service is used. Direct `docker compose` commands require `THEIA_DB_DSN` to be set explicitly. If the password contains URL-reserved characters or you use an external PostgreSQL service, set `THEIA_DB_DSN` explicitly with a URL-encoded password.
 
 ```bash
 cp .env.staging.example .env.staging
@@ -600,7 +609,7 @@ Configuration is loaded from local `config.yaml` when present. The tracked `conf
 | none | `THEIA_ENCRYPTION_KEYS` | none | Comma-separated credential encryption keyring entries in `<key-id>=<secret>` format |
 | none | `THEIA_ENCRYPTION_KEY` | none | Legacy credential encryption fallback; when keyring variables are set, this value is loaded as key id `legacy` |
 | `listen_addr` | `THEIA_LISTEN_ADDR` | `:8080` | HTTP server bind address |
-| `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN; `config.Load()` does not inject one, so operators must provide it explicitly through local config, local env, or a secret manager |
+| `db_dsn` | `THEIA_DB_DSN` | none | PostgreSQL DSN; Unix Makefile production and staging targets derive it for bundled PostgreSQL when blank, while direct Compose, external database, and non-compose deployments must provide it through local config, local env, or a secret manager |
 | `data_dir` | `THEIA_DATA_DIR` | `./data` | Local app data directory for known_hosts and backup files |
 | `bridge_binaries_dir` | `THEIA_BRIDGE_BINARIES_DIR` | `` | Directory containing pre-built bridge binaries; compose defaults to `/data/bridge_binaries` for staging and production |
 | `session_secret` | `THEIA_SESSION_SECRET` | none | Secret used to protect first-party password sessions; Required whenever the backend initializes first-party password auth |

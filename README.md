@@ -28,7 +28,7 @@ Theia currently includes:
 - **Administration**: first-party password auth, session and CSRF protection, RBAC permissions, admin users, roles, role permissions, password reset, and audit logs.
 - **Bridge Connector**: local desktop connector for launching WinBox from Theia with per-user Bridge Secrets and one-time launch tokens.
 - **WISP lab**: Docker-based MikroTik-flavoured lab topology with FRRouting, OSPF, BGP/default-route checks, SNMP/LLDP data, and seed scripts for repeatable demos.
-- **Deployment surfaces**: development, staging, and production Docker Compose stacks; Makefile targets for common workflows; GHCR-oriented production and staging compose files.
+- **Deployment surfaces**: development, staging, and production Docker Compose stacks; Makefile targets for common workflows; release-image deployment with a local production build override.
 
 ## Architecture
 

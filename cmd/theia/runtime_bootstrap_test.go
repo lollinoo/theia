@@ -321,6 +321,18 @@ func TestCIWorkflowPublishesNonMasterBranchImages(t *testing.T) {
 	requireWorkflowBuildPushStep(t, frontendBuild, "./frontend", "./Dockerfile.frontend", "${{ steps.meta-frontend-branch.outputs.tags }}")
 }
 
+func TestCIImageJobsCheckoutRepositoryBeforeBuildPush(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	workflow := readGitHubWorkflow(t, filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
+
+	for _, jobName := range []string{"master-images", "branch-images", "release-images"} {
+		t.Run(jobName, func(t *testing.T) {
+			job := requireWorkflowJob(t, workflow, jobName)
+			requireWorkflowCheckoutBeforeBuildPush(t, job)
+		})
+	}
+}
+
 func TestPrometheusConfigsScrapeBackendMetrics(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	tests := []struct {
@@ -947,6 +959,33 @@ func requireWorkflowBuildPushStep(t *testing.T, step githubWorkflowStep, context
 		if step.With[key] != value {
 			t.Fatalf("%s with.%s = %q, want %q", step.Name, key, step.With[key], value)
 		}
+	}
+}
+
+func requireWorkflowCheckoutBeforeBuildPush(t *testing.T, job githubWorkflowJob) {
+	t.Helper()
+	checkoutIndex := -1
+	firstBuildIndex := -1
+	for i, step := range job.Steps {
+		switch step.Uses {
+		case "actions/checkout@v4":
+			if checkoutIndex == -1 {
+				checkoutIndex = i
+			}
+		case "docker/build-push-action@v7":
+			if firstBuildIndex == -1 {
+				firstBuildIndex = i
+			}
+		}
+	}
+	if firstBuildIndex == -1 {
+		t.Fatalf("missing docker/build-push-action@v7 step")
+	}
+	if checkoutIndex == -1 {
+		t.Fatalf("missing actions/checkout@v4 step before docker/build-push-action@v7")
+	}
+	if checkoutIndex > firstBuildIndex {
+		t.Fatalf("actions/checkout@v4 step index = %d, want before first docker/build-push-action@v7 step index %d", checkoutIndex, firstBuildIndex)
 	}
 }
 

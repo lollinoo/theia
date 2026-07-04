@@ -1,8 +1,8 @@
 .PHONY: dev test test-integration build clean seed verify stop logs help \
        postgres-up postgres-down dev-postgres \
-       prod-postgres prod-postgres-metrics staging-postgres \
-       wisp-lab wisp-lab-down wisp-seed wisp-radio-seed wisp-seed-all wisp-ospf wisp-bgp \
-       phase4-scale-lab phase4-validate \
+	       prod-postgres prod-postgres-metrics staging-postgres \
+	       wisp-lab wisp-lab-down wisp-seed wisp-radio-seed wisp-seed-all wisp-ospf wisp-bgp \
+	       scale-lab-evidence scale-lab-validate \
        development prod production prod-metrics prod-down prod-build prod-logs prod-clean \
        staging staging-down staging-logs \
        backend-fast frontend-fast govulncheck \
@@ -21,10 +21,28 @@ endif
 
 DEV_COMPOSE_PROFILES := --profile dev
 TEST_COMPOSE_PROFILES := --profile test
-PHASE4_API_BASE ?= http://localhost:8080
-PHASE4_OUT ?= .planning/phases/04-scale-validation-and-hardening/evidence/synthetic
-PHASE4_MODE ?= synthetic
+SCALE_LAB_API_BASE ?= http://localhost:8080
+SCALE_LAB_OUT ?= .planning/scale-lab/evidence/synthetic
+SCALE_LAB_MODE ?= synthetic
 WISP_SEED_TARGET_MODE ?= auto
+
+define PROD_COMPOSE_ENV
+set -e; set -a; . ./.env.prod; set +a; \
+if [ -z "$$THEIA_DB_DSN" ]; then \
+	: "$${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"; \
+	THEIA_DB_DSN="$$(printf '%s://%s:%s@postgres:5432/%s?sslmode=disable' postgres "$${POSTGRES_USER:-theia}" "$$POSTGRES_PASSWORD" "$${POSTGRES_DB:-theia}")"; \
+	export THEIA_DB_DSN; \
+fi
+endef
+
+define STAGING_COMPOSE_ENV
+set -e; set -a; . ./.env.staging; set +a; \
+if [ -z "$$THEIA_DB_DSN" ]; then \
+	: "$${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"; \
+	THEIA_DB_DSN="$$(printf '%s://%s:%s@postgres:5432/%s?sslmode=disable' postgres "$${POSTGRES_USER:-theia}" "$$POSTGRES_PASSWORD" "$${POSTGRES_DB:-theia}")"; \
+	export THEIA_DB_DSN; \
+fi
+endef
 
 # Default target
 ifeq ($(IS_WINDOWS),1)
@@ -187,7 +205,7 @@ prod: ## Start production stack (pulls from GHCR)
 	@Write-Output "Run 'make prod-logs' to follow backend logs."
 else
 prod: ## Start production stack (pulls from GHCR)
-	docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 	@echo ""
 	@echo "MikroTik Theia production stack is running:"
 	@echo "  Frontend: http://localhost:$$(grep FRONTEND_PORT .env.prod 2>/dev/null | cut -d= -f2 || echo 80)"
@@ -198,8 +216,14 @@ endif
 
 production: prod ## Start the production stack
 
+prod-build: ## Build and start production stack from local source
+	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml -f docker-compose.prod-build.yml --env-file .env.prod up --build -d
+	@echo ""
+	@echo "MikroTik Theia production stack is running from locally built images."
+	@echo "Run 'make prod-logs' to follow backend logs."
+
 prod-metrics: ## Start production stack with Prometheus + SNMP exporter
-	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics up -d
+	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics up -d
 	@echo ""
 	@echo "MikroTik Theia production stack (with metrics) is running."
 	@echo "Edit docker/prometheus/prometheus.prod.yml to add your SNMP device IPs."
@@ -218,23 +242,23 @@ prod-postgres-metrics: ## Start production stack on PostgreSQL with metrics
 	@Write-Output "MikroTik Theia production metrics stack is running on PostgreSQL."
 else
 prod-postgres: ## Start production stack on PostgreSQL
-	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
-	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d
+	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
+	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d
 	@echo ""
 	@echo "MikroTik Theia production stack is running on PostgreSQL."
 
 prod-postgres-metrics: ## Start production stack on PostgreSQL with metrics
-	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
-	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres --profile metrics up -d
+	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres up -d postgres
+	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml --env-file .env.prod --profile postgres --profile metrics up -d
 	@echo ""
 	@echo "MikroTik Theia production metrics stack is running on PostgreSQL."
 endif
 
 prod-down: ## Stop production stack
-	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics --profile postgres down
+	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics --profile postgres down
 
 prod-logs: ## Follow production backend logs
-	docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f backend
+	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f backend
 
 ifeq ($(IS_WINDOWS),1)
 prod-clean: ## Stop production stack and remove volumes (resets database)
@@ -243,21 +267,20 @@ prod-clean: ## Stop production stack and remove volumes (resets database)
 	@Write-Output "Cleaned all production containers and volumes"
 else
 prod-clean: ## Stop production stack and remove volumes (resets database)
-	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics --profile postgres down -v
+	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics --profile postgres down -v
 	docker volume rm -f theia-data theia-prometheus-data theia-prod-postgres-data 2>/dev/null || true
 	@echo "Cleaned all production containers and volumes"
 endif
 
 # ---------------------------------------------------------------------------
-# Staging stack (GHCR pull + Watchtower auto-update)
+# Staging stack (GHCR pull)
 # ---------------------------------------------------------------------------
-staging: ## Start staging stack (auto-updates via Watchtower)
-	docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+staging: ## Start staging stack
+	@$(STAGING_COMPOSE_ENV); docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 	@echo ""
 	@echo "MikroTik Theia staging stack is running:"
 	@echo "  Frontend: http://localhost:3001"
 	@echo "  API proxy: http://localhost:3001/api/v1"
-	@echo "  Watchtower polls for new :master images every 30s"
 	@echo ""
 	@echo "Run 'make staging-logs' to follow backend logs."
 
@@ -269,17 +292,17 @@ staging-postgres: ## Start staging stack on PostgreSQL
 	@Write-Output "MikroTik Theia staging stack is running on PostgreSQL."
 else
 staging-postgres: ## Start staging stack on PostgreSQL
-	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d postgres
-	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d
+	@$(STAGING_COMPOSE_ENV); docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d postgres
+	@$(STAGING_COMPOSE_ENV); docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres up -d
 	@echo ""
 	@echo "MikroTik Theia staging stack is running on PostgreSQL."
 endif
 
 staging-down: ## Stop staging stack
-	docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres down
+	@$(STAGING_COMPOSE_ENV); docker compose -f docker-compose.staging.yml --env-file .env.staging --profile postgres down
 
 staging-logs: ## Follow staging backend logs
-	docker compose -f docker-compose.staging.yml --env-file .env.staging logs -f backend
+	@$(STAGING_COMPOSE_ENV); docker compose -f docker-compose.staging.yml --env-file .env.staging logs -f backend
 
 # ---------------------------------------------------------------------------
 # Cleanup
@@ -305,23 +328,23 @@ seed: ## Add sample SNMP devices via the API (requires reachable devices)
 endif
 
 ifeq ($(IS_WINDOWS),1)
-phase4-scale-lab: ## Write Phase 4 synthetic scale-lab evidence files
-	@New-Item -ItemType Directory -Force "$(PHASE4_OUT)" | Out-Null
-	go run ./cmd/theia-scale-lab -profile 300 -scenario baseline -out "$(PHASE4_OUT)/scale-300-baseline.json" >$$null
-	go run ./cmd/theia-scale-lab -profile 300 -scenario burst-adds -out "$(PHASE4_OUT)/scale-300-burst-adds.json" >$$null
-	@Write-Output "Wrote scale-lab evidence to $(PHASE4_OUT)"
+scale-lab-evidence: ## Write synthetic scale-lab evidence files
+	@New-Item -ItemType Directory -Force "$(SCALE_LAB_OUT)" | Out-Null
+	go run ./cmd/theia-scale-lab -profile 300 -scenario baseline -out "$(SCALE_LAB_OUT)/scale-300-baseline.json" >$$null
+	go run ./cmd/theia-scale-lab -profile 300 -scenario burst-adds -out "$(SCALE_LAB_OUT)/scale-300-burst-adds.json" >$$null
+	@Write-Output "Wrote scale-lab evidence to $(SCALE_LAB_OUT)"
 
-phase4-validate: ## Run the Phase 4 validation workflow and capture evidence
-	@& ./scripts/phase4-validate.ps1 "$(PHASE4_MODE)" "$(PHASE4_API_BASE)" "$(PHASE4_OUT)"
+scale-lab-validate: ## Run scale-lab validation workflow and capture evidence
+	@& ./scripts/scale-lab-validate.ps1 "$(SCALE_LAB_MODE)" "$(SCALE_LAB_API_BASE)" "$(SCALE_LAB_OUT)"
 else
-phase4-scale-lab: ## Write Phase 4 synthetic scale-lab evidence files
-	@mkdir -p "$(PHASE4_OUT)"
-	go run ./cmd/theia-scale-lab -profile 300 -scenario baseline -out "$(PHASE4_OUT)/scale-300-baseline.json" >/dev/null
-	go run ./cmd/theia-scale-lab -profile 300 -scenario burst-adds -out "$(PHASE4_OUT)/scale-300-burst-adds.json" >/dev/null
-	@echo "Wrote scale-lab evidence to $(PHASE4_OUT)"
+scale-lab-evidence: ## Write synthetic scale-lab evidence files
+	@mkdir -p "$(SCALE_LAB_OUT)"
+	go run ./cmd/theia-scale-lab -profile 300 -scenario baseline -out "$(SCALE_LAB_OUT)/scale-300-baseline.json" >/dev/null
+	go run ./cmd/theia-scale-lab -profile 300 -scenario burst-adds -out "$(SCALE_LAB_OUT)/scale-300-burst-adds.json" >/dev/null
+	@echo "Wrote scale-lab evidence to $(SCALE_LAB_OUT)"
 
-phase4-validate: ## Run the Phase 4 validation workflow and capture evidence
-	@bash scripts/phase4-validate.sh "$(PHASE4_MODE)" "$(PHASE4_API_BASE)" "$(PHASE4_OUT)"
+scale-lab-validate: ## Run scale-lab validation workflow and capture evidence
+	@bash scripts/scale-lab-validate.sh "$(SCALE_LAB_MODE)" "$(SCALE_LAB_API_BASE)" "$(SCALE_LAB_OUT)"
 endif
 
 ifeq ($(IS_WINDOWS),1)

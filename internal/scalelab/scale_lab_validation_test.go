@@ -1,6 +1,6 @@
 package scalelab
 
-// This file exercises phase4 validation behavior so refactors preserve the documented contract.
+// This file exercises scale-lab validation behavior so refactors preserve the documented contract.
 
 import (
 	"encoding/json"
@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func TestPhase4BuiltinProfile300_MatchesValidationContract(t *testing.T) {
+func TestScaleLabBuiltinProfile300_MatchesValidationContract(t *testing.T) {
 	profile, err := BuiltinProfile("300")
 	if err != nil {
 		t.Fatalf("BuiltinProfile(300): %v", err)
@@ -46,7 +46,7 @@ func TestPhase4BuiltinProfile300_MatchesValidationContract(t *testing.T) {
 	}
 }
 
-func TestPhase4WISPHybridFixture_BaselineReportMatchesValidationContract(t *testing.T) {
+func TestScaleLabWISPHybridFixture_BaselineReportMatchesValidationContract(t *testing.T) {
 	raw, err := os.ReadFile("testdata/wisp-hybrid.json")
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -91,7 +91,7 @@ func TestPhase4WISPHybridFixture_BaselineReportMatchesValidationContract(t *test
 	}
 }
 
-func TestPhase4ValidateScript_SyntheticWritesRequiredEvidenceSurfaces(t *testing.T) {
+func TestScaleLabValidateScript_SyntheticWritesRequiredEvidenceSurfaces(t *testing.T) {
 	for _, tool := range []string{"bash", "curl"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not available: %v", tool, err)
@@ -121,15 +121,15 @@ theia_state_changes_dropped_total 0
 	}))
 	defer server.Close()
 
-	root := phase4RepoRoot(t)
+	root := scaleLabRepoRoot(t)
 	outputDir := t.TempDir()
 
-	cmd := exec.Command("bash", "scripts/phase4-validate.sh", "synthetic", server.URL, outputDir)
+	cmd := exec.Command("bash", "scripts/scale-lab-validate.sh", "synthetic", server.URL, outputDir)
 	cmd.Dir = root
 	cmd.Env = os.Environ()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("phase4-validate.sh failed: %v\n%s", err, output)
+		t.Fatalf("scale-lab-validate.sh failed: %v\n%s", err, output)
 	}
 
 	for _, name := range []string{
@@ -173,7 +173,7 @@ theia_state_changes_dropped_total 0
 	}
 }
 
-func phase4RepoRoot(t *testing.T) string {
+func scaleLabRepoRoot(t *testing.T) string {
 	t.Helper()
 
 	wd, err := os.Getwd()

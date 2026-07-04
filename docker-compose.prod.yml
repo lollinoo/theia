@@ -12,7 +12,8 @@
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics up -d
 #
 # First-time setup:
-#   1. Authenticate with GHCR:  echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
+#   1. Optional GHCR login if authenticated pulls are needed for rate limits:
+#      echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
 #   2. Copy env file:           cp .env.prod.example .env.prod
 #   3. Set IMAGE_TAG, THEIA_ENCRYPTION_KEY_ID, THEIA_ENCRYPTION_KEYS, THEIA_SESSION_SECRET, THEIA_METRICS_TOKEN, THEIA_DB_DSN, and POSTGRES_PASSWORD in .env.prod
 #   4. Start the stack:         docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
@@ -41,7 +42,7 @@ services:
   # Backend -- Go API server (pulled from GHCR)
   # ---------------------------------------------------------------------------
   backend:
-    image: ghcr.io/lollinoo/theia-backend:${IMAGE_TAG:-master}
+    image: ghcr.io/lollinoo/theia-backend:${IMAGE_TAG:-latest}
     container_name: theia-backend
     restart: unless-stopped
     networks:
@@ -97,7 +98,7 @@ services:
   # Frontend -- nginx serving compiled React SPA + API proxy (pulled from GHCR)
   # ---------------------------------------------------------------------------
   frontend:
-    image: ghcr.io/lollinoo/theia-frontend:${IMAGE_TAG:-master}
+    image: ghcr.io/lollinoo/theia-frontend:${IMAGE_TAG:-latest}
     container_name: theia-frontend
     restart: unless-stopped
     ports:

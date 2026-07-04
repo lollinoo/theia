@@ -1,14 +1,14 @@
 // Package state provides a thread-safe in-memory store for live device
 // runtime state: metrics, health, reachability, and staleness. It is the
 // architectural centerpiece of the SNMP pipeline and is consumed by the
-// metrics collector (and later, by the pipeline orchestrator in Phase 42).
+// metrics collector and pipeline orchestrator.
 //
 // D-07: this package coexists with internal/cache/DeviceLinkCache — they have
 // separate concerns and must not be merged in this phase. The state engine
 // holds VOLATILE RUNTIME state (metrics, health, reachability, staleness,
 // consecutive failure counts), while DeviceLinkCache holds DB-BACKED CONFIG
 // data (hostnames, IPs, interfaces, credentials). Whether the cache is later
-// absorbed into the state engine is a Phase 42 decision; for Phase 38 the
+// absorbed into the state engine is a future architecture decision; today the
 // two remain architecturally independent.
 package state
 
@@ -188,10 +188,10 @@ func (s *Store) Update(u StateUpdate) {
 			applyOperationalUpdate(&next, prev, u)
 		case domain.VolatilityClassStatic:
 			applyStaticUpdate(&next, u)
-		default:
-			// Preserve the Phase 38 contract for pre-cutover callers that have not
-			// started stamping volatility yet. Phase 42 collectors set an explicit
-			// volatility class and bypass this path.
+			default:
+				// Preserve compatibility for older callers that have not started
+				// stamping volatility yet. Modern collectors set an explicit
+				// volatility class and bypass this path.
 			applyFreshnessMetadata(&next, u)
 			applyLegacyUpdate(&next, prev, existed, u)
 		}
@@ -762,8 +762,8 @@ func applyLegacyUpdate(next *DeviceState, prev DeviceState, existed bool, update
 		return
 	}
 
-	// Preserve the existing Phase 38 behavior for success-without-metrics
-	// callers until all runtime paths move to explicit volatility classes.
+		// Preserve the existing success-without-metrics behavior for callers
+		// that have not moved to explicit volatility classes.
 	next.Metrics = domain.DeviceMetrics{}
 	next.CPUSeverity = ""
 	next.MemSeverity = ""

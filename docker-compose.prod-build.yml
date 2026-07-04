@@ -1,0 +1,24 @@
+# =============================================================================
+# Theia - Production Local Build Override
+# =============================================================================
+# Usage:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.prod-build.yml --env-file .env.prod up --build -d
+#
+# This override keeps the production runtime shape but builds backend and
+# frontend images from the checked-out source tree.
+# =============================================================================
+
+services:
+  backend:
+    image: theia-backend:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+
+  frontend:
+    image: theia-frontend:${IMAGE_TAG:-local}
+    build:
+      context: ./frontend
+      dockerfile: ../Dockerfile.frontend
+      target: production
