@@ -10,7 +10,7 @@
 # ---------------------------------------------------------------------------
 # Stage: dev — Vite dev server with HMR
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS dev
+FROM node:26-alpine AS dev
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ CMD ["npm", "run", "dev"]
 # ---------------------------------------------------------------------------
 # Stage: builder — Compile static assets
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /app
 
