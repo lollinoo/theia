@@ -2152,7 +2152,7 @@ func TestFinishBulkBackupRunRecordsCompletionMetrics(t *testing.T) {
 	}
 }
 
-func TestStartBulkBackupRunRejectsDeviceCountOverLimit(t *testing.T) {
+func TestStartBulkBackupRunAllowsDeviceCountAboveLegacyLimit(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
 	credentialProfileRepo := newMockCredentialProfileRepo()
@@ -2186,25 +2186,24 @@ func TestStartBulkBackupRunRejectsDeviceCountOverLimit(t *testing.T) {
 	})
 
 	run, err := svc.StartBulkBackupRun(context.Background(), nil, "operator")
-	if err == nil {
-		t.Fatal("StartBulkBackupRun error = nil, want bulk limit error")
+	if err != nil {
+		t.Fatalf("StartBulkBackupRun: %v", err)
 	}
-	var limitErr *BulkLimitError
-	if !errors.As(err, &limitErr) {
-		t.Fatalf("StartBulkBackupRun error = %v, want bulk limit error", err)
+	if run == nil {
+		t.Fatal("run = nil, want persistent run")
 	}
-	if limitErr.Limit != "devices" || limitErr.Max != 100 || limitErr.Actual != 105 {
-		t.Fatalf("limit error = %+v, want devices max=100 actual=105", limitErr)
+	if run.TotalCount != 105 || len(run.Items) != 105 {
+		t.Fatalf("run has total=%d items=%d, want 105 items", run.TotalCount, len(run.Items))
 	}
-	if run != nil {
-		t.Fatalf("run = %#v, want nil on limit error", run)
+	if run.BatchSize != defaultBulkBackupRunBatchSize {
+		t.Fatalf("run.BatchSize = %d, want %d", run.BatchSize, defaultBulkBackupRunBatchSize)
 	}
-	if active, activeErr := runRepo.GetActiveRun(); activeErr != nil || active != nil {
-		t.Fatalf("active run after limit error = %#v, err=%v; want none", active, activeErr)
+	if got := mockBackupJobCount(jobRepo); got != 0 {
+		t.Fatalf("queued jobs = %d, want 0 for down devices", got)
 	}
 }
 
-func TestStartBulkBackupRunRejectsQueuedJobCountOverLimit(t *testing.T) {
+func TestStartBulkBackupRunAllowsQueuedItemsAboveLegacyLimit(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
 	credentialProfileRepo := newMockCredentialProfileRepo()
@@ -2238,24 +2237,17 @@ func TestStartBulkBackupRunRejectsQueuedJobCountOverLimit(t *testing.T) {
 	})
 
 	run, err := svc.StartBulkBackupRun(context.Background(), nil, "operator")
-	if err == nil {
-		t.Fatal("StartBulkBackupRun error = nil, want queued job limit error")
+	if err != nil {
+		t.Fatalf("StartBulkBackupRun: %v", err)
 	}
-	var limitErr *BulkLimitError
-	if !errors.As(err, &limitErr) {
-		t.Fatalf("StartBulkBackupRun error = %v, want bulk limit error", err)
+	if run == nil {
+		t.Fatal("run = nil, want persistent run")
 	}
-	if limitErr.Limit != "queued jobs" || limitErr.Max != 1 || limitErr.Actual != 2 {
-		t.Fatalf("limit error = %+v, want queued jobs max=1 actual=2", limitErr)
-	}
-	if run != nil {
-		t.Fatalf("run = %#v, want nil on limit error", run)
-	}
-	if active, activeErr := runRepo.GetActiveRun(); activeErr != nil || active != nil {
-		t.Fatalf("active run after limit error = %#v, err=%v; want none", active, activeErr)
+	if run.TotalCount != 2 || len(run.Items) != 2 {
+		t.Fatalf("run has total=%d items=%d, want 2 items", run.TotalCount, len(run.Items))
 	}
 	if got := mockBackupJobCount(jobRepo); got != 0 {
-		t.Fatalf("queued jobs = %d, want 0 after limit error", got)
+		t.Fatalf("queued jobs = %d, want 0 for down devices", got)
 	}
 }
 

@@ -446,8 +446,10 @@ func (h *BackupHandler) HandleGetBulkOperationStatus(w http.ResponseWriter, r *h
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"data": map[string]interface{}{
 			"bulk_backup_run": map[string]interface{}{
-				"max_devices":                 limits.BulkBackupMaxDevices,
-				"max_queued_jobs":             limits.BulkBackupMaxQueuedJobs,
+				// Persistent bulk runs are not capped by selected device count;
+				// live backup work remains bounded by batch_size and active runs.
+				"max_devices":                 0,
+				"max_queued_jobs":             0,
 				"batch_size":                  batchSize,
 				"max_active_runs":             1,
 				"configurable_concurrency":    false,

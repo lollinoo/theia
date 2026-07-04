@@ -593,10 +593,6 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     (device) => selectedDeviceIds.has(device.id) && selectableDeviceIds.has(device.id),
   );
   const selectedCount = selectedDevices.length;
-  const bulkBackupMaxDeviceCount = positiveIntegerOrFallback(
-    bulkOperationStatus?.bulk_backup_run.max_devices,
-    0,
-  );
 
   const setAllDevicesSelected = () => {
     setSelectedDeviceIds(new Set(selectableDeviceIds));
@@ -629,13 +625,6 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       setBulkBackupSession((current) => ({
         ...current,
         error: 'Select at least one device to back up.',
-      }));
-      return;
-    }
-    if (bulkBackupMaxDeviceCount > 0 && selectedDevices.length > bulkBackupMaxDeviceCount) {
-      setBulkBackupSession((current) => ({
-        ...current,
-        error: `Too many devices selected for bulk backup. Maximum ${bulkBackupMaxDeviceCount}, selected ${selectedDevices.length}.`,
       }));
       return;
     }
