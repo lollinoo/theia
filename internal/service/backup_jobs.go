@@ -220,7 +220,17 @@ func validateBackupDeletionPath(backupRoot, filePath string) (string, error) {
 
 // GetBackupFile returns a single backup file by ID.
 func (s *BackupService) GetBackupFile(ctx context.Context, id uuid.UUID) (*domain.BackupFile, error) {
-	return s.fileRepo.GetByID(id)
+	file, err := s.fileRepo.GetByID(id)
+	if err != nil || file == nil {
+		return file, err
+	}
+	resolvedPath := s.resolveBackupFilePath(file)
+	if resolvedPath == file.FilePath {
+		return file, nil
+	}
+	resolved := *file
+	resolved.FilePath = resolvedPath
+	return &resolved, nil
 }
 
 // GetBackupFileContent opens the backup file for streaming.
@@ -233,9 +243,47 @@ func (s *BackupService) GetBackupFileContent(ctx context.Context, id uuid.UUID) 
 	if file == nil {
 		return nil, "", fmt.Errorf("backup file not found")
 	}
-	f, err := os.Open(file.FilePath)
+	filePath := s.resolveBackupFilePath(file)
+	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("opening backup file: %w", err)
 	}
 	return f, file.FileName, nil
+}
+
+func (s *BackupService) resolveBackupFilePath(file *domain.BackupFile) string {
+	if file == nil {
+		return ""
+	}
+	if _, err := os.Stat(file.FilePath); err == nil {
+		return file.FilePath
+	}
+	fallback := s.restoredBackupFilePath(file)
+	if fallback == "" {
+		return file.FilePath
+	}
+	if _, err := os.Stat(fallback); err == nil {
+		return fallback
+	}
+	return file.FilePath
+}
+
+func (s *BackupService) restoredBackupFilePath(file *domain.BackupFile) string {
+	if file == nil || strings.TrimSpace(s.backupDir) == "" {
+		return ""
+	}
+	deviceDir := filepath.Base(filepath.Dir(filepath.Clean(file.FilePath)))
+	fileName := filepath.Base(file.FileName)
+	if deviceDir == "" || deviceDir == "." || fileName == "" || fileName == "." {
+		return ""
+	}
+	backupRoot, err := validatedBackupRoot(s.backupDir)
+	if err != nil {
+		return ""
+	}
+	candidate := filepath.Join(backupRoot, deviceDir, fileName)
+	if !pathIsUnderDir(backupRoot, candidate) {
+		return ""
+	}
+	return candidate
 }

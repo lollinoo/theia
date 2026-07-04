@@ -67,7 +67,6 @@ func (s *BackupService) bulkBackupDevices(ctx context.Context, requestedDeviceID
 }
 
 func (s *BackupService) bulkBackupRunDevices(ctx context.Context, requestedDeviceIDs []uuid.UUID) ([]domain.Device, error) {
-	limits := s.BulkOperationLimits()
 	if len(requestedDeviceIDs) == 0 {
 		if err := contextError(ctx); err != nil {
 			return nil, err
@@ -76,27 +75,10 @@ func (s *BackupService) bulkBackupRunDevices(ctx context.Context, requestedDevic
 		if err != nil {
 			return nil, fmt.Errorf("fetching devices: %w", err)
 		}
-		if len(devices) > limits.BulkBackupMaxDevices {
-			return nil, &BulkLimitError{
-				Operation: "bulk backup run",
-				Limit:     "devices",
-				Max:       int64(limits.BulkBackupMaxDevices),
-				Actual:    int64(len(devices)),
-			}
-		}
 		return devices, nil
 	}
 
 	uniqueIDs := dedupeUUIDs(requestedDeviceIDs)
-	if len(uniqueIDs) > limits.BulkBackupMaxDevices {
-		return nil, &BulkLimitError{
-			Operation: "bulk backup run",
-			Limit:     "devices",
-			Max:       int64(limits.BulkBackupMaxDevices),
-			Actual:    int64(len(uniqueIDs)),
-		}
-	}
-
 	devices := make([]domain.Device, 0, len(uniqueIDs))
 	for _, id := range uniqueIDs {
 		if err := contextError(ctx); err != nil {

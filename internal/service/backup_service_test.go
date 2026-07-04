@@ -1245,6 +1245,86 @@ func TestBackupGetFileContent_TextFile(t *testing.T) {
 	}
 }
 
+func TestBackupGetFileResolvesRestoredAbsolutePathUnderCurrentBackupDir(t *testing.T) {
+	fileRepo := newMockBackupFileRepo()
+
+	backupDir := t.TempDir()
+	deviceDir := uuid.New().String()
+	fileName := "20260626_router.rsc"
+	actualDir := filepath.Join(backupDir, deviceDir)
+	if err := os.MkdirAll(actualDir, 0700); err != nil {
+		t.Fatalf("creating restored backup dir: %v", err)
+	}
+	actualPath := filepath.Join(actualDir, fileName)
+	if err := os.WriteFile(actualPath, []byte("# restored export\n"), 0600); err != nil {
+		t.Fatalf("writing restored backup file: %v", err)
+	}
+
+	fileID := uuid.New()
+	fileRepo.Create(&domain.BackupFile{
+		ID:       fileID,
+		JobID:    uuid.New(),
+		FileType: "running",
+		FileName: fileName,
+		FilePath: filepath.Join("/data/backups", deviceDir, fileName),
+	})
+
+	svc := &BackupService{fileRepo: fileRepo, backupDir: backupDir}
+	file, err := svc.GetBackupFile(context.Background(), fileID)
+	if err != nil {
+		t.Fatalf("GetBackupFile returned error: %v", err)
+	}
+	if file == nil {
+		t.Fatal("GetBackupFile returned nil")
+	}
+	if file.FilePath != actualPath {
+		t.Fatalf("FilePath = %q, want %q", file.FilePath, actualPath)
+	}
+}
+
+func TestBackupGetFileContentResolvesRestoredAbsolutePathUnderCurrentBackupDir(t *testing.T) {
+	fileRepo := newMockBackupFileRepo()
+
+	backupDir := t.TempDir()
+	deviceDir := uuid.New().String()
+	fileName := "20260626_router.rsc"
+	content := "# restored export\n"
+	actualDir := filepath.Join(backupDir, deviceDir)
+	if err := os.MkdirAll(actualDir, 0700); err != nil {
+		t.Fatalf("creating restored backup dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(actualDir, fileName), []byte(content), 0600); err != nil {
+		t.Fatalf("writing restored backup file: %v", err)
+	}
+
+	fileID := uuid.New()
+	fileRepo.Create(&domain.BackupFile{
+		ID:       fileID,
+		JobID:    uuid.New(),
+		FileType: "running",
+		FileName: fileName,
+		FilePath: filepath.Join("/data/backups", deviceDir, fileName),
+	})
+
+	svc := &BackupService{fileRepo: fileRepo, backupDir: backupDir}
+	rc, fileName, err := svc.GetBackupFileContent(context.Background(), fileID)
+	if err != nil {
+		t.Fatalf("GetBackupFileContent returned error: %v", err)
+	}
+	t.Cleanup(func() { rc.Close() })
+
+	if fileName != "20260626_router.rsc" {
+		t.Fatalf("fileName = %q, want %q", fileName, "20260626_router.rsc")
+	}
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("reading content: %v", err)
+	}
+	if string(data) != content {
+		t.Fatalf("content = %q, want %q", string(data), content)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test 6: TestBackupGetFileContent_NotFound (TEST-02 gap: text export flow)
 // ---------------------------------------------------------------------------
@@ -2072,7 +2152,7 @@ func TestFinishBulkBackupRunRecordsCompletionMetrics(t *testing.T) {
 	}
 }
 
-func TestStartBulkBackupRunRejectsDeviceCountOverLimit(t *testing.T) {
+func TestStartBulkBackupRunAllowsDeviceCountAboveLegacyLimit(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
 	credentialProfileRepo := newMockCredentialProfileRepo()
@@ -2106,25 +2186,24 @@ func TestStartBulkBackupRunRejectsDeviceCountOverLimit(t *testing.T) {
 	})
 
 	run, err := svc.StartBulkBackupRun(context.Background(), nil, "operator")
-	if err == nil {
-		t.Fatal("StartBulkBackupRun error = nil, want bulk limit error")
+	if err != nil {
+		t.Fatalf("StartBulkBackupRun: %v", err)
 	}
-	var limitErr *BulkLimitError
-	if !errors.As(err, &limitErr) {
-		t.Fatalf("StartBulkBackupRun error = %v, want bulk limit error", err)
+	if run == nil {
+		t.Fatal("run = nil, want persistent run")
 	}
-	if limitErr.Limit != "devices" || limitErr.Max != 100 || limitErr.Actual != 105 {
-		t.Fatalf("limit error = %+v, want devices max=100 actual=105", limitErr)
+	if run.TotalCount != 105 || len(run.Items) != 105 {
+		t.Fatalf("run has total=%d items=%d, want 105 items", run.TotalCount, len(run.Items))
 	}
-	if run != nil {
-		t.Fatalf("run = %#v, want nil on limit error", run)
+	if run.BatchSize != defaultBulkBackupRunBatchSize {
+		t.Fatalf("run.BatchSize = %d, want %d", run.BatchSize, defaultBulkBackupRunBatchSize)
 	}
-	if active, activeErr := runRepo.GetActiveRun(); activeErr != nil || active != nil {
-		t.Fatalf("active run after limit error = %#v, err=%v; want none", active, activeErr)
+	if got := mockBackupJobCount(jobRepo); got != 0 {
+		t.Fatalf("queued jobs = %d, want 0 for down devices", got)
 	}
 }
 
-func TestStartBulkBackupRunRejectsQueuedJobCountOverLimit(t *testing.T) {
+func TestStartBulkBackupRunAllowsQueuedItemsAboveLegacyLimit(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
 	credentialProfileRepo := newMockCredentialProfileRepo()
@@ -2158,24 +2237,17 @@ func TestStartBulkBackupRunRejectsQueuedJobCountOverLimit(t *testing.T) {
 	})
 
 	run, err := svc.StartBulkBackupRun(context.Background(), nil, "operator")
-	if err == nil {
-		t.Fatal("StartBulkBackupRun error = nil, want queued job limit error")
+	if err != nil {
+		t.Fatalf("StartBulkBackupRun: %v", err)
 	}
-	var limitErr *BulkLimitError
-	if !errors.As(err, &limitErr) {
-		t.Fatalf("StartBulkBackupRun error = %v, want bulk limit error", err)
+	if run == nil {
+		t.Fatal("run = nil, want persistent run")
 	}
-	if limitErr.Limit != "queued jobs" || limitErr.Max != 1 || limitErr.Actual != 2 {
-		t.Fatalf("limit error = %+v, want queued jobs max=1 actual=2", limitErr)
-	}
-	if run != nil {
-		t.Fatalf("run = %#v, want nil on limit error", run)
-	}
-	if active, activeErr := runRepo.GetActiveRun(); activeErr != nil || active != nil {
-		t.Fatalf("active run after limit error = %#v, err=%v; want none", active, activeErr)
+	if run.TotalCount != 2 || len(run.Items) != 2 {
+		t.Fatalf("run has total=%d items=%d, want 2 items", run.TotalCount, len(run.Items))
 	}
 	if got := mockBackupJobCount(jobRepo); got != 0 {
-		t.Fatalf("queued jobs = %d, want 0 after limit error", got)
+		t.Fatalf("queued jobs = %d, want 0 for down devices", got)
 	}
 }
 

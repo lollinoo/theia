@@ -714,6 +714,45 @@ func TestBackupContent_SmallTextReturnsInlineContent(t *testing.T) {
 	}
 }
 
+func TestBackupContent_LegacyRSCFileTypeReturnsInlineContent(t *testing.T) {
+	handler, _, fileRepo := setupBackupHandler(t)
+
+	dir := t.TempDir()
+	content := "/export compact\n"
+	path := filepath.Join(dir, "router_compact.rsc")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("creating backup file: %v", err)
+	}
+
+	fileID := uuid.New()
+	fileRepo.Create(&domain.BackupFile{
+		ID:       fileID,
+		JobID:    uuid.New(),
+		FileType: "rsc",
+		FileName: "router_compact.rsc",
+		FilePath: path,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-files/"+fileID.String()+"/content", nil)
+	rec := httptest.NewRecorder()
+	handler.HandleGetBackupFileContent(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	data := decodeBackupContentData(t, rec.Body)
+
+	if got := data["inline"]; got != true {
+		t.Fatalf("expected inline true, got %#v", got)
+	}
+	if got := data["content"]; got != content {
+		t.Fatalf("expected content %q, got %#v", content, got)
+	}
+	if got := data["download_url"]; got != "/api/v1/backup-files/"+fileID.String()+"/download" {
+		t.Fatalf("unexpected download_url: %#v", got)
+	}
+}
+
 func TestBackupContent_LargeTextReturnsDownloadMetadata(t *testing.T) {
 	handler, _, fileRepo := setupBackupHandler(t)
 
@@ -1246,8 +1285,7 @@ func TestBackupHandlerStartBulkBackupRunMapsActiveRunToConflict(t *testing.T) {
 	}
 }
 
-func TestBackupHandlerStartBulkBackupRunReportsLimitRejection(t *testing.T) {
-	registry := observability.ResetDefaultForTest()
+func TestBackupHandlerStartBulkBackupRunAllowsDeviceCountAboveLegacyLimit(t *testing.T) {
 	handler, _, _, deviceRepo, _ := setupBackupHandlerForBulkRunTests(t, t.TempDir())
 	handler.svc.SetBulkOperationLimits(service.BulkOperationLimits{
 		BulkBackupMaxDevices:    1,
@@ -1273,12 +1311,37 @@ func TestBackupHandlerStartBulkBackupRunReportsLimitRejection(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.HandleStartBulkBackupRun(rec, req)
 
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("expected 413, got %d; body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d; body: %s", rec.Code, rec.Body.String())
 	}
-	metrics := string(registry.MarshalPrometheus())
-	if !strings.Contains(metrics, `theia_bulk_operation_rejections_total{operation="bulk_backup_run",reason="device_count_limit",source="local"} 1`) {
-		t.Fatalf("expected bulk run limit rejection metric, got:\n%s", metrics)
+	var resp struct {
+		Data struct {
+			ID           string `json:"id"`
+			TotalCount   int    `json:"total_count"`
+			SkippedCount int    `json:"skipped_count"`
+			Items        []struct {
+				DeviceID string `json:"device_id"`
+				Status   string `json:"status"`
+				Reason   string `json:"reason"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if _, err := uuid.Parse(resp.Data.ID); err != nil {
+		t.Fatalf("expected run id UUID, got %q", resp.Data.ID)
+	}
+	if resp.Data.TotalCount != 2 || resp.Data.SkippedCount != 2 {
+		t.Fatalf("expected two skipped items, got total=%d skipped=%d", resp.Data.TotalCount, resp.Data.SkippedCount)
+	}
+	if len(resp.Data.Items) != 2 {
+		t.Fatalf("expected two items, got %#v", resp.Data.Items)
+	}
+	for _, item := range resp.Data.Items {
+		if item.Status != "skipped" || item.Reason != "device offline" {
+			t.Fatalf("expected skipped offline item, got %#v", item)
+		}
 	}
 }
 
@@ -1332,8 +1395,8 @@ func TestBackupHandlerGetBulkOperationStatusReportsEffectiveLimitsAndCapabilitie
 		t.Fatalf("Decode response: %v", err)
 	}
 
-	if resp.Data.BulkBackupRun.MaxDevices != 11 ||
-		resp.Data.BulkBackupRun.MaxQueuedJobs != 12 ||
+	if resp.Data.BulkBackupRun.MaxDevices != 0 ||
+		resp.Data.BulkBackupRun.MaxQueuedJobs != 0 ||
 		resp.Data.BulkBackupRun.BatchSize != 10 ||
 		resp.Data.BulkBackupRun.MaxActiveRuns != 1 ||
 		resp.Data.BulkBackupRun.Configurable ||

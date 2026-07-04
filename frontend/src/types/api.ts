@@ -1005,7 +1005,9 @@ export interface BulkBackupRun {
 /** BulkOperationStatus advertises backend quota and concurrency limits for bulk actions. */
 export interface BulkOperationStatus {
   bulk_backup_run: {
+    /** 0 means persistent bulk backup runs have no enforced selected-device cap. */
     max_devices: number;
+    /** 0 means persistent bulk backup runs have no enforced queued-item cap. */
     max_queued_jobs: number;
     batch_size: number;
     max_active_runs: number;

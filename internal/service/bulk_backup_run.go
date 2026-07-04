@@ -55,15 +55,6 @@ func (s *BackupService) StartBulkBackupRun(ctx context.Context, requestedDeviceI
 	if err != nil {
 		return nil, err
 	}
-	limits := s.BulkOperationLimits()
-	if len(devices) > limits.BulkBackupMaxQueuedJobs {
-		return nil, &BulkLimitError{
-			Operation: "bulk backup run",
-			Limit:     "queued jobs",
-			Max:       int64(limits.BulkBackupMaxQueuedJobs),
-			Actual:    int64(len(devices)),
-		}
-	}
 
 	now := time.Now().UTC()
 	run := &domain.BulkBackupRun{

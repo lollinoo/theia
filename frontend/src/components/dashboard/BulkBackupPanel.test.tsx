@@ -260,27 +260,35 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
     expect(await screen.findByText(/groups of 7/)).toBeInTheDocument();
   });
 
-  it('blocks persistent runs that exceed the fetched device limit', async () => {
+  it('submits all selected eligible devices even when they exceed the fetched legacy device limit', async () => {
     const { fetchBulkOperationStatus, startBulkBackupRun } = await import('../../api/client');
     (fetchBulkOperationStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       mockBulkOperationStatus({ bulkBackupRun: { batch_size: 7, max_devices: 2 } }),
     );
-    const devices = Array.from({ length: 3 }, (_, index) =>
+    const devices = [
+      mockDevice({ id: 'dev-1', sys_name: 'router-1' }),
+      mockDevice({ id: 'dev-2', sys_name: 'router-2' }),
+      mockDevice({ id: 'dev-3', sys_name: 'router-3' }),
+      mockDevice({ id: 'dev-offline', sys_name: 'offline-router', status: 'down' }),
       mockDevice({
-        id: `dev-${index + 1}`,
-        sys_name: `router-${index + 1}`,
+        id: 'dev-polling-off',
+        sys_name: 'polling-off-router',
+        polling_enabled: false,
       }),
-    );
+      mockDevice({ id: 'dev-virtual', sys_name: 'virtual-node', device_type: 'virtual' }),
+    ];
 
     render(<BulkBackupPanel devices={devices} />);
 
     await screen.findByText(/groups of 7/);
-    fireEvent.click(screen.getByText('Backup All Devices'));
+    fireEvent.click(screen.getByText('Backup Selected Devices'));
 
-    expect(startBulkBackupRun).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(startBulkBackupRun).toHaveBeenCalledWith(['dev-1', 'dev-2', 'dev-3']);
+    });
     expect(
-      await screen.findByText('Too many devices selected for bulk backup. Maximum 2, selected 3.'),
-    ).toBeInTheDocument();
+      screen.queryByText('Too many devices selected for bulk backup. Maximum 2, selected 3.'),
+    ).not.toBeInTheDocument();
   });
 
   it('starts one persistent run and maps queued/skipped items', async () => {
