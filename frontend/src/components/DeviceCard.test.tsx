@@ -499,14 +499,9 @@ describe('DeviceCard', () => {
     const statusBadge = screen.getByTestId('physical-node-status-badge');
 
     expect(screen.getByText('Down')).toBeInTheDocument();
-    expect(body).toHaveClass('topology-node-down-pulse');
+    expect(body).not.toHaveClass('topology-node-down-pulse');
     expect(body).not.toHaveClass('topology-node-status-pulse');
-    expect(body.getAttribute('style')).toContain(
-      '--theia-node-status-bg: var(--nt-node-down-card-bg)',
-    );
-    expect(body.getAttribute('style')).toContain(
-      '--theia-node-status-pulse-bg: var(--nt-node-down-card-pulse-bg)',
-    );
+    expect(body.getAttribute('style')).not.toContain('--theia-node-status');
     expect(body.style.backgroundColor).toBe('var(--nt-node-down-card-bg)');
     expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.18)');
     expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
@@ -528,13 +523,8 @@ describe('DeviceCard', () => {
     const statusBadge = screen.getByTestId('physical-node-status-badge');
 
     expect(screen.getByText('Probing')).toBeInTheDocument();
-    expect(body).toHaveClass('topology-node-status-pulse');
-    expect(body.getAttribute('style')).toContain(
-      '--theia-node-status-bg: var(--nt-node-probing-card-bg)',
-    );
-    expect(body.getAttribute('style')).toContain(
-      '--theia-node-status-pulse-bg: var(--nt-node-probing-card-pulse-bg)',
-    );
+    expect(body).not.toHaveClass('topology-node-status-pulse');
+    expect(body.getAttribute('style')).not.toContain('--theia-node-status');
     expect(body.style.backgroundColor).toBe('var(--nt-node-probing-card-bg)');
     expect(body.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.18)');
     expect(statusBadge.style.borderColor).toBe('var(--nt-node-probing-border)');
@@ -557,7 +547,8 @@ describe('DeviceCard', () => {
     expect(screen.getByText('CPU')).toBeInTheDocument();
     expect(screen.getByText('MEM')).toBeInTheDocument();
     expect(screen.getByText('Uptime')).toBeInTheDocument();
-    expect(body).toHaveClass('flex-1', 'topology-node-status-pulse');
+    expect(body).toHaveClass('flex-1');
+    expect(body).not.toHaveClass('topology-node-status-pulse');
     expect(body.style.backgroundColor).toBe('var(--nt-node-probing-card-bg)');
     expect(areaAccent.style.background).toBe('var(--nt-node-probing-border)');
   });
@@ -619,8 +610,8 @@ describe('DeviceCard', () => {
     expect(downCard.container.innerHTML).toContain('var(--nt-node-down-badge-border)');
     expect(downCard.container.innerHTML).toContain('var(--nt-node-down-card-bg)');
     expect(downCard.container.innerHTML).toContain('var(--nt-node-down-ring)');
-    expect(downCard.container.innerHTML).toContain('var(--nt-node-down-glow)');
-    expect(downCard.container.innerHTML).toContain('topology-node-down-pulse');
+    expect(downCard.container.innerHTML).not.toContain('var(--nt-node-down-glow)');
+    expect(downCard.container.innerHTML).not.toContain('topology-node-down-pulse');
   });
 
   it('renders unmonitored virtual nodes as neutral capsule endpoints', () => {
@@ -825,14 +816,10 @@ describe('DeviceCard', () => {
     const iconShell = screen.getByTestId('virtual-node-icon-shell');
     const typeLabel = screen.getByTestId('virtual-node-type-label');
 
-    expect(capsule).toHaveClass('pr-4', 'py-3', 'topology-node-down-pulse');
+    expect(capsule).toHaveClass('pr-4', 'py-3');
+    expect(capsule).not.toHaveClass('topology-node-down-pulse');
     expect(capsule).not.toHaveClass('topology-virtual-node-status-pulse');
-    expect(capsule.getAttribute('style')).toContain(
-      '--theia-virtual-node-status-bg: var(--nt-node-down-card-bg)',
-    );
-    expect(capsule.getAttribute('style')).toContain(
-      '--theia-virtual-node-status-pulse-bg: var(--nt-node-down-card-pulse-bg)',
-    );
+    expect(capsule.getAttribute('style')).not.toContain('--theia-virtual-node-status');
     expect(capsule.style.backgroundColor).toBe('var(--nt-node-down-card-bg)');
     expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.18)');
     expect(iconShell.style.color).toBe('var(--nt-status-down)');
@@ -869,13 +856,8 @@ describe('DeviceCard', () => {
     const typeLabel = screen.getByTestId('virtual-node-type-label');
 
     expect(screen.getByText('Probing')).toBeInTheDocument();
-    expect(capsule).toHaveClass('topology-virtual-node-status-pulse');
-    expect(capsule.getAttribute('style')).toContain(
-      '--theia-virtual-node-status-bg: var(--nt-node-probing-card-bg)',
-    );
-    expect(capsule.getAttribute('style')).toContain(
-      '--theia-virtual-node-status-pulse-bg: var(--nt-node-probing-card-pulse-bg)',
-    );
+    expect(capsule).not.toHaveClass('topology-virtual-node-status-pulse');
+    expect(capsule.getAttribute('style')).not.toContain('--theia-virtual-node-status');
     expect(capsule.style.backgroundColor).toBe('var(--nt-node-probing-card-bg)');
     expect(capsule.style.backgroundColor).not.toBe('rgba(37, 99, 235, 0.18)');
     expect(iconShell.style.color).toBe('var(--nt-status-probing)');

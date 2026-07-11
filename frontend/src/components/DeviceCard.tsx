@@ -300,15 +300,13 @@ interface RgbColor {
 type CSSCustomProperties = CSSProperties & Record<`--${string}`, string>;
 
 interface VirtualStatusTone {
-  capsuleClassName: string;
-  capsuleStyle: CSSCustomProperties;
+  capsuleStyle: CSSProperties;
   markerStyle: CSSProperties;
   textStyle: CSSProperties;
 }
 
 interface PhysicalStatusTone {
-  bodyClassName: string;
-  bodyStyle: CSSCustomProperties;
+  bodyStyle: CSSProperties;
 }
 
 const virtualAreaToneSurface: RgbColor = { red: 17, green: 26, blue: 38 };
@@ -450,10 +448,7 @@ function virtualPrimaryStatusTone(status: DeviceVisualStatus): VirtualStatusTone
   switch (status) {
     case 'down':
       return {
-        capsuleClassName: 'topology-node-down-pulse',
         capsuleStyle: {
-          '--theia-virtual-node-status-bg': 'var(--nt-node-down-card-bg)',
-          '--theia-virtual-node-status-pulse-bg': 'var(--nt-node-down-card-pulse-bg)',
           backgroundColor: 'var(--nt-node-down-card-bg)',
         },
         markerStyle: {
@@ -466,10 +461,7 @@ function virtualPrimaryStatusTone(status: DeviceVisualStatus): VirtualStatusTone
       };
     case 'probing':
       return {
-        capsuleClassName: 'topology-virtual-node-status-pulse',
         capsuleStyle: {
-          '--theia-virtual-node-status-bg': 'var(--nt-node-probing-card-bg)',
-          '--theia-virtual-node-status-pulse-bg': 'var(--nt-node-probing-card-pulse-bg)',
           backgroundColor: 'var(--nt-node-probing-card-bg)',
         },
         markerStyle: {
@@ -489,19 +481,13 @@ function physicalPrimaryStatusTone(status: DeviceVisualStatus): PhysicalStatusTo
   switch (status) {
     case 'down':
       return {
-        bodyClassName: 'topology-node-down-pulse',
         bodyStyle: {
-          '--theia-node-status-bg': 'var(--nt-node-down-card-bg)',
-          '--theia-node-status-pulse-bg': 'var(--nt-node-down-card-pulse-bg)',
           backgroundColor: 'var(--nt-node-down-card-bg)',
         },
       };
     case 'probing':
       return {
-        bodyClassName: 'topology-node-status-pulse',
         bodyStyle: {
-          '--theia-node-status-bg': 'var(--nt-node-probing-card-bg)',
-          '--theia-node-status-pulse-bg': 'var(--nt-node-probing-card-pulse-bg)',
           backgroundColor: 'var(--nt-node-probing-card-bg)',
         },
       };
@@ -760,7 +746,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         {renderModel.variant === 'physical' ? (
           <div
             data-testid="physical-node-body"
-            className={`topology-physical-node-body flex-1 px-4 pb-3.5 pt-3 ${physicalStatusTone?.bodyClassName ?? ''}`}
+            className="topology-physical-node-body flex-1 px-4 pb-3.5 pt-3"
             style={physicalStatusTone?.bodyStyle ?? areaTintStyle(colors, 0.18)}
           >
             <div className="topology-semantic-header flex items-start justify-between gap-3">
@@ -872,7 +858,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         ) : (
           <div
             data-testid="virtual-node-capsule"
-            className={`topology-virtual-node-capsule relative flex ${virtualCapsuleHeightClass} items-center gap-3 rounded-[23px] ${virtualCapsulePaddingClass} ${virtualStatusTone?.capsuleClassName ?? ''}`}
+            className={`topology-virtual-node-capsule relative flex ${virtualCapsuleHeightClass} items-center gap-3 rounded-[23px] ${virtualCapsulePaddingClass}`}
             style={
               virtualStatusTone?.capsuleStyle ??
               areaTintStyle(data.visualColor ? [data.visualColor] : colors, 0.18)

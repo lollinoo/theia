@@ -195,19 +195,17 @@ describe('deviceVisualState', () => {
     expect(minimapColorForDevice({ device, metrics })).toBe('var(--color-status-down)');
   });
 
-  it('gives down nodes a dedicated frame glow and card fill without reusing them for critical', () => {
+  it('gives down nodes a static frame ring and card fill without reusing them for critical', () => {
     expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain(
       'var(--nt-node-down-ring)',
     );
-    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).toContain(
+    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.boxShadow).not.toContain(
       'var(--nt-node-down-glow)',
     );
     expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameStyle.backgroundColor).toBe(
       'var(--nt-node-down-card-bg)',
     );
-    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameClass).toBe(
-      'topology-node-down-pulse',
-    );
+    expect(resolveDeviceNodeStatusStyles({ status: 'down' }).frameClass).toBeUndefined();
     expect(
       resolveDeviceNodeStatusStyles({ status: 'critical' }).frameStyle.boxShadow,
     ).not.toContain('var(--nt-node-down-ring)');
@@ -220,12 +218,21 @@ describe('deviceVisualState', () => {
     expect(resolveDeviceNodeStatusStyles({ status: 'critical' }).frameClass).toBeUndefined();
   });
 
-  it('preserves the down glow when selected so failure semantics stay visible', () => {
+  it('preserves the static down ring when selected so failure semantics stay visible', () => {
     const selectedDown = resolveDeviceNodeStatusStyles({ status: 'down', selected: true });
 
     expect(selectedDown.frameStyle.boxShadow).toContain('var(--color-focus-ring)');
-    expect(selectedDown.frameStyle.boxShadow).toContain('var(--nt-node-down-glow)');
+    expect(selectedDown.frameStyle.boxShadow).toContain('var(--nt-node-down-ring)');
+    expect(selectedDown.frameStyle.boxShadow).not.toContain('var(--nt-node-down-glow)');
     expect(selectedDown.frameStyle.backgroundColor).toBe('var(--nt-node-down-card-bg)');
+  });
+
+  it('gives probing nodes a static ring without a full-card bloom', () => {
+    const probing = resolveDeviceNodeStatusStyles({ status: 'probing' });
+
+    expect(probing.frameStyle.boxShadow).toContain('var(--nt-node-probing-ring)');
+    expect(probing.frameStyle.boxShadow).not.toContain('var(--nt-node-probing-glow)');
+    expect(probing.frameClass).toBeUndefined();
   });
 
   it('keeps critical dots static while down dots keep the stronger active emphasis', () => {

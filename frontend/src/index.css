@@ -50,7 +50,6 @@
   --nt-node-down-badge-border: rgba(255, 92, 108, 0.58);
   --nt-node-down-badge-bg: rgba(255, 92, 108, 0.24);
   --nt-node-down-card-bg: #35191e;
-  --nt-node-down-card-pulse-bg: #492027;
   --nt-node-down-panel-border: rgba(255, 92, 108, 0.42);
   --nt-node-down-panel-bg: rgba(255, 92, 108, 0.14);
   --nt-node-down-ring: rgba(255, 92, 108, 0.18);
@@ -58,7 +57,6 @@
   --nt-node-probing-border: rgba(239, 189, 105, 0.9);
   --nt-node-probing-badge-bg: rgba(239, 189, 105, 0.2);
   --nt-node-probing-card-bg: rgba(239, 189, 105, 0.14);
-  --nt-node-probing-card-pulse-bg: rgba(239, 189, 105, 0.24);
   --nt-node-probing-ring: rgba(239, 189, 105, 0.12);
   --nt-node-probing-glow: rgba(239, 189, 105, 0.22);
 
@@ -138,7 +136,6 @@
   --nt-node-down-badge-border: rgba(180, 35, 45, 0.32);
   --nt-node-down-badge-bg: rgba(180, 35, 45, 0.08);
   --nt-node-down-card-bg: #fff1f2;
-  --nt-node-down-card-pulse-bg: #ffe4e6;
   --nt-node-down-panel-border: rgba(180, 35, 45, 0.2);
   --nt-node-down-panel-bg: rgba(180, 35, 45, 0.05);
   --nt-node-down-ring: rgba(180, 35, 45, 0.08);
@@ -146,7 +143,6 @@
   --nt-node-probing-border: rgba(122, 79, 10, 0.64);
   --nt-node-probing-badge-bg: rgba(122, 79, 10, 0.08);
   --nt-node-probing-card-bg: #fff8e6;
-  --nt-node-probing-card-pulse-bg: #ffefc2;
   --nt-node-probing-ring: rgba(122, 79, 10, 0.06);
   --nt-node-probing-glow: rgba(122, 79, 10, 0.12);
 
@@ -323,38 +319,6 @@
 }
 
 @layer utilities {
-  @keyframes topology-node-down-pulse {
-    0%, 100% {
-      background-color: var(--nt-node-down-card-bg);
-      box-shadow: 0 0 0 1px var(--nt-node-down-border), 0 0 18px var(--nt-node-down-glow);
-    }
-
-    38%, 62% {
-      background-color: var(--nt-node-down-card-pulse-bg);
-      box-shadow: 0 0 0 2px var(--nt-node-down-border), 0 0 34px var(--nt-node-down-glow);
-    }
-  }
-
-  @keyframes topology-node-status-pulse {
-    0%, 100% {
-      background-color: var(--theia-node-status-bg);
-    }
-
-    38%, 62% {
-      background-color: var(--theia-node-status-pulse-bg);
-    }
-  }
-
-  @keyframes topology-virtual-node-status-pulse {
-    0%, 100% {
-      background-color: var(--theia-virtual-node-status-bg);
-    }
-
-    38%, 62% {
-      background-color: var(--theia-virtual-node-status-pulse-bg);
-    }
-  }
-
   .topology-backdrop {
     background: var(--nt-canvas-backdrop);
   }
@@ -562,35 +526,6 @@
     transition: none !important;
   }
 
-  .topology-node-down-pulse {
-    animation: topology-node-down-pulse 0.95s ease-in-out infinite;
-    will-change: background-color, box-shadow;
-  }
-
-  .topology-node-status-pulse {
-    animation: topology-node-status-pulse 1.05s ease-in-out infinite;
-    will-change: background-color;
-  }
-
-  .topology-virtual-node-status-pulse {
-    animation: topology-virtual-node-status-pulse 1.05s ease-in-out infinite;
-    will-change: background-color;
-  }
-
-  .topology-interacting .topology-node-down-pulse,
-  .topology-interacting .topology-node-status-pulse,
-  .topology-interacting .topology-virtual-node-status-pulse {
-    animation: none;
-    will-change: auto;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .topology-node-down-pulse,
-  .topology-node-status-pulse,
-  .topology-virtual-node-status-pulse {
-    animation: none;
-  }
 }
 
 @font-face {

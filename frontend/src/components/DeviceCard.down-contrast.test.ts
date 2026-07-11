@@ -24,7 +24,8 @@ describe('DeviceCard down node contrast tokens', () => {
     expect(darkTheme).toContain('--nt-status-down: #ff5c6c;');
     expect(darkTheme).toContain('--nt-node-down-border: rgba(255, 92, 108, 0.98);');
     expect(darkTheme).toContain('--nt-node-down-card-bg: #35191e;');
-    expect(darkTheme).toContain('--nt-node-down-card-pulse-bg: #492027;');
+    expect(darkTheme).not.toContain('--nt-node-down-card-pulse-bg');
+    expect(darkTheme).not.toContain('--nt-node-probing-card-pulse-bg');
     expect(darkTheme).toContain('--nt-node-down-glow: rgba(255, 92, 108, 0.36);');
   });
 
@@ -34,13 +35,19 @@ describe('DeviceCard down node contrast tokens', () => {
     expect(lightTheme).toContain('--nt-status-down: #b4232d;');
     expect(lightTheme).toContain('--nt-node-down-border: rgba(180, 35, 45, 0.78);');
     expect(lightTheme).toContain('--nt-node-down-card-bg: #fff1f2;');
-    expect(lightTheme).toContain('--nt-node-down-card-pulse-bg: #ffe4e6;');
+    expect(lightTheme).not.toContain('--nt-node-down-card-pulse-bg');
+    expect(lightTheme).not.toContain('--nt-node-probing-card-pulse-bg');
     expect(lightTheme).toContain('--nt-node-down-glow: rgba(180, 35, 45, 0.16);');
   });
 
-  it('accentuates the existing down pulse animation', () => {
-    expect(css).toContain('animation: topology-node-down-pulse 0.95s ease-in-out infinite;');
-    expect(css).toContain('box-shadow: 0 0 0 1px var(--nt-node-down-border)');
-    expect(css).toContain('0 0 34px var(--nt-node-down-glow)');
+  it('keeps whole-node status surfaces static', () => {
+    expect(css).not.toContain('@keyframes topology-node-down-pulse');
+    expect(css).not.toContain('@keyframes topology-node-status-pulse');
+    expect(css).not.toContain('@keyframes topology-virtual-node-status-pulse');
+    expect(css).not.toContain('.topology-node-down-pulse');
+    expect(css).not.toContain('.topology-node-status-pulse');
+    expect(css).not.toContain('.topology-virtual-node-status-pulse');
+    expect(css).not.toContain('will-change: background-color');
+    expect(css).not.toContain('0 0 34px var(--nt-node-down-glow)');
   });
 });
