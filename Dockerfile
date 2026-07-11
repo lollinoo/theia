@@ -8,9 +8,9 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# Stage: postgres-tools — PostgreSQL 17 client binaries
+# Stage: postgres-tools — PostgreSQL 18 client binaries
 # ---------------------------------------------------------------------------
-FROM postgres:17-bookworm AS postgres-tools
+FROM postgres:18-bookworm AS postgres-tools
 
 # ---------------------------------------------------------------------------
 # Stage: dev — Development with Air hot-reload
@@ -21,9 +21,9 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends curl libpq5 libreadline8 && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_dump /usr/local/bin/pg_dump
-COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_restore /usr/local/bin/pg_restore
-COPY --from=postgres-tools /usr/lib/postgresql/17/bin/psql /usr/local/bin/psql
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/pg_dump /usr/local/bin/pg_dump
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/pg_restore /usr/local/bin/pg_restore
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/psql /usr/local/bin/psql
 COPY --from=postgres-tools /usr/lib/x86_64-linux-gnu/libpq.so.5* /usr/lib/x86_64-linux-gnu/
 
 # Install dev/test tooling.
@@ -76,9 +76,9 @@ RUN apt-get update && \
 WORKDIR /app
 
 COPY --from=builder /app/theia /usr/local/bin/theia
-COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_dump /usr/local/bin/pg_dump
-COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_restore /usr/local/bin/pg_restore
-COPY --from=postgres-tools /usr/lib/postgresql/17/bin/psql /usr/local/bin/psql
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/pg_dump /usr/local/bin/pg_dump
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/pg_restore /usr/local/bin/pg_restore
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/psql /usr/local/bin/psql
 COPY --from=postgres-tools /usr/lib/x86_64-linux-gnu/libpq.so.5* /usr/lib/x86_64-linux-gnu/
 
 RUN mkdir -p /data
