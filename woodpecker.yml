@@ -2,11 +2,7 @@
 # - Pipeline path: woodpecker.yml
 # - Trusted Volumes: enabled for the Docker socket mount.
 when:
-  - event: push
-  - event: pull_request
-    branch: master
-  - event: release
-  - event: manual
+  - evaluate: 'CI_PIPELINE_EVENT == "push" || (CI_PIPELINE_EVENT == "pull_request" && CI_COMMIT_BRANCH == "master") || CI_PIPELINE_EVENT == "release" || CI_PIPELINE_EVENT == "manual"'
 
 services:
   - name: postgres
