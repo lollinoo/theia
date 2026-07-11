@@ -227,6 +227,8 @@ steps:
         set -eu
         branch_tag=$(printf '%s' "$CI_COMMIT_BRANCH" | tr '[:upper:]' '[:lower:]' | sed -E 's|[^a-z0-9_.-]+|-|g; s|^-+||; s|-+$||')
         test -n "$branch_tag"
+        tag_length=$(printf '%s' "$branch_tag" | wc -c)
+        test "$tag_length" -le 128
         short_sha=$(printf '%s' "$CI_COMMIT_SHA" | cut -c1-7)
 
         printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
