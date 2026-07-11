@@ -11,6 +11,7 @@ describe('playwright backend webServer', () => {
   it('uses PostgreSQL-only settings for the e2e backend', () => {
     const backendServer = config.webServer?.[0];
 
+    expect(backendServer?.command).toMatch(/^bash -c /);
     expect(backendServer?.command).toContain('THEIA_DB_DSN=');
     expect(backendServer?.command).toContain(
       'postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable',
