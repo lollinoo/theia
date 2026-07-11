@@ -86,7 +86,7 @@ steps:
         } > .ci/changed-areas.env
 
   - name: backend-fast
-    image: golang:1.26.4-bookworm
+    image: golang:1.26.5-bookworm
     commands:
       - |
         set -eu
@@ -131,7 +131,7 @@ steps:
 
         apt-get update
         apt-get install -y --no-install-recommends ca-certificates curl postgresql-client
-        curl -fsSL https://go.dev/dl/go1.26.4.linux-amd64.tar.gz -o /tmp/go.tar.gz
+        curl -fsSL https://go.dev/dl/go1.26.5.linux-amd64.tar.gz -o /tmp/go.tar.gz
         rm -rf /usr/local/go
         tar -C /usr/local -xzf /tmp/go.tar.gz
         export PATH="/usr/local/go/bin:$PATH"
@@ -144,7 +144,7 @@ steps:
         make browser-e2e
 
   - name: build-bridge
-    image: golang:1.26.4-bookworm
+    image: golang:1.26.5-bookworm
     when:
       - event: release
         evaluate: 'CI_COMMIT_PRERELEASE == "false"'
@@ -156,7 +156,7 @@ steps:
       - test -f bridge_binaries/winbox-bridge-linux-arm64
 
   - name: upload-bridge-assets
-    image: golang:1.26.4-bookworm
+    image: golang:1.26.5-bookworm
     environment:
       GH_TOKEN:
         from_secret: GITHUB_TOKEN
