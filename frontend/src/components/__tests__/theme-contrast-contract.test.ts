@@ -159,19 +159,33 @@ describe('enterprise NOC theme contrast contract', () => {
     expect(token(lightBlock, '--nt-outline-strong')).toBe('#94a4b5');
     expect(token(lightBlock, '--nt-edge-default')).toBe('#60778e');
     expect(token(lightBlock, '--nt-edge-muted')).toBe('#a9b6c3');
-    expect(declaration(lightBlock, '--nt-canvas-backdrop')).toContain(
-      'radial-gradient(ellipse at 50% 0%, rgba(100, 120, 150, 0.13) 0%, transparent 55%)',
-    );
-    expect(declaration(lightBlock, '--nt-canvas-backdrop')).toContain(
-      'linear-gradient(180deg, #dde2e8 0%, #d4dae2 100%)',
-    );
-    expect(declaration(lightBlock, '--nt-shadow-panel')).toBe('0 22px 46px rgba(20, 35, 55, 0.18)');
+    expect(declaration(lightBlock, '--nt-glass-bg')).toBe('rgba(251, 252, 253, 0.96)');
+    expect(declaration(lightBlock, '--nt-glass-border')).toBe('rgba(23, 33, 45, 0.12)');
+    expect(declaration(lightBlock, '--nt-glass-backdrop')).toBe('none');
+    expect(declaration(lightBlock, '--nt-minimap-mask')).toBe('rgba(220, 227, 234, 0.88)');
+    expect(declaration(lightBlock, '--nt-canvas-backdrop')).toBe('#e8edf2');
+    expect(declaration(lightBlock, '--nt-shadow-panel')).toBe('0 12px 28px rgba(20, 35, 55, 0.12)');
     expect(declaration(lightBlock, '--nt-shadow-floating')).toBe(
-      '0 14px 28px rgba(20, 35, 55, 0.14)',
+      '0 8px 20px rgba(20, 35, 55, 0.1)',
     );
+    expect(declaration(lightBlock, '--nt-shadow-pill')).toBe('0 4px 12px rgba(20, 35, 55, 0.08)');
+    expect(declaration(lightBlock, '--nt-shadow-canvas')).toBe('0 12px 32px rgba(20, 35, 55, 0.1)');
     expect(compact(declaration(lightBlock, '--nt-node-shadow'))).toBe(
-      '0 2px 4px rgba(20, 35, 55, 0.08), 0 8px 20px rgba(20, 35, 55, 0.12), 0 0 0 1px rgba(20, 35, 55, 0.06)',
+      '0 1px 2px rgba(20, 35, 55, 0.08), 0 6px 16px rgba(20, 35, 55, 0.1)',
     );
+  });
+
+  it('keeps dark-mode chrome restrained over the topology canvas', () => {
+    expect(declaration(darkBlock, '--nt-glass-bg')).toBe('rgba(19, 26, 34, 0.94)');
+    expect(declaration(darkBlock, '--nt-glass-border')).toBe('rgba(237, 244, 251, 0.14)');
+    expect(declaration(darkBlock, '--nt-glass-backdrop')).toBe('blur(12px)');
+    expect(declaration(darkBlock, '--nt-minimap-mask')).toBe('rgba(13, 18, 24, 0.72)');
+    expect(declaration(darkBlock, '--nt-canvas-backdrop')).toBe('#0d141b');
+    expect(declaration(darkBlock, '--nt-shadow-panel')).toBe('0 18px 40px rgba(0, 0, 0, 0.32)');
+    expect(declaration(darkBlock, '--nt-shadow-floating')).toBe('0 12px 28px rgba(0, 0, 0, 0.26)');
+    expect(declaration(darkBlock, '--nt-shadow-pill')).toBe('0 8px 20px rgba(0, 0, 0, 0.22)');
+    expect(declaration(darkBlock, '--nt-shadow-canvas')).toBe('0 18px 48px rgba(0, 0, 0, 0.24)');
+    expect(declaration(darkBlock, '--nt-node-shadow')).toBe('0 10px 24px rgba(0, 0, 0, 0.22)');
   });
 
   it('keeps light-mode operational text readable on all primary surfaces', () => {

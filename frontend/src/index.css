@@ -70,21 +70,19 @@
   --nt-node-selected: #8fcfff;
   --nt-focus-ring: rgba(143, 207, 255, 0.36);
 
-  --nt-glass-bg: rgba(17, 26, 38, 0.92);
-  --nt-glass-border: rgba(183, 196, 214, 0.18);
-  --nt-glass-backdrop: blur(14px);
-  --nt-minimap-mask: rgba(11, 17, 24, 0.7);
+  --nt-glass-bg: rgba(19, 26, 34, 0.94);
+  --nt-glass-border: rgba(237, 244, 251, 0.14);
+  --nt-glass-backdrop: blur(12px);
+  --nt-minimap-mask: rgba(13, 18, 24, 0.72);
   --nt-selection-fill: rgba(143, 207, 255, 0.14);
   --nt-selection-stroke: rgba(143, 207, 255, 0.52);
-  --nt-canvas-backdrop:
-    radial-gradient(circle at top, rgba(78, 105, 150, 0.16), transparent 32%),
-    linear-gradient(180deg, #0f1724 0%, #0b1118 62%, #080d13 100%);
+  --nt-canvas-backdrop: #0d141b;
 
-  --nt-shadow-panel: 0 28px 56px rgba(1, 7, 18, 0.38);
-  --nt-shadow-floating: 0 18px 42px rgba(1, 7, 18, 0.3);
-  --nt-shadow-pill: 0 14px 30px rgba(1, 7, 18, 0.26);
-  --nt-shadow-canvas: 0 28px 72px rgba(0, 0, 0, 0.26);
-  --nt-node-shadow: 0 16px 28px rgba(2, 7, 16, 0.24);
+  --nt-shadow-panel: 0 18px 40px rgba(0, 0, 0, 0.32);
+  --nt-shadow-floating: 0 12px 28px rgba(0, 0, 0, 0.26);
+  --nt-shadow-pill: 0 8px 20px rgba(0, 0, 0, 0.22);
+  --nt-shadow-canvas: 0 18px 48px rgba(0, 0, 0, 0.24);
+  --nt-node-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
 
   --nt-glow-shadow-opacity: 0.32;
   --nt-glow-bloom-opacity: 0.1;
@@ -160,24 +158,21 @@
   --nt-node-selected: #1f5ec9;
   --nt-focus-ring: rgba(31, 94, 201, 0.32);
 
-  --nt-glass-bg: rgba(240, 242, 245, 0.96);
-  --nt-glass-border: rgba(20, 35, 55, 0.14);
-  --nt-glass-backdrop: blur(10px);
-  --nt-minimap-mask: rgba(212, 218, 226, 0.85);
+  --nt-glass-bg: rgba(251, 252, 253, 0.96);
+  --nt-glass-border: rgba(23, 33, 45, 0.12);
+  --nt-glass-backdrop: none;
+  --nt-minimap-mask: rgba(220, 227, 234, 0.88);
   --nt-selection-fill: rgba(31, 94, 201, 0.12);
   --nt-selection-stroke: rgba(31, 94, 201, 0.44);
-  --nt-canvas-backdrop:
-    radial-gradient(ellipse at 50% 0%, rgba(100, 120, 150, 0.13) 0%, transparent 55%),
-    linear-gradient(180deg, #dde2e8 0%, #d4dae2 100%);
+  --nt-canvas-backdrop: #e8edf2;
 
-  --nt-shadow-panel: 0 22px 46px rgba(20, 35, 55, 0.18);
-  --nt-shadow-floating: 0 14px 28px rgba(20, 35, 55, 0.14);
-  --nt-shadow-pill: 0 10px 20px rgba(20, 35, 55, 0.12);
-  --nt-shadow-canvas: 0 22px 52px rgba(20, 35, 55, 0.14);
+  --nt-shadow-panel: 0 12px 28px rgba(20, 35, 55, 0.12);
+  --nt-shadow-floating: 0 8px 20px rgba(20, 35, 55, 0.1);
+  --nt-shadow-pill: 0 4px 12px rgba(20, 35, 55, 0.08);
+  --nt-shadow-canvas: 0 12px 32px rgba(20, 35, 55, 0.1);
   --nt-node-shadow:
-    0 2px 4px rgba(20, 35, 55, 0.08),
-    0 8px 20px rgba(20, 35, 55, 0.12),
-    0 0 0 1px rgba(20, 35, 55, 0.06);
+    0 1px 2px rgba(20, 35, 55, 0.08),
+    0 6px 16px rgba(20, 35, 55, 0.1);
 
   --nt-glow-shadow-opacity: 0.16;
   --nt-glow-bloom-opacity: 0.04;
