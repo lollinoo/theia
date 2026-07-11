@@ -7,12 +7,12 @@
 
 :root,
 [data-theme="dark"] {
-  --nt-bg: #0b1118;
-  --nt-surface: #111a26;
-  --nt-surface-container: #172233;
-  --nt-surface-container-high: #202d41;
+  --nt-bg: #0d1218;
+  --nt-surface: #131a22;
+  --nt-surface-container: #1a242e;
+  --nt-surface-container-high: #222f3a;
   --nt-surface-high: var(--nt-surface-container);
-  --nt-elevated: #26364f;
+  --nt-elevated: #2a3945;
 
   --nt-text-primary: #edf4fb;
   --nt-text-secondary: #b7c4d6;
@@ -21,8 +21,8 @@
   --nt-on-bg-secondary: var(--nt-text-secondary);
   --nt-on-bg-muted: var(--nt-text-muted);
 
-  --nt-outline: #2f4057;
-  --nt-outline-strong: #4c617d;
+  --nt-outline: #30404f;
+  --nt-outline-strong: #526677;
   --nt-outline-subtle: var(--nt-outline);
 
   --nt-primary: #4fd0a3;
@@ -97,25 +97,25 @@
 }
 
 [data-theme="light"] {
-  --nt-bg: #dde2e8;
-  --nt-surface: #f0f2f5;
-  --nt-surface-container: #e8eaee;
-  --nt-surface-container-high: #f7f8fa;
+  --nt-bg: #e8edf2;
+  --nt-surface: #f5f7f9;
+  --nt-surface-container: #eef2f5;
+  --nt-surface-container-high: #fbfcfd;
   --nt-surface-high: var(--nt-surface-container);
-  --nt-elevated: #fbfcfd;
+  --nt-elevated: #ffffff;
 
-  --nt-text-primary: #1a2332;
-  --nt-text-secondary: #38506a;
-  --nt-text-muted: #4d6781;
+  --nt-text-primary: #17212d;
+  --nt-text-secondary: #40546a;
+  --nt-text-muted: #566b80;
   --nt-on-bg: var(--nt-text-primary);
   --nt-on-bg-secondary: var(--nt-text-secondary);
   --nt-on-bg-muted: var(--nt-text-muted);
 
-  --nt-outline: #bcc8d6;
-  --nt-outline-strong: #8fa3b8;
+  --nt-outline: #c5cfd9;
+  --nt-outline-strong: #94a4b5;
   --nt-outline-subtle: var(--nt-outline);
 
-  --nt-primary: #08775a;
+  --nt-primary: #08745a;
   --nt-on-primary: #ffffff;
   --nt-area-secondary: #1d5fbf;
   --nt-area-tertiary: #7e2fa8;
@@ -152,8 +152,8 @@
   --nt-node-probing-ring: rgba(132, 84, 10, 0.1);
   --nt-node-probing-glow: rgba(132, 84, 10, 0.18);
 
-  --nt-edge-default: #6b8299;
-  --nt-edge-muted: #a0b4c5;
+  --nt-edge-default: #60778e;
+  --nt-edge-muted: #a9b6c3;
   --nt-edge-active: #1f5ec9;
   --nt-edge-warning: var(--nt-status-warning);
   --nt-edge-critical: var(--nt-status-critical);

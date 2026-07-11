@@ -90,7 +90,7 @@ describe('enterprise NOC theme contrast contract', () => {
     expect(token(block, '--recursive-alias')).toBe('#123456');
   });
 
-  it('uses a warm greige light surface scale with real canvas depth', () => {
+  it('uses a neutral light surface scale with restrained canvas depth', () => {
     const lightSurfaceTokens = {
       background: token(lightBlock, '--nt-bg'),
       surface: token(lightBlock, '--nt-surface'),
@@ -100,14 +100,16 @@ describe('enterprise NOC theme contrast contract', () => {
     };
 
     expect(lightSurfaceTokens).toEqual({
-      background: '#dde2e8',
-      surface: '#f0f2f5',
-      surfaceContainer: '#e8eaee',
-      surfaceContainerHigh: '#f7f8fa',
-      elevated: '#fbfcfd',
+      background: '#e8edf2',
+      surface: '#f5f7f9',
+      surfaceContainer: '#eef2f5',
+      surfaceContainerHigh: '#fbfcfd',
+      elevated: '#ffffff',
     });
 
-    for (const [label, value] of Object.entries(lightSurfaceTokens)) {
+    for (const [label, value] of Object.entries(lightSurfaceTokens).filter(
+      ([key]) => key !== 'elevated',
+    )) {
       expect(value, `${label} should not be pure white`).not.toBe('#ffffff');
     }
 
@@ -118,27 +120,45 @@ describe('enterprise NOC theme contrast contract', () => {
 
     expect(
       backgroundLuminance,
-      'light canvas should move away from near-white glare',
-    ).toBeLessThanOrEqual(0.77);
+      'light canvas should remain below near-white working surfaces',
+    ).toBeLessThanOrEqual(0.86);
     expect(
       surfaceLuminance - backgroundLuminance,
-      'nodes need clear depth over canvas',
-    ).toBeGreaterThanOrEqual(0.12);
+      'nodes need restrained depth over canvas',
+    ).toBeGreaterThanOrEqual(0.07);
     expect(
       containerHighLuminance - backgroundLuminance,
       'raised layers need visible separation from canvas',
-    ).toBeGreaterThanOrEqual(0.18);
+    ).toBeGreaterThanOrEqual(0.12);
     expect(
       elevatedLuminance - containerHighLuminance,
       'raised surfaces should stay subtle',
     ).toBeLessThanOrEqual(0.04);
   });
 
+  it('uses a neutral dark surface scale with clear layer separation', () => {
+    const darkSurfaceTokens = {
+      background: token(darkBlock, '--nt-bg'),
+      surface: token(darkBlock, '--nt-surface'),
+      surfaceContainer: token(darkBlock, '--nt-surface-container'),
+      surfaceContainerHigh: token(darkBlock, '--nt-surface-container-high'),
+      elevated: token(darkBlock, '--nt-elevated'),
+    };
+
+    expect(darkSurfaceTokens).toEqual({
+      background: '#0d1218',
+      surface: '#131a22',
+      surfaceContainer: '#1a242e',
+      surfaceContainerHigh: '#222f3a',
+      elevated: '#2a3945',
+    });
+  });
+
   it('keeps light-mode chrome layered without washing out controls', () => {
-    expect(token(lightBlock, '--nt-outline')).toBe('#bcc8d6');
-    expect(token(lightBlock, '--nt-outline-strong')).toBe('#8fa3b8');
-    expect(token(lightBlock, '--nt-edge-default')).toBe('#6b8299');
-    expect(token(lightBlock, '--nt-edge-muted')).toBe('#a0b4c5');
+    expect(token(lightBlock, '--nt-outline')).toBe('#c5cfd9');
+    expect(token(lightBlock, '--nt-outline-strong')).toBe('#94a4b5');
+    expect(token(lightBlock, '--nt-edge-default')).toBe('#60778e');
+    expect(token(lightBlock, '--nt-edge-muted')).toBe('#a9b6c3');
     expect(declaration(lightBlock, '--nt-canvas-backdrop')).toContain(
       'radial-gradient(ellipse at 50% 0%, rgba(100, 120, 150, 0.13) 0%, transparent 55%)',
     );
@@ -180,9 +200,10 @@ describe('enterprise NOC theme contrast contract', () => {
       }
     }
 
-    expect(token(lightBlock, '--nt-text-primary')).toBe('#1a2332');
-    expect(token(lightBlock, '--nt-text-secondary')).toBe('#38506a');
-    expect(token(lightBlock, '--nt-text-muted')).toBe('#4d6781');
+    expect(token(lightBlock, '--nt-text-primary')).toBe('#17212d');
+    expect(token(lightBlock, '--nt-text-secondary')).toBe('#40546a');
+    expect(token(lightBlock, '--nt-text-muted')).toBe('#566b80');
+    expect(token(lightBlock, '--nt-primary')).toBe('#08745a');
     expect(token(lightBlock, '--nt-text-primary')).not.toBe('#000000');
   });
 
