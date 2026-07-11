@@ -351,7 +351,7 @@ func TestCIImageJobsUseGitHubTokenForGHCRLogin(t *testing.T) {
 	}
 }
 
-func TestDockerfileUsesPostgres17ClientTools(t *testing.T) {
+func TestDockerfileUsesPostgres18ClientTools(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	content, err := os.ReadFile(filepath.Join(repoRoot, "Dockerfile"))
 	if err != nil {
@@ -359,13 +359,13 @@ func TestDockerfileUsesPostgres17ClientTools(t *testing.T) {
 	}
 	dockerfile := string(content)
 
-	if !strings.Contains(dockerfile, "FROM postgres:17-bookworm AS postgres-tools") {
-		t.Fatalf("Dockerfile postgres-tools stage must use PostgreSQL 17 client tools")
+	if !strings.Contains(dockerfile, "FROM postgres:18-bookworm AS postgres-tools") {
+		t.Fatalf("Dockerfile postgres-tools stage must use PostgreSQL 18 client tools")
 	}
 	for _, tool := range []string{"pg_dump", "pg_restore", "psql"} {
-		want := "/usr/lib/postgresql/17/bin/" + tool
+		want := "/usr/lib/postgresql/18/bin/" + tool
 		if !strings.Contains(dockerfile, want) {
-			t.Fatalf("Dockerfile must copy %s from PostgreSQL 17 tools", tool)
+			t.Fatalf("Dockerfile must copy %s from PostgreSQL 18 tools", tool)
 		}
 	}
 }
