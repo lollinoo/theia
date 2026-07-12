@@ -4,6 +4,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -17,11 +18,11 @@ import (
 
 // GrafanaDashboardHandler represents grafana dashboard handler data used by the HTTP boundary and route policy.
 type GrafanaDashboardHandler struct {
-	repo domain.SettingsRepository
+	repo domain.AtomicSettingsRepository
 }
 
 // NewGrafanaDashboardHandler constructs grafana dashboard handler state for the HTTP boundary and route policy.
-func NewGrafanaDashboardHandler(repo domain.SettingsRepository) *GrafanaDashboardHandler {
+func NewGrafanaDashboardHandler(repo domain.AtomicSettingsRepository) *GrafanaDashboardHandler {
 	return &GrafanaDashboardHandler{repo: repo}
 }
 
@@ -63,6 +64,8 @@ type grafanaDeviceOverrideRequest struct {
 }
 
 var grafanaTemplatePlaceholderPattern = regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_]+)\s*\}\}`)
+
+var errGrafanaConfigUpdateRejected = errors.New("Grafana dashboard config update rejected")
 
 var grafanaVariableSources = map[string]bool{
 	"hostname": true,
@@ -114,11 +117,6 @@ func (h *GrafanaDashboardHandler) HandleDeviceOverride(w http.ResponseWriter, r 
 		return
 	}
 
-	config, ok := h.loadConfig(w)
-	if !ok {
-		return
-	}
-
 	var req grafanaDeviceOverrideRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -137,35 +135,32 @@ func (h *GrafanaDashboardHandler) HandleDeviceOverride(w http.ResponseWriter, r 
 			writeError(w, http.StatusBadRequest, "profile_id must be a valid UUID")
 			return
 		}
-		if !grafanaProfileExists(config.Profiles, rawProfileID) {
-			writeError(w, http.StatusBadRequest, "profile_id does not match an existing Grafana dashboard profile")
-			return
-		}
 		profileID = &rawProfileID
 	}
 
-	if config.DeviceOverrides == nil {
-		config.DeviceOverrides = map[string]grafanaDeviceDashboardOverride{}
-	}
-	if profileID == nil && customURL == "" {
-		delete(config.DeviceOverrides, deviceID.String())
-	} else {
-		config.DeviceOverrides[deviceID.String()] = grafanaDeviceDashboardOverride{
-			ProfileID: profileID,
-			CustomURL: customURL,
-			UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	config, ok := h.updateConfig(w, func(config *grafanaDashboardConfig) bool {
+		if profileID != nil && !grafanaProfileExists(config.Profiles, *profileID) {
+			writeError(w, http.StatusBadRequest, "profile_id does not match an existing Grafana dashboard profile")
+			return false
 		}
-	}
-
-	h.saveConfig(w, config)
-}
-
-func (h *GrafanaDashboardHandler) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
-	config, ok := h.loadConfig(w)
+		if profileID == nil && customURL == "" {
+			delete(config.DeviceOverrides, deviceID.String())
+		} else {
+			config.DeviceOverrides[deviceID.String()] = grafanaDeviceDashboardOverride{
+				ProfileID: profileID,
+				CustomURL: customURL,
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			}
+		}
+		return true
+	})
 	if !ok {
 		return
 	}
+	writeGrafanaConfigResponse(w, http.StatusOK, config)
+}
 
+func (h *GrafanaDashboardHandler) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 	var req grafanaDashboardProfileRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -174,84 +169,84 @@ func (h *GrafanaDashboardHandler) handleCreateProfile(w http.ResponseWriter, r *
 	if !ok {
 		return
 	}
-	if grafanaProfileNameExists(config.Profiles, profile.Name, "") {
-		writeError(w, http.StatusConflict, "a Grafana dashboard profile with that name already exists")
-		return
-	}
-
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	profile.CreatedAt = now
 	profile.UpdatedAt = now
-	config.Profiles = append(config.Profiles, profile)
-	if req.IsDefault || config.DefaultProfileID == "" {
-		config.DefaultProfileID = profile.ID
-	}
-
-	h.writeSavedConfig(w, http.StatusCreated, config)
-}
-
-func (h *GrafanaDashboardHandler) handleUpdateProfile(w http.ResponseWriter, r *http.Request, profileID string) {
-	config, ok := h.loadConfig(w)
+	config, ok := h.updateConfig(w, func(config *grafanaDashboardConfig) bool {
+		if grafanaProfileNameExists(config.Profiles, profile.Name, "") {
+			writeError(w, http.StatusConflict, "a Grafana dashboard profile with that name already exists")
+			return false
+		}
+		config.Profiles = append(config.Profiles, profile)
+		if req.IsDefault || config.DefaultProfileID == "" {
+			config.DefaultProfileID = profile.ID
+		}
+		return true
+	})
 	if !ok {
 		return
 	}
-	index := grafanaProfileIndex(config.Profiles, profileID)
-	if index < 0 {
-		writeError(w, http.StatusNotFound, "Grafana dashboard profile not found")
-		return
-	}
+	writeGrafanaConfigResponse(w, http.StatusCreated, config)
+}
 
+func (h *GrafanaDashboardHandler) handleUpdateProfile(w http.ResponseWriter, r *http.Request, profileID string) {
 	var req grafanaDashboardProfileRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	current := config.Profiles[index]
-	profile, ok := buildGrafanaDashboardProfile(w, req, profileID, current.CreatedAt, time.Now().UTC().Format(time.RFC3339Nano))
+	config, ok := h.updateConfig(w, func(config *grafanaDashboardConfig) bool {
+		index := grafanaProfileIndex(config.Profiles, profileID)
+		if index < 0 {
+			writeError(w, http.StatusNotFound, "Grafana dashboard profile not found")
+			return false
+		}
+		current := config.Profiles[index]
+		profile, valid := buildGrafanaDashboardProfile(w, req, profileID, current.CreatedAt, time.Now().UTC().Format(time.RFC3339Nano))
+		if !valid {
+			return false
+		}
+		if grafanaProfileNameExists(config.Profiles, profile.Name, profileID) {
+			writeError(w, http.StatusConflict, "a Grafana dashboard profile with that name already exists")
+			return false
+		}
+		config.Profiles[index] = profile
+		if req.IsDefault {
+			config.DefaultProfileID = profileID
+		} else if config.DefaultProfileID == profileID {
+			config.DefaultProfileID = ""
+		}
+		return true
+	})
 	if !ok {
 		return
 	}
-	if grafanaProfileNameExists(config.Profiles, profile.Name, profileID) {
-		writeError(w, http.StatusConflict, "a Grafana dashboard profile with that name already exists")
-		return
-	}
-	config.Profiles[index] = profile
-	if req.IsDefault {
-		config.DefaultProfileID = profileID
-	} else if config.DefaultProfileID == profileID {
-		config.DefaultProfileID = ""
-	}
-
-	h.saveConfig(w, config)
+	writeGrafanaConfigResponse(w, http.StatusOK, config)
 }
 
 func (h *GrafanaDashboardHandler) handleDeleteProfile(w http.ResponseWriter, profileID string) {
-	config, ok := h.loadConfig(w)
-	if !ok {
-		return
-	}
-	index := grafanaProfileIndex(config.Profiles, profileID)
-	if index < 0 {
-		writeError(w, http.StatusNotFound, "Grafana dashboard profile not found")
-		return
-	}
-
-	config.Profiles = append(config.Profiles[:index], config.Profiles[index+1:]...)
-	if config.DefaultProfileID == profileID {
-		config.DefaultProfileID = ""
-	}
-	for deviceID, override := range config.DeviceOverrides {
-		if override.ProfileID != nil && *override.ProfileID == profileID {
-			override.ProfileID = nil
-			if override.CustomURL == "" {
-				delete(config.DeviceOverrides, deviceID)
-			} else {
-				config.DeviceOverrides[deviceID] = override
+	_, ok := h.updateConfig(w, func(config *grafanaDashboardConfig) bool {
+		index := grafanaProfileIndex(config.Profiles, profileID)
+		if index < 0 {
+			writeError(w, http.StatusNotFound, "Grafana dashboard profile not found")
+			return false
+		}
+		config.Profiles = append(config.Profiles[:index], config.Profiles[index+1:]...)
+		if config.DefaultProfileID == profileID {
+			config.DefaultProfileID = ""
+		}
+		for deviceID, override := range config.DeviceOverrides {
+			if override.ProfileID != nil && *override.ProfileID == profileID {
+				override.ProfileID = nil
+				if override.CustomURL == "" {
+					delete(config.DeviceOverrides, deviceID)
+				} else {
+					config.DeviceOverrides[deviceID] = override
+				}
 			}
 		}
-	}
-
-	if err := h.persistConfig(config); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save Grafana dashboard config", err)
+		return true
+	})
+	if !ok {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -310,6 +305,10 @@ func (h *GrafanaDashboardHandler) readConfig() (grafanaDashboardConfig, error) {
 	if err != nil {
 		raw = "{}"
 	}
+	return h.decodeConfig(raw)
+}
+
+func (h *GrafanaDashboardHandler) decodeConfig(raw string) (grafanaDashboardConfig, error) {
 	var config grafanaDashboardConfig
 	if strings.TrimSpace(raw) != "" {
 		if err := json.Unmarshal([]byte(raw), &config); err != nil {
@@ -349,25 +348,39 @@ func (h *GrafanaDashboardHandler) mergeLegacyDeviceURLs(config *grafanaDashboard
 	}
 }
 
-func (h *GrafanaDashboardHandler) saveConfig(w http.ResponseWriter, config grafanaDashboardConfig) {
-	h.writeSavedConfig(w, http.StatusOK, config)
-}
-
-func (h *GrafanaDashboardHandler) writeSavedConfig(w http.ResponseWriter, status int, config grafanaDashboardConfig) {
-	if err := h.persistConfig(config); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save Grafana dashboard config", err)
-		return
-	}
+func writeGrafanaConfigResponse(w http.ResponseWriter, status int, config grafanaDashboardConfig) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(grafanaDashboardConfigResponse{Data: config})
 }
 
-func (h *GrafanaDashboardHandler) persistConfig(config grafanaDashboardConfig) error {
-	payload, err := json.Marshal(config)
+func (h *GrafanaDashboardHandler) updateConfig(
+	w http.ResponseWriter,
+	update func(config *grafanaDashboardConfig) bool,
+) (grafanaDashboardConfig, bool) {
+	var updated grafanaDashboardConfig
+	_, err := h.repo.Update(domain.SettingGrafanaDashboardConfig, func(raw string) (string, error) {
+		config, err := h.decodeConfig(raw)
+		if err != nil {
+			return "", err
+		}
+		if !update(&config) {
+			return "", errGrafanaConfigUpdateRejected
+		}
+		payload, err := json.Marshal(config)
+		if err != nil {
+			return "", fmt.Errorf("encoding Grafana dashboard config: %w", err)
+		}
+		updated = config
+		return string(payload), nil
+	})
 	if err != nil {
-		return fmt.Errorf("encoding Grafana dashboard config: %w", err)
+		if errors.Is(err, errGrafanaConfigUpdateRejected) {
+			return grafanaDashboardConfig{}, false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to save Grafana dashboard config", err)
+		return grafanaDashboardConfig{}, false
 	}
-	return h.repo.Set(domain.SettingGrafanaDashboardConfig, string(payload))
+	return updated, true
 }
 
 func grafanaProfileIndex(profiles []grafanaDashboardProfile, profileID string) int {
