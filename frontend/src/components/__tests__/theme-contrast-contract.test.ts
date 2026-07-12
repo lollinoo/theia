@@ -190,13 +190,9 @@ describe('enterprise NOC theme contrast contract', () => {
     expect(declaration(darkBlock, '--nt-minimap-mask')).toBe('rgba(16, 19, 21, 0.74)');
     expect(declaration(darkBlock, '--nt-canvas-backdrop')).toBe('#0e1213');
     expect(declaration(darkBlock, '--nt-shadow-panel')).toBe('0 12px 28px rgba(0, 0, 0, 0.3)');
-    expect(declaration(darkBlock, '--nt-shadow-floating')).toBe(
-      '0 8px 20px rgba(0, 0, 0, 0.26)',
-    );
+    expect(declaration(darkBlock, '--nt-shadow-floating')).toBe('0 8px 20px rgba(0, 0, 0, 0.26)');
     expect(declaration(darkBlock, '--nt-shadow-pill')).toBe('0 4px 12px rgba(0, 0, 0, 0.22)');
-    expect(declaration(darkBlock, '--nt-shadow-canvas')).toBe(
-      '0 14px 36px rgba(0, 0, 0, 0.26)',
-    );
+    expect(declaration(darkBlock, '--nt-shadow-canvas')).toBe('0 14px 36px rgba(0, 0, 0, 0.26)');
     expect(declaration(darkBlock, '--nt-node-shadow')).toBe('0 6px 16px rgba(0, 0, 0, 0.24)');
     expect(declaration(darkBlock, '--nt-glow-shadow-opacity')).toBe('0.26');
     expect(declaration(darkBlock, '--nt-glow-bloom-opacity')).toBe('0.07');
