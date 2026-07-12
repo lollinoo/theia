@@ -16,17 +16,22 @@ interface BackupPanelProps {
   device: Device;
 }
 
+interface LatestBackupState {
+  deviceId: string;
+  latest: BackupJob | null;
+  error: string;
+}
+
 function isActiveBackupJob(job: BackupJob): boolean {
   return job.status === 'pending' || job.status === 'running';
 }
 
 /** Renders the BackupPanel component within the operations dashboard. */
 export function BackupPanel({ device }: BackupPanelProps) {
-  const [latest, setLatest] = useState<BackupJob | null>(null);
+  const [latestState, setLatestState] = useState<LatestBackupState | null>(null);
   const [triggering, setTriggering] = useState(false);
   const [triggerResult, setTriggerResult] = useState<BackupJob | null>(null);
   const [error, setError] = useState('');
-  const [latestError, setLatestError] = useState('');
   const [hostKeyResetMessage, setHostKeyResetMessage] = useState('');
   const [hostKeyResetError, setHostKeyResetError] = useState('');
   const [resettingHostKey, setResettingHostKey] = useState(false);
@@ -48,8 +53,7 @@ export function BackupPanel({ device }: BackupPanelProps) {
       ) {
         return;
       }
-      setLatest(job);
-      setLatestError('');
+      setLatestState({ deviceId: requestedDeviceId, latest: job, error: '' });
     } catch (err) {
       if (
         activeDeviceIdRef.current !== requestedDeviceId ||
@@ -57,19 +61,20 @@ export function BackupPanel({ device }: BackupPanelProps) {
       ) {
         return;
       }
-      setLatest(null);
-      setLatestError(
-        err instanceof Error
-          ? `Failed to load latest backup: ${err.message}`
-          : 'Failed to load latest backup',
-      );
+      setLatestState({
+        deviceId: requestedDeviceId,
+        latest: null,
+        error:
+          err instanceof Error
+            ? `Failed to load latest backup: ${err.message}`
+            : 'Failed to load latest backup',
+      });
     }
   }, [device.id]);
 
   useEffect(() => {
     activeDeviceIdRef.current = device.id;
-    setLatest(null);
-    setLatestError('');
+    setLatestState(null);
     void loadLatest();
     return () => {
       latestRequestRef.current += 1;
@@ -185,6 +190,9 @@ export function BackupPanel({ device }: BackupPanelProps) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const currentLatestState = latestState?.deviceId === device.id ? latestState : null;
+  const latest = currentLatestState?.latest ?? null;
+  const latestError = currentLatestState?.error ?? '';
   const totalSize = latest?.files?.reduce((sum, f) => sum + f.size_bytes, 0) ?? 0;
   const activeBackupInProgress = triggerResult ? isActiveBackupJob(triggerResult) : false;
   const hasHostKeyMismatch =
@@ -305,12 +313,14 @@ export function BackupPanel({ device }: BackupPanelProps) {
         <div className="text-xs font-medium text-on-bg-secondary uppercase tracking-[0.12em] mb-2">
           Latest Successful Backup
         </div>
-        {latestError && (
-          <div className="mb-2 rounded-md border border-status-down/20 bg-status-down/5 p-3 text-xs text-status-down">
+        {latestError ? (
+          <div
+            role="alert"
+            className="rounded-md border border-status-down/20 bg-status-down/5 p-3 text-xs text-status-down"
+          >
             {latestError}
           </div>
-        )}
-        {latest ? (
+        ) : latest ? (
           <div className="rounded-lg bg-surface-high p-3 space-y-1.5">
             <div className="flex justify-between text-xs">
               <span className="text-on-bg-secondary">Date</span>

@@ -2,6 +2,7 @@
  * Exercises single-device backup panel host-key recovery behavior.
  */
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { useLayoutEffect, useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchBackupJob,
@@ -17,6 +18,11 @@ interface Deferred<T> {
   promise: Promise<T>;
   resolve: (value: T) => void;
   reject: (reason?: unknown) => void;
+}
+
+interface RenderFrame {
+  deviceId: string;
+  text: string;
 }
 
 vi.mock('../../api/client', () => ({
@@ -81,6 +87,25 @@ function mockBackupFiles(count: number, jobId: string) {
     size_bytes: 100,
     created_at: '2026-06-28T00:00:00Z',
   }));
+}
+
+function BackupPanelRenderProbe({
+  device,
+  captureFrame,
+}: {
+  device: Device;
+  captureFrame: (frame: RenderFrame) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    captureFrame({ deviceId: device.id, text: containerRef.current?.textContent ?? '' });
+  });
+
+  return (
+    <div ref={containerRef}>
+      <BackupPanel device={device} />
+    </div>
+  );
 }
 
 async function flushPromises() {
@@ -209,8 +234,10 @@ describe('BackupPanel latest backup device ownership', () => {
     expect(screen.queryByText(/device A unavailable/i)).not.toBeInTheDocument();
   });
 
-  it('clears the previous device latest backup while the next device loads', async () => {
+  it('never renders the previous device latest backup in the next device commit', async () => {
     const deviceBRequest = deferred<BackupJob | null>();
+    const frames: RenderFrame[] = [];
+    const captureFrame = (frame: RenderFrame) => frames.push(frame);
     vi.mocked(fetchLatestBackupJob)
       .mockResolvedValueOnce(
         mockBackupJob({
@@ -221,14 +248,41 @@ describe('BackupPanel latest backup device ownership', () => {
         }),
       )
       .mockReturnValueOnce(deviceBRequest.promise);
-    const view = render(<BackupPanel device={mockDevice({ id: 'dev-a' })} />);
+    const view = render(
+      <BackupPanelRenderProbe device={mockDevice({ id: 'dev-a' })} captureFrame={captureFrame} />,
+    );
     await flushPromises();
     expect(screen.getByText('1 files')).toBeInTheDocument();
 
-    view.rerender(<BackupPanel device={mockDevice({ id: 'dev-b' })} />);
+    view.rerender(
+      <BackupPanelRenderProbe device={mockDevice({ id: 'dev-b' })} captureFrame={captureFrame} />,
+    );
 
-    expect(screen.queryByText('1 files')).not.toBeInTheDocument();
-    expect(screen.getByText('No backups yet')).toBeInTheDocument();
+    const firstDeviceBFrame = frames.find((frame) => frame.deviceId === 'dev-b');
+    expect(firstDeviceBFrame).toBeDefined();
+    expect(firstDeviceBFrame?.text).not.toContain('1 files');
+  });
+
+  it('never renders the previous device latest backup error in the next device commit', async () => {
+    const deviceBRequest = deferred<BackupJob | null>();
+    const frames: RenderFrame[] = [];
+    const captureFrame = (frame: RenderFrame) => frames.push(frame);
+    vi.mocked(fetchLatestBackupJob)
+      .mockRejectedValueOnce(new Error('device A unavailable'))
+      .mockReturnValueOnce(deviceBRequest.promise);
+    const view = render(
+      <BackupPanelRenderProbe device={mockDevice({ id: 'dev-a' })} captureFrame={captureFrame} />,
+    );
+    await flushPromises();
+    expect(screen.getByText(/device A unavailable/i)).toBeInTheDocument();
+
+    view.rerender(
+      <BackupPanelRenderProbe device={mockDevice({ id: 'dev-b' })} captureFrame={captureFrame} />,
+    );
+
+    const firstDeviceBFrame = frames.find((frame) => frame.deviceId === 'dev-b');
+    expect(firstDeviceBFrame).toBeDefined();
+    expect(firstDeviceBFrame?.text).not.toContain('device A unavailable');
   });
 
   it('handles a latest backup rejection after unmount', async () => {
@@ -253,10 +307,10 @@ describe('BackupPanel latest backup device ownership', () => {
       await Promise.resolve();
     });
 
-    expect(
-      screen.getByText('Failed to load latest backup: network unavailable'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('No backups yet')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Failed to load latest backup: network unavailable',
+    );
+    expect(screen.queryByText('No backups yet')).not.toBeInTheDocument();
   });
 });
 
