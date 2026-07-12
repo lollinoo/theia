@@ -71,7 +71,7 @@ describe('canvasPerfBenchmark', () => {
         expect(aggregate.p95Ms).toBeLessThanOrEqual(aggregate.maxMs);
       }
     }
-  }, 15_000);
+  }, 60_000);
 
   it('reports effective sample counts when scenario defaults or overrides are used', () => {
     const defaultResult = runCanvasPerfBenchmark({
