@@ -146,11 +146,11 @@ describe('enterprise NOC theme contrast contract', () => {
     };
 
     expect(darkSurfaceTokens).toEqual({
-      background: '#0d1218',
-      surface: '#131a22',
-      surfaceContainer: '#1a242e',
-      surfaceContainerHigh: '#222f3a',
-      elevated: '#2a3945',
+      background: '#101315',
+      surface: '#171b1e',
+      surfaceContainer: '#1d2327',
+      surfaceContainerHigh: '#252c31',
+      elevated: '#2b3439',
     });
   });
 
@@ -223,7 +223,7 @@ describe('enterprise NOC theme contrast contract', () => {
     expect(token(lightBlock, '--nt-text-primary')).not.toBe('#000000');
   });
 
-  it('keeps dark-mode secondary and muted text readable on operational surfaces', () => {
+  it('keeps dark-mode operational colors readable on primary surfaces', () => {
     const backgrounds = [
       token(darkBlock, '--nt-bg'),
       token(darkBlock, '--nt-surface'),
@@ -231,9 +231,15 @@ describe('enterprise NOC theme contrast contract', () => {
       token(darkBlock, '--nt-surface-container-high'),
     ];
     const foregrounds = [
-      ['primary', token(darkBlock, '--nt-text-primary'), 7],
-      ['secondary', token(darkBlock, '--nt-text-secondary'), 4.5],
-      ['muted', token(darkBlock, '--nt-text-muted'), 4.5],
+      ['primary text', token(darkBlock, '--nt-text-primary'), 7],
+      ['secondary text', token(darkBlock, '--nt-text-secondary'), 4.5],
+      ['muted text', token(darkBlock, '--nt-text-muted'), 4.5],
+      ['primary teal', token(darkBlock, '--nt-primary'), 4.5],
+      ['status up', token(darkBlock, '--nt-status-up'), 4.5],
+      ['warning', token(darkBlock, '--nt-warning'), 4.5],
+      ['critical', token(darkBlock, '--nt-critical'), 4.5],
+      ['down', token(darkBlock, '--nt-status-down'), 4.5],
+      ['unknown', token(darkBlock, '--nt-status-unknown'), 4.5],
     ] as const;
 
     for (const background of backgrounds) {
@@ -244,6 +250,17 @@ describe('enterprise NOC theme contrast contract', () => {
         ).toBeGreaterThanOrEqual(minimum);
       }
     }
+
+    expect(token(darkBlock, '--nt-text-primary')).toBe('#f1f5f4');
+    expect(token(darkBlock, '--nt-text-secondary')).toBe('#b8c4c1');
+    expect(token(darkBlock, '--nt-text-muted')).toBe('#94a5a1');
+    expect(token(darkBlock, '--nt-primary')).toBe('#4cc9b0');
+    expect(token(darkBlock, '--nt-on-primary')).toBe('#071411');
+    expect(token(darkBlock, '--nt-status-ok')).toBe('#6edb8f');
+    expect(token(darkBlock, '--nt-status-warning')).toBe('#efbd69');
+    expect(token(darkBlock, '--nt-status-critical')).toBe('#ff8296');
+    expect(token(darkBlock, '--nt-status-unknown')).toBe('#a1aaa8');
+    expect(token(darkBlock, '--nt-status-down')).toBe('#ff5c6c');
   });
 
   it('defines a readable on-primary token for primary controls', () => {

@@ -21,7 +21,7 @@ describe('DeviceCard down node contrast tokens', () => {
   it('uses high-contrast down reds in dark mode', () => {
     const darkTheme = themeBlock(':root,\n[data-theme="dark"]');
 
-    expect(darkTheme).toContain('--nt-status-down: #ff3045;');
+    expect(darkTheme).toContain('--nt-status-down: #ff5c6c;');
     expect(darkTheme).toContain('--nt-node-down-border: rgba(255, 48, 69, 0.98);');
     expect(darkTheme).toContain('--nt-node-down-card-bg: #3b101b;');
     expect(darkTheme).toContain('--nt-node-down-card-pulse-bg: #5a0f21;');
