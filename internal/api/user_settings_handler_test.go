@@ -116,6 +116,92 @@ func TestUserSettingsHandlerSecretReturnedOnlyOnMutation(t *testing.T) {
 	}
 }
 
+func TestUserSettingsHandlerBridgeSecretMutationsRejectMalformedBodies(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		handle func(*UserSettingsHandler, http.ResponseWriter, *http.Request)
+		calls  func(*fakeUserSettingsService) int
+	}{
+		{
+			name:   "rotate",
+			path:   "/api/v1/settings/bridge/secret/rotate",
+			handle: (*UserSettingsHandler).HandleBridgeSecret,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.rotateCalls },
+		},
+		{
+			name:   "revoke",
+			path:   "/api/v1/settings/bridge/secret/revoke",
+			handle: (*UserSettingsHandler).HandleBridgeSecretRevoke,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.revokeCalls },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeUserSettingsService{secret: &service.BridgeSecretResult{}}
+			handler := NewUserSettingsHandler(fake, "")
+			user := testAPIUser("alice", false, "account:manage")
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(`{"reason":`))
+			req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+			rec := httptest.NewRecorder()
+
+			tt.handle(handler, rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if calls := tt.calls(fake); calls != 0 {
+				t.Fatalf("service calls = %d, want 0", calls)
+			}
+		})
+	}
+}
+
+func TestUserSettingsHandlerBridgeSecretMutationsRejectOversizedBodies(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		handle func(*UserSettingsHandler, http.ResponseWriter, *http.Request)
+		calls  func(*fakeUserSettingsService) int
+	}{
+		{
+			name:   "rotate",
+			path:   "/api/v1/settings/bridge/secret/rotate",
+			handle: (*UserSettingsHandler).HandleBridgeSecret,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.rotateCalls },
+		},
+		{
+			name:   "revoke",
+			path:   "/api/v1/settings/bridge/secret/revoke",
+			handle: (*UserSettingsHandler).HandleBridgeSecretRevoke,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.revokeCalls },
+		},
+	}
+	bigJSON := `{"reason":"` + strings.Repeat("a", 2<<20) + `"}`
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeUserSettingsService{secret: &service.BridgeSecretResult{}}
+			handler := NewUserSettingsHandler(fake, "")
+			user := testAPIUser("alice", false, "account:manage")
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(bigJSON))
+			rec := httptest.NewRecorder()
+			req.Body = http.MaxBytesReader(rec, req.Body, 1<<20)
+			req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+
+			tt.handle(handler, rec, req)
+
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want 413; body=%s", rec.Code, rec.Body.String())
+			}
+			if calls := tt.calls(fake); calls != 0 {
+				t.Fatalf("service calls = %d, want 0", calls)
+			}
+		})
+	}
+}
+
 func TestUserSettingsHandlerDuplicateIdentifierReturnsConflict(t *testing.T) {
 	handler := NewUserSettingsHandler(&fakeUserSettingsService{updateErr: service.ErrDuplicateUserIdentifier}, "")
 	user := testAPIUser("alice", false, "account:manage")
@@ -246,10 +332,12 @@ func TestUserSettingsHandlerConnectorConfigListsDownloadAvailability(t *testing.
 }
 
 type fakeUserSettingsService struct {
-	settings   *service.UserSettingsResult
-	secret     *service.BridgeSecretResult
-	updateErr  error
-	lastUpdate service.UpdateUserSettingsInput
+	settings    *service.UserSettingsResult
+	secret      *service.BridgeSecretResult
+	updateErr   error
+	lastUpdate  service.UpdateUserSettingsInput
+	rotateCalls int
+	revokeCalls int
 }
 
 func (f *fakeUserSettingsService) GetSettings(context.Context, *service.AuthenticatedUser) (*service.UserSettingsResult, error) {
@@ -275,10 +363,12 @@ func (f *fakeUserSettingsService) GenerateSecret(context.Context, *service.Authe
 }
 
 func (f *fakeUserSettingsService) RotateSecret(context.Context, *service.AuthenticatedUser, string) (*service.BridgeSecretResult, error) {
+	f.rotateCalls++
 	return f.secret, nil
 }
 
 func (f *fakeUserSettingsService) RevokeSecret(context.Context, *service.AuthenticatedUser, string) (*service.BridgeCredentialMetadata, error) {
+	f.revokeCalls++
 	if f.secret == nil {
 		return nil, errors.New("missing secret")
 	}
