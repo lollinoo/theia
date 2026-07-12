@@ -55,10 +55,25 @@ describe('AlertsPanel (COMP-06)', () => {
     expect(firingDot).not.toBeUndefined();
   });
 
-  it('firing status dot has a glow shadow', () => {
-    const alerts = [mockAlert({ state: 'firing' })];
-    const { container } = render(<AlertsPanel model={mockModel({ firingAlerts: alerts })} />);
-    expect(container.innerHTML).toContain('rgba(255,23,68');
+  it('uses the semantic down glow for firing alerts', () => {
+    const { container } = render(<AlertsPanel model={mockModel()} />);
+    const firingDot = container.querySelector('.bg-status-down');
+
+    expect(firingDot).toHaveStyle({ boxShadow: 'var(--nt-glow-status-down)' });
+  });
+
+  it('uses the semantic ok glow for resolved alerts', () => {
+    const { container } = render(
+      <AlertsPanel
+        model={mockModel({
+          firingAlerts: [],
+          resolvedAlerts: [mockAlert({ state: 'resolved' })],
+        })}
+      />,
+    );
+    const resolvedDot = container.querySelector('.bg-status-up');
+
+    expect(resolvedDot).toHaveStyle({ boxShadow: 'var(--nt-glow-status-ok)' });
   });
 
   it('alert cards do not have border border-outline class', () => {

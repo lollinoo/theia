@@ -34,11 +34,17 @@ function severityBadge(severity: string) {
 function stateBadge(state: string) {
   if (state === 'firing') {
     return (
-      <span className="h-2 w-2 flex-none rounded-full bg-status-down animate-pulse shadow-[0_0_10px_rgba(255,23,68,var(--nt-glow-shadow-opacity))] motion-reduce:animate-none" />
+      <span
+        className="h-2 w-2 flex-none rounded-full bg-status-down animate-pulse motion-reduce:animate-none"
+        style={{ boxShadow: 'var(--nt-glow-status-down)' }}
+      />
     );
   }
   return (
-    <span className="h-2 w-2 flex-none rounded-full bg-status-up shadow-[0_0_6px_rgba(0,230,118,var(--nt-glow-shadow-opacity))]" />
+    <span
+      className="h-2 w-2 flex-none rounded-full bg-status-up"
+      style={{ boxShadow: 'var(--nt-glow-status-ok)' }}
+    />
   );
 }
 
