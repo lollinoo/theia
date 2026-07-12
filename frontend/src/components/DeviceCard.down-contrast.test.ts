@@ -22,10 +22,10 @@ describe('DeviceCard down node contrast tokens', () => {
     const darkTheme = themeBlock(':root,\n[data-theme="dark"]');
 
     expect(darkTheme).toContain('--nt-status-down: #ff5c6c;');
-    expect(darkTheme).toContain('--nt-node-down-border: rgba(255, 48, 69, 0.98);');
-    expect(darkTheme).toContain('--nt-node-down-card-bg: #3b101b;');
-    expect(darkTheme).toContain('--nt-node-down-card-pulse-bg: #5a0f21;');
-    expect(darkTheme).toContain('--nt-node-down-glow: rgba(255, 48, 69, 0.42);');
+    expect(darkTheme).toContain('--nt-node-down-border: rgba(255, 92, 108, 0.98);');
+    expect(darkTheme).toContain('--nt-node-down-card-bg: #35191e;');
+    expect(darkTheme).toContain('--nt-node-down-card-pulse-bg: #492027;');
+    expect(darkTheme).toContain('--nt-node-down-glow: rgba(255, 92, 108, 0.36);');
   });
 
   it('uses high-contrast down reds in light mode', () => {

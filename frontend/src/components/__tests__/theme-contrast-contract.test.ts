@@ -177,17 +177,29 @@ describe('enterprise NOC theme contrast contract', () => {
     );
   });
 
-  it('keeps dark-mode chrome restrained over the topology canvas', () => {
-    expect(declaration(darkBlock, '--nt-glass-bg')).toBe('rgba(19, 26, 34, 0.94)');
-    expect(declaration(darkBlock, '--nt-glass-border')).toBe('rgba(237, 244, 251, 0.14)');
-    expect(declaration(darkBlock, '--nt-glass-backdrop')).toBe('blur(12px)');
-    expect(declaration(darkBlock, '--nt-minimap-mask')).toBe('rgba(13, 18, 24, 0.72)');
-    expect(declaration(darkBlock, '--nt-canvas-backdrop')).toBe('#0d141b');
-    expect(declaration(darkBlock, '--nt-shadow-panel')).toBe('0 18px 40px rgba(0, 0, 0, 0.32)');
-    expect(declaration(darkBlock, '--nt-shadow-floating')).toBe('0 12px 28px rgba(0, 0, 0, 0.26)');
-    expect(declaration(darkBlock, '--nt-shadow-pill')).toBe('0 8px 20px rgba(0, 0, 0, 0.22)');
-    expect(declaration(darkBlock, '--nt-shadow-canvas')).toBe('0 18px 48px rgba(0, 0, 0, 0.24)');
-    expect(declaration(darkBlock, '--nt-node-shadow')).toBe('0 10px 24px rgba(0, 0, 0, 0.22)');
+  it('keeps dark-mode chrome neutral and restrained over the topology canvas', () => {
+    expect(token(darkBlock, '--nt-outline')).toBe('#343d40');
+    expect(token(darkBlock, '--nt-outline-strong')).toBe('#59666a');
+    expect(token(darkBlock, '--nt-edge-default')).toBe('#82908f');
+    expect(token(darkBlock, '--nt-edge-muted')).toBe('#4b5758');
+    expect(token(darkBlock, '--nt-edge-active')).toBe('#67d9c0');
+    expect(token(darkBlock, '--nt-node-selected')).toBe('#67d9c0');
+    expect(declaration(darkBlock, '--nt-glass-bg')).toBe('rgba(23, 27, 30, 0.94)');
+    expect(declaration(darkBlock, '--nt-glass-border')).toBe('rgba(241, 245, 244, 0.12)');
+    expect(declaration(darkBlock, '--nt-glass-backdrop')).toBe('blur(10px)');
+    expect(declaration(darkBlock, '--nt-minimap-mask')).toBe('rgba(16, 19, 21, 0.74)');
+    expect(declaration(darkBlock, '--nt-canvas-backdrop')).toBe('#0e1213');
+    expect(declaration(darkBlock, '--nt-shadow-panel')).toBe('0 12px 28px rgba(0, 0, 0, 0.3)');
+    expect(declaration(darkBlock, '--nt-shadow-floating')).toBe(
+      '0 8px 20px rgba(0, 0, 0, 0.26)',
+    );
+    expect(declaration(darkBlock, '--nt-shadow-pill')).toBe('0 4px 12px rgba(0, 0, 0, 0.22)');
+    expect(declaration(darkBlock, '--nt-shadow-canvas')).toBe(
+      '0 14px 36px rgba(0, 0, 0, 0.26)',
+    );
+    expect(declaration(darkBlock, '--nt-node-shadow')).toBe('0 6px 16px rgba(0, 0, 0, 0.24)');
+    expect(declaration(darkBlock, '--nt-glow-shadow-opacity')).toBe('0.26');
+    expect(declaration(darkBlock, '--nt-glow-bloom-opacity')).toBe('0.07');
   });
 
   it('keeps light-mode operational text readable on all primary surfaces', () => {
