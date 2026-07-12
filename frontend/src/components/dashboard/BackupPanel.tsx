@@ -26,21 +26,55 @@ export function BackupPanel({ device }: BackupPanelProps) {
   const [triggering, setTriggering] = useState(false);
   const [triggerResult, setTriggerResult] = useState<BackupJob | null>(null);
   const [error, setError] = useState('');
+  const [latestError, setLatestError] = useState('');
   const [hostKeyResetMessage, setHostKeyResetMessage] = useState('');
   const [hostKeyResetError, setHostKeyResetError] = useState('');
   const [resettingHostKey, setResettingHostKey] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const latestRequestRef = useRef(0);
+  const activeDeviceIdRef = useRef(device.id);
 
   const backupSupported = device.backup_supported;
 
   const loadLatest = useCallback(async () => {
-    const job = await fetchLatestBackupJob(device.id);
-    setLatest(job);
+    const requestedDeviceId = device.id;
+    if (activeDeviceIdRef.current !== requestedDeviceId) return;
+    const requestId = ++latestRequestRef.current;
+    try {
+      const job = await fetchLatestBackupJob(requestedDeviceId);
+      if (
+        activeDeviceIdRef.current !== requestedDeviceId ||
+        latestRequestRef.current !== requestId
+      ) {
+        return;
+      }
+      setLatest(job);
+      setLatestError('');
+    } catch (err) {
+      if (
+        activeDeviceIdRef.current !== requestedDeviceId ||
+        latestRequestRef.current !== requestId
+      ) {
+        return;
+      }
+      setLatest(null);
+      setLatestError(
+        err instanceof Error
+          ? `Failed to load latest backup: ${err.message}`
+          : 'Failed to load latest backup',
+      );
+    }
   }, [device.id]);
 
   useEffect(() => {
-    loadLatest();
-  }, [loadLatest]);
+    activeDeviceIdRef.current = device.id;
+    setLatest(null);
+    setLatestError('');
+    void loadLatest();
+    return () => {
+      latestRequestRef.current += 1;
+    };
+  }, [device.id, loadLatest]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -271,6 +305,11 @@ export function BackupPanel({ device }: BackupPanelProps) {
         <div className="text-xs font-medium text-on-bg-secondary uppercase tracking-[0.12em] mb-2">
           Latest Successful Backup
         </div>
+        {latestError && (
+          <div className="mb-2 rounded-md border border-status-down/20 bg-status-down/5 p-3 text-xs text-status-down">
+            {latestError}
+          </div>
+        )}
         {latest ? (
           <div className="rounded-lg bg-surface-high p-3 space-y-1.5">
             <div className="flex justify-between text-xs">

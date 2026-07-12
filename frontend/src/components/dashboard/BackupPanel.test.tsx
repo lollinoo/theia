@@ -13,6 +13,12 @@ import {
 import type { BackupJob, Device } from '../../types/api';
 import { BackupPanel } from './BackupPanel';
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+}
+
 vi.mock('../../api/client', () => ({
   fetchBackupJob: vi.fn(),
   fetchBackupJobs: vi.fn(),
@@ -53,6 +59,28 @@ function mockBackupJob(overrides: Partial<BackupJob> = {}): BackupJob {
     files: [],
     ...overrides,
   };
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function mockBackupFiles(count: number, jobId: string) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `file-${jobId}-${index}`,
+    job_id: jobId,
+    file_type: 'export',
+    file_name: `${jobId}-${index}.rsc`,
+    file_hash: `hash-${index}`,
+    size_bytes: 100,
+    created_at: '2026-06-28T00:00:00Z',
+  }));
 }
 
 async function flushPromises() {
@@ -106,6 +134,129 @@ describe('BackupPanel active job rehydration', () => {
     });
 
     expect(fetchBackupJob).toHaveBeenCalledWith('job-active');
+  });
+});
+
+describe('BackupPanel latest backup device ownership', () => {
+  it('ignores a previous device response that resolves after the current device', async () => {
+    const deviceARequest = deferred<BackupJob | null>();
+    const deviceBRequest = deferred<BackupJob | null>();
+    vi.mocked(fetchLatestBackupJob).mockImplementation((deviceId) =>
+      deviceId === 'dev-a' ? deviceARequest.promise : deviceBRequest.promise,
+    );
+    const deviceA = mockDevice({ id: 'dev-a', sys_name: 'router-a' });
+    const deviceB = mockDevice({ id: 'dev-b', sys_name: 'router-b' });
+
+    const view = render(<BackupPanel device={deviceA} />);
+    view.rerender(<BackupPanel device={deviceB} />);
+
+    await act(async () => {
+      deviceBRequest.resolve(
+        mockBackupJob({
+          id: 'job-b',
+          device_id: 'dev-b',
+          status: 'success',
+          files: mockBackupFiles(2, 'job-b'),
+        }),
+      );
+      await deviceBRequest.promise;
+    });
+    expect(screen.getByText('2 files')).toBeInTheDocument();
+
+    await act(async () => {
+      deviceARequest.resolve(
+        mockBackupJob({
+          id: 'job-a',
+          device_id: 'dev-a',
+          status: 'success',
+          files: mockBackupFiles(1, 'job-a'),
+        }),
+      );
+      await deviceARequest.promise;
+    });
+
+    expect(screen.getByText('2 files')).toBeInTheDocument();
+    expect(screen.queryByText('1 files')).not.toBeInTheDocument();
+  });
+
+  it('ignores a previous device rejection after the current device loads', async () => {
+    const deviceARequest = deferred<BackupJob | null>();
+    const deviceBRequest = deferred<BackupJob | null>();
+    vi.mocked(fetchLatestBackupJob).mockImplementation((deviceId) =>
+      deviceId === 'dev-a' ? deviceARequest.promise : deviceBRequest.promise,
+    );
+    const view = render(<BackupPanel device={mockDevice({ id: 'dev-a' })} />);
+    view.rerender(<BackupPanel device={mockDevice({ id: 'dev-b' })} />);
+
+    await act(async () => {
+      deviceBRequest.resolve(
+        mockBackupJob({
+          id: 'job-b',
+          device_id: 'dev-b',
+          status: 'success',
+          files: mockBackupFiles(2, 'job-b'),
+        }),
+      );
+      await deviceBRequest.promise;
+    });
+
+    await act(async () => {
+      deviceARequest.reject(new Error('device A unavailable'));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('2 files')).toBeInTheDocument();
+    expect(screen.queryByText(/device A unavailable/i)).not.toBeInTheDocument();
+  });
+
+  it('clears the previous device latest backup while the next device loads', async () => {
+    const deviceBRequest = deferred<BackupJob | null>();
+    vi.mocked(fetchLatestBackupJob)
+      .mockResolvedValueOnce(
+        mockBackupJob({
+          id: 'job-a',
+          device_id: 'dev-a',
+          status: 'success',
+          files: mockBackupFiles(1, 'job-a'),
+        }),
+      )
+      .mockReturnValueOnce(deviceBRequest.promise);
+    const view = render(<BackupPanel device={mockDevice({ id: 'dev-a' })} />);
+    await flushPromises();
+    expect(screen.getByText('1 files')).toBeInTheDocument();
+
+    view.rerender(<BackupPanel device={mockDevice({ id: 'dev-b' })} />);
+
+    expect(screen.queryByText('1 files')).not.toBeInTheDocument();
+    expect(screen.getByText('No backups yet')).toBeInTheDocument();
+  });
+
+  it('handles a latest backup rejection after unmount', async () => {
+    const request = deferred<BackupJob | null>();
+    vi.mocked(fetchLatestBackupJob).mockReturnValue(request.promise);
+    const view = render(<BackupPanel device={mockDevice()} />);
+
+    view.unmount();
+    await act(async () => {
+      request.reject(new Error('request completed after unmount'));
+      await Promise.resolve();
+    });
+  });
+
+  it('shows a useful error when the current device latest backup request fails', async () => {
+    const request = deferred<BackupJob | null>();
+    vi.mocked(fetchLatestBackupJob).mockReturnValue(request.promise);
+    render(<BackupPanel device={mockDevice()} />);
+
+    await act(async () => {
+      request.reject(new Error('network unavailable'));
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.getByText('Failed to load latest backup: network unavailable'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('No backups yet')).toBeInTheDocument();
   });
 });
 
