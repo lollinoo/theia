@@ -33,11 +33,11 @@
   --nt-tertiary: var(--nt-area-tertiary);
 
   --nt-status-ok: #6edb8f;
-  --nt-status-warning: #efbd69;
+  --nt-status-warning: #ffd000;
   --nt-status-critical: #ff8296;
   --nt-status-unknown: #a1aaa8;
   --nt-status-up: var(--nt-status-ok);
-  --nt-status-down: #ff5c6c;
+  --nt-status-down: #ff5964;
   --nt-status-probing: var(--nt-status-warning);
   --nt-warning: var(--nt-status-warning);
   --nt-critical: var(--nt-status-critical);
@@ -46,19 +46,19 @@
   --nt-node-critical-badge-bg: rgba(255, 130, 150, 0.12);
   --nt-node-critical-panel-border: rgba(255, 130, 150, 0.24);
   --nt-node-critical-panel-bg: rgba(255, 130, 150, 0.08);
-  --nt-node-down-border: rgba(255, 92, 108, 0.98);
-  --nt-node-down-badge-border: rgba(255, 92, 108, 0.58);
-  --nt-node-down-badge-bg: rgba(255, 92, 108, 0.24);
-  --nt-node-down-card-bg: #35191e;
-  --nt-node-down-panel-border: rgba(255, 92, 108, 0.42);
-  --nt-node-down-panel-bg: rgba(255, 92, 108, 0.14);
-  --nt-node-down-ring: rgba(255, 92, 108, 0.18);
-  --nt-node-down-glow: rgba(255, 92, 108, 0.36);
-  --nt-node-probing-border: rgba(239, 189, 105, 0.9);
-  --nt-node-probing-badge-bg: rgba(239, 189, 105, 0.2);
-  --nt-node-probing-card-bg: rgba(239, 189, 105, 0.14);
-  --nt-node-probing-ring: rgba(239, 189, 105, 0.12);
-  --nt-node-probing-glow: rgba(239, 189, 105, 0.22);
+  --nt-node-down-border: rgba(255, 89, 100, 0.98);
+  --nt-node-down-badge-border: rgba(255, 89, 100, 0.58);
+  --nt-node-down-badge-bg: rgba(255, 89, 100, 0.24);
+  --nt-node-down-card-bg: #3a171c;
+  --nt-node-down-panel-border: rgba(255, 89, 100, 0.42);
+  --nt-node-down-panel-bg: rgba(255, 89, 100, 0.14);
+  --nt-node-down-ring: rgba(255, 89, 100, 0.18);
+  --nt-node-down-glow: rgba(255, 89, 100, 0.36);
+  --nt-node-probing-border: rgba(255, 208, 0, 0.92);
+  --nt-node-probing-badge-bg: rgba(255, 208, 0, 0.2);
+  --nt-node-probing-card-bg: rgba(255, 208, 0, 0.15);
+  --nt-node-probing-ring: rgba(255, 208, 0, 0.13);
+  --nt-node-probing-glow: rgba(255, 208, 0, 0.22);
 
   --nt-edge-default: #82908f;
   --nt-edge-muted: #4b5758;
@@ -85,9 +85,9 @@
   --nt-glow-shadow-opacity: 0.26;
   --nt-glow-bloom-opacity: 0.07;
   --nt-glow-status-ok: 0 0 0 1px rgba(110, 219, 143, 0.16), 0 0 10px rgba(110, 219, 143, 0.14);
-  --nt-glow-status-warning: 0 0 0 1px rgba(239, 189, 105, 0.18), 0 0 12px rgba(239, 189, 105, 0.16);
+  --nt-glow-status-warning: 0 0 0 1px rgba(255, 208, 0, 0.18), 0 0 12px rgba(255, 208, 0, 0.16);
   --nt-glow-status-critical: 0 0 0 1px rgba(255, 130, 150, 0.2), 0 0 14px rgba(255, 130, 150, 0.2);
-  --nt-glow-status-down: 0 0 0 1px rgba(255, 92, 108, 0.3), 0 0 18px rgba(255, 92, 108, 0.3);
+  --nt-glow-status-down: 0 0 0 1px rgba(255, 89, 100, 0.3), 0 0 18px rgba(255, 89, 100, 0.3);
   --nt-glow-status-unknown: 0 0 0 1px rgba(161, 170, 168, 0.14), 0 0 8px rgba(161, 170, 168, 0.12);
   color-scheme: dark;
 }
@@ -119,11 +119,11 @@
   --nt-tertiary: var(--nt-area-tertiary);
 
   --nt-status-ok: #0b6b50;
-  --nt-status-warning: #7a4f0a;
+  --nt-status-warning: #765a00;
   --nt-status-critical: #a93449;
   --nt-status-unknown: #536176;
   --nt-status-up: var(--nt-status-ok);
-  --nt-status-down: #b4232d;
+  --nt-status-down: #c51624;
   --nt-status-probing: var(--nt-status-warning);
   --nt-warning: var(--nt-status-warning);
   --nt-critical: var(--nt-status-critical);
@@ -132,19 +132,19 @@
   --nt-node-critical-badge-bg: rgba(184, 66, 82, 0.1);
   --nt-node-critical-panel-border: rgba(184, 66, 82, 0.22);
   --nt-node-critical-panel-bg: rgba(184, 66, 82, 0.07);
-  --nt-node-down-border: rgba(180, 35, 45, 0.78);
-  --nt-node-down-badge-border: rgba(180, 35, 45, 0.32);
-  --nt-node-down-badge-bg: rgba(180, 35, 45, 0.08);
-  --nt-node-down-card-bg: #fff1f2;
-  --nt-node-down-panel-border: rgba(180, 35, 45, 0.2);
-  --nt-node-down-panel-bg: rgba(180, 35, 45, 0.05);
-  --nt-node-down-ring: rgba(180, 35, 45, 0.08);
-  --nt-node-down-glow: rgba(180, 35, 45, 0.16);
-  --nt-node-probing-border: rgba(122, 79, 10, 0.64);
-  --nt-node-probing-badge-bg: rgba(122, 79, 10, 0.08);
-  --nt-node-probing-card-bg: #fff8e6;
-  --nt-node-probing-ring: rgba(122, 79, 10, 0.06);
-  --nt-node-probing-glow: rgba(122, 79, 10, 0.12);
+  --nt-node-down-border: rgba(197, 22, 36, 0.82);
+  --nt-node-down-badge-border: rgba(197, 22, 36, 0.36);
+  --nt-node-down-badge-bg: rgba(197, 22, 36, 0.1);
+  --nt-node-down-card-bg: #fff0f1;
+  --nt-node-down-panel-border: rgba(197, 22, 36, 0.22);
+  --nt-node-down-panel-bg: rgba(197, 22, 36, 0.06);
+  --nt-node-down-ring: rgba(197, 22, 36, 0.09);
+  --nt-node-down-glow: rgba(197, 22, 36, 0.16);
+  --nt-node-probing-border: rgba(118, 90, 0, 0.72);
+  --nt-node-probing-badge-bg: rgba(118, 90, 0, 0.1);
+  --nt-node-probing-card-bg: #fff9dc;
+  --nt-node-probing-ring: rgba(118, 90, 0, 0.07);
+  --nt-node-probing-glow: rgba(118, 90, 0, 0.12);
 
   --nt-edge-default: #657a8e;
   --nt-edge-muted: #b5c0cb;
@@ -173,9 +173,9 @@
   --nt-glow-shadow-opacity: 0.16;
   --nt-glow-bloom-opacity: 0.04;
   --nt-glow-status-ok: 0 0 0 1px rgba(23, 126, 93, 0.14), 0 0 8px rgba(23, 126, 93, 0.12);
-  --nt-glow-status-warning: 0 0 0 1px rgba(165, 110, 24, 0.16), 0 0 10px rgba(165, 110, 24, 0.12);
+  --nt-glow-status-warning: 0 0 0 1px rgba(118, 90, 0, 0.16), 0 0 10px rgba(118, 90, 0, 0.12);
   --nt-glow-status-critical: 0 0 0 1px rgba(184, 66, 82, 0.18), 0 0 10px rgba(184, 66, 82, 0.14);
-  --nt-glow-status-down: 0 0 0 1px rgba(185, 28, 28, 0.24), 0 0 14px rgba(185, 28, 28, 0.22);
+  --nt-glow-status-down: 0 0 0 1px rgba(197, 22, 36, 0.24), 0 0 14px rgba(197, 22, 36, 0.22);
   --nt-glow-status-unknown: 0 0 0 1px rgba(103, 116, 135, 0.16), 0 0 6px rgba(103, 116, 135, 0.1);
   color-scheme: light;
 }
