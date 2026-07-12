@@ -4,8 +4,11 @@ package postgres
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 // SettingsRepo implements domain.SettingsRepository using PostgreSQL.
@@ -19,13 +22,13 @@ func NewSettingsRepo(db *sql.DB) *SettingsRepo {
 }
 
 // Get retrieves a single setting value by key.
-// Returns an error if the key is not found.
+// Returns domain.ErrSettingNotFound if the key is not found.
 func (r *SettingsRepo) Get(key string) (string, error) {
 	var value string
 	err := r.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return "", fmt.Errorf("setting not found: %s", key)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("%w: %s", domain.ErrSettingNotFound, key)
 		}
 		return "", fmt.Errorf("querying setting %s: %w", key, err)
 	}

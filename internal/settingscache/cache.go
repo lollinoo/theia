@@ -45,7 +45,7 @@ func (c *Cache) Get(key string) (string, error) {
 
 	value, ok := c.values[key]
 	if !ok {
-		return "", fmt.Errorf("setting not found: %s", key)
+		return "", fmt.Errorf("%w: %s", domain.ErrSettingNotFound, key)
 	}
 	return value, nil
 }

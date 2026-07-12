@@ -4,6 +4,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -307,8 +308,10 @@ func (h *GrafanaDashboardHandler) loadConfig(w http.ResponseWriter) (grafanaDash
 
 func (h *GrafanaDashboardHandler) readConfig() (grafanaDashboardConfig, error) {
 	raw, err := h.repo.Get(domain.SettingGrafanaDashboardConfig)
-	if err != nil {
+	if errors.Is(err, domain.ErrSettingNotFound) {
 		raw = "{}"
+	} else if err != nil {
+		return grafanaDashboardConfig{}, fmt.Errorf("reading Grafana dashboard config: %w", err)
 	}
 	var config grafanaDashboardConfig
 	if strings.TrimSpace(raw) != "" {

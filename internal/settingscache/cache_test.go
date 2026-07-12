@@ -1,15 +1,19 @@
 package settingscache
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 type fakeSettingsRepo struct {
 	mu          sync.Mutex
 	values      map[string]string
+	getAllErr   error
 	getAllCount int
 	setCount    int
 }
@@ -43,6 +47,9 @@ func (r *fakeSettingsRepo) GetAll() (map[string]string, error) {
 	defer r.mu.Unlock()
 
 	r.getAllCount++
+	if r.getAllErr != nil {
+		return nil, r.getAllErr
+	}
 	values := make(map[string]string, len(r.values))
 	for key, value := range r.values {
 		values[key] = value
@@ -216,5 +223,30 @@ func TestCacheReloadsAfterTTL(t *testing.T) {
 	getAllCount, _ := repo.counts()
 	if getAllCount != 2 {
 		t.Fatalf("GetAll count = %d, want 2", getAllCount)
+	}
+}
+
+func TestCacheGetMissingSettingReturnsTypedNotFound(t *testing.T) {
+	cache := New(newFakeSettingsRepo(map[string]string{}), time.Minute)
+
+	_, err := cache.Get("missing")
+
+	if !errors.Is(err, domain.ErrSettingNotFound) {
+		t.Fatalf("Get error = %v, want ErrSettingNotFound", err)
+	}
+}
+
+func TestCacheGetPreservesRepositoryReadError(t *testing.T) {
+	repo := newFakeSettingsRepo(map[string]string{})
+	repo.getAllErr = errors.New("database unavailable")
+	cache := New(repo, time.Minute)
+
+	_, err := cache.Get("missing")
+
+	if !errors.Is(err, repo.getAllErr) {
+		t.Fatalf("Get error = %v, want repository read error", err)
+	}
+	if errors.Is(err, domain.ErrSettingNotFound) {
+		t.Fatalf("Get error = %v, did not want ErrSettingNotFound", err)
 	}
 }
