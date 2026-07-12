@@ -309,44 +309,12 @@ function createDefaultWorkerSettings(): Record<WorkerSettingKey, string> {
   return values;
 }
 
-function createWorkerSavedFlags(): Record<WorkerSettingKey, boolean> {
-  const flags = {} as Record<WorkerSettingKey, boolean>;
-  for (const setting of WORKER_SETTINGS) {
-    flags[setting.key] = false;
-  }
-  return flags;
-}
-
-function createWorkerTimerRefs(): Record<WorkerSettingKey, number | null> {
-  const refs = {} as Record<WorkerSettingKey, number | null>;
-  for (const setting of WORKER_SETTINGS) {
-    refs[setting.key] = null;
-  }
-  return refs;
-}
-
 function createDefaultSNMPDebugSettings(): Record<SNMPDebugSettingKey, string> {
   const values = {} as Record<SNMPDebugSettingKey, string>;
   for (const setting of SNMP_DEBUG_SETTINGS) {
     values[setting.key] = setting.defaultValue;
   }
   return values;
-}
-
-function createSNMPDebugSavedFlags(): Record<SNMPDebugSettingKey, boolean> {
-  const flags = {} as Record<SNMPDebugSettingKey, boolean>;
-  for (const setting of SNMP_DEBUG_SETTINGS) {
-    flags[setting.key] = false;
-  }
-  return flags;
-}
-
-function createSNMPDebugTimerRefs(): Record<SNMPDebugSettingKey, number | null> {
-  const refs = {} as Record<SNMPDebugSettingKey, number | null>;
-  for (const setting of SNMP_DEBUG_SETTINGS) {
-    refs[setting.key] = null;
-  }
-  return refs;
 }
 
 const DEFAULT_WORKER_SETTINGS = createDefaultWorkerSettings();
@@ -362,10 +330,6 @@ export type {
   WorkerSettingKey,
 };
 export {
-  createSNMPDebugSavedFlags,
-  createSNMPDebugTimerRefs,
-  createWorkerSavedFlags,
-  createWorkerTimerRefs,
   DEFAULT_SNMP_DEBUG_SETTINGS,
   DEFAULT_WORKER_SETTINGS,
   POLLING_PRESETS,

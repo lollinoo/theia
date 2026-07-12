@@ -10,10 +10,17 @@ import {
   resetSSHHostKey,
   triggerBackup,
 } from '../../api/client';
+import { useAsyncPolling } from '../../hooks/useAsyncPolling';
 import { type BackupJob, type Device } from '../../types/api';
 
 interface BackupPanelProps {
   device: Device;
+}
+
+interface LatestBackupState {
+  deviceId: string;
+  latest: BackupJob | null;
+  error: string;
 }
 
 function isActiveBackupJob(job: BackupJob): boolean {
@@ -22,59 +29,86 @@ function isActiveBackupJob(job: BackupJob): boolean {
 
 /** Renders the BackupPanel component within the operations dashboard. */
 export function BackupPanel({ device }: BackupPanelProps) {
-  const [latest, setLatest] = useState<BackupJob | null>(null);
+  const [latestState, setLatestState] = useState<LatestBackupState | null>(null);
   const [triggering, setTriggering] = useState(false);
   const [triggerResult, setTriggerResult] = useState<BackupJob | null>(null);
   const [error, setError] = useState('');
   const [hostKeyResetMessage, setHostKeyResetMessage] = useState('');
   const [hostKeyResetError, setHostKeyResetError] = useState('');
   const [resettingHostKey, setResettingHostKey] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollJobIdRef = useRef<string | null>(null);
+  const latestRequestRef = useRef(0);
+  const activeDeviceIdRef = useRef(device.id);
 
   const backupSupported = device.backup_supported;
 
   const loadLatest = useCallback(async () => {
-    const job = await fetchLatestBackupJob(device.id);
-    setLatest(job);
+    const requestedDeviceId = device.id;
+    if (activeDeviceIdRef.current !== requestedDeviceId) return;
+    const requestId = ++latestRequestRef.current;
+    try {
+      const job = await fetchLatestBackupJob(requestedDeviceId);
+      if (
+        activeDeviceIdRef.current !== requestedDeviceId ||
+        latestRequestRef.current !== requestId
+      ) {
+        return;
+      }
+      setLatestState({ deviceId: requestedDeviceId, latest: job, error: '' });
+    } catch (err) {
+      if (
+        activeDeviceIdRef.current !== requestedDeviceId ||
+        latestRequestRef.current !== requestId
+      ) {
+        return;
+      }
+      setLatestState({
+        deviceId: requestedDeviceId,
+        latest: null,
+        error:
+          err instanceof Error
+            ? `Failed to load latest backup: ${err.message}`
+            : 'Failed to load latest backup',
+      });
+    }
   }, [device.id]);
 
-  useEffect(() => {
-    loadLatest();
-  }, [loadLatest]);
+  const polling = useAsyncPolling({
+    intervalMs: 2000,
+    poll: async () => {
+      if (!pollJobIdRef.current) throw new Error('Missing backup job id');
+      return fetchBackupJob(pollJobIdRef.current);
+    },
+    onResult: (job) => {
+      setTriggerResult(job);
+      if (job.status === 'success' || job.status === 'failed') {
+        void loadLatest();
+        return false;
+      }
+    },
+  });
 
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
-
+  const stopPolling = polling.stop;
   const startPolling = useCallback(
     (jobId: string) => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
-        try {
-          const job = await fetchBackupJob(jobId);
-          setTriggerResult(job);
-          if (job.status === 'success' || job.status === 'failed') {
-            if (pollRef.current) clearInterval(pollRef.current);
-            pollRef.current = null;
-            loadLatest();
-          }
-        } catch {
-          // ignore poll errors
-        }
-      }, 2000);
+      pollJobIdRef.current = jobId;
+      polling.start();
     },
-    [loadLatest],
+    [polling.start],
   );
 
   useEffect(() => {
+    activeDeviceIdRef.current = device.id;
+    setLatestState(null);
+    void loadLatest();
+    return () => {
+      latestRequestRef.current += 1;
+    };
+  }, [device.id, loadLatest]);
+
+  useEffect(() => {
     let cancelled = false;
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    stopPolling();
     setTriggerResult(null);
     setError('');
     setHostKeyResetMessage('');
@@ -96,8 +130,9 @@ export function BackupPanel({ device }: BackupPanelProps) {
     void loadActiveBackupJob();
     return () => {
       cancelled = true;
+      stopPolling();
     };
-  }, [device.id, startPolling]);
+  }, [device.id, startPolling, stopPolling]);
 
   const handleBackup = async () => {
     setTriggering(true);
@@ -151,6 +186,9 @@ export function BackupPanel({ device }: BackupPanelProps) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const currentLatestState = latestState?.deviceId === device.id ? latestState : null;
+  const latest = currentLatestState?.latest ?? null;
+  const latestError = currentLatestState?.error ?? '';
   const totalSize = latest?.files?.reduce((sum, f) => sum + f.size_bytes, 0) ?? 0;
   const activeBackupInProgress = triggerResult ? isActiveBackupJob(triggerResult) : false;
   const hasHostKeyMismatch =
@@ -271,7 +309,14 @@ export function BackupPanel({ device }: BackupPanelProps) {
         <div className="text-xs font-medium text-on-bg-secondary uppercase tracking-[0.12em] mb-2">
           Latest Successful Backup
         </div>
-        {latest ? (
+        {latestError ? (
+          <div
+            role="alert"
+            className="rounded-md border border-status-down/20 bg-status-down/5 p-3 text-xs text-status-down"
+          >
+            {latestError}
+          </div>
+        ) : latest ? (
           <div className="rounded-lg bg-surface-high p-3 space-y-1.5">
             <div className="flex justify-between text-xs">
               <span className="text-on-bg-secondary">Date</span>

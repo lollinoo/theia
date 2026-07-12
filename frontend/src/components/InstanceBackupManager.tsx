@@ -15,6 +15,7 @@ import {
   updateSetting,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
+import { useAsyncPolling } from '../hooks/useAsyncPolling';
 import type { InstanceBackup, RestoreReport, RestoreStatus } from '../types/api';
 import { validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
 
@@ -51,7 +52,6 @@ export function InstanceBackupManager() {
   >({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [expandedErrorId, setExpandedErrorId] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
@@ -71,13 +71,6 @@ export function InstanceBackupManager() {
   const savedRetentionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  }, []);
-
   const setInitialLoadError = useCallback((section: InitialLoadSection) => {
     setInitialLoadErrors((current) => ({
       ...current,
@@ -94,23 +87,18 @@ export function InstanceBackupManager() {
     });
   }, []);
 
-  const startPolling = useCallback(() => {
-    stopPolling();
-    pollRef.current = setInterval(async () => {
-      try {
-        const data = await fetchInstanceBackups();
-        setBackups(data);
-        clearInitialLoadError('history');
-        const running = data.find((b) => b.status === 'running');
-        if (!running) {
-          stopPolling();
-          setCreating(false);
-        }
-      } catch {
-        // ignore poll errors
+  const { start: startPolling, stop: stopPolling } = useAsyncPolling({
+    intervalMs: 2000,
+    poll: fetchInstanceBackups,
+    onResult: (data) => {
+      setBackups(data);
+      clearInitialLoadError('history');
+      if (!data.some((backup) => backup.status === 'running')) {
+        setCreating(false);
+        return false;
       }
-    }, 2000);
-  }, [clearInitialLoadError, stopPolling]);
+    },
+  });
 
   // Initial load + resume polling if a backup is already running
   useEffect(() => {

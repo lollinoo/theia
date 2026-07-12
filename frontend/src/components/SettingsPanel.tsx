@@ -2,13 +2,14 @@
  * Renders settings panel UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   fetchHealthRuntime,
   fetchSettingsWithMetadata,
   type HealthRuntime,
   updateSetting,
 } from '../api/client';
+import { useSettingAutosave } from '../hooks/useSettingAutosave';
 import type { TopologyDiscoveryMode } from '../types/api';
 import {
   formatTopologyDiscoveryMode,
@@ -32,10 +33,6 @@ import { SavedIndicator } from './settings-panel/SavedIndicator';
 import { SettingsSection } from './settings-panel/SettingsSection';
 import { SNMPDebugSettingsSection } from './settings-panel/SNMPDebugSettingsSection';
 import {
-  createSNMPDebugSavedFlags,
-  createSNMPDebugTimerRefs,
-  createWorkerSavedFlags,
-  createWorkerTimerRefs,
   DEFAULT_SNMP_DEBUG_SETTINGS,
   DEFAULT_WORKER_SETTINGS,
   PRESET_VALUES,
@@ -98,60 +95,37 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   const [timezone, setTimezone] = useState('UTC');
   const [topologyDiscoveryDefaultMode, setTopologyDiscoveryDefaultMode] =
     useState<TopologyDiscoveryMode>('lldp_cdp');
-  const [savedPolling, setSavedPolling] = useState(false);
-  const [savedNetworkProbePorts, setSavedNetworkProbePorts] = useState(false);
-  const [savedPrometheus, setSavedPrometheus] = useState(false);
-  const [savedTimezone, setSavedTimezone] = useState(false);
-  const [savedTopologyDiscovery, setSavedTopologyDiscovery] = useState(false);
   const [runtimeInfo, setRuntimeInfo] = useState<HealthRuntime | null>(null);
+  const [runtimeError, setRuntimeError] = useState(false);
   const [backupSectionOpen, setBackupSectionOpen] = useState(false);
   const [deviceBackupSectionOpen, setDeviceBackupSectionOpen] = useState(false);
   const [deviceBackupInterval, setDeviceBackupInterval] = useState('0');
   const [deviceBackupRetention, setDeviceBackupRetention] = useState('5');
-  const [savedDeviceInterval, setSavedDeviceInterval] = useState(false);
-  const [savedDeviceRetention, setSavedDeviceRetention] = useState(false);
   const [bridgePort, setBridgePort] = useState('1337');
-  const [savedBridgePort, setSavedBridgePort] = useState(false);
   const [workerSectionOpen, setWorkerSectionOpen] = useState(false);
   const [snmpDebugSectionOpen, setSNMPDebugSectionOpen] = useState(false);
   const [workerSettings, setWorkerSettings] =
     useState<Record<WorkerSettingKey, string>>(DEFAULT_WORKER_SETTINGS);
-  const [savedWorkerSettings, setSavedWorkerSettings] =
-    useState<Record<WorkerSettingKey, boolean>>(createWorkerSavedFlags);
   const [snmpDebugSettings, setSNMPDebugSettings] = useState<Record<SNMPDebugSettingKey, string>>(
     DEFAULT_SNMP_DEBUG_SETTINGS,
   );
-  const [savedSNMPDebugSettings, setSavedSNMPDebugSettings] =
-    useState<Record<SNMPDebugSettingKey, boolean>>(createSNMPDebugSavedFlags);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const autosave = useSettingAutosave(updateSetting);
 
-  const pollingTimerRef = useRef<number | null>(null);
-  const prometheusTimerRef = useRef<number | null>(null);
-  const savedPollingTimerRef = useRef<number | null>(null);
-  const savedNetworkProbePortsTimerRef = useRef<number | null>(null);
-  const savedPrometheusTimerRef = useRef<number | null>(null);
-  const savedTimezoneTimerRef = useRef<number | null>(null);
-  const savedTopologyDiscoveryTimerRef = useRef<number | null>(null);
-  const deviceIntervalTimerRef = useRef<number | null>(null);
-  const deviceRetentionTimerRef = useRef<number | null>(null);
-  const savedDeviceIntervalTimerRef = useRef<number | null>(null);
-  const savedDeviceRetentionTimerRef = useRef<number | null>(null);
-  const bridgePortTimerRef = useRef<number | null>(null);
-  const savedBridgePortTimerRef = useRef<number | null>(null);
-  const workerTimerRefs = useRef<Record<WorkerSettingKey, number | null>>(createWorkerTimerRefs());
-  const savedWorkerTimerRefs = useRef<Record<WorkerSettingKey, number | null>>(
-    createWorkerTimerRefs(),
-  );
-  const snmpDebugTimerRefs = useRef<Record<SNMPDebugSettingKey, number | null>>(
-    createSNMPDebugTimerRefs(),
-  );
-  const savedSNMPDebugTimerRefs = useRef<Record<SNMPDebugSettingKey, number | null>>(
-    createSNMPDebugTimerRefs(),
-  );
+  const isSaved = (key: string) => autosave.states[key]?.status === 'saved';
+  const saveError = Object.values(autosave.states).find((state) => state.error)?.error;
+  const savedWorkerSettings = Object.fromEntries(
+    WORKER_SETTINGS.map((setting) => [setting.key, isSaved(setting.key)]),
+  ) as Record<WorkerSettingKey, boolean>;
+  const savedSNMPDebugSettings = Object.fromEntries(
+    SNMP_DEBUG_SETTINGS.map((setting) => [setting.key, isSaved(setting.key)]),
+  ) as Record<SNMPDebugSettingKey, boolean>;
 
   useEffect(() => {
+    let active = true;
     fetchSettingsWithMetadata()
       .then(({ data: settings }) => {
+        if (!active) return;
         const interval = settings['polling_interval_seconds'] ?? '60';
         if (PRESET_VALUES.has(interval)) {
           setPollingValue(interval);
@@ -187,7 +161,17 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
       .catch(() => {
         /* non-fatal */
       });
-    fetchHealthRuntime().then(setRuntimeInfo);
+    fetchHealthRuntime().then(
+      (runtime) => {
+        if (active) setRuntimeInfo(runtime);
+      },
+      () => {
+        if (active) setRuntimeError(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
   }, []);
 
   /** Stores validation errors by stable field key and removes entries when fields become valid. */
@@ -198,38 +182,6 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
       delete next[field];
       return next;
     });
-  }
-
-  /** Shows a short-lived saved indicator and resets any previous timer for the same field. */
-  function showSaved(
-    setter: React.Dispatch<React.SetStateAction<boolean>>,
-    timerRef: React.MutableRefObject<number | null>,
-  ) {
-    setter(true);
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => setter(false), 2000);
-  }
-
-  /** Shows the saved indicator for one worker setting without affecting other worker rows. */
-  function showWorkerSaved(key: WorkerSettingKey) {
-    setSavedWorkerSettings((prev) => ({ ...prev, [key]: true }));
-    if (savedWorkerTimerRefs.current[key] !== null) {
-      window.clearTimeout(savedWorkerTimerRefs.current[key]);
-    }
-    savedWorkerTimerRefs.current[key] = window.setTimeout(() => {
-      setSavedWorkerSettings((prev) => ({ ...prev, [key]: false }));
-    }, 2000);
-  }
-
-  /** Shows the saved indicator for one SNMP debug setting without affecting other rows. */
-  function showSNMPDebugSaved(key: SNMPDebugSettingKey) {
-    setSavedSNMPDebugSettings((prev) => ({ ...prev, [key]: true }));
-    if (savedSNMPDebugTimerRefs.current[key] !== null) {
-      window.clearTimeout(savedSNMPDebugTimerRefs.current[key]);
-    }
-    savedSNMPDebugTimerRefs.current[key] = window.setTimeout(() => {
-      setSavedSNMPDebugSettings((prev) => ({ ...prev, [key]: false }));
-    }, 2000);
   }
 
   /** Validates worker numeric settings before scheduling an autosave request. */
@@ -247,27 +199,16 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     if (!setting) return;
     setWorkerSettings((prev) => ({ ...prev, [key]: value }));
     setSNMPDebugSettings((prev) => ({ ...prev, [key]: value }));
-    if (workerTimerRefs.current[key] !== null) {
-      window.clearTimeout(workerTimerRefs.current[key]);
-    }
-    if (snmpDebugTimerRefs.current[key] !== null) {
-      window.clearTimeout(snmpDebugTimerRefs.current[key]);
-    }
-
     const err = validateIntegerRange(value, setting.min, setting.max);
     if (err) {
+      autosave.cancel(key);
       setFieldError(key, err);
       return;
     }
 
     setFieldError(key, null);
     const normalized = String(parseInt(value, 10));
-    workerTimerRefs.current[key] = window.setTimeout(() => {
-      void updateSetting(key, normalized).then(() => {
-        showWorkerSaved(key);
-        showSNMPDebugSaved(key);
-      });
-    }, 500);
+    autosave.save(key, normalized);
   }
 
   /** Debounces SNMP debug setting persistence and keeps duplicate worker controls synchronized. */
@@ -277,118 +218,86 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     setSNMPDebugSettings((prev) => ({ ...prev, [key]: value }));
     if (isWorkerSettingKey(key)) {
       setWorkerSettings((prev) => ({ ...prev, [key]: value }));
-      if (workerTimerRefs.current[key] !== null) {
-        window.clearTimeout(workerTimerRefs.current[key]);
-      }
-    }
-    if (snmpDebugTimerRefs.current[key] !== null) {
-      window.clearTimeout(snmpDebugTimerRefs.current[key]);
     }
 
     const err = validateIntegerRange(value, setting.min, setting.max);
     if (err) {
+      autosave.cancel(key);
       setFieldError(key, err);
       return;
     }
 
     setFieldError(key, null);
     const normalized = String(parseInt(value, 10));
-    snmpDebugTimerRefs.current[key] = window.setTimeout(() => {
-      void updateSetting(key, normalized).then(() => {
-        showSNMPDebugSaved(key);
-        if (isWorkerSettingKey(key)) {
-          showWorkerSaved(key);
-        }
-      });
-    }, 500);
+    autosave.save(key, normalized);
   }
 
   /** Debounces polling interval persistence after enforcing the global allowed range. */
   function schedulePollingUpdate(rawValue: string) {
-    if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current);
     const trimmed = rawValue.trim();
     const numVal = parseInt(trimmed, 10);
-    if (!/^\d+$/.test(trimmed) || numVal < 5 || numVal > 3600) return;
-    pollingTimerRef.current = window.setTimeout(() => {
-      void updateSetting('polling_interval_seconds', String(numVal)).then(() =>
-        showSaved(setSavedPolling, savedPollingTimerRef),
-      );
-    }, 500);
+    if (!/^\d+$/.test(trimmed) || numVal < 5 || numVal > 3600) {
+      autosave.cancel('polling_interval_seconds');
+      return;
+    }
+    autosave.save('polling_interval_seconds', String(numVal));
   }
 
   /** Debounces Prometheus URL persistence while treating an empty URL as a valid disabled state. */
   function schedulePrometheusUpdate(value: string) {
-    if (prometheusTimerRef.current !== null) window.clearTimeout(prometheusTimerRef.current);
     // Gate auto-save: if value is non-empty and fails URL validation, set error and skip save
     if (value.trim() !== '') {
       const err = validateURL(value, 'Prometheus URL');
       if (err) {
+        autosave.cancel('prometheus_url');
         setFieldError('prometheusUrl', err);
         return;
       }
     }
-    prometheusTimerRef.current = window.setTimeout(() => {
-      void updateSetting('prometheus_url', value).then(() =>
-        showSaved(setSavedPrometheus, savedPrometheusTimerRef),
-      );
-    }, 500);
+    autosave.save('prometheus_url', value);
   }
 
   /** Persists only supported device-backup interval values so the scheduler receives known cadences. */
   function handleDeviceIntervalChange(value: string) {
     const err = validateIntervalAllowlist(value);
     if (err) {
+      autosave.cancel('device_backup_interval_hours');
       setFieldError('deviceBackupInterval', err);
       setDeviceBackupInterval(value);
       return;
     }
     setFieldError('deviceBackupInterval', null);
     setDeviceBackupInterval(value);
-    if (deviceIntervalTimerRef.current !== null)
-      window.clearTimeout(deviceIntervalTimerRef.current);
-    deviceIntervalTimerRef.current = window.setTimeout(() => {
-      void updateSetting('device_backup_interval_hours', value).then(() =>
-        showSaved(setSavedDeviceInterval, savedDeviceIntervalTimerRef),
-      );
-    }, 500);
+    autosave.save('device_backup_interval_hours', value);
   }
 
   /** Debounces device-backup retention persistence after normalizing to an integer string. */
   function handleDeviceRetentionChange(value: string) {
     const err = validateRetentionCount(value);
     if (err) {
+      autosave.cancel('device_backup_retention_count');
       setFieldError('deviceBackupRetention', err);
       setDeviceBackupRetention(value);
       return;
     }
     setFieldError('deviceBackupRetention', null);
     setDeviceBackupRetention(value);
-    if (deviceRetentionTimerRef.current !== null)
-      window.clearTimeout(deviceRetentionTimerRef.current);
     const num = parseInt(value, 10);
-    deviceRetentionTimerRef.current = window.setTimeout(() => {
-      void updateSetting('device_backup_retention_count', String(num)).then(() =>
-        showSaved(setSavedDeviceRetention, savedDeviceRetentionTimerRef),
-      );
-    }, 500);
+    autosave.save('device_backup_retention_count', String(num));
   }
 
   /** Debounces bridge port persistence and keeps invalid port text visible for correction. */
   function handleBridgePortChange(value: string) {
     setBridgePort(value);
     setFieldError('bridgePort', null);
-    if (bridgePortTimerRef.current !== null) window.clearTimeout(bridgePortTimerRef.current);
     const trimmed = value.trim();
     const num = parseInt(trimmed, 10);
     if (!/^\d+$/.test(trimmed) || num < 1 || num > 65535) {
+      autosave.cancel('bridge_port');
       setFieldError('bridgePort', 'Bridge port must be an integer between 1 and 65535');
       return;
     }
-    bridgePortTimerRef.current = window.setTimeout(() => {
-      void updateSetting('bridge_port', String(num)).then(() =>
-        showSaved(setSavedBridgePort, savedBridgePortTimerRef),
-      );
-    }, 500);
+    autosave.save('bridge_port', String(num));
   }
 
   /** Applies a preset polling cadence immediately while custom values wait for the custom input. */
@@ -396,6 +305,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     setPollingValue(value);
     if (value !== 'custom') {
       schedulePollingUpdate(value);
+    } else {
+      autosave.cancel('polling_interval_seconds');
     }
   }
 
@@ -408,6 +319,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   function handleNetworkProbePortsChange(value: string) {
     setNetworkProbePorts(value);
     setFieldError('networkProbePorts', null);
+    autosave.cancel('network_probe_ports');
   }
 
   function handleNetworkProbePortsBlur() {
@@ -418,9 +330,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
     }
     setFieldError('networkProbePorts', null);
     setNetworkProbePorts(normalized.value);
-    void updateSetting('network_probe_ports', normalized.value).then(() =>
-      showSaved(setSavedNetworkProbePorts, savedNetworkProbePortsTimerRef),
-    );
+    autosave.save('network_probe_ports', normalized.value, { delayMs: 0 });
   }
 
   /** Reports custom polling validation on blur without changing the debounced save contract. */
@@ -447,9 +357,9 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
   /** Persists timezone immediately because the select only exposes valid IANA timezone values. */
   function handleTimezoneChange(value: string) {
     setTimezone(value);
-    void updateSetting('timezone', value).then(() => {
-      showSaved(setSavedTimezone, savedTimezoneTimerRef);
-      onSettingsChange?.({ timezone: value });
+    autosave.save('timezone', value, {
+      delayMs: 0,
+      onSuccess: () => onSettingsChange?.({ timezone: value }),
     });
   }
 
@@ -483,6 +393,14 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
       className="grid min-w-0 items-start gap-6 p-4 transition-colors duration-200 lg:grid-cols-2"
     >
       <div data-testid="settings-panel-left-column" className="grid min-w-0 content-start gap-6">
+        {saveError && (
+          <p
+            role="alert"
+            className="rounded-md bg-status-down/10 px-3 py-2 text-sm text-status-down"
+          >
+            {saveError}
+          </p>
+        )}
         <SettingsSection
           id="settings-polling-heading"
           title="Polling"
@@ -494,8 +412,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
             pollingValue={pollingValue}
             customPolling={customPolling}
             networkProbePorts={networkProbePorts}
-            savedPolling={savedPolling}
-            savedNetworkProbePorts={savedNetworkProbePorts}
+            savedPolling={isSaved('polling_interval_seconds')}
+            savedNetworkProbePorts={isSaved('network_probe_ports')}
             customPollingError={fieldErrors.customPolling}
             networkProbePortsError={fieldErrors.networkProbePorts}
             workerSectionOpen={workerSectionOpen}
@@ -541,7 +459,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           <label className="grid gap-1 text-sm" htmlFor="topology-discovery-default">
             <span className="flex items-center justify-between gap-3">
               <span className={fieldLabelClass}>Topology Discovery Default</span>
-              <SavedIndicator visible={savedTopologyDiscovery} />
+              <SavedIndicator visible={isSaved('topology_discovery_default_mode')} />
             </span>
             <select
               id="topology-discovery-default"
@@ -550,9 +468,9 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
               onChange={(e) => {
                 const nextValue = e.target.value as TopologyDiscoveryMode;
                 setTopologyDiscoveryDefaultMode(nextValue);
-                void updateSetting('topology_discovery_default_mode', nextValue).then(() => {
-                  showSaved(setSavedTopologyDiscovery, savedTopologyDiscoveryTimerRef);
-                  onSettingsChange?.();
+                autosave.save('topology_discovery_default_mode', nextValue, {
+                  delayMs: 0,
+                  onSuccess: () => onSettingsChange?.(),
                 });
               }}
               className={controlClass()}
@@ -583,7 +501,7 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
         >
           <PrometheusSettingsSection
             prometheusUrl={prometheusUrl}
-            savedPrometheus={savedPrometheus}
+            savedPrometheus={isSaved('prometheus_url')}
             prometheusError={fieldErrors.prometheusUrl}
             onPrometheusChange={handlePrometheusChange}
             onPrometheusBlur={handlePrometheusBlur}
@@ -602,8 +520,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
           <BridgeSettingsSection
             timezone={timezone}
             bridgePort={bridgePort}
-            savedTimezone={savedTimezone}
-            savedBridgePort={savedBridgePort}
+            savedTimezone={isSaved('timezone')}
+            savedBridgePort={isSaved('bridge_port')}
             bridgePortError={fieldErrors.bridgePort}
             onTimezoneChange={handleTimezoneChange}
             onBridgePortChange={handleBridgePortChange}
@@ -652,8 +570,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
               open={deviceBackupSectionOpen}
               deviceBackupInterval={deviceBackupInterval}
               deviceBackupRetention={deviceBackupRetention}
-              savedDeviceInterval={savedDeviceInterval}
-              savedDeviceRetention={savedDeviceRetention}
+              savedDeviceInterval={isSaved('device_backup_interval_hours')}
+              savedDeviceRetention={isSaved('device_backup_retention_count')}
               retentionError={fieldErrors.deviceBackupRetention}
               onToggle={() => setDeviceBackupSectionOpen((prev) => !prev)}
               onDeviceIntervalChange={handleDeviceIntervalChange}
@@ -708,6 +626,8 @@ export function SettingsPanel({ onSettingsChange }: SettingsPanelProps) {
                 </span>
               </div>
             </div>
+          ) : runtimeError ? (
+            <p className="text-sm text-status-down">Runtime information unavailable</p>
           ) : (
             <p className="text-sm text-on-bg-secondary">Loading runtime information</p>
           )}

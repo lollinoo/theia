@@ -31,13 +31,13 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import('../api/client');
   vi.mocked(fetchInstanceBackups).mockReset().mockResolvedValue([]);
   vi.mocked(fetchSettings).mockReset().mockResolvedValue({});
   vi.mocked(fetchRestoreStatus).mockReset().mockResolvedValue(null);
 });
-
 // Helper: render and wait for initial loading to complete
 async function renderAndWait() {
   render(<InstanceBackupManager />);
@@ -174,9 +174,9 @@ describe('InstanceBackupManager — independent initial loads', () => {
     vi.mocked(fetchInstanceBackups).mockReturnValueOnce(backupsRequest.promise);
     vi.mocked(fetchSettings).mockReturnValueOnce(settingsRequest.promise);
     vi.mocked(fetchRestoreStatus).mockReturnValueOnce(restoreStatusRequest.promise);
-    const setIntervalSpy = vi
-      .spyOn(globalThis, 'setInterval')
-      .mockImplementation(() => 1 as unknown as ReturnType<typeof setInterval>);
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(() => 1 as unknown as ReturnType<typeof setTimeout>);
 
     render(<InstanceBackupManager />);
 
@@ -190,7 +190,7 @@ describe('InstanceBackupManager — independent initial loads', () => {
       await backupsRequest.promise;
     });
     expect(screen.getByText('running-history-load.tar.gz')).toBeInTheDocument();
-    expect(setIntervalSpy).toHaveBeenCalledOnce();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2000);
     expect(screen.getByText('Loading backups...')).toBeInTheDocument();
 
     await act(async () => {
@@ -249,9 +249,9 @@ describe('InstanceBackupManager — independent initial loads', () => {
     vi.mocked(fetchInstanceBackups).mockReturnValueOnce(backupsRequest.promise);
     vi.mocked(fetchSettings).mockReturnValueOnce(settingsRequest.promise);
     vi.mocked(fetchRestoreStatus).mockReturnValueOnce(restoreStatusRequest.promise);
-    const setIntervalSpy = vi
-      .spyOn(globalThis, 'setInterval')
-      .mockImplementation(() => 1 as unknown as ReturnType<typeof setInterval>);
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(() => 1 as unknown as ReturnType<typeof setTimeout>);
     const { unmount } = render(<InstanceBackupManager />);
 
     unmount();
@@ -266,8 +266,8 @@ describe('InstanceBackupManager — independent initial loads', () => {
       ]);
     });
 
-    expect(setIntervalSpy).not.toHaveBeenCalled();
-    setIntervalSpy.mockRestore();
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+    setTimeoutSpy.mockRestore();
   });
 
   it('does not show an empty history state when the history request failed', async () => {
@@ -307,13 +307,14 @@ describe('InstanceBackupManager — independent initial loads', () => {
   it('clears a history error after a successful backup poll', async () => {
     const { fetchInstanceBackups } = await import('../api/client');
     vi.mocked(fetchInstanceBackups).mockRejectedValueOnce(new Error('history unavailable'));
-    let poll: (() => Promise<void>) | undefined;
-    vi.spyOn(globalThis, 'setInterval').mockImplementation((callback) => {
-      poll = callback as () => Promise<void>;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
     await renderAndWait();
     expect(screen.getByText('Could not load backup history.')).toBeInTheDocument();
+
+    let poll: (() => Promise<void>) | undefined;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay) => {
+      if (delay === 2000) poll = callback as () => Promise<void>;
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    });
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Create Backup' }));
@@ -321,7 +322,9 @@ describe('InstanceBackupManager — independent initial loads', () => {
     });
     expect(poll).toBeDefined();
     await act(async () => {
-      await poll?.();
+      poll?.();
+      await Promise.resolve();
+      await Promise.resolve();
     });
 
     expect(screen.queryByText('Could not load backup history.')).not.toBeInTheDocument();
@@ -986,6 +989,51 @@ describe('InstanceBackupManager — SC-5: create button shows Creating... while 
     await waitFor(() => {
       expect(screen.getByText('Creating...')).toBeInTheDocument();
     });
+  });
+});
+
+describe('InstanceBackupManager — non-overlapping polling', () => {
+  it('schedules the next backup refresh only after the current refresh settles', async () => {
+    vi.useFakeTimers();
+    const firstPoll = deferred<ReturnType<typeof mockBackup>[]>();
+    const { fetchInstanceBackups } = await import('../api/client');
+    const running = mockBackup({ id: 'running-backup', status: 'running', file_name: '' });
+    (fetchInstanceBackups as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([running])
+      .mockImplementationOnce(() => firstPoll.promise)
+      .mockResolvedValue([running]);
+
+    render(<InstanceBackupManager />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fetchInstanceBackups).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(fetchInstanceBackups).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      firstPoll.resolve([running]);
+      await firstPoll.promise;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1999);
+    });
+    expect(fetchInstanceBackups).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(fetchInstanceBackups).toHaveBeenCalledTimes(3);
   });
 });
 

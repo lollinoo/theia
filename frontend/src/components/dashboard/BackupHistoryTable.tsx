@@ -2,8 +2,9 @@
  * Defines backup history table behavior for the operations dashboard.
  * Keeps table, backup, and device-management responsibilities isolated by module.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { backupFileDownloadUrl, deleteBackupJob, fetchBackupJobs } from '../../api/client';
+import { useAsyncPolling } from '../../hooks/useAsyncPolling';
 import { type BackupJob } from '../../types/api';
 
 interface BackupHistoryTableProps {
@@ -23,43 +24,44 @@ export function BackupHistoryTable({ deviceId, onViewConfig }: BackupHistoryTabl
   const [jobs, setJobs] = useState<BackupJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
-    try {
-      const data = await fetchBackupJobs(deviceId);
-      setJobs(data);
-      return data;
-    } catch (err) {
-      console.error('Failed to fetch backup jobs:', err);
-      return [];
-    } finally {
-      setLoading(false);
-    }
+    return fetchBackupJobs(deviceId);
   }, [deviceId]);
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    void load()
+      .then((data) => {
+        if (!cancelled) setJobs(data);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) console.error('Failed to fetch backup jobs:', error);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
+  const polling = useAsyncPolling({
+    intervalMs: 2000,
+    poll: load,
+    onResult: (data) => {
+      setJobs(data);
+    },
+    onError: (error) => console.error('Failed to fetch backup jobs:', error),
+  });
+
   // Poll while any job is pending/running
+  const hasActive = jobs.some((job) => job.status === 'pending' || job.status === 'running');
   useEffect(() => {
-    const hasActive = jobs.some((j) => j.status === 'pending' || j.status === 'running');
-    if (hasActive && !pollRef.current) {
-      pollRef.current = setInterval(() => {
-        load();
-      }, 2000);
-    } else if (!hasActive && pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [jobs, load]);
+    if (hasActive) polling.start();
+    else polling.stop();
+    return polling.stop;
+  }, [deviceId, hasActive, polling.start, polling.stop]);
 
   const handleDelete = async (id: string) => {
     try {

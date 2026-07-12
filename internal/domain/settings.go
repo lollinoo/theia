@@ -2,6 +2,11 @@ package domain
 
 // This file defines settings domain contracts and lifecycle invariants.
 
+import "errors"
+
+// ErrSettingNotFound indicates that a requested runtime setting does not exist.
+var ErrSettingNotFound = errors.New("setting not found")
+
 // Setting keys for runtime configuration stored in the primary database.
 const (
 	SettingPrometheusURL                       = "prometheus_url"
@@ -79,8 +84,16 @@ func DefaultSettings() map[string]string {
 }
 
 // SettingsRepository defines persistence operations for runtime settings.
+// Get returns ErrSettingNotFound when key does not exist.
 type SettingsRepository interface {
 	Get(key string) (string, error)
 	Set(key, value string) error
 	GetAll() (map[string]string, error)
+}
+
+// AtomicSettingsRepository updates a setting from its latest persisted value
+// while preventing concurrent updates to the same key from overwriting each other.
+type AtomicSettingsRepository interface {
+	SettingsRepository
+	Update(key string, update func(current string) (string, error)) (string, error)
 }
