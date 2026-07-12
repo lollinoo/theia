@@ -15,6 +15,7 @@ import {
   triggerBulkDownload,
 } from '../../api/client';
 import { ServerError, ValidationError } from '../../api/errors';
+import { useAsyncPolling } from '../../hooks/useAsyncPolling';
 import type {
   BackupJob,
   BulkBackupRun,
@@ -480,32 +481,45 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
   );
   const [bulkOperationStatus, setBulkOperationStatus] = useState<BulkOperationStatus | null>(null);
   const [controlBusy, setControlBusy] = useState<'pause' | 'resume' | 'stop' | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const entriesRef = useRef<DeviceEntry[]>([]);
   const mountedRef = useRef(false);
   const runIdRef = useRef<string | undefined>(bulkBackupSession.runId);
+  const pollingRunIdRef = useRef<string | undefined>(undefined);
+
+  const polling = useAsyncPolling({
+    intervalMs: 2000,
+    poll: async () => {
+      if (!runIdRef.current) throw new Error('Missing bulk backup run id');
+      return fetchBulkBackupRun(runIdRef.current);
+    },
+    onResult: (run) => {
+      const next = sessionFromRun(run);
+      entriesRef.current = next.entries;
+      runIdRef.current = next.runId;
+      setBulkBackupSession((current) => ({ ...next, downloading: current.downloading }));
+      if (next.phase === 'done' || run.status === 'paused') {
+        pollingRunIdRef.current = undefined;
+        return false;
+      }
+    },
+  });
+
+  const stopPolling = useCallback(() => {
+    pollingRunIdRef.current = undefined;
+    polling.stop();
+  }, [polling.stop]);
 
   // Poll the persistent run for status updates.
-  const startPolling = useCallback((runId?: string) => {
-    const id = runId ?? runIdRef.current;
-    if (!id) return;
-    if (pollRef.current) return;
-    pollRef.current = setInterval(async () => {
-      try {
-        const run = await fetchBulkBackupRun(id);
-        const next = sessionFromRun(run);
-        entriesRef.current = next.entries;
-        runIdRef.current = next.runId;
-        setBulkBackupSession((current) => ({ ...next, downloading: current.downloading }));
-        if ((next.phase === 'done' || run.status === 'paused') && pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
-      } catch {
-        // Keep the last known progress visible; the next poll may recover.
-      }
-    }, 2000);
-  }, []);
+  const startPolling = useCallback(
+    (runId?: string) => {
+      const id = runId ?? runIdRef.current;
+      if (!id || pollingRunIdRef.current === id) return;
+      runIdRef.current = id;
+      pollingRunIdRef.current = id;
+      polling.start();
+    },
+    [polling.start],
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -534,9 +548,10 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       .catch(() => {});
     return () => {
       mountedRef.current = false;
+      stopPolling();
       unsubscribe();
     };
-  }, [startPolling]);
+  }, [startPolling, stopPolling]);
 
   useEffect(() => {
     let active = true;
@@ -562,25 +577,14 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     setSelectedDeviceIds(new Set(selectableDeviceIds));
   }, [deviceIdsKey, phase, selectableDeviceIds]);
 
-  // Cleanup on unmount
-  useEffect(
-    () => () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    },
-    [],
-  );
-
   // Detect completion: all entries terminal → done
   useEffect(() => {
     if (phase !== 'running' || entries.length === 0) return;
     if (entries.every((e) => TERMINAL.has(e.phase))) {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
+      stopPolling();
       setBulkBackupSession((current) => ({ ...current, phase: 'done' }));
     }
-  }, [entries, phase]);
+  }, [entries, phase, stopPolling]);
 
   useEffect(() => {
     if (phase !== 'running') return;
@@ -714,11 +718,9 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
     runIdRef.current = next.runId;
     setBulkBackupSession((current) => ({ ...next, downloading: current.downloading }));
     if (shouldPollRun(run)) {
+      stopPolling();
       startPolling(run.id);
-    } else if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    } else stopPolling();
   };
 
   const handlePause = async () => {

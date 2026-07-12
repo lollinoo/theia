@@ -160,6 +160,92 @@ describe('BackupPanel active job rehydration', () => {
 
     expect(fetchBackupJob).toHaveBeenCalledWith('job-active');
   });
+
+  it('waits for a slow active-job request to settle before scheduling the next poll', async () => {
+    const firstPoll = deferred<BackupJob>();
+    vi.mocked(fetchBackupJobs).mockResolvedValue([
+      mockBackupJob({ id: 'job-active', status: 'running' }),
+    ]);
+    vi.mocked(fetchBackupJob)
+      .mockImplementationOnce(() => firstPoll.promise)
+      .mockResolvedValue(mockBackupJob({ id: 'job-active', status: 'running' }));
+
+    render(<BackupPanel device={mockDevice()} />);
+    await flushPromises();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fetchBackupJob).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(fetchBackupJob).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      firstPoll.resolve(mockBackupJob({ id: 'job-active', status: 'running' }));
+      await firstPoll.promise;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1999);
+    });
+    expect(fetchBackupJob).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(fetchBackupJob).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries polling after a transient active-job failure', async () => {
+    vi.mocked(fetchBackupJobs).mockResolvedValue([
+      mockBackupJob({ id: 'job-active', status: 'running' }),
+    ]);
+    vi.mocked(fetchBackupJob)
+      .mockRejectedValueOnce(new Error('temporary'))
+      .mockResolvedValueOnce(mockBackupJob({ id: 'job-active', status: 'success' }));
+
+    render(<BackupPanel device={mockDevice()} />);
+    await flushPromises();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fetchBackupJob).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fetchBackupJob).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a terminal poll result that settles after unmount', async () => {
+    const pendingPoll = deferred<BackupJob>();
+    vi.mocked(fetchBackupJobs).mockResolvedValue([
+      mockBackupJob({ id: 'job-active', status: 'running' }),
+    ]);
+    vi.mocked(fetchBackupJob).mockImplementationOnce(() => pendingPoll.promise);
+
+    const view = render(<BackupPanel device={mockDevice()} />);
+    await flushPromises();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fetchLatestBackupJob).toHaveBeenCalledTimes(1);
+
+    view.unmount();
+    await act(async () => {
+      pendingPoll.resolve(mockBackupJob({ id: 'job-active', status: 'success' }));
+      await pendingPoll.promise;
+    });
+
+    expect(fetchLatestBackupJob).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(fetchBackupJob).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('BackupPanel latest backup device ownership', () => {

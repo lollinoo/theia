@@ -1,8 +1,8 @@
 /**
  * Exercises instance backup manager component behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerError, ValidationError } from '../api/errors';
 import { InstanceBackupManager } from './InstanceBackupManager';
 
@@ -28,6 +28,18 @@ vi.mock('../api/client', () => ({
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 // Helper: render and wait for initial loading to complete
 async function renderAndWait() {
@@ -678,6 +690,51 @@ describe('InstanceBackupManager — SC-5: create button shows Creating... while 
     await waitFor(() => {
       expect(screen.getByText('Creating...')).toBeInTheDocument();
     });
+  });
+});
+
+describe('InstanceBackupManager — non-overlapping polling', () => {
+  it('schedules the next backup refresh only after the current refresh settles', async () => {
+    vi.useFakeTimers();
+    const firstPoll = deferred<ReturnType<typeof mockBackup>[]>();
+    const { fetchInstanceBackups } = await import('../api/client');
+    const running = mockBackup({ id: 'running-backup', status: 'running', file_name: '' });
+    (fetchInstanceBackups as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([running])
+      .mockImplementationOnce(() => firstPoll.promise)
+      .mockResolvedValue([running]);
+
+    render(<InstanceBackupManager />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fetchInstanceBackups).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(fetchInstanceBackups).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      firstPoll.resolve([running]);
+      await firstPoll.promise;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1999);
+    });
+    expect(fetchInstanceBackups).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(fetchInstanceBackups).toHaveBeenCalledTimes(3);
   });
 });
 
