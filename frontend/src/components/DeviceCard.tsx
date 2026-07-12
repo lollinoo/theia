@@ -313,6 +313,7 @@ interface PhysicalStatusTone {
 
 const virtualAreaToneSurface: RgbColor = { red: 17, green: 26, blue: 38 };
 const whiteRgb: RgbColor = { red: 255, green: 255, blue: 255 };
+const blackRgb: RgbColor = { red: 0, green: 0, blue: 0 };
 const minimumVirtualAreaToneContrast = 4.5;
 
 function hexToRgb(color: string): RgbColor | null {
@@ -378,18 +379,35 @@ function mixRgb(start: RgbColor, end: RgbColor, amount: number): RgbColor {
   };
 }
 
-function readableVirtualAreaTone(color: string): string | null {
+function readableVirtualAreaTone(
+  color: string,
+  background: RgbColor,
+  mixTarget: RgbColor,
+): string | null {
   const rgb = hexToRgb(color);
   if (!rgb) return null;
 
-  for (let mixAmount = 0; mixAmount <= 0.8; mixAmount += 0.08) {
-    const candidate = mixRgb(rgb, whiteRgb, mixAmount);
-    if (contrastRatio(candidate, virtualAreaToneSurface) >= minimumVirtualAreaToneContrast) {
+  for (let mixAmount = 0; mixAmount <= 1; mixAmount += 0.04) {
+    const candidate = mixRgb(rgb, mixTarget, mixAmount);
+    if (contrastRatio(candidate, background) >= minimumVirtualAreaToneContrast) {
       return rgbToCss(candidate);
     }
   }
 
-  return rgbToCss(mixRgb(rgb, whiteRgb, 0.8));
+  return rgbToCss(mixTarget);
+}
+
+function virtualAreaToneStyle(color?: string): CSSCustomProperties | undefined {
+  if (!color) return undefined;
+
+  const darkTone = readableVirtualAreaTone(color, virtualAreaToneSurface, whiteRgb);
+  const lightTone = readableVirtualAreaTone(color, whiteRgb, blackRgb);
+  if (!darkTone || !lightTone) return undefined;
+
+  return {
+    '--theia-virtual-node-tone-dark': darkTone,
+    '--theia-virtual-node-tone-light': lightTone,
+  };
 }
 
 function areaTintStyle(colors: string[] | undefined, alpha = 0.1): CSSProperties | undefined {
@@ -414,19 +432,18 @@ function virtualAreaMarkerStyle(color?: string): CSSProperties | undefined {
   if (!color) return undefined;
 
   const rgb = hexToRgb(color);
-  const readableColor = readableVirtualAreaTone(color);
-  if (!rgb || !readableColor) return undefined;
+  const toneStyle = virtualAreaToneStyle(color);
+  if (!rgb || !toneStyle) return undefined;
 
   return {
+    ...toneStyle,
     backgroundColor: rgbToRgba(rgb, 0.14),
     borderColor: rgbToRgba(rgb, 0.32),
-    color: readableColor,
   };
 }
 
 function virtualAreaTextStyle(color?: string): CSSProperties | undefined {
-  const readableColor = color ? readableVirtualAreaTone(color) : null;
-  return readableColor ? { color: readableColor } : undefined;
+  return virtualAreaToneStyle(color);
 }
 
 function virtualPrimaryStatusTone(status: DeviceVisualStatus): VirtualStatusTone | null {
@@ -871,7 +888,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
 
             <div
               data-testid="virtual-node-icon-shell"
-              className="topology-virtual-node-icon-shell relative z-10 flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-[18px] border border-primary/25 bg-primary/10 text-primary"
+              className="topology-virtual-node-icon-shell relative z-10 flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-[18px] border border-primary/25 bg-primary/10"
               style={virtualStatusTone?.markerStyle ?? virtualAreaMarkerStyle(virtualToneColor)}
             >
               <MaterialIcon name="hub" size={24} />
@@ -882,7 +899,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div className="topology-semantic-identity-frame min-w-0 flex-1">
                   <div
                     data-testid="virtual-node-type-label"
-                    className="topology-virtual-node-type-label truncate text-[11px] font-semibold uppercase text-primary"
+                    className="topology-virtual-node-type-label truncate text-[11px] font-semibold uppercase"
                     style={{
                       ...readableFontStyle(10),
                       ...(virtualStatusTone?.textStyle ?? virtualAreaTextStyle(virtualToneColor)),

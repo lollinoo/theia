@@ -295,6 +295,16 @@
 }
 
 @layer components {
+  .topology-virtual-node-icon-shell,
+  .topology-virtual-node-type-label {
+    color: var(--theia-virtual-node-tone-dark, var(--nt-primary));
+  }
+
+  [data-theme="light"] .topology-virtual-node-icon-shell,
+  [data-theme="light"] .topology-virtual-node-type-label {
+    color: var(--theia-virtual-node-tone-light, var(--nt-primary));
+  }
+
   .theia-input {
     @apply h-10 w-full rounded-lg border border-outline-subtle bg-surface-container-high px-3 text-sm text-on-bg outline-none transition-colors focus:border-outline-strong focus:ring-2 focus:ring-focus-ring;
   }

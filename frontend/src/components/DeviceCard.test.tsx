@@ -144,6 +144,25 @@ function renderDeviceCard(data: DeviceCardTestData = {}) {
   );
 }
 
+function rgbContrastRatio(foreground: string, background: [number, number, number]): number {
+  const channels = foreground.match(/\d+/g)?.map(Number);
+  if (channels?.length !== 3) return 0;
+
+  const luminance = ([red, green, blue]: number[]) => {
+    const linearized = [red, green, blue].map((value) => {
+      const channel = value / 255;
+      return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * linearized[0] + 0.7152 * linearized[1] + 0.0722 * linearized[2];
+  };
+
+  const foregroundLuminance = luminance(channels);
+  const backgroundLuminance = luminance(background);
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+  const darker = Math.min(foregroundLuminance, backgroundLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 describe('DeviceCard', () => {
   it('renders physical node card body with hostname, status, address, telemetry, and compact runtime readouts', () => {
     renderDeviceCard({ metrics: mockMetrics() });
@@ -643,10 +662,20 @@ describe('DeviceCard', () => {
     const typeLabel = screen.getByTestId('virtual-node-type-label');
 
     expect(iconShell).toHaveClass('h-[50px]', 'w-[50px]');
-    expect(iconShell.style.color).toBe('rgb(89, 136, 240)');
+    expect(iconShell.style.getPropertyValue('--theia-virtual-node-tone-dark')).toBe(
+      'rgb(81, 130, 239)',
+    );
+    expect(iconShell.style.getPropertyValue('--theia-virtual-node-tone-light')).toBe(
+      'rgb(37, 99, 235)',
+    );
     expect(iconShell.style.borderColor).toBe('rgba(37, 99, 235, 0.32)');
     expect(iconShell.style.backgroundColor).toBe('rgba(37, 99, 235, 0.14)');
-    expect(typeLabel.style.color).toBe('rgb(89, 136, 240)');
+    expect(typeLabel.style.getPropertyValue('--theia-virtual-node-tone-dark')).toBe(
+      'rgb(81, 130, 239)',
+    );
+    expect(typeLabel.style.getPropertyValue('--theia-virtual-node-tone-light')).toBe(
+      'rgb(37, 99, 235)',
+    );
     expect(capsule.style.backgroundColor).toBe('rgba(37, 99, 235, 0.18)');
     expect(capsule.style.background).not.toContain('linear-gradient');
     expect(capsule.style.background).not.toContain('transparent');
@@ -685,6 +714,30 @@ describe('DeviceCard', () => {
     expect(iconShell.style.borderColor).toBe('rgba(255, 51, 102, 0.32)');
     expect(iconShell.style.backgroundColor).toBe('rgba(255, 51, 102, 0.14)');
     expect(areaAccent.style.background).toContain('rgb(37, 99, 235)');
+  });
+
+  it('derives readable light and dark theme tones from bright virtual colors', () => {
+    renderDeviceCard({
+      device: mockDevice({
+        device_type: 'virtual',
+        ip: '',
+        sys_name: '',
+        tags: { display_name: 'Bright Service', virtual_subtype: 'service' },
+      }),
+      isVirtual: true,
+      subtype: 'service',
+      visualColor: '#d4ff00',
+    });
+
+    const iconShell = screen.getByTestId('virtual-node-icon-shell');
+    const typeLabel = screen.getByTestId('virtual-node-type-label');
+    const darkTone = iconShell.style.getPropertyValue('--theia-virtual-node-tone-dark');
+    const lightTone = iconShell.style.getPropertyValue('--theia-virtual-node-tone-light');
+
+    expect(typeLabel.style.getPropertyValue('--theia-virtual-node-tone-dark')).toBe(darkTone);
+    expect(typeLabel.style.getPropertyValue('--theia-virtual-node-tone-light')).toBe(lightTone);
+    expect(rgbContrastRatio(darkTone, [17, 26, 38])).toBeGreaterThanOrEqual(4.5);
+    expect(rgbContrastRatio(lightTone, [255, 255, 255])).toBeGreaterThanOrEqual(4.5);
   });
 
   it('tints virtual capsules with all assigned area colors when no visual color is set', () => {
