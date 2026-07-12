@@ -2,6 +2,7 @@
  * Exercises bulk backup panel operations dashboard behavior so refactors preserve the documented contract.
  */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerError, ValidationError } from '../../api/errors';
 import type { Device } from '../../types/api';
@@ -268,6 +269,34 @@ describe('BulkBackupPanel — startBulkBackupRun .catch handles ValidationError'
 });
 
 describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
+  it('continues polling an existing running session through StrictMode effect replay', async () => {
+    vi.useFakeTimers();
+    const { fetchBulkBackupRun, fetchLatestBulkBackupRun } = await import('../../api/client');
+    const activeRun = mockBulkRun({ status: 'running' }, [
+      mockRunItem({ device_id: 'dev-1', device_name: 'router-01', status: 'queued' }),
+    ]);
+    (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(activeRun);
+
+    const seedView = render(<BulkBackupPanel devices={[mockDevice()]} />);
+    await flushPromises();
+    seedView.unmount();
+    (fetchBulkBackupRun as ReturnType<typeof vi.fn>).mockClear();
+
+    render(
+      <StrictMode>
+        <BulkBackupPanel devices={[mockDevice()]} />
+      </StrictMode>,
+    );
+    await flushPromises();
+    expect(screen.getByText('Processing... 0/1')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(fetchBulkBackupRun).toHaveBeenCalledTimes(1);
+  });
+
   it('waits for a slow persistent-run request before scheduling the next poll', async () => {
     vi.useFakeTimers();
     const firstPoll = deferred<ReturnType<typeof mockBulkRun>>();

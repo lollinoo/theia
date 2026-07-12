@@ -548,9 +548,10 @@ export function BulkBackupPanel({ devices: allDevices }: BulkBackupPanelProps) {
       .catch(() => {});
     return () => {
       mountedRef.current = false;
+      stopPolling();
       unsubscribe();
     };
-  }, [startPolling]);
+  }, [startPolling, stopPolling]);
 
   useEffect(() => {
     let active = true;
