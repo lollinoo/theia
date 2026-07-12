@@ -65,7 +65,7 @@ export function CanvasContextMenus({
               setDeviceMenu(null);
             },
             onOpenGrafana: () => {
-              if (gUrl) window.open(gUrl, '_blank');
+              if (gUrl) window.open(gUrl, '_blank', 'noopener,noreferrer');
               setDeviceMenu(null);
             },
             onConfigure: () => {
@@ -116,7 +116,7 @@ export function CanvasContextMenus({
                   label: gUrl ? 'Open in Grafana' : 'Open in Grafana (not configured)',
                   icon: 'hub',
                   onClick: () => {
-                    if (gUrl) window.open(gUrl, '_blank');
+                    if (gUrl) window.open(gUrl, '_blank', 'noopener,noreferrer');
                     setEdgeMenu(null);
                   },
                 },
