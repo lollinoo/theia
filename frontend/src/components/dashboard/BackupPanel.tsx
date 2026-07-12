@@ -10,6 +10,7 @@ import {
   resetSSHHostKey,
   triggerBackup,
 } from '../../api/client';
+import { useAsyncPolling } from '../../hooks/useAsyncPolling';
 import { type BackupJob, type Device } from '../../types/api';
 
 interface BackupPanelProps {
@@ -29,7 +30,7 @@ export function BackupPanel({ device }: BackupPanelProps) {
   const [hostKeyResetMessage, setHostKeyResetMessage] = useState('');
   const [hostKeyResetError, setHostKeyResetError] = useState('');
   const [resettingHostKey, setResettingHostKey] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollJobIdRef = useRef<string | null>(null);
 
   const backupSupported = device.backup_supported;
 
@@ -38,43 +39,37 @@ export function BackupPanel({ device }: BackupPanelProps) {
     setLatest(job);
   }, [device.id]);
 
+  const polling = useAsyncPolling({
+    intervalMs: 2000,
+    poll: async () => {
+      if (!pollJobIdRef.current) throw new Error('Missing backup job id');
+      return fetchBackupJob(pollJobIdRef.current);
+    },
+    onResult: (job) => {
+      setTriggerResult(job);
+      if (job.status === 'success' || job.status === 'failed') {
+        void loadLatest();
+        return false;
+      }
+    },
+  });
+
+  const stopPolling = polling.stop;
+  const startPolling = useCallback(
+    (jobId: string) => {
+      pollJobIdRef.current = jobId;
+      polling.start();
+    },
+    [polling.start],
+  );
+
   useEffect(() => {
     loadLatest();
   }, [loadLatest]);
 
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
-
-  const startPolling = useCallback(
-    (jobId: string) => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
-        try {
-          const job = await fetchBackupJob(jobId);
-          setTriggerResult(job);
-          if (job.status === 'success' || job.status === 'failed') {
-            if (pollRef.current) clearInterval(pollRef.current);
-            pollRef.current = null;
-            loadLatest();
-          }
-        } catch {
-          // ignore poll errors
-        }
-      }, 2000);
-    },
-    [loadLatest],
-  );
-
   useEffect(() => {
     let cancelled = false;
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    stopPolling();
     setTriggerResult(null);
     setError('');
     setHostKeyResetMessage('');
@@ -96,8 +91,9 @@ export function BackupPanel({ device }: BackupPanelProps) {
     void loadActiveBackupJob();
     return () => {
       cancelled = true;
+      stopPolling();
     };
-  }, [device.id, startPolling]);
+  }, [device.id, startPolling, stopPolling]);
 
   const handleBackup = async () => {
     setTriggering(true);

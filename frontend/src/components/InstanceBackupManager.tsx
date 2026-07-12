@@ -2,7 +2,7 @@
  * Renders instance backup manager UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   cancelInstanceBackup,
   createInstanceBackup,
@@ -15,6 +15,7 @@ import {
   updateSetting,
 } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
+import { useAsyncPolling } from '../hooks/useAsyncPolling';
 import type { InstanceBackup, RestoreReport, RestoreStatus } from '../types/api';
 import { validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
 
@@ -40,7 +41,6 @@ export function InstanceBackupManager() {
   const [createError, setCreateError] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [expandedErrorId, setExpandedErrorId] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
@@ -60,35 +60,25 @@ export function InstanceBackupManager() {
   const savedRetentionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  }, []);
-
-  const startPolling = useCallback(() => {
-    stopPolling();
-    pollRef.current = setInterval(async () => {
-      try {
-        const data = await fetchInstanceBackups();
-        setBackups(data);
-        const running = data.find((b) => b.status === 'running');
-        if (!running) {
-          stopPolling();
-          setCreating(false);
-        }
-      } catch {
-        // ignore poll errors
+  const { start: startPolling, stop: stopPolling } = useAsyncPolling({
+    intervalMs: 2000,
+    poll: fetchInstanceBackups,
+    onResult: (data) => {
+      setBackups(data);
+      if (!data.some((backup) => backup.status === 'running')) {
+        setCreating(false);
+        return false;
       }
-    }, 2000);
-  }, [stopPolling]);
+    },
+  });
 
   // Initial load + resume polling if a backup is already running
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
       try {
         const data = await fetchInstanceBackups();
+        if (cancelled) return;
         setBackups(data);
         const running = data.find((b) => b.status === 'running');
         if (running) {
@@ -96,30 +86,39 @@ export function InstanceBackupManager() {
           startPolling();
         }
         const settings = await fetchSettings();
+        if (cancelled) return;
         if (settings['instance_backup_interval_hours'] !== undefined) {
           setScheduleInterval(settings['instance_backup_interval_hours']);
         }
         if (settings['instance_backup_retention_count'] !== undefined) {
           setRetentionCount(settings['instance_backup_retention_count']);
         }
-        setRestoreStatus(await fetchRestoreStatus());
+        const status = await fetchRestoreStatus();
+        if (!cancelled) setRestoreStatus(status);
       } catch {
         // non-fatal
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-    return () => stopPolling();
+    return () => {
+      cancelled = true;
+      stopPolling();
+    };
   }, [startPolling, stopPolling]);
 
   // Re-fetch when backend reconnects (e.g. after restore restart)
   useEffect(() => {
+    let cancelled = false;
     const handleReconnect = () => {
       void (async () => {
         try {
           const data = await fetchInstanceBackups();
+          if (cancelled) return;
           setBackups(data);
-          setRestoreStatus(await fetchRestoreStatus());
+          const status = await fetchRestoreStatus();
+          if (cancelled) return;
+          setRestoreStatus(status);
           setCreating(false);
         } catch {
           // non-fatal
@@ -127,7 +126,10 @@ export function InstanceBackupManager() {
       })();
     };
     window.addEventListener('backend-reconnected', handleReconnect);
-    return () => window.removeEventListener('backend-reconnected', handleReconnect);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('backend-reconnected', handleReconnect);
+    };
   }, []);
 
   // Cleanup on unmount
