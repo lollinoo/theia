@@ -102,6 +102,20 @@ jobs:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: theia
+          POSTGRES_PASSWORD: theia
+          POSTGRES_DB: theia
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U theia -d theia"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       CGO_ENABLED: 1
     steps:
@@ -110,6 +124,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      - name: Run PostgreSQL settings atomicity regression
+        env:
+          THEIA_TEST_DB_DSN: postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable
+        run: go test ./internal/repository/postgres -run '^TestSettingsRepoUpdateSerializesConcurrentMutations$' -count=1
 
       - name: Install govulncheck
         run: |

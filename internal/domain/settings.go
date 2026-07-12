@@ -84,3 +84,10 @@ type SettingsRepository interface {
 	Set(key, value string) error
 	GetAll() (map[string]string, error)
 }
+
+// AtomicSettingsRepository updates a setting from its latest persisted value
+// while preventing concurrent updates to the same key from overwriting each other.
+type AtomicSettingsRepository interface {
+	SettingsRepository
+	Update(key string, update func(current string) (string, error)) (string, error)
+}

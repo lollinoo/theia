@@ -21,7 +21,7 @@ type routerDependencies struct {
 	positionRepo          domain.PositionRepository
 	canvasMapRepo         domain.CanvasMapRepository
 	canvasMapPositionRepo domain.CanvasMapPositionRepository
-	settingsRepo          domain.SettingsRepository
+	settingsRepo          domain.AtomicSettingsRepository
 	snmpProfileRepo       domain.SNMPProfileRepository
 	credentialProfileRepo *postgres.CredentialProfileRepo
 	areaRepo              domain.AreaRepository

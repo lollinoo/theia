@@ -12,17 +12,18 @@ const defaultTTL = 5 * time.Second
 
 // Cache wraps a settings repository with a short-lived in-memory snapshot.
 type Cache struct {
-	repo domain.SettingsRepository
+	repo domain.AtomicSettingsRepository
 	ttl  time.Duration
 	now  func() time.Time
 
+	updateMu sync.Mutex
 	mu       sync.RWMutex
 	values   map[string]string
 	loadedAt time.Time
 }
 
 // New creates a settings cache. Non-positive TTL values use the default TTL.
-func New(repo domain.SettingsRepository, ttl time.Duration) *Cache {
+func New(repo domain.AtomicSettingsRepository, ttl time.Duration) *Cache {
 	if ttl <= 0 {
 		ttl = defaultTTL
 	}
@@ -32,6 +33,24 @@ func New(repo domain.SettingsRepository, ttl time.Duration) *Cache {
 		ttl:  ttl,
 		now:  time.Now,
 	}
+}
+
+// Update atomically replaces a setting from its latest persisted value and refreshes the cache.
+func (c *Cache) Update(key string, update func(current string) (string, error)) (string, error) {
+	c.updateMu.Lock()
+	defer c.updateMu.Unlock()
+
+	value, err := c.repo.Update(key, update)
+	if err != nil {
+		return "", err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.values != nil {
+		c.values[key] = value
+	}
+	return value, nil
 }
 
 // Get retrieves a setting from the cached snapshot, refreshing when needed.
@@ -52,6 +71,9 @@ func (c *Cache) Get(key string) (string, error) {
 
 // Set writes a setting through to the repository and updates the cached value.
 func (c *Cache) Set(key, value string) error {
+	c.updateMu.Lock()
+	defer c.updateMu.Unlock()
+
 	if err := c.repo.Set(key, value); err != nil {
 		return err
 	}
