@@ -1,11 +1,11 @@
 /**
  * Exercises link create panel component behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchDeviceInterfaces } from '../api/client';
 import { ServerError, ValidationError } from '../api/errors';
-import type { Device } from '../types/api';
+import type { Device, InterfaceInfo } from '../types/api';
 import { LinkCreatePanel } from './LinkCreatePanel';
 
 // Mock API calls
@@ -84,6 +84,25 @@ function mockVirtualDevice(overrides: Partial<Device> = {}): Device {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function mockInterface(ifName: string): InterfaceInfo {
+  return {
+    if_name: ifName,
+    if_descr: ifName,
+    speed: 1_000_000_000,
+    oper_status: 'up',
+    admin_status: 'up',
+    in_use: false,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(fetchDeviceInterfaces).mockImplementation(() => new Promise<never>(() => {}));
@@ -159,6 +178,176 @@ describe('LinkCreatePanel', () => {
       );
       // The selected device display should show the display_name
       expect(screen.getByText('ISP Gateway')).toBeInTheDocument();
+    });
+  });
+
+  describe('interface request ownership', () => {
+    it('ignores a stale source response that resolves after the selected source response', async () => {
+      const sourceARequest = deferred<InterfaceInfo[]>();
+      const sourceBRequest = deferred<InterfaceInfo[]>();
+      vi.mocked(fetchDeviceInterfaces).mockImplementation((deviceId: string) => {
+        if (deviceId === 'source-a') return sourceARequest.promise;
+        if (deviceId === 'source-b') return sourceBRequest.promise;
+        return Promise.resolve([]);
+      });
+      const sourceA = mockDevice({
+        id: 'source-a',
+        ip: '10.0.1.1',
+        hostname: '10.0.1.1',
+        sys_name: 'Source A',
+      });
+      const sourceB = mockDevice({
+        id: 'source-b',
+        ip: '10.0.1.2',
+        hostname: '10.0.1.2',
+        sys_name: 'Source B',
+      });
+
+      render(
+        <LinkCreatePanel
+          {...baseProps}
+          devices={[sourceA, sourceB, mockVirtualDevice()]}
+          initialSourceDeviceId="source-a"
+          initialTargetDeviceId="dev-virtual"
+        />,
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /10\.0\.1\.1/ }));
+      });
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /10\.0\.1\.2/ }));
+      });
+
+      await act(async () => {
+        sourceBRequest.resolve([mockInterface('source-b-port')]);
+      });
+      const sourcePort = screen.getByRole('combobox');
+      act(() => {
+        fireEvent.change(sourcePort, { target: { value: 'source-b-port' } });
+      });
+
+      await act(async () => {
+        sourceARequest.resolve([mockInterface('source-a-port')]);
+      });
+
+      expect(screen.getByRole('option', { name: /source-b-port/ })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: /source-a-port/ })).not.toBeInTheDocument();
+      expect(sourcePort).toHaveValue('source-b-port');
+      expect(screen.getByRole('button', { name: 'Create Link' })).toBeEnabled();
+    });
+
+    it('ignores a stale target response that resolves after the selected target response', async () => {
+      const targetARequest = deferred<InterfaceInfo[]>();
+      const targetBRequest = deferred<InterfaceInfo[]>();
+      vi.mocked(fetchDeviceInterfaces).mockImplementation((deviceId: string) => {
+        if (deviceId === 'target-a') return targetARequest.promise;
+        if (deviceId === 'target-b') return targetBRequest.promise;
+        return Promise.resolve([]);
+      });
+      const targetA = mockDevice({
+        id: 'target-a',
+        ip: '10.0.2.1',
+        hostname: '10.0.2.1',
+        sys_name: 'Target A',
+      });
+      const targetB = mockDevice({
+        id: 'target-b',
+        ip: '10.0.2.2',
+        hostname: '10.0.2.2',
+        sys_name: 'Target B',
+      });
+
+      render(
+        <LinkCreatePanel
+          {...baseProps}
+          devices={[mockVirtualDevice(), targetA, targetB]}
+          initialSourceDeviceId="dev-virtual"
+          initialTargetDeviceId="target-a"
+        />,
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /10\.0\.2\.1/ }));
+      });
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /10\.0\.2\.2/ }));
+      });
+
+      await act(async () => {
+        targetBRequest.resolve([mockInterface('target-b-port')]);
+      });
+      const targetPort = screen.getByRole('combobox');
+      act(() => {
+        fireEvent.change(targetPort, { target: { value: 'target-b-port' } });
+      });
+
+      await act(async () => {
+        targetARequest.resolve([mockInterface('target-a-port')]);
+      });
+
+      expect(screen.getByRole('option', { name: /target-b-port/ })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: /target-a-port/ })).not.toBeInTheDocument();
+      expect(targetPort).toHaveValue('target-b-port');
+      expect(screen.getByRole('button', { name: 'Create Link' })).toBeEnabled();
+    });
+
+    it('clears incompatible source options and keeps the active source request loading', async () => {
+      const sourceARequest = deferred<InterfaceInfo[]>();
+      const sourceBRequest = deferred<InterfaceInfo[]>();
+      vi.mocked(fetchDeviceInterfaces).mockImplementation((deviceId: string) => {
+        if (deviceId === 'source-a') return sourceARequest.promise;
+        if (deviceId === 'source-b') return sourceBRequest.promise;
+        return Promise.resolve([]);
+      });
+      const sourceA = mockDevice({
+        id: 'source-a',
+        ip: '10.0.3.1',
+        hostname: '10.0.3.1',
+        sys_name: 'Source A',
+      });
+      const sourceB = mockDevice({
+        id: 'source-b',
+        ip: '10.0.3.2',
+        hostname: '10.0.3.2',
+        sys_name: 'Source B',
+      });
+
+      render(
+        <LinkCreatePanel
+          {...baseProps}
+          devices={[sourceA, sourceB, mockVirtualDevice()]}
+          initialSourceDeviceId="source-a"
+          initialTargetDeviceId="dev-virtual"
+        />,
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /10\.0\.3\.1/ }));
+      });
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /10\.0\.3\.2/ }));
+      });
+
+      const sourcePort = screen.getByRole('combobox');
+      expect(sourcePort).toBeDisabled();
+      expect(sourcePort).toHaveValue('');
+
+      await act(async () => {
+        sourceARequest.resolve([mockInterface('source-a-port')]);
+      });
+
+      expect(sourcePort).toBeDisabled();
+      expect(sourcePort).toHaveValue('');
+      expect(screen.queryByRole('option', { name: /source-a-port/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Create Link' })).toBeDisabled();
+
+      await act(async () => {
+        sourceBRequest.resolve([mockInterface('source-b-port')]);
+      });
+
+      expect(sourcePort).toBeEnabled();
+      expect(screen.getByRole('option', { name: /source-b-port/ })).toBeInTheDocument();
     });
   });
 });
