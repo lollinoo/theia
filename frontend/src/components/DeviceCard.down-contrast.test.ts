@@ -22,8 +22,11 @@ describe('DeviceCard down node contrast tokens', () => {
     const darkTheme = themeBlock(':root,\n[data-theme="dark"]');
 
     expect(darkTheme).toContain('--nt-status-down: #ff5964;');
-    expect(darkTheme).toContain('--nt-node-down-border: rgba(255, 89, 100, 0.98);');
-    expect(darkTheme).toContain('--nt-node-down-card-bg: #3a171c;');
+    expect(darkTheme).toContain('--nt-node-down-border: #ff5964;');
+    expect(darkTheme).toContain('--nt-node-down-badge-bg: rgba(255, 89, 100, 0.42);');
+    expect(darkTheme).toContain('--nt-node-down-card-bg: #541720;');
+    expect(darkTheme).toContain('--nt-node-down-panel-bg: rgba(255, 89, 100, 0.28);');
+    expect(darkTheme).toContain('--nt-node-down-ring: rgba(255, 89, 100, 0.32);');
     expect(darkTheme).not.toContain('--nt-node-down-card-pulse-bg');
     expect(darkTheme).not.toContain('--nt-node-probing-card-pulse-bg');
     expect(darkTheme).toContain('--nt-node-down-glow: rgba(255, 89, 100, 0.36);');
@@ -32,22 +35,29 @@ describe('DeviceCard down node contrast tokens', () => {
   it('uses high-contrast down reds in light mode', () => {
     const lightTheme = themeBlock('[data-theme="light"]');
 
-    expect(lightTheme).toContain('--nt-status-down: #c51624;');
-    expect(lightTheme).toContain('--nt-node-down-border: rgba(197, 22, 36, 0.82);');
-    expect(lightTheme).toContain('--nt-node-down-card-bg: #fff0f1;');
+    expect(lightTheme).toContain('--nt-status-down: #8f0d18;');
+    expect(lightTheme).toContain('--nt-node-down-border: #d7192d;');
+    expect(lightTheme).toContain('--nt-node-down-badge-bg: rgba(215, 25, 45, 0.24);');
+    expect(lightTheme).toContain('--nt-node-down-card-bg: #ff9aa4;');
+    expect(lightTheme).toContain('--nt-node-down-panel-bg: rgba(215, 25, 45, 0.18);');
+    expect(lightTheme).toContain('--nt-node-down-ring: rgba(215, 25, 45, 0.2);');
     expect(lightTheme).not.toContain('--nt-node-down-card-pulse-bg');
     expect(lightTheme).not.toContain('--nt-node-probing-card-pulse-bg');
-    expect(lightTheme).toContain('--nt-node-down-glow: rgba(197, 22, 36, 0.16);');
+    expect(lightTheme).toContain('--nt-node-down-glow: rgba(215, 25, 45, 0.18);');
   });
 
   it('coordinates probing accents with the stronger theme yellows', () => {
     const darkTheme = themeBlock(':root,\n[data-theme="dark"]');
     const lightTheme = themeBlock('[data-theme="light"]');
 
-    expect(darkTheme).toContain('--nt-node-probing-border: rgba(255, 208, 0, 0.92);');
-    expect(darkTheme).toContain('--nt-node-probing-card-bg: rgba(255, 208, 0, 0.15);');
-    expect(lightTheme).toContain('--nt-node-probing-border: rgba(118, 90, 0, 0.72);');
-    expect(lightTheme).toContain('--nt-node-probing-card-bg: #fff9dc;');
+    expect(darkTheme).toContain('--nt-node-probing-border: #ffd000;');
+    expect(darkTheme).toContain('--nt-node-probing-badge-bg: rgba(255, 208, 0, 0.42);');
+    expect(darkTheme).toContain('--nt-node-probing-card-bg: rgba(255, 208, 0, 0.36);');
+    expect(darkTheme).toContain('--nt-node-probing-ring: rgba(255, 208, 0, 0.28);');
+    expect(lightTheme).toContain('--nt-node-probing-border: #a97d00;');
+    expect(lightTheme).toContain('--nt-node-probing-badge-bg: rgba(169, 125, 0, 0.24);');
+    expect(lightTheme).toContain('--nt-node-probing-card-bg: #ffd54f;');
+    expect(lightTheme).toContain('--nt-node-probing-ring: rgba(169, 125, 0, 0.18);');
   });
 
   it('keeps whole-node status surfaces static', () => {

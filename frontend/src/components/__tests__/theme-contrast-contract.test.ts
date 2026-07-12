@@ -272,8 +272,8 @@ describe('enterprise NOC theme contrast contract', () => {
   });
 
   it('uses saturated probing and offline colors in light mode', () => {
-    expect(token(lightBlock, '--nt-status-warning')).toBe('#765a00');
-    expect(token(lightBlock, '--nt-status-down')).toBe('#c51624');
+    expect(token(lightBlock, '--nt-status-warning')).toBe('#5f4800');
+    expect(token(lightBlock, '--nt-status-down')).toBe('#8f0d18');
   });
 
   it('defines a readable on-primary token for primary controls', () => {
