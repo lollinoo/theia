@@ -270,7 +270,6 @@ function frameToneForStatus(status: DeviceVisualStatus): DeviceFrameTone {
         shadowLayers: [
           '0 0 0 1px var(--nt-node-down-border)',
           '0 0 0 6px var(--nt-node-down-ring)',
-          '0 0 28px var(--nt-node-down-glow)',
         ],
         focusRingSize: 8,
       };
@@ -287,11 +286,7 @@ function frameToneForStatus(status: DeviceVisualStatus): DeviceFrameTone {
           status === 'probing' ? 'var(--nt-node-probing-border)' : 'var(--color-status-warning)',
         shadowLayers:
           status === 'probing'
-            ? [
-                '0 0 0 1px var(--nt-node-probing-border)',
-                '0 0 0 6px var(--nt-node-probing-ring)',
-                '0 0 28px var(--nt-node-probing-glow)',
-              ]
+            ? ['0 0 0 1px var(--nt-node-probing-border)', '0 0 0 6px var(--nt-node-probing-ring)']
             : ['0 0 0 1px var(--color-status-warning)'],
         focusRingSize: status === 'probing' ? 8 : 4,
       };
@@ -332,7 +327,6 @@ export function resolveDeviceNodeStatusStyles({
     badgeStyle: badgeStyleForStatus(status),
     panelClass: panelClassForStatus(status),
     panelStyle: panelStyleForStatus(status),
-    frameClass: status === 'down' ? 'topology-node-down-pulse' : undefined,
     frameStyle: {
       ...(tone.borderColor
         ? { borderColor: tone.borderColor }
