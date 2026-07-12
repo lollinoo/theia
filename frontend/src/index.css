@@ -64,7 +64,7 @@
   --nt-edge-muted: #4b5758;
   --nt-edge-active: #67d9c0;
   --nt-edge-warning: var(--nt-status-warning);
-  --nt-edge-critical: var(--nt-status-critical);
+  --nt-edge-critical: #ff4055;
   --nt-node-selected: #67d9c0;
   --nt-focus-ring: rgba(76, 201, 176, 0.34);
 
@@ -149,8 +149,8 @@
   --nt-edge-default: #657a8e;
   --nt-edge-muted: #b5c0cb;
   --nt-edge-active: #1f5ec9;
-  --nt-edge-warning: var(--nt-status-warning);
-  --nt-edge-critical: var(--nt-status-critical);
+  --nt-edge-warning: #a97d00;
+  --nt-edge-critical: #d7192d;
   --nt-node-selected: #1f5ec9;
   --nt-focus-ring: rgba(31, 94, 201, 0.32);
 

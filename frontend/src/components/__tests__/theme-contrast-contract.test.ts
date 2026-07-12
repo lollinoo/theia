@@ -274,6 +274,16 @@ describe('enterprise NOC theme contrast contract', () => {
   it('uses saturated probing and offline colors in light mode', () => {
     expect(token(lightBlock, '--nt-status-warning')).toBe('#5f4800');
     expect(token(lightBlock, '--nt-status-down')).toBe('#8f0d18');
+    expect(token(darkBlock, '--nt-edge-warning')).toBe('#ffd000');
+    expect(token(darkBlock, '--nt-edge-critical')).toBe('#ff4055');
+    expect(token(lightBlock, '--nt-edge-warning')).toBe('#a97d00');
+    expect(token(lightBlock, '--nt-edge-critical')).toBe('#d7192d');
+    expect(
+      contrastRatio(token(lightBlock, '--nt-edge-warning'), token(lightBlock, '--nt-bg')),
+    ).toBeGreaterThanOrEqual(3);
+    expect(
+      contrastRatio(token(lightBlock, '--nt-edge-critical'), token(lightBlock, '--nt-bg')),
+    ).toBeGreaterThanOrEqual(3);
   });
 
   it('defines a readable on-primary token for primary controls', () => {

@@ -69,7 +69,10 @@ describe('LinkEdge render', () => {
     expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();
     expect(screen.queryByText('SPD 1 Gbps')).not.toBeInTheDocument();
     expect(screen.queryByText('AUTO')).not.toBeInTheDocument();
-    expect(screen.getByTestId('edge-1')).toHaveStyle({ stroke: 'var(--color-status-up)' });
+    expect(screen.getByTestId('edge-1')).toHaveStyle({
+      stroke: 'var(--color-status-up)',
+      strokeOpacity: '0.72',
+    });
   });
 
   it('keeps the transparent pointer hit target out of the button accessibility tree', () => {
@@ -93,7 +96,20 @@ describe('LinkEdge render', () => {
     );
 
     expect(screen.getByTestId('edge-2-badge-rate-warning')).toHaveTextContent('!');
-    expect(screen.getByTestId('edge-2')).toHaveStyle({ stroke: 'var(--color-edge-warning)' });
+    expect(screen.getByTestId('edge-2')).toHaveStyle({
+      stroke: 'var(--color-edge-warning)',
+      strokeOpacity: '0.96',
+    });
+  });
+
+  it('keeps critical operational links prominent without adding a halo layer', () => {
+    renderEdge({ id: 'edge-critical' }, { alertStatus: 'down' });
+
+    expect(screen.getByTestId('edge-critical')).toHaveStyle({
+      stroke: 'var(--color-edge-critical)',
+      strokeOpacity: '0.96',
+    });
+    expect(screen.queryByTestId('edge-critical-halo')).not.toBeInTheDocument();
   });
 
   it('does not hide base telemetry when an edge is visually muted', () => {

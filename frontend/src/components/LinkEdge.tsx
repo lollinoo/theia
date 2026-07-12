@@ -69,7 +69,16 @@ function LinkEdgeInner({
     tone.semanticState !== 'critical'
       ? data.areaColor
       : tone.haloColor;
-  const strokeOpacity = isMuted ? 0.22 : isConnected ? 0.98 : isActive ? 0.94 : 0.72;
+  const isOperationalAlert = tone.semanticState === 'warning' || tone.semanticState === 'critical';
+  const strokeOpacity = isMuted
+    ? 0.22
+    : isConnected
+      ? 0.98
+      : isOperationalAlert
+        ? 0.96
+        : isActive
+          ? 0.94
+          : 0.72;
   const strokeWidth = isActive || isConnected ? tone.width + 0.7 : tone.width;
   const labelYOffset = labelY + labelOffsetY;
   const badgePresentation = useMemo(
