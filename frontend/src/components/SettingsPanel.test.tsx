@@ -10,7 +10,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsPanel } from './SettingsPanel';
 
 // Mock API calls made in SettingsPanel on mount
@@ -59,6 +59,16 @@ async function renderSettingsPanel(ui = <SettingsPanel />): Promise<RenderResult
   }
 
   return result;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 describe('SettingsPanel (COMP-05)', () => {
@@ -942,5 +952,157 @@ describe('SettingsPanel — SNMP Debug settings', () => {
     for (const field of performancePoolFields) {
       expect(field).toHaveValue(15);
     }
+  });
+});
+
+describe('SettingsPanel — reliable autosave lifecycle', () => {
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    const { fetchHealthRuntime, fetchSettingsWithMetadata, updateSetting } = await import(
+      '../api/client'
+    );
+    (fetchSettingsWithMetadata as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({
+      data: {},
+      secrets: {},
+    });
+    (fetchHealthRuntime as ReturnType<typeof vi.fn>)
+      .mockReset()
+      .mockResolvedValue({ environment: 'staging' });
+    (updateSetting as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows save failures without leaving an unhandled rejection', async () => {
+    const { updateSetting } = await import('../api/client');
+    (updateSetting as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('disk full'));
+    await renderSettingsPanel();
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('http://localhost:9090'), {
+        target: { value: 'http://prometheus.internal:9090' },
+      });
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(screen.getByText('Failed to save setting. Please try again.')).toBeInTheDocument();
+  });
+
+  it('sequences overlapping saves so an older completion cannot mark a newer value saved', async () => {
+    const { updateSetting } = await import('../api/client');
+    const older = deferred<void>();
+    const newer = deferred<void>();
+    (updateSetting as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => older.promise)
+      .mockImplementationOnce(() => newer.promise);
+    await renderSettingsPanel();
+
+    const input = screen.getByPlaceholderText('http://localhost:9090');
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'http://older.example:9090' } });
+      await vi.advanceTimersByTimeAsync(500);
+      fireEvent.change(input, { target: { value: 'http://newer.example:9090' } });
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(updateSetting).toHaveBeenCalledTimes(1);
+
+    const integrations = screen.getByRole('heading', { name: 'Integrations' }).closest('section');
+    expect(integrations).not.toBeNull();
+    const saved = within(integrations as HTMLElement).getByText('Saved');
+    expect(saved.className).toContain('opacity-0');
+
+    await act(async () => {
+      older.resolve();
+      await Promise.resolve();
+    });
+    expect(saved.className).toContain('opacity-0');
+    expect(updateSetting).toHaveBeenCalledTimes(2);
+    expect(updateSetting).toHaveBeenLastCalledWith('prometheus_url', 'http://newer.example:9090');
+
+    await act(async () => {
+      newer.resolve();
+      await Promise.resolve();
+    });
+    expect(saved.className).toContain('opacity-100');
+  });
+
+  it('persists only the latest value after rapid edits', async () => {
+    const { updateSetting } = await import('../api/client');
+    await renderSettingsPanel();
+
+    const input = screen.getByPlaceholderText('http://localhost:9090');
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'http://first.example:9090' } });
+      await vi.advanceTimersByTimeAsync(250);
+      fireEvent.change(input, { target: { value: 'http://latest.example:9090' } });
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(updateSetting).toHaveBeenCalledTimes(1);
+    expect(updateSetting).toHaveBeenCalledWith('prometheus_url', 'http://latest.example:9090');
+  });
+
+  it('clears a saved state as soon as a blur-persisted value is edited again', async () => {
+    await renderSettingsPanel();
+
+    const input = screen.getByLabelText('Default network probe ports');
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '22,443' } });
+      fireEvent.blur(input);
+      await Promise.resolve();
+    });
+    const polling = screen.getByRole('heading', { name: 'Polling' }).closest('section');
+    expect(polling).not.toBeNull();
+    const savedIndicators = within(polling as HTMLElement).getAllByText('Saved');
+    expect(savedIndicators[1].className).toContain('opacity-100');
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: '22,443,8291' } });
+    });
+
+    expect(savedIndicators[1].className).toContain('opacity-0');
+  });
+
+  it('cleans pending timers and ignores in-flight completion after unmount', async () => {
+    const { updateSetting } = await import('../api/client');
+    const inFlight = deferred<void>();
+    const onSettingsChange = vi.fn();
+    (updateSetting as ReturnType<typeof vi.fn>).mockImplementationOnce(() => inFlight.promise);
+    const { unmount } = await renderSettingsPanel(
+      <SettingsPanel onSettingsChange={onSettingsChange} />,
+    );
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Topology Discovery Default'), {
+        target: { value: 'bootstrap_once' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('http://localhost:9090'), {
+        target: { value: 'http://pending.example:9090' },
+      });
+    });
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await act(async () => {
+      inFlight.resolve();
+      await Promise.resolve();
+    });
+    expect(onSettingsChange).not.toHaveBeenCalled();
+  });
+
+  it('shows a stable fallback when the initial runtime health fetch fails', async () => {
+    const { fetchHealthRuntime } = await import('../api/client');
+    (fetchHealthRuntime as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('health unavailable'),
+    );
+
+    await renderSettingsPanel();
+
+    expect(screen.getByText('Runtime information unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Loading runtime information')).not.toBeInTheDocument();
   });
 });
