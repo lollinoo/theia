@@ -166,6 +166,27 @@ func TestSettingsHandlerUpdate_PerDeviceGrafanaDashboardURLAllowed(t *testing.T)
 	}
 }
 
+func TestSettingsHandlerUpdateRejectsGrafanaDashboardConfig(t *testing.T) {
+	repo := newMockSettingsRepo()
+	h := NewSettingsHandler(repo)
+	body := `{"value":"{\"profiles\":[]}"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/"+domain.SettingGrafanaDashboardConfig, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleUpdate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	value, err := repo.Get(domain.SettingGrafanaDashboardConfig)
+	if err != nil {
+		t.Fatalf("get Grafana config: %v", err)
+	}
+	if value != "{}" {
+		t.Fatalf("Grafana config changed through generic settings endpoint: %q", value)
+	}
+}
+
 func TestSettingsHandlerGet_LegacyBridgeSecretRejected(t *testing.T) {
 	repo := newMockSettingsRepo()
 	h := NewSettingsHandler(repo)

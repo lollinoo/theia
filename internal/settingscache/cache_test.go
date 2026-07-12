@@ -15,6 +15,18 @@ type fakeSettingsRepo struct {
 	updateCount int
 }
 
+type blockingSetSettingsRepo struct {
+	*fakeSettingsRepo
+	setStarted chan struct{}
+	releaseSet chan struct{}
+}
+
+func (r *blockingSetSettingsRepo) Set(key, value string) error {
+	close(r.setStarted)
+	<-r.releaseSet
+	return r.fakeSettingsRepo.Set(key, value)
+}
+
 func newFakeSettingsRepo(values map[string]string) *fakeSettingsRepo {
 	return &fakeSettingsRepo{values: values}
 }
@@ -141,6 +153,32 @@ func TestCacheSetWritesThroughAndRefreshesValue(t *testing.T) {
 	getAllCount, _ = repo.counts()
 	if getAllCount != 1 {
 		t.Fatalf("GetAll count = %d, want 1", getAllCount)
+	}
+}
+
+func TestCacheSetCoordinatesWithAtomicUpdates(t *testing.T) {
+	repo := &blockingSetSettingsRepo{
+		fakeSettingsRepo: newFakeSettingsRepo(map[string]string{"setting": "initial"}),
+		setStarted:       make(chan struct{}),
+		releaseSet:       make(chan struct{}),
+	}
+	cache := New(repo, time.Minute)
+	setDone := make(chan error, 1)
+	go func() {
+		setDone <- cache.Set("setting", "set")
+	}()
+	<-repo.setStarted
+
+	mutationLockWasFree := cache.updateMu.TryLock()
+	if mutationLockWasFree {
+		cache.updateMu.Unlock()
+	}
+	close(repo.releaseSet)
+	if err := <-setDone; err != nil {
+		t.Fatalf("Set returned error: %v", err)
+	}
+	if mutationLockWasFree {
+		t.Fatal("Set did not coordinate with atomic updates")
 	}
 }
 

@@ -71,6 +71,9 @@ func (c *Cache) Get(key string) (string, error) {
 
 // Set writes a setting through to the repository and updates the cached value.
 func (c *Cache) Set(key, value string) error {
+	c.updateMu.Lock()
+	defer c.updateMu.Unlock()
+
 	if err := c.repo.Set(key, value); err != nil {
 		return err
 	}
