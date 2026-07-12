@@ -38,6 +38,7 @@ export function InstanceBackupManager() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [initialLoadErrors, setInitialLoadErrors] = useState<string[]>([]);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [expandedErrorId, setExpandedErrorId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -86,30 +87,52 @@ export function InstanceBackupManager() {
 
   // Initial load + resume polling if a backup is already running
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
-      try {
-        const data = await fetchInstanceBackups();
-        setBackups(data);
-        const running = data.find((b) => b.status === 'running');
+      const [backupsResult, settingsResult, restoreStatusResult] = await Promise.allSettled([
+        fetchInstanceBackups(),
+        fetchSettings(),
+        fetchRestoreStatus(),
+      ]);
+      if (cancelled) return;
+
+      const loadErrors: string[] = [];
+      if (backupsResult.status === 'fulfilled') {
+        setBackups(backupsResult.value);
+        const running = backupsResult.value.find((backup) => backup.status === 'running');
         if (running) {
           setCreating(true);
           startPolling();
         }
-        const settings = await fetchSettings();
+      } else {
+        loadErrors.push('Could not load backup history.');
+      }
+
+      if (settingsResult.status === 'fulfilled') {
+        const settings = settingsResult.value;
         if (settings['instance_backup_interval_hours'] !== undefined) {
           setScheduleInterval(settings['instance_backup_interval_hours']);
         }
         if (settings['instance_backup_retention_count'] !== undefined) {
           setRetentionCount(settings['instance_backup_retention_count']);
         }
-        setRestoreStatus(await fetchRestoreStatus());
-      } catch {
-        // non-fatal
-      } finally {
-        setLoading(false);
+      } else {
+        loadErrors.push('Could not load backup settings.');
       }
+
+      if (restoreStatusResult.status === 'fulfilled') {
+        setRestoreStatus(restoreStatusResult.value);
+      } else {
+        loadErrors.push('Could not load restore status.');
+      }
+
+      setInitialLoadErrors(loadErrors);
+      setLoading(false);
     })();
-    return () => stopPolling();
+    return () => {
+      cancelled = true;
+      stopPolling();
+    };
   }, [startPolling, stopPolling]);
 
   // Re-fetch when backend reconnects (e.g. after restore restart)
@@ -561,6 +584,14 @@ export function InstanceBackupManager() {
       </div>
 
       {/* ERROR MESSAGE */}
+      {initialLoadErrors.length > 0 && (
+        <div className="rounded-md border border-status-down/20 bg-status-down/5 p-2 text-xs text-status-down">
+          {initialLoadErrors.map((error) => (
+            <p key={error}>{error}</p>
+          ))}
+        </div>
+      )}
+
       {createError && (
         <div className="rounded-md border border-status-down/20 bg-status-down/5 p-2 text-xs text-status-down">
           {createError}

@@ -1,9 +1,10 @@
 /**
  * Exercises instance backup manager component behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerError, ValidationError } from '../api/errors';
+import type { InstanceBackup } from '../types/api';
 import { InstanceBackupManager } from './InstanceBackupManager';
 
 // Mock all API calls used by InstanceBackupManager
@@ -29,6 +30,14 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+afterEach(async () => {
+  vi.restoreAllMocks();
+  const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import('../api/client');
+  (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue([]);
+  (fetchSettings as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({});
+  (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(null);
+});
+
 // Helper: render and wait for initial loading to complete
 async function renderAndWait() {
   render(<InstanceBackupManager />);
@@ -36,6 +45,166 @@ async function renderAndWait() {
     expect(screen.queryByText('Loading backups...')).not.toBeInTheDocument();
   });
 }
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+}
+
+const completedRestoreStatus = {
+  operation_id: 'restore-1',
+  phase: 'completed',
+  attempt_count: 1,
+  last_error: '',
+  missing_key_id: '',
+  created_at: '2026-07-12T00:00:00Z',
+  updated_at: '2026-07-12T00:01:00Z',
+};
+
+describe('InstanceBackupManager — independent initial loads', () => {
+  it('renders settings and restore status when backup history fails', async () => {
+    const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
+      '../api/client'
+    );
+    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('history unavailable'),
+    );
+    (fetchSettings as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      instance_backup_interval_hours: '24',
+      instance_backup_retention_count: '9',
+    });
+    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(completedRestoreStatus);
+
+    await renderAndWait();
+
+    expect(fetchInstanceBackups).toHaveBeenCalledOnce();
+    expect(fetchSettings).toHaveBeenCalledOnce();
+    expect(fetchRestoreStatus).toHaveBeenCalledOnce();
+    expect(screen.getByDisplayValue('Every 24 hours')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('9')).toBeInTheDocument();
+    expect(screen.getByText('Restore completed.')).toBeInTheDocument();
+    expect(screen.getByText('Could not load backup history.')).toBeInTheDocument();
+  });
+
+  it('renders backup history and restore status with setting defaults when settings fail', async () => {
+    const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
+      '../api/client'
+    );
+    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      mockBackup({ file_name: 'history-survives-settings-failure.tar.gz' }),
+    ]);
+    (fetchSettings as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('settings unavailable'),
+    );
+    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(completedRestoreStatus);
+
+    await renderAndWait();
+
+    expect(fetchInstanceBackups).toHaveBeenCalledOnce();
+    expect(fetchSettings).toHaveBeenCalledOnce();
+    expect(fetchRestoreStatus).toHaveBeenCalledOnce();
+    expect(screen.getByText('history-survives-settings-failure.tar.gz')).toBeInTheDocument();
+    expect(screen.getByText('Restore completed.')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Disabled')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('5')).toBeInTheDocument();
+    expect(screen.getByText('Could not load backup settings.')).toBeInTheDocument();
+  });
+
+  it('renders backup history and settings when restore status fails', async () => {
+    const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
+      '../api/client'
+    );
+    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      mockBackup({ file_name: 'history-survives-restore-failure.tar.gz' }),
+    ]);
+    (fetchSettings as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      instance_backup_interval_hours: '12',
+      instance_backup_retention_count: '7',
+    });
+    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('restore status unavailable'),
+    );
+
+    await renderAndWait();
+
+    expect(fetchInstanceBackups).toHaveBeenCalledOnce();
+    expect(fetchSettings).toHaveBeenCalledOnce();
+    expect(fetchRestoreStatus).toHaveBeenCalledOnce();
+    expect(screen.getByText('history-survives-restore-failure.tar.gz')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Every 12 hours')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('7')).toBeInTheDocument();
+    expect(screen.getByText('Could not load restore status.')).toBeInTheDocument();
+  });
+
+  it('starts all independent requests before any of them settles', async () => {
+    const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
+      '../api/client'
+    );
+    const backupsRequest = deferred<Awaited<ReturnType<typeof fetchInstanceBackups>>>();
+    const settingsRequest = deferred<Awaited<ReturnType<typeof fetchSettings>>>();
+    const restoreStatusRequest = deferred<Awaited<ReturnType<typeof fetchRestoreStatus>>>();
+    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockReturnValueOnce(backupsRequest.promise);
+    (fetchSettings as ReturnType<typeof vi.fn>).mockReturnValueOnce(settingsRequest.promise);
+    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      restoreStatusRequest.promise,
+    );
+
+    render(<InstanceBackupManager />);
+
+    expect(fetchInstanceBackups).toHaveBeenCalledOnce();
+    expect(fetchSettings).toHaveBeenCalledOnce();
+    expect(fetchRestoreStatus).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      backupsRequest.resolve([]);
+      settingsRequest.resolve({});
+      restoreStatusRequest.resolve(null);
+      await Promise.all([
+        backupsRequest.promise,
+        settingsRequest.promise,
+        restoreStatusRequest.promise,
+      ]);
+    });
+  });
+
+  it('ignores late initial results after unmount', async () => {
+    const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
+      '../api/client'
+    );
+    const backupsRequest = deferred<Awaited<ReturnType<typeof fetchInstanceBackups>>>();
+    const settingsRequest = deferred<Awaited<ReturnType<typeof fetchSettings>>>();
+    const restoreStatusRequest = deferred<Awaited<ReturnType<typeof fetchRestoreStatus>>>();
+    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockReturnValueOnce(backupsRequest.promise);
+    (fetchSettings as ReturnType<typeof vi.fn>).mockReturnValueOnce(settingsRequest.promise);
+    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      restoreStatusRequest.promise,
+    );
+    const setIntervalSpy = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockImplementation(() => 1 as unknown as ReturnType<typeof setInterval>);
+    const { unmount } = render(<InstanceBackupManager />);
+
+    unmount();
+    await act(async () => {
+      backupsRequest.resolve([mockBackup({ status: 'running', file_name: '' })]);
+      settingsRequest.resolve({});
+      restoreStatusRequest.resolve(null);
+      await Promise.all([
+        backupsRequest.promise,
+        settingsRequest.promise,
+        restoreStatusRequest.promise,
+      ]);
+    });
+
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    setIntervalSpy.mockRestore();
+  });
+});
 
 // --- Gap 9: InstanceBackupManager validation ---
 
@@ -565,7 +734,7 @@ describe('InstanceBackupManager — trigger badge on backup rows', () => {
 // --- Phase 16 gap tests (SC-5 base UI behaviors) ---
 
 // Helper: build a complete InstanceBackup fixture
-function mockBackup(overrides: Record<string, unknown> = {}) {
+function mockBackup(overrides: Partial<InstanceBackup> = {}): InstanceBackup {
   return {
     id: 'backup-abc',
     file_name: 'theia-backup-20260407-120000.tar.gz',
