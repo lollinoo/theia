@@ -4,7 +4,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerError, ValidationError } from '../api/errors';
-import type { InstanceBackup } from '../types/api';
+import type { InstanceBackup, RestoreStatus } from '../types/api';
 import { InstanceBackupManager } from './InstanceBackupManager';
 
 // Mock all API calls used by InstanceBackupManager
@@ -33,9 +33,9 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import('../api/client');
-  (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue([]);
-  (fetchSettings as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({});
-  (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(null);
+  vi.mocked(fetchInstanceBackups).mockReset().mockResolvedValue([]);
+  vi.mocked(fetchSettings).mockReset().mockResolvedValue({});
+  vi.mocked(fetchRestoreStatus).mockReset().mockResolvedValue(null);
 });
 
 // Helper: render and wait for initial loading to complete
@@ -56,7 +56,7 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
-const completedRestoreStatus = {
+const completedRestoreStatus: RestoreStatus = {
   operation_id: 'restore-1',
   phase: 'completed',
   attempt_count: 1,
@@ -71,14 +71,12 @@ describe('InstanceBackupManager — independent initial loads', () => {
     const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
       '../api/client'
     );
-    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('history unavailable'),
-    );
-    (fetchSettings as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    vi.mocked(fetchInstanceBackups).mockRejectedValueOnce(new Error('history unavailable'));
+    vi.mocked(fetchSettings).mockResolvedValueOnce({
       instance_backup_interval_hours: '24',
       instance_backup_retention_count: '9',
     });
-    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(completedRestoreStatus);
+    vi.mocked(fetchRestoreStatus).mockResolvedValueOnce(completedRestoreStatus);
 
     await renderAndWait();
 
@@ -95,13 +93,11 @@ describe('InstanceBackupManager — independent initial loads', () => {
     const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
       '../api/client'
     );
-    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+    vi.mocked(fetchInstanceBackups).mockResolvedValueOnce([
       mockBackup({ file_name: 'history-survives-settings-failure.tar.gz' }),
     ]);
-    (fetchSettings as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('settings unavailable'),
-    );
-    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(completedRestoreStatus);
+    vi.mocked(fetchSettings).mockRejectedValueOnce(new Error('settings unavailable'));
+    vi.mocked(fetchRestoreStatus).mockResolvedValueOnce(completedRestoreStatus);
 
     await renderAndWait();
 
@@ -119,16 +115,14 @@ describe('InstanceBackupManager — independent initial loads', () => {
     const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
       '../api/client'
     );
-    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+    vi.mocked(fetchInstanceBackups).mockResolvedValueOnce([
       mockBackup({ file_name: 'history-survives-restore-failure.tar.gz' }),
     ]);
-    (fetchSettings as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    vi.mocked(fetchSettings).mockResolvedValueOnce({
       instance_backup_interval_hours: '12',
       instance_backup_retention_count: '7',
     });
-    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('restore status unavailable'),
-    );
+    vi.mocked(fetchRestoreStatus).mockRejectedValueOnce(new Error('restore status unavailable'));
 
     await renderAndWait();
 
@@ -148,11 +142,9 @@ describe('InstanceBackupManager — independent initial loads', () => {
     const backupsRequest = deferred<Awaited<ReturnType<typeof fetchInstanceBackups>>>();
     const settingsRequest = deferred<Awaited<ReturnType<typeof fetchSettings>>>();
     const restoreStatusRequest = deferred<Awaited<ReturnType<typeof fetchRestoreStatus>>>();
-    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockReturnValueOnce(backupsRequest.promise);
-    (fetchSettings as ReturnType<typeof vi.fn>).mockReturnValueOnce(settingsRequest.promise);
-    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockReturnValueOnce(
-      restoreStatusRequest.promise,
-    );
+    vi.mocked(fetchInstanceBackups).mockReturnValueOnce(backupsRequest.promise);
+    vi.mocked(fetchSettings).mockReturnValueOnce(settingsRequest.promise);
+    vi.mocked(fetchRestoreStatus).mockReturnValueOnce(restoreStatusRequest.promise);
 
     render(<InstanceBackupManager />);
 
@@ -172,6 +164,81 @@ describe('InstanceBackupManager — independent initial loads', () => {
     });
   });
 
+  it('applies each successful result as soon as its request settles', async () => {
+    const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
+      '../api/client'
+    );
+    const backupsRequest = deferred<Awaited<ReturnType<typeof fetchInstanceBackups>>>();
+    const settingsRequest = deferred<Awaited<ReturnType<typeof fetchSettings>>>();
+    const restoreStatusRequest = deferred<Awaited<ReturnType<typeof fetchRestoreStatus>>>();
+    vi.mocked(fetchInstanceBackups).mockReturnValueOnce(backupsRequest.promise);
+    vi.mocked(fetchSettings).mockReturnValueOnce(settingsRequest.promise);
+    vi.mocked(fetchRestoreStatus).mockReturnValueOnce(restoreStatusRequest.promise);
+    const setIntervalSpy = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockImplementation(() => 1 as unknown as ReturnType<typeof setInterval>);
+
+    render(<InstanceBackupManager />);
+
+    await act(async () => {
+      backupsRequest.resolve([
+        mockBackup({
+          file_name: 'running-history-load.tar.gz',
+          status: 'running',
+        }),
+      ]);
+      await backupsRequest.promise;
+    });
+    expect(screen.getByText('running-history-load.tar.gz')).toBeInTheDocument();
+    expect(setIntervalSpy).toHaveBeenCalledOnce();
+    expect(screen.getByText('Loading backups...')).toBeInTheDocument();
+
+    await act(async () => {
+      settingsRequest.resolve({
+        instance_backup_interval_hours: '48',
+        instance_backup_retention_count: '11',
+      });
+      await settingsRequest.promise;
+    });
+    expect(screen.getByDisplayValue('Every 48 hours')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('11')).toBeInTheDocument();
+    expect(screen.getByText('Loading backups...')).toBeInTheDocument();
+
+    await act(async () => {
+      restoreStatusRequest.resolve(completedRestoreStatus);
+      await restoreStatusRequest.promise;
+    });
+    expect(screen.getByText('Restore completed.')).toBeInTheDocument();
+    expect(screen.queryByText('Loading backups...')).not.toBeInTheDocument();
+  });
+
+  it('applies restore status while history and settings remain pending', async () => {
+    const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
+      '../api/client'
+    );
+    const backupsRequest = deferred<Awaited<ReturnType<typeof fetchInstanceBackups>>>();
+    const settingsRequest = deferred<Awaited<ReturnType<typeof fetchSettings>>>();
+    const restoreStatusRequest = deferred<Awaited<ReturnType<typeof fetchRestoreStatus>>>();
+    vi.mocked(fetchInstanceBackups).mockReturnValueOnce(backupsRequest.promise);
+    vi.mocked(fetchSettings).mockReturnValueOnce(settingsRequest.promise);
+    vi.mocked(fetchRestoreStatus).mockReturnValueOnce(restoreStatusRequest.promise);
+
+    render(<InstanceBackupManager />);
+
+    await act(async () => {
+      restoreStatusRequest.resolve(completedRestoreStatus);
+      await restoreStatusRequest.promise;
+    });
+    expect(screen.getByText('Restore completed.')).toBeInTheDocument();
+    expect(screen.getByText('Loading backups...')).toBeInTheDocument();
+
+    await act(async () => {
+      backupsRequest.resolve([]);
+      settingsRequest.resolve({});
+      await Promise.all([backupsRequest.promise, settingsRequest.promise]);
+    });
+  });
+
   it('ignores late initial results after unmount', async () => {
     const { fetchInstanceBackups, fetchRestoreStatus, fetchSettings } = await import(
       '../api/client'
@@ -179,11 +246,9 @@ describe('InstanceBackupManager — independent initial loads', () => {
     const backupsRequest = deferred<Awaited<ReturnType<typeof fetchInstanceBackups>>>();
     const settingsRequest = deferred<Awaited<ReturnType<typeof fetchSettings>>>();
     const restoreStatusRequest = deferred<Awaited<ReturnType<typeof fetchRestoreStatus>>>();
-    (fetchInstanceBackups as ReturnType<typeof vi.fn>).mockReturnValueOnce(backupsRequest.promise);
-    (fetchSettings as ReturnType<typeof vi.fn>).mockReturnValueOnce(settingsRequest.promise);
-    (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockReturnValueOnce(
-      restoreStatusRequest.promise,
-    );
+    vi.mocked(fetchInstanceBackups).mockReturnValueOnce(backupsRequest.promise);
+    vi.mocked(fetchSettings).mockReturnValueOnce(settingsRequest.promise);
+    vi.mocked(fetchRestoreStatus).mockReturnValueOnce(restoreStatusRequest.promise);
     const setIntervalSpy = vi
       .spyOn(globalThis, 'setInterval')
       .mockImplementation(() => 1 as unknown as ReturnType<typeof setInterval>);
@@ -203,6 +268,80 @@ describe('InstanceBackupManager — independent initial loads', () => {
 
     expect(setIntervalSpy).not.toHaveBeenCalled();
     setIntervalSpy.mockRestore();
+  });
+
+  it('does not show an empty history state when the history request failed', async () => {
+    const { fetchInstanceBackups } = await import('../api/client');
+    vi.mocked(fetchInstanceBackups).mockRejectedValueOnce(new Error('history unavailable'));
+
+    await renderAndWait();
+
+    expect(screen.getByText('Could not load backup history.')).toBeInTheDocument();
+    expect(screen.queryByText(/No instance backups yet/)).not.toBeInTheDocument();
+  });
+
+  it('clears history and restore errors after successful reconnect refreshes', async () => {
+    const { fetchInstanceBackups, fetchRestoreStatus } = await import('../api/client');
+    vi.mocked(fetchInstanceBackups).mockRejectedValueOnce(new Error('history unavailable'));
+    vi.mocked(fetchRestoreStatus).mockRejectedValueOnce(new Error('restore status unavailable'));
+    await renderAndWait();
+    expect(screen.getByText('Could not load backup history.')).toBeInTheDocument();
+    expect(screen.getByText('Could not load restore status.')).toBeInTheDocument();
+
+    vi.mocked(fetchInstanceBackups).mockResolvedValueOnce([
+      mockBackup({ file_name: 'reconnected-history.tar.gz' }),
+    ]);
+    vi.mocked(fetchRestoreStatus).mockResolvedValueOnce(completedRestoreStatus);
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-reconnected'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('reconnected-history.tar.gz')).toBeInTheDocument();
+    expect(screen.getByText('Restore completed.')).toBeInTheDocument();
+    expect(screen.queryByText('Could not load backup history.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Could not load restore status.')).not.toBeInTheDocument();
+  });
+
+  it('clears a history error after a successful backup poll', async () => {
+    const { fetchInstanceBackups } = await import('../api/client');
+    vi.mocked(fetchInstanceBackups).mockRejectedValueOnce(new Error('history unavailable'));
+    let poll: (() => Promise<void>) | undefined;
+    vi.spyOn(globalThis, 'setInterval').mockImplementation((callback) => {
+      poll = callback as () => Promise<void>;
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    await renderAndWait();
+    expect(screen.getByText('Could not load backup history.')).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create Backup' }));
+      await Promise.resolve();
+    });
+    expect(poll).toBeDefined();
+    await act(async () => {
+      await poll?.();
+    });
+
+    expect(screen.queryByText('Could not load backup history.')).not.toBeInTheDocument();
+    expect(screen.getByText(/No instance backups yet/)).toBeInTheDocument();
+  });
+
+  it('clears a settings error after a successful settings save', async () => {
+    const { fetchSettings, updateSetting } = await import('../api/client');
+    vi.mocked(fetchSettings).mockRejectedValueOnce(new Error('settings unavailable'));
+    await renderAndWait();
+    expect(screen.getByText('Could not load backup settings.')).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.change(screen.getByDisplayValue('Disabled'), { target: { value: '24' } });
+    });
+
+    await waitFor(() => {
+      expect(updateSetting).toHaveBeenCalledWith('instance_backup_interval_hours', '24');
+      expect(screen.queryByText('Could not load backup settings.')).not.toBeInTheDocument();
+    });
   });
 });
 

@@ -32,13 +32,23 @@ const statusIcons: Record<string, string> = {
   cancelled: '\u25CB', // hollow circle
 };
 
+type InitialLoadSection = 'history' | 'settings' | 'restore';
+
+const initialLoadErrorMessages: Record<InitialLoadSection, string> = {
+  history: 'Could not load backup history.',
+  settings: 'Could not load backup settings.',
+  restore: 'Could not load restore status.',
+};
+
 /** Renders the InstanceBackupManager component within the UI component boundary. */
 export function InstanceBackupManager() {
   const [backups, setBackups] = useState<InstanceBackup[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
-  const [initialLoadErrors, setInitialLoadErrors] = useState<string[]>([]);
+  const [initialLoadErrors, setInitialLoadErrors] = useState<
+    Partial<Record<InitialLoadSection, string>>
+  >({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [expandedErrorId, setExpandedErrorId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -68,12 +78,29 @@ export function InstanceBackupManager() {
     }
   }, []);
 
+  const setInitialLoadError = useCallback((section: InitialLoadSection) => {
+    setInitialLoadErrors((current) => ({
+      ...current,
+      [section]: initialLoadErrorMessages[section],
+    }));
+  }, []);
+
+  const clearInitialLoadError = useCallback((section: InitialLoadSection) => {
+    setInitialLoadErrors((current) => {
+      if (current[section] === undefined) return current;
+      const next = { ...current };
+      delete next[section];
+      return next;
+    });
+  }, []);
+
   const startPolling = useCallback(() => {
     stopPolling();
     pollRef.current = setInterval(async () => {
       try {
         const data = await fetchInstanceBackups();
         setBackups(data);
+        clearInitialLoadError('history');
         const running = data.find((b) => b.status === 'running');
         if (!running) {
           stopPolling();
@@ -83,75 +110,90 @@ export function InstanceBackupManager() {
         // ignore poll errors
       }
     }, 2000);
-  }, [stopPolling]);
+  }, [clearInitialLoadError, stopPolling]);
 
   // Initial load + resume polling if a backup is already running
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      const [backupsResult, settingsResult, restoreStatusResult] = await Promise.allSettled([
-        fetchInstanceBackups(),
-        fetchSettings(),
-        fetchRestoreStatus(),
-      ]);
-      if (cancelled) return;
-
-      const loadErrors: string[] = [];
-      if (backupsResult.status === 'fulfilled') {
-        setBackups(backupsResult.value);
-        const running = backupsResult.value.find((backup) => backup.status === 'running');
+    const backupsRequest = fetchInstanceBackups()
+      .then((data) => {
+        if (cancelled) return;
+        setBackups(data);
+        clearInitialLoadError('history');
+        const running = data.find((backup) => backup.status === 'running');
         if (running) {
           setCreating(true);
           startPolling();
         }
-      } else {
-        loadErrors.push('Could not load backup history.');
-      }
+      })
+      .catch(() => {
+        if (!cancelled) setInitialLoadError('history');
+      });
 
-      if (settingsResult.status === 'fulfilled') {
-        const settings = settingsResult.value;
+    const settingsRequest = fetchSettings()
+      .then((settings) => {
+        if (cancelled) return;
         if (settings['instance_backup_interval_hours'] !== undefined) {
           setScheduleInterval(settings['instance_backup_interval_hours']);
         }
         if (settings['instance_backup_retention_count'] !== undefined) {
           setRetentionCount(settings['instance_backup_retention_count']);
         }
-      } else {
-        loadErrors.push('Could not load backup settings.');
-      }
+        clearInitialLoadError('settings');
+      })
+      .catch(() => {
+        if (!cancelled) setInitialLoadError('settings');
+      });
 
-      if (restoreStatusResult.status === 'fulfilled') {
-        setRestoreStatus(restoreStatusResult.value);
-      } else {
-        loadErrors.push('Could not load restore status.');
-      }
+    const restoreStatusRequest = fetchRestoreStatus()
+      .then((status) => {
+        if (cancelled) return;
+        setRestoreStatus(status);
+        clearInitialLoadError('restore');
+      })
+      .catch(() => {
+        if (!cancelled) setInitialLoadError('restore');
+      });
 
-      setInitialLoadErrors(loadErrors);
-      setLoading(false);
-    })();
+    void Promise.all([backupsRequest, settingsRequest, restoreStatusRequest]).then(() => {
+      if (!cancelled) setLoading(false);
+    });
     return () => {
       cancelled = true;
       stopPolling();
     };
-  }, [startPolling, stopPolling]);
+  }, [clearInitialLoadError, setInitialLoadError, startPolling, stopPolling]);
 
   // Re-fetch when backend reconnects (e.g. after restore restart)
   useEffect(() => {
+    let cancelled = false;
     const handleReconnect = () => {
-      void (async () => {
-        try {
-          const data = await fetchInstanceBackups();
+      void fetchInstanceBackups()
+        .then((data) => {
+          if (cancelled) return;
           setBackups(data);
-          setRestoreStatus(await fetchRestoreStatus());
           setCreating(false);
-        } catch {
+          clearInitialLoadError('history');
+        })
+        .catch(() => {
           // non-fatal
-        }
-      })();
+        });
+      void fetchRestoreStatus()
+        .then((status) => {
+          if (cancelled) return;
+          setRestoreStatus(status);
+          clearInitialLoadError('restore');
+        })
+        .catch(() => {
+          // non-fatal
+        });
     };
     window.addEventListener('backend-reconnected', handleReconnect);
-    return () => window.removeEventListener('backend-reconnected', handleReconnect);
-  }, []);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('backend-reconnected', handleReconnect);
+    };
+  }, [clearInitialLoadError]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -194,9 +236,10 @@ export function InstanceBackupManager() {
     setScheduleInterval(value);
     if (scheduleTimerRef.current !== null) clearTimeout(scheduleTimerRef.current);
     scheduleTimerRef.current = setTimeout(() => {
-      void updateSetting('instance_backup_interval_hours', value).then(() =>
-        showSaved(setSavedSchedule, savedScheduleTimerRef),
-      );
+      void updateSetting('instance_backup_interval_hours', value).then(() => {
+        clearInitialLoadError('settings');
+        showSaved(setSavedSchedule, savedScheduleTimerRef);
+      });
     }, 500);
   }
 
@@ -212,9 +255,10 @@ export function InstanceBackupManager() {
     if (retentionTimerRef.current !== null) clearTimeout(retentionTimerRef.current);
     const num = parseInt(value, 10);
     retentionTimerRef.current = setTimeout(() => {
-      void updateSetting('instance_backup_retention_count', String(num)).then(() =>
-        showSaved(setSavedRetention, savedRetentionTimerRef),
-      );
+      void updateSetting('instance_backup_retention_count', String(num)).then(() => {
+        clearInitialLoadError('settings');
+        showSaved(setSavedRetention, savedRetentionTimerRef);
+      });
     }, 500);
   }
 
@@ -584,11 +628,11 @@ export function InstanceBackupManager() {
       </div>
 
       {/* ERROR MESSAGE */}
-      {initialLoadErrors.length > 0 && (
+      {Object.keys(initialLoadErrors).length > 0 && (
         <div className="rounded-md border border-status-down/20 bg-status-down/5 p-2 text-xs text-status-down">
-          {initialLoadErrors.map((error) => (
-            <p key={error}>{error}</p>
-          ))}
+          {(Object.keys(initialLoadErrorMessages) as InitialLoadSection[]).map((section) =>
+            initialLoadErrors[section] ? <p key={section}>{initialLoadErrors[section]}</p> : null,
+          )}
         </div>
       )}
 
@@ -617,7 +661,7 @@ export function InstanceBackupManager() {
       {loading && <p className="text-xs text-on-bg-secondary">Loading backups...</p>}
 
       {/* EMPTY STATE */}
-      {!loading && backups.length === 0 && (
+      {!loading && initialLoadErrors.history === undefined && backups.length === 0 && (
         <p className="text-xs text-on-bg-secondary">
           No instance backups yet. Create one to back up the entire Theia database and
           configuration.
@@ -625,7 +669,7 @@ export function InstanceBackupManager() {
       )}
 
       {/* BACKUP LIST */}
-      {!loading && backups.length > 0 && (
+      {backups.length > 0 && (
         <div className="space-y-1.5">
           {backups.map((backup) => (
             <div key={backup.id} className="rounded-lg bg-surface-high p-2.5 space-y-1">
