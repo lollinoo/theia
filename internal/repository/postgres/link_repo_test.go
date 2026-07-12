@@ -3,6 +3,7 @@ package postgres
 // This file exercises link repo behavior so refactors preserve the documented contract.
 
 import (
+	"errors"
 	"sync"
 	"testing"
 
@@ -1434,7 +1435,7 @@ func TestSettingsRepo_GetSetGetAll(t *testing.T) {
 
 	// Error for non-existent key
 	_, err = repo.Get("nonexistent")
-	if err == nil {
-		t.Error("Expected error for nonexistent key")
+	if !errors.Is(err, domain.ErrSettingNotFound) {
+		t.Errorf("Get nonexistent error = %v, want ErrSettingNotFound", err)
 	}
 }

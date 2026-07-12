@@ -111,7 +111,9 @@ func (h *UserSettingsHandler) HandleBridgeSecret(w http.ResponseWriter, r *http.
 		var req struct {
 			Reason string `json:"reason"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if !decodeJSON(w, r, &req) {
+			return
+		}
 		result, err = h.service.RotateSecret(r.Context(), user, req.Reason)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
@@ -141,7 +143,9 @@ func (h *UserSettingsHandler) HandleBridgeSecretRevoke(w http.ResponseWriter, r 
 	var req struct {
 		Reason string `json:"reason"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if !decodeJSON(w, r, &req) {
+		return
+	}
 	result, err := h.service.RevokeSecret(r.Context(), user, req.Reason)
 	if err != nil {
 		writeUserSettingsServiceError(w, err)

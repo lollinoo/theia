@@ -2,6 +2,7 @@
  * Exercises single-device backup panel host-key recovery behavior.
  */
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { useLayoutEffect, useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchBackupJob,
@@ -12,6 +13,17 @@ import {
 } from '../../api/client';
 import type { BackupJob, Device } from '../../types/api';
 import { BackupPanel } from './BackupPanel';
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+}
+
+interface RenderFrame {
+  deviceId: string;
+  text: string;
+}
 
 vi.mock('../../api/client', () => ({
   fetchBackupJob: vi.fn(),
@@ -55,7 +67,7 @@ function mockBackupJob(overrides: Partial<BackupJob> = {}): BackupJob {
   };
 }
 
-function deferred<T>() {
+function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
   const promise = new Promise<T>((resolvePromise, rejectPromise) => {
@@ -63,6 +75,37 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function mockBackupFiles(count: number, jobId: string) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `file-${jobId}-${index}`,
+    job_id: jobId,
+    file_type: 'export',
+    file_name: `${jobId}-${index}.rsc`,
+    file_hash: `hash-${index}`,
+    size_bytes: 100,
+    created_at: '2026-06-28T00:00:00Z',
+  }));
+}
+
+function BackupPanelRenderProbe({
+  device,
+  captureFrame,
+}: {
+  device: Device;
+  captureFrame: (frame: RenderFrame) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    captureFrame({ deviceId: device.id, text: containerRef.current?.textContent ?? '' });
+  });
+
+  return (
+    <div ref={containerRef}>
+      <BackupPanel device={device} />
+    </div>
+  );
 }
 
 async function flushPromises() {
@@ -202,6 +245,158 @@ describe('BackupPanel active job rehydration', () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });
     expect(fetchBackupJob).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BackupPanel latest backup device ownership', () => {
+  it('ignores a previous device response that resolves after the current device', async () => {
+    const deviceARequest = deferred<BackupJob | null>();
+    const deviceBRequest = deferred<BackupJob | null>();
+    vi.mocked(fetchLatestBackupJob).mockImplementation((deviceId) =>
+      deviceId === 'dev-a' ? deviceARequest.promise : deviceBRequest.promise,
+    );
+    const deviceA = mockDevice({ id: 'dev-a', sys_name: 'router-a' });
+    const deviceB = mockDevice({ id: 'dev-b', sys_name: 'router-b' });
+
+    const view = render(<BackupPanel device={deviceA} />);
+    view.rerender(<BackupPanel device={deviceB} />);
+
+    await act(async () => {
+      deviceBRequest.resolve(
+        mockBackupJob({
+          id: 'job-b',
+          device_id: 'dev-b',
+          status: 'success',
+          files: mockBackupFiles(2, 'job-b'),
+        }),
+      );
+      await deviceBRequest.promise;
+    });
+    expect(screen.getByText('2 files')).toBeInTheDocument();
+
+    await act(async () => {
+      deviceARequest.resolve(
+        mockBackupJob({
+          id: 'job-a',
+          device_id: 'dev-a',
+          status: 'success',
+          files: mockBackupFiles(1, 'job-a'),
+        }),
+      );
+      await deviceARequest.promise;
+    });
+
+    expect(screen.getByText('2 files')).toBeInTheDocument();
+    expect(screen.queryByText('1 files')).not.toBeInTheDocument();
+  });
+
+  it('ignores a previous device rejection after the current device loads', async () => {
+    const deviceARequest = deferred<BackupJob | null>();
+    const deviceBRequest = deferred<BackupJob | null>();
+    vi.mocked(fetchLatestBackupJob).mockImplementation((deviceId) =>
+      deviceId === 'dev-a' ? deviceARequest.promise : deviceBRequest.promise,
+    );
+    const view = render(<BackupPanel device={mockDevice({ id: 'dev-a' })} />);
+    view.rerender(<BackupPanel device={mockDevice({ id: 'dev-b' })} />);
+
+    await act(async () => {
+      deviceBRequest.resolve(
+        mockBackupJob({
+          id: 'job-b',
+          device_id: 'dev-b',
+          status: 'success',
+          files: mockBackupFiles(2, 'job-b'),
+        }),
+      );
+      await deviceBRequest.promise;
+    });
+
+    await act(async () => {
+      deviceARequest.reject(new Error('device A unavailable'));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('2 files')).toBeInTheDocument();
+    expect(screen.queryByText(/device A unavailable/i)).not.toBeInTheDocument();
+  });
+
+  it('never renders the previous device latest backup in the next device commit', async () => {
+    const deviceBRequest = deferred<BackupJob | null>();
+    const frames: RenderFrame[] = [];
+    const captureFrame = (frame: RenderFrame) => frames.push(frame);
+    vi.mocked(fetchLatestBackupJob)
+      .mockResolvedValueOnce(
+        mockBackupJob({
+          id: 'job-a',
+          device_id: 'dev-a',
+          status: 'success',
+          files: mockBackupFiles(1, 'job-a'),
+        }),
+      )
+      .mockReturnValueOnce(deviceBRequest.promise);
+    const view = render(
+      <BackupPanelRenderProbe device={mockDevice({ id: 'dev-a' })} captureFrame={captureFrame} />,
+    );
+    await flushPromises();
+    expect(screen.getByText('1 files')).toBeInTheDocument();
+
+    view.rerender(
+      <BackupPanelRenderProbe device={mockDevice({ id: 'dev-b' })} captureFrame={captureFrame} />,
+    );
+
+    const firstDeviceBFrame = frames.find((frame) => frame.deviceId === 'dev-b');
+    expect(firstDeviceBFrame).toBeDefined();
+    expect(firstDeviceBFrame?.text).not.toContain('1 files');
+  });
+
+  it('never renders the previous device latest backup error in the next device commit', async () => {
+    const deviceBRequest = deferred<BackupJob | null>();
+    const frames: RenderFrame[] = [];
+    const captureFrame = (frame: RenderFrame) => frames.push(frame);
+    vi.mocked(fetchLatestBackupJob)
+      .mockRejectedValueOnce(new Error('device A unavailable'))
+      .mockReturnValueOnce(deviceBRequest.promise);
+    const view = render(
+      <BackupPanelRenderProbe device={mockDevice({ id: 'dev-a' })} captureFrame={captureFrame} />,
+    );
+    await flushPromises();
+    expect(screen.getByText(/device A unavailable/i)).toBeInTheDocument();
+
+    view.rerender(
+      <BackupPanelRenderProbe device={mockDevice({ id: 'dev-b' })} captureFrame={captureFrame} />,
+    );
+
+    const firstDeviceBFrame = frames.find((frame) => frame.deviceId === 'dev-b');
+    expect(firstDeviceBFrame).toBeDefined();
+    expect(firstDeviceBFrame?.text).not.toContain('device A unavailable');
+  });
+
+  it('handles a latest backup rejection after unmount', async () => {
+    const request = deferred<BackupJob | null>();
+    vi.mocked(fetchLatestBackupJob).mockReturnValue(request.promise);
+    const view = render(<BackupPanel device={mockDevice()} />);
+
+    view.unmount();
+    await act(async () => {
+      request.reject(new Error('request completed after unmount'));
+      await Promise.resolve();
+    });
+  });
+
+  it('shows a useful error when the current device latest backup request fails', async () => {
+    const request = deferred<BackupJob | null>();
+    vi.mocked(fetchLatestBackupJob).mockReturnValue(request.promise);
+    render(<BackupPanel device={mockDevice()} />);
+
+    await act(async () => {
+      request.reject(new Error('network unavailable'));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Failed to load latest backup: network unavailable',
+    );
+    expect(screen.queryByText('No backups yet')).not.toBeInTheDocument();
   });
 });
 

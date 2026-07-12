@@ -236,29 +236,55 @@ export function LinkCreatePanel({
   const [targetLoading, setTargetLoading] = useState(false);
 
   useEffect(() => {
+    let stale = false;
     setSourceIfName('');
+    setSourceInterfaces([]);
     if (!sourceDeviceId || sourceIsVirtual) {
-      setSourceInterfaces([]);
-      return;
+      setSourceLoading(false);
+      return () => {
+        stale = true;
+      };
     }
     setSourceLoading(true);
     fetchDeviceInterfaces(sourceDeviceId)
-      .then((ifaces) => setSourceInterfaces(ifaces))
-      .catch(() => setSourceInterfaces([]))
-      .finally(() => setSourceLoading(false));
+      .then((ifaces) => {
+        if (!stale) setSourceInterfaces(ifaces);
+      })
+      .catch(() => {
+        if (!stale) setSourceInterfaces([]);
+      })
+      .finally(() => {
+        if (!stale) setSourceLoading(false);
+      });
+    return () => {
+      stale = true;
+    };
   }, [sourceDeviceId, sourceIsVirtual]);
 
   useEffect(() => {
+    let stale = false;
     setTargetIfName('');
+    setTargetInterfaces([]);
     if (!targetDeviceId || targetIsVirtual) {
-      setTargetInterfaces([]);
-      return;
+      setTargetLoading(false);
+      return () => {
+        stale = true;
+      };
     }
     setTargetLoading(true);
     fetchDeviceInterfaces(targetDeviceId)
-      .then((ifaces) => setTargetInterfaces(ifaces))
-      .catch(() => setTargetInterfaces([]))
-      .finally(() => setTargetLoading(false));
+      .then((ifaces) => {
+        if (!stale) setTargetInterfaces(ifaces);
+      })
+      .catch(() => {
+        if (!stale) setTargetInterfaces([]);
+      })
+      .finally(() => {
+        if (!stale) setTargetLoading(false);
+      });
+    return () => {
+      stale = true;
+    };
   }, [targetDeviceId, targetIsVirtual]);
 
   function handleSourceDeviceChange(id: string) {

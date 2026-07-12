@@ -145,12 +145,24 @@ func (r *AuthRepo) ListUsers(ctx context.Context, filter domain.UserListFilter) 
 	}
 
 	aggregates := make([]domain.UserWithRolesAndPermissions, 0, len(users))
+	if len(users) == 0 {
+		return aggregates, nil
+	}
+
+	rolesByUser, err := r.rolesForUsers(ctx, users)
+	if err != nil {
+		return nil, fmt.Errorf("loading listed auth user roles: %w", err)
+	}
+	permissionsByUser, err := r.permissionsForUsers(ctx, users)
+	if err != nil {
+		return nil, fmt.Errorf("loading listed auth user permissions: %w", err)
+	}
 	for _, user := range users {
-		aggregate, err := r.userRolesAndPermissions(ctx, user)
-		if err != nil {
-			return nil, fmt.Errorf("loading auth user aggregate: %w", err)
-		}
-		aggregates = append(aggregates, *aggregate)
+		aggregates = append(aggregates, domain.UserWithRolesAndPermissions{
+			User:        user,
+			Roles:       rolesByUser[user.ID],
+			Permissions: permissionsByUser[user.ID],
+		})
 	}
 	return aggregates, nil
 }
@@ -1003,6 +1015,40 @@ func (r *AuthRepo) rolesForUser(ctx context.Context, userID uuid.UUID) ([]domain
 	return roles, nil
 }
 
+func (r *AuthRepo) rolesForUsers(ctx context.Context, users []domain.User) (map[uuid.UUID][]domain.Role, error) {
+	placeholders, args := authUserIDQueryArgs(users)
+	rows, err := r.queryContext(ctx,
+		`SELECT ur.user_id, r.id, r.name, r.description, r.is_system_role, r.created_at, r.updated_at
+		 FROM roles r
+		 JOIN user_roles ur ON ur.role_id = r.id
+		 WHERE ur.user_id IN (`+strings.Join(placeholders, ", ")+`)
+		 ORDER BY ur.user_id ASC, r.name ASC`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing roles for auth users: %w", err)
+	}
+	defer rows.Close()
+
+	rolesByUser := make(map[uuid.UUID][]domain.Role)
+	for rows.Next() {
+		var userID string
+		var role domain.Role
+		if err := rows.Scan(&userID, &role.ID, &role.Name, &role.Description, &role.IsSystemRole, &role.CreatedAt, &role.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scanning role for auth users: %w", err)
+		}
+		parsedUserID, err := uuid.Parse(userID)
+		if err != nil {
+			return nil, fmt.Errorf("parsing role auth user id: %w", err)
+		}
+		rolesByUser[parsedUserID] = append(rolesByUser[parsedUserID], role)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating roles for auth users: %w", err)
+	}
+	return rolesByUser, nil
+}
+
 func (r *AuthRepo) permissionsForUser(ctx context.Context, userID uuid.UUID) ([]domain.Permission, error) {
 	rows, err := r.queryContext(ctx,
 		`SELECT DISTINCT p.id, p.key, p.description, p.resource, p.action
@@ -1030,6 +1076,51 @@ func (r *AuthRepo) permissionsForUser(ctx context.Context, userID uuid.UUID) ([]
 		return nil, fmt.Errorf("iterating auth user permissions: %w", err)
 	}
 	return permissions, nil
+}
+
+func (r *AuthRepo) permissionsForUsers(ctx context.Context, users []domain.User) (map[uuid.UUID][]domain.Permission, error) {
+	placeholders, args := authUserIDQueryArgs(users)
+	rows, err := r.queryContext(ctx,
+		`SELECT DISTINCT ur.user_id, p.id, p.key, p.description, p.resource, p.action
+		 FROM permissions p
+		 JOIN role_permissions rp ON rp.permission_id = p.id
+		 JOIN user_roles ur ON ur.role_id = rp.role_id
+		 WHERE ur.user_id IN (`+strings.Join(placeholders, ", ")+`)
+		 ORDER BY ur.user_id ASC, p.key ASC`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing permissions for auth users: %w", err)
+	}
+	defer rows.Close()
+
+	permissionsByUser := make(map[uuid.UUID][]domain.Permission)
+	for rows.Next() {
+		var userID string
+		var permission domain.Permission
+		if err := rows.Scan(&userID, &permission.ID, &permission.Key, &permission.Description, &permission.Resource, &permission.Action); err != nil {
+			return nil, fmt.Errorf("scanning permission for auth users: %w", err)
+		}
+		parsedUserID, err := uuid.Parse(userID)
+		if err != nil {
+			return nil, fmt.Errorf("parsing permission auth user id: %w", err)
+		}
+		permissionsByUser[parsedUserID] = append(permissionsByUser[parsedUserID], permission)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating permissions for auth users: %w", err)
+	}
+	return permissionsByUser, nil
+}
+
+func authUserIDQueryArgs(users []domain.User) ([]string, []interface{}) {
+	placeholders := make([]string, 0, len(users))
+	args := make([]interface{}, 0, len(users))
+	for _, user := range users {
+		placeholders = append(placeholders, "?")
+		args = append(args, user.ID.String())
+	}
+	return placeholders, args
 }
 
 func (r *AuthRepo) scanUser(row authRowScanner) (*domain.User, error) {
