@@ -1,8 +1,8 @@
 /**
  * Exercises bulk backup panel operations dashboard behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerError, ValidationError } from '../../api/errors';
 import type { Device } from '../../types/api';
 import { __resetBulkBackupSessionForTests, BulkBackupPanel } from './BulkBackupPanel';
@@ -161,6 +161,21 @@ function mockRunItem(overrides: Record<string, unknown>) {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function flushPromises() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 function mockBulkOperationStatus(
   overrides: {
     bulkBackupRun?: Record<string, unknown>;
@@ -198,6 +213,10 @@ function mockBulkOperationStatus(
 beforeEach(() => {
   vi.clearAllMocks();
   __resetBulkBackupSessionForTests();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('BulkBackupPanel — startBulkBackupRun .catch handles ServerError', () => {
@@ -249,6 +268,80 @@ describe('BulkBackupPanel — startBulkBackupRun .catch handles ValidationError'
 });
 
 describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
+  it('waits for a slow persistent-run request before scheduling the next poll', async () => {
+    vi.useFakeTimers();
+    const firstPoll = deferred<ReturnType<typeof mockBulkRun>>();
+    const { fetchBulkBackupRun, fetchLatestBulkBackupRun } = await import('../../api/client');
+    const activeRun = mockBulkRun({ status: 'running' }, [
+      mockRunItem({ device_id: 'dev-1', device_name: 'router-01', status: 'queued' }),
+    ]);
+    (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(activeRun);
+    (fetchBulkBackupRun as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => firstPoll.promise)
+      .mockResolvedValue(activeRun);
+
+    render(<BulkBackupPanel devices={[mockDevice()]} />);
+    await flushPromises();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fetchBulkBackupRun).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(fetchBulkBackupRun).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      firstPoll.resolve(activeRun);
+      await firstPoll.promise;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1999);
+    });
+    expect(fetchBulkBackupRun).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(fetchBulkBackupRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not publish a persistent-run result that settles after unmount', async () => {
+    vi.useFakeTimers();
+    const pendingPoll = deferred<ReturnType<typeof mockBulkRun>>();
+    const { fetchBulkBackupRun, fetchLatestBulkBackupRun } = await import('../../api/client');
+    const activeRun = mockBulkRun({ status: 'running' }, [
+      mockRunItem({ device_id: 'dev-1', device_name: 'router-01', status: 'queued' }),
+    ]);
+    const completedRun = mockBulkRun({ status: 'success' }, [
+      mockRunItem({ device_id: 'dev-1', device_name: 'router-01', status: 'success' }),
+    ]);
+    (fetchLatestBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(activeRun);
+    (fetchBulkBackupRun as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => pendingPoll.promise,
+    );
+
+    const view = render(<BulkBackupPanel devices={[mockDevice()]} />);
+    await flushPromises();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    view.unmount();
+    await act(async () => {
+      pendingPoll.resolve(completedRun);
+      await pendingPoll.promise;
+    });
+
+    render(<BulkBackupPanel devices={[mockDevice()]} />);
+    await flushPromises();
+
+    expect(screen.getByText('Processing... 0/1')).toBeInTheDocument();
+    expect(screen.queryByText(/Complete —/)).not.toBeInTheDocument();
+  });
+
   it('shows the fetched persistent run batch size in the idle summary', async () => {
     const { fetchBulkOperationStatus } = await import('../../api/client');
     (fetchBulkOperationStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
