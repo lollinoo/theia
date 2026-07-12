@@ -20,7 +20,7 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
       className={`rounded-xl p-4 space-y-3 transition-colors duration-200 ${metricsUnavailable ? 'bg-status-down/10' : 'bg-surface-high'}`}
     >
       <div>
-        <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Device</p>
+        <p className="text-[12px] font-medium uppercase text-on-bg-secondary">Device</p>
         <p className="mt-0.5 text-sm font-medium text-on-bg">{section.deviceLabel}</p>
         {section.metricsUnavailableMessage && (
           <p className="mt-1 text-xs font-medium text-status-down">
@@ -30,7 +30,7 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
       </div>
 
       <div>
-        <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Interface</p>
+        <p className="text-[12px] font-medium uppercase text-on-bg-secondary">Interface</p>
         <p className="mt-0.5 text-sm font-mono text-on-bg">{section.ifName}</p>
         {section.interfaceDescription && (
           <p className="text-xs text-on-bg-secondary">{section.interfaceDescription}</p>
@@ -40,7 +40,7 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
       <div className="grid grid-cols-2 gap-3">
         {section.speedLabel && (
           <div>
-            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Speed</p>
+            <p className="text-[12px] font-medium uppercase text-on-bg-secondary">Speed</p>
             <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">
               {section.speedLabel}
             </p>
@@ -48,7 +48,7 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
         )}
         {section.statusLabel && (
           <div>
-            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Status</p>
+            <p className="text-[12px] font-medium uppercase text-on-bg-secondary">Status</p>
             <p
               className={`mt-0.5 text-sm ${section.statusTone === 'up' ? 'text-status-up' : section.statusTone === 'down' ? 'text-status-down' : 'text-on-bg-secondary'}`}
             >
@@ -60,7 +60,7 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
 
       <div className="grid grid-cols-2 gap-3 mt-3 pt-3">
         <div>
-          <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">TX</p>
+          <p className="text-[12px] font-medium uppercase text-on-bg-secondary">TX</p>
           <p
             className={`mt-0.5 font-mono text-[11px] font-semibold ${metricsUnavailable ? 'text-status-down/70' : 'text-on-bg'}`}
           >
@@ -68,7 +68,7 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
           </p>
         </div>
         <div>
-          <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">RX</p>
+          <p className="text-[12px] font-medium uppercase text-on-bg-secondary">RX</p>
           <p
             className={`mt-0.5 font-mono text-[11px] font-semibold ${metricsUnavailable ? 'text-status-down/70' : 'text-on-bg'}`}
           >
@@ -80,9 +80,7 @@ function InterfaceStatsSection({ section }: InterfaceStatsSectionProps) {
       {section.utilizationPct !== null && (
         <div>
           <div className="flex items-center justify-between">
-            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">
-              Utilization
-            </p>
+            <p className="text-[12px] font-medium uppercase text-on-bg-secondary">Utilization</p>
             <p className="text-xs font-mono" style={{ color: section.utilizationColor }}>
               {section.utilizationPct}%
             </p>
@@ -132,7 +130,7 @@ export function InterfaceStatsPanel({ model }: InterfaceStatsPanelProps) {
       >
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">
+            <p className="text-[12px] font-medium uppercase text-on-bg-secondary">
               Autonegotiation
             </p>
             <p className="mt-1 text-sm font-semibold">{model.negotiation.summaryLabel}</p>
@@ -142,13 +140,13 @@ export function InterfaceStatsPanel({ model }: InterfaceStatsPanelProps) {
 
         <div className="mt-3 grid grid-cols-2 gap-3 border-t border-outline-subtle/70 pt-3">
           <div>
-            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Source</p>
+            <p className="text-[12px] font-medium uppercase text-on-bg-secondary">Source</p>
             <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">
               {model.negotiation.sourceLabel}
             </p>
           </div>
           <div>
-            <p className="text-[12px] uppercase tracking-[0.16em] text-on-bg-secondary">Target</p>
+            <p className="text-[12px] font-medium uppercase text-on-bg-secondary">Target</p>
             <p className="mt-0.5 font-mono text-[11px] font-semibold text-on-bg">
               {model.negotiation.targetLabel}
             </p>

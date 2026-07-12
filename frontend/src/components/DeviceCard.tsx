@@ -313,6 +313,7 @@ interface PhysicalStatusTone {
 
 const virtualAreaToneSurface: RgbColor = { red: 17, green: 26, blue: 38 };
 const whiteRgb: RgbColor = { red: 255, green: 255, blue: 255 };
+const blackRgb: RgbColor = { red: 0, green: 0, blue: 0 };
 const minimumVirtualAreaToneContrast = 4.5;
 
 function hexToRgb(color: string): RgbColor | null {
@@ -378,18 +379,35 @@ function mixRgb(start: RgbColor, end: RgbColor, amount: number): RgbColor {
   };
 }
 
-function readableVirtualAreaTone(color: string): string | null {
+function readableVirtualAreaTone(
+  color: string,
+  background: RgbColor,
+  mixTarget: RgbColor,
+): string | null {
   const rgb = hexToRgb(color);
   if (!rgb) return null;
 
-  for (let mixAmount = 0; mixAmount <= 0.8; mixAmount += 0.08) {
-    const candidate = mixRgb(rgb, whiteRgb, mixAmount);
-    if (contrastRatio(candidate, virtualAreaToneSurface) >= minimumVirtualAreaToneContrast) {
+  for (let mixAmount = 0; mixAmount <= 1; mixAmount += 0.04) {
+    const candidate = mixRgb(rgb, mixTarget, mixAmount);
+    if (contrastRatio(candidate, background) >= minimumVirtualAreaToneContrast) {
       return rgbToCss(candidate);
     }
   }
 
-  return rgbToCss(mixRgb(rgb, whiteRgb, 0.8));
+  return rgbToCss(mixTarget);
+}
+
+function virtualAreaToneStyle(color?: string): CSSCustomProperties | undefined {
+  if (!color) return undefined;
+
+  const darkTone = readableVirtualAreaTone(color, virtualAreaToneSurface, whiteRgb);
+  const lightTone = readableVirtualAreaTone(color, whiteRgb, blackRgb);
+  if (!darkTone || !lightTone) return undefined;
+
+  return {
+    '--theia-virtual-node-tone-dark': darkTone,
+    '--theia-virtual-node-tone-light': lightTone,
+  };
 }
 
 function areaTintStyle(colors: string[] | undefined, alpha = 0.1): CSSProperties | undefined {
@@ -414,19 +432,18 @@ function virtualAreaMarkerStyle(color?: string): CSSProperties | undefined {
   if (!color) return undefined;
 
   const rgb = hexToRgb(color);
-  const readableColor = readableVirtualAreaTone(color);
-  if (!rgb || !readableColor) return undefined;
+  const toneStyle = virtualAreaToneStyle(color);
+  if (!rgb || !toneStyle) return undefined;
 
   return {
+    ...toneStyle,
     backgroundColor: rgbToRgba(rgb, 0.14),
     borderColor: rgbToRgba(rgb, 0.32),
-    color: readableColor,
   };
 }
 
 function virtualAreaTextStyle(color?: string): CSSProperties | undefined {
-  const readableColor = color ? readableVirtualAreaTone(color) : null;
-  return readableColor ? { color: readableColor } : undefined;
+  return virtualAreaToneStyle(color);
 }
 
 function virtualPrimaryStatusTone(status: DeviceVisualStatus): VirtualStatusTone | null {
@@ -507,7 +524,7 @@ function physicalStatusAccent(status: DeviceVisualStatus): string | undefined {
 function PollingDisabledNotice({ className = '' }: { className?: string }) {
   return (
     <div
-      className={`rounded-2xl border border-outline-strong bg-surface-container-high px-3 py-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-on-bg-secondary ${className}`}
+      className={`rounded-2xl border border-outline-strong bg-surface-container-high px-3 py-2 text-center text-[11px] font-semibold uppercase text-on-bg-secondary ${className}`}
     >
       Continuous polling disabled
     </div>
@@ -635,7 +652,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           }}
         >
           <div data-testid="semantic-detail-node" className="topology-semantic-card px-3 py-2">
-            <p className="topology-semantic-detail-only truncate text-[11px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
+            <p className="topology-semantic-detail-only truncate text-[11px] font-medium uppercase text-on-bg-secondary">
               cross-area
             </p>
             <p
@@ -678,14 +695,14 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           }}
           aria-label={`View details for self link ${formatSelfLinkSummary(primarySelfLink)}`}
         >
-          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">
+          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-primary">
             {formatSelfLinkLabel(primarySelfLink)}
           </span>
-          <span className="min-w-0 truncate font-mono text-[10px] text-on-bg-secondary">
+          <span className="min-w-0 truncate font-mono text-[11px] text-on-bg-secondary">
             {formatSelfLinkSummary(primarySelfLink)}
           </span>
           {selfLinks.length > 1 ? (
-            <span className="shrink-0 rounded-full border border-outline px-1.5 py-0.5 text-[9px] font-semibold text-on-bg-secondary">
+            <span className="shrink-0 rounded-full border border-outline px-1.5 py-0.5 text-[11px] font-semibold text-on-bg-secondary">
               +{selfLinks.length - 1}
             </span>
           ) : null}
@@ -809,7 +826,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               >
                 <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
                   <span
-                    className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
+                    className="truncate text-[11px] font-semibold uppercase leading-none text-on-bg-secondary"
                     style={readableFontStyle(9)}
                   >
                     CPU
@@ -823,7 +840,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 </div>
                 <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
                   <span
-                    className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
+                    className="truncate text-[11px] font-semibold uppercase leading-none text-on-bg-secondary"
                     style={readableFontStyle(9)}
                   >
                     MEM
@@ -837,7 +854,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 </div>
                 <div className="flex min-w-0 flex-col justify-center px-2.5">
                   <span
-                    className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
+                    className="truncate text-[11px] font-semibold uppercase leading-none text-on-bg-secondary"
                     style={readableFontStyle(9)}
                   >
                     Uptime
@@ -871,7 +888,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
 
             <div
               data-testid="virtual-node-icon-shell"
-              className="topology-virtual-node-icon-shell relative z-10 flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-[18px] border border-primary/25 bg-primary/10 text-primary"
+              className="topology-virtual-node-icon-shell relative z-10 flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-[18px] border border-primary/25 bg-primary/10"
               style={virtualStatusTone?.markerStyle ?? virtualAreaMarkerStyle(virtualToneColor)}
             >
               <MaterialIcon name="hub" size={24} />
@@ -882,7 +899,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div className="topology-semantic-identity-frame min-w-0 flex-1">
                   <div
                     data-testid="virtual-node-type-label"
-                    className="topology-virtual-node-type-label truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-primary"
+                    className="topology-virtual-node-type-label truncate text-[11px] font-semibold uppercase"
                     style={{
                       ...readableFontStyle(10),
                       ...(virtualStatusTone?.textStyle ?? virtualAreaTextStyle(virtualToneColor)),
@@ -902,7 +919,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 {renderModel.showVirtualStatusBadge ? (
                   <div
                     data-testid="virtual-node-status-badge"
-                    className={`topology-semantic-status-badge inline-flex max-w-[82px] shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusStyles.badgeClass}`}
+                    className={`topology-semantic-status-badge inline-flex max-w-[82px] shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusStyles.badgeClass}`}
                     style={mergeReadableFontStyle(statusStyles.badgeStyle, 10)}
                   >
                     <StatusDot status={headerState.dotStatus} />
@@ -926,7 +943,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               {renderModel.showFreshnessMeta ? (
                 <div
                   data-testid="virtual-node-runtime-meta"
-                  className="topology-semantic-detail-only mt-1.5 flex w-full items-center justify-between gap-2 overflow-hidden text-[10px]"
+                  className="topology-semantic-detail-only mt-1.5 flex w-full items-center justify-between gap-2 overflow-hidden text-[11px]"
                 >
                   <div
                     className={`min-w-0 truncate font-medium ${readoutToneClass(freshness!.tone)}`}
@@ -956,7 +973,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                   {runtimeBadges.map((badge) => (
                     <span
                       key={badge}
-                      className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-warning"
+                      className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-warning"
                     >
                       {badge}
                     </span>

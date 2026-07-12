@@ -21,21 +21,21 @@ describe('DeviceCard down node contrast tokens', () => {
   it('uses high-contrast down reds in dark mode', () => {
     const darkTheme = themeBlock(':root,\n[data-theme="dark"]');
 
-    expect(darkTheme).toContain('--nt-status-down: #ff3045;');
-    expect(darkTheme).toContain('--nt-node-down-border: rgba(255, 48, 69, 0.98);');
-    expect(darkTheme).toContain('--nt-node-down-card-bg: #3b101b;');
-    expect(darkTheme).toContain('--nt-node-down-card-pulse-bg: #5a0f21;');
-    expect(darkTheme).toContain('--nt-node-down-glow: rgba(255, 48, 69, 0.42);');
+    expect(darkTheme).toContain('--nt-status-down: #ff5c6c;');
+    expect(darkTheme).toContain('--nt-node-down-border: rgba(255, 92, 108, 0.98);');
+    expect(darkTheme).toContain('--nt-node-down-card-bg: #35191e;');
+    expect(darkTheme).toContain('--nt-node-down-card-pulse-bg: #492027;');
+    expect(darkTheme).toContain('--nt-node-down-glow: rgba(255, 92, 108, 0.36);');
   });
 
   it('uses high-contrast down reds in light mode', () => {
     const lightTheme = themeBlock('[data-theme="light"]');
 
-    expect(lightTheme).toContain('--nt-status-down: #b91c1c;');
-    expect(lightTheme).toContain('--nt-node-down-border: rgba(185, 28, 28, 0.94);');
-    expect(lightTheme).toContain('--nt-node-down-card-bg: #ffd8d2;');
-    expect(lightTheme).toContain('--nt-node-down-card-pulse-bg: #ffb8ad;');
-    expect(lightTheme).toContain('--nt-node-down-glow: rgba(185, 28, 28, 0.28);');
+    expect(lightTheme).toContain('--nt-status-down: #b4232d;');
+    expect(lightTheme).toContain('--nt-node-down-border: rgba(180, 35, 45, 0.78);');
+    expect(lightTheme).toContain('--nt-node-down-card-bg: #fff1f2;');
+    expect(lightTheme).toContain('--nt-node-down-card-pulse-bg: #ffe4e6;');
+    expect(lightTheme).toContain('--nt-node-down-glow: rgba(180, 35, 45, 0.16);');
   });
 
   it('accentuates the existing down pulse animation', () => {

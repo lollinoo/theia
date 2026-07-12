@@ -34,7 +34,7 @@ function LinkLabelStack({ label }: { label: RegisteredLinkLabel }) {
           key={`${edgeId}-${badge.key}`}
           data-testid={`${edgeId}-badge-${badge.key}`}
           title={badge.title}
-          className={`topology-link-badge topology-render-contained inline-flex min-h-7 items-center gap-2 whitespace-nowrap rounded-full border bg-surface-container-high px-2.5 py-1.5 font-mono text-[11px] font-bold leading-none tracking-[0.06em] ${
+          className={`topology-link-badge topology-render-contained inline-flex min-h-7 items-center gap-2 whitespace-nowrap rounded-full border bg-surface-container-high px-2.5 py-1.5 font-mono text-[11px] font-bold leading-none ${
             interactive ? 'transition-none' : 'transition-[border-color,color] duration-150'
           } ${badge.className}`}
           style={badge.style}
@@ -44,7 +44,7 @@ function LinkLabelStack({ label }: { label: RegisteredLinkLabel }) {
             <span
               data-testid={`${edgeId}-badge-${badge.key}-warning`}
               title={badge.warningIndicator.title}
-              className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full border text-[10px] font-bold leading-none ${badge.warningIndicator.className}`}
+              className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full border text-[11px] font-bold leading-none ${badge.warningIndicator.className}`}
             >
               {badge.warningIndicator.text}
             </span>

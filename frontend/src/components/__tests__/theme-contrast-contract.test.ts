@@ -90,7 +90,7 @@ describe('enterprise NOC theme contrast contract', () => {
     expect(token(block, '--recursive-alias')).toBe('#123456');
   });
 
-  it('uses a warm greige light surface scale with real canvas depth', () => {
+  it('uses a neutral light surface scale with restrained canvas depth', () => {
     const lightSurfaceTokens = {
       background: token(lightBlock, '--nt-bg'),
       surface: token(lightBlock, '--nt-surface'),
@@ -100,14 +100,16 @@ describe('enterprise NOC theme contrast contract', () => {
     };
 
     expect(lightSurfaceTokens).toEqual({
-      background: '#dde2e8',
-      surface: '#f0f2f5',
-      surfaceContainer: '#e8eaee',
-      surfaceContainerHigh: '#f7f8fa',
-      elevated: '#fbfcfd',
+      background: '#f1f4f7',
+      surface: '#ffffff',
+      surfaceContainer: '#f4f6f8',
+      surfaceContainerHigh: '#fafbfc',
+      elevated: '#ffffff',
     });
 
-    for (const [label, value] of Object.entries(lightSurfaceTokens)) {
+    for (const [label, value] of Object.entries(lightSurfaceTokens).filter(
+      ([key]) => key !== 'surface' && key !== 'elevated',
+    )) {
       expect(value, `${label} should not be pure white`).not.toBe('#ffffff');
     }
 
@@ -118,40 +120,82 @@ describe('enterprise NOC theme contrast contract', () => {
 
     expect(
       backgroundLuminance,
-      'light canvas should move away from near-white glare',
-    ).toBeLessThanOrEqual(0.77);
+      'light canvas should remain below near-white working surfaces',
+    ).toBeLessThanOrEqual(0.91);
     expect(
       surfaceLuminance - backgroundLuminance,
-      'nodes need clear depth over canvas',
-    ).toBeGreaterThanOrEqual(0.12);
+      'nodes need restrained depth over canvas',
+    ).toBeGreaterThanOrEqual(0.09);
     expect(
       containerHighLuminance - backgroundLuminance,
       'raised layers need visible separation from canvas',
-    ).toBeGreaterThanOrEqual(0.18);
+    ).toBeGreaterThanOrEqual(0.05);
     expect(
       elevatedLuminance - containerHighLuminance,
       'raised surfaces should stay subtle',
     ).toBeLessThanOrEqual(0.04);
   });
 
+  it('uses a neutral dark surface scale with clear layer separation', () => {
+    const darkSurfaceTokens = {
+      background: token(darkBlock, '--nt-bg'),
+      surface: token(darkBlock, '--nt-surface'),
+      surfaceContainer: token(darkBlock, '--nt-surface-container'),
+      surfaceContainerHigh: token(darkBlock, '--nt-surface-container-high'),
+      elevated: token(darkBlock, '--nt-elevated'),
+    };
+
+    expect(darkSurfaceTokens).toEqual({
+      background: '#101315',
+      surface: '#171b1e',
+      surfaceContainer: '#1d2327',
+      surfaceContainerHigh: '#252c31',
+      elevated: '#2b3439',
+    });
+  });
+
   it('keeps light-mode chrome layered without washing out controls', () => {
-    expect(token(lightBlock, '--nt-outline')).toBe('#bcc8d6');
-    expect(token(lightBlock, '--nt-outline-strong')).toBe('#8fa3b8');
-    expect(token(lightBlock, '--nt-edge-default')).toBe('#6b8299');
-    expect(token(lightBlock, '--nt-edge-muted')).toBe('#a0b4c5');
-    expect(declaration(lightBlock, '--nt-canvas-backdrop')).toContain(
-      'radial-gradient(ellipse at 50% 0%, rgba(100, 120, 150, 0.13) 0%, transparent 55%)',
-    );
-    expect(declaration(lightBlock, '--nt-canvas-backdrop')).toContain(
-      'linear-gradient(180deg, #dde2e8 0%, #d4dae2 100%)',
-    );
-    expect(declaration(lightBlock, '--nt-shadow-panel')).toBe('0 22px 46px rgba(20, 35, 55, 0.18)');
+    expect(token(lightBlock, '--nt-outline')).toBe('#d1d9e2');
+    expect(token(lightBlock, '--nt-outline-strong')).toBe('#98a8b8');
+    expect(token(lightBlock, '--nt-edge-default')).toBe('#657a8e');
+    expect(token(lightBlock, '--nt-edge-muted')).toBe('#b5c0cb');
+    expect(declaration(lightBlock, '--nt-glass-bg')).toBe('rgba(255, 255, 255, 0.94)');
+    expect(declaration(lightBlock, '--nt-glass-border')).toBe('rgba(24, 34, 48, 0.1)');
+    expect(declaration(lightBlock, '--nt-glass-backdrop')).toBe('none');
+    expect(declaration(lightBlock, '--nt-minimap-mask')).toBe('rgba(225, 230, 235, 0.88)');
+    expect(declaration(lightBlock, '--nt-canvas-backdrop')).toBe('#edf1f5');
+    expect(declaration(lightBlock, '--nt-shadow-panel')).toBe('0 10px 24px rgba(16, 24, 40, 0.1)');
     expect(declaration(lightBlock, '--nt-shadow-floating')).toBe(
-      '0 14px 28px rgba(20, 35, 55, 0.14)',
+      '0 6px 16px rgba(16, 24, 40, 0.09)',
+    );
+    expect(declaration(lightBlock, '--nt-shadow-pill')).toBe('0 2px 8px rgba(16, 24, 40, 0.07)');
+    expect(declaration(lightBlock, '--nt-shadow-canvas')).toBe(
+      '0 10px 28px rgba(16, 24, 40, 0.08)',
     );
     expect(compact(declaration(lightBlock, '--nt-node-shadow'))).toBe(
-      '0 2px 4px rgba(20, 35, 55, 0.08), 0 8px 20px rgba(20, 35, 55, 0.12), 0 0 0 1px rgba(20, 35, 55, 0.06)',
+      '0 1px 2px rgba(16, 24, 40, 0.06), 0 4px 12px rgba(16, 24, 40, 0.08)',
     );
+  });
+
+  it('keeps dark-mode chrome neutral and restrained over the topology canvas', () => {
+    expect(token(darkBlock, '--nt-outline')).toBe('#343d40');
+    expect(token(darkBlock, '--nt-outline-strong')).toBe('#59666a');
+    expect(token(darkBlock, '--nt-edge-default')).toBe('#82908f');
+    expect(token(darkBlock, '--nt-edge-muted')).toBe('#4b5758');
+    expect(token(darkBlock, '--nt-edge-active')).toBe('#67d9c0');
+    expect(token(darkBlock, '--nt-node-selected')).toBe('#67d9c0');
+    expect(declaration(darkBlock, '--nt-glass-bg')).toBe('rgba(23, 27, 30, 0.94)');
+    expect(declaration(darkBlock, '--nt-glass-border')).toBe('rgba(241, 245, 244, 0.12)');
+    expect(declaration(darkBlock, '--nt-glass-backdrop')).toBe('blur(10px)');
+    expect(declaration(darkBlock, '--nt-minimap-mask')).toBe('rgba(16, 19, 21, 0.74)');
+    expect(declaration(darkBlock, '--nt-canvas-backdrop')).toBe('#0e1213');
+    expect(declaration(darkBlock, '--nt-shadow-panel')).toBe('0 12px 28px rgba(0, 0, 0, 0.3)');
+    expect(declaration(darkBlock, '--nt-shadow-floating')).toBe('0 8px 20px rgba(0, 0, 0, 0.26)');
+    expect(declaration(darkBlock, '--nt-shadow-pill')).toBe('0 4px 12px rgba(0, 0, 0, 0.22)');
+    expect(declaration(darkBlock, '--nt-shadow-canvas')).toBe('0 14px 36px rgba(0, 0, 0, 0.26)');
+    expect(declaration(darkBlock, '--nt-node-shadow')).toBe('0 6px 16px rgba(0, 0, 0, 0.24)');
+    expect(declaration(darkBlock, '--nt-glow-shadow-opacity')).toBe('0.26');
+    expect(declaration(darkBlock, '--nt-glow-bloom-opacity')).toBe('0.07');
   });
 
   it('keeps light-mode operational text readable on all primary surfaces', () => {
@@ -180,13 +224,14 @@ describe('enterprise NOC theme contrast contract', () => {
       }
     }
 
-    expect(token(lightBlock, '--nt-text-primary')).toBe('#1a2332');
-    expect(token(lightBlock, '--nt-text-secondary')).toBe('#38506a');
-    expect(token(lightBlock, '--nt-text-muted')).toBe('#4d6781');
+    expect(token(lightBlock, '--nt-text-primary')).toBe('#182230');
+    expect(token(lightBlock, '--nt-text-secondary')).toBe('#43566b');
+    expect(token(lightBlock, '--nt-text-muted')).toBe('#5b6f84');
+    expect(token(lightBlock, '--nt-primary')).toBe('#08745a');
     expect(token(lightBlock, '--nt-text-primary')).not.toBe('#000000');
   });
 
-  it('keeps dark-mode secondary and muted text readable on operational surfaces', () => {
+  it('keeps dark-mode operational colors readable on primary surfaces', () => {
     const backgrounds = [
       token(darkBlock, '--nt-bg'),
       token(darkBlock, '--nt-surface'),
@@ -194,9 +239,15 @@ describe('enterprise NOC theme contrast contract', () => {
       token(darkBlock, '--nt-surface-container-high'),
     ];
     const foregrounds = [
-      ['primary', token(darkBlock, '--nt-text-primary'), 7],
-      ['secondary', token(darkBlock, '--nt-text-secondary'), 4.5],
-      ['muted', token(darkBlock, '--nt-text-muted'), 4.5],
+      ['primary text', token(darkBlock, '--nt-text-primary'), 7],
+      ['secondary text', token(darkBlock, '--nt-text-secondary'), 4.5],
+      ['muted text', token(darkBlock, '--nt-text-muted'), 4.5],
+      ['primary teal', token(darkBlock, '--nt-primary'), 4.5],
+      ['status up', token(darkBlock, '--nt-status-up'), 4.5],
+      ['warning', token(darkBlock, '--nt-warning'), 4.5],
+      ['critical', token(darkBlock, '--nt-critical'), 4.5],
+      ['down', token(darkBlock, '--nt-status-down'), 4.5],
+      ['unknown', token(darkBlock, '--nt-status-unknown'), 4.5],
     ] as const;
 
     for (const background of backgrounds) {
@@ -207,6 +258,17 @@ describe('enterprise NOC theme contrast contract', () => {
         ).toBeGreaterThanOrEqual(minimum);
       }
     }
+
+    expect(token(darkBlock, '--nt-text-primary')).toBe('#f1f5f4');
+    expect(token(darkBlock, '--nt-text-secondary')).toBe('#b8c4c1');
+    expect(token(darkBlock, '--nt-text-muted')).toBe('#94a5a1');
+    expect(token(darkBlock, '--nt-primary')).toBe('#4cc9b0');
+    expect(token(darkBlock, '--nt-on-primary')).toBe('#071411');
+    expect(token(darkBlock, '--nt-status-ok')).toBe('#6edb8f');
+    expect(token(darkBlock, '--nt-status-warning')).toBe('#efbd69');
+    expect(token(darkBlock, '--nt-status-critical')).toBe('#ff8296');
+    expect(token(darkBlock, '--nt-status-unknown')).toBe('#a1aaa8');
+    expect(token(darkBlock, '--nt-status-down')).toBe('#ff5c6c');
   });
 
   it('defines a readable on-primary token for primary controls', () => {

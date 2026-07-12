@@ -59,6 +59,10 @@ const FIXED_PALETTE_PATTERNS: { pattern: RegExp; replacement: string }[] = [
   { pattern: /hover:text-yellow-300/, replacement: 'hover:text-warning' },
 ];
 
+const FIXED_GLOW_PATTERNS: { pattern: RegExp; replacement: string }[] = [
+  { pattern: /shadow-\[[^\]]*rgba\(/, replacement: 'a semantic --nt-glow-* token' },
+];
+
 function scanFile(filePath: string, patterns: { pattern: RegExp }[]): string[] {
   const content = readFileSync(filePath, 'utf-8');
   const lines = content.split('\n');
@@ -117,6 +121,20 @@ describe('FOUND-06: No hardcoded hex or fixed palette colors in canvas files', (
 
     if (violations.length > 0) {
       console.error('Fixed palette color violations found:\n' + violations.join('\n'));
+    }
+    expect(violations).toHaveLength(0);
+  });
+
+  it('no fixed RGB glow values remain', () => {
+    const violations: string[] = [];
+
+    for (const file of TARGET_FILES) {
+      const fullPath = join(SRC_DIR, file);
+      violations.push(...scanFile(fullPath, FIXED_GLOW_PATTERNS));
+    }
+
+    if (violations.length > 0) {
+      console.error('Fixed RGB glow violations found:\n' + violations.join('\n'));
     }
     expect(violations).toHaveLength(0);
   });
