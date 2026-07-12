@@ -219,6 +219,10 @@ func (h *SettingsHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "setting key is required")
 		return
 	}
+	if key == domain.SettingGrafanaDashboardConfig {
+		writeError(w, http.StatusBadRequest, "grafana_dashboard_config must be updated through the Grafana dashboard endpoints")
+		return
+	}
 
 	var req struct {
 		Value string `json:"value"`

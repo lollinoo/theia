@@ -5,6 +5,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -508,6 +510,52 @@ func TestAuthRepoListUsersFiltersByRole(t *testing.T) {
 	}
 	if len(listed[0].Roles) != 1 || listed[0].Roles[0].ID != domain.RoleViewer {
 		t.Fatalf("ListUsers role filter roles = %#v", listed[0].Roles)
+	}
+}
+
+func TestAuthRepoListUsersPostgresBatchAggregates(t *testing.T) {
+	repo, ctx := newAuthRepoForTest(t)
+
+	alice := testAuthUser("alice", "alice@example.test")
+	bob := testAuthUser("bob", "bob@example.test")
+	charlie := testAuthUser("charlie", "charlie@example.test")
+	for _, user := range []*domain.User{&charlie, &alice, &bob} {
+		if err := repo.CreateUser(ctx, user); err != nil {
+			t.Fatalf("CreateUser %s: %v", user.Username, err)
+		}
+	}
+	for _, roleID := range []string{domain.RoleViewer, domain.RoleAdmin} {
+		if err := repo.AssignRole(ctx, alice.ID, roleID, nil); err != nil {
+			t.Fatalf("AssignRole alice %s: %v", roleID, err)
+		}
+	}
+	if err := repo.AssignRole(ctx, charlie.ID, domain.RoleViewer, nil); err != nil {
+		t.Fatalf("AssignRole charlie viewer: %v", err)
+	}
+
+	users, err := repo.ListUsers(ctx, domain.UserListFilter{})
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	if len(users) != 3 {
+		t.Fatalf("ListUsers count = %d, want 3", len(users))
+	}
+	if got, want := []uuid.UUID{users[0].User.ID, users[1].User.ID, users[2].User.ID}, []uuid.UUID{alice.ID, bob.ID, charlie.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListUsers IDs = %#v, want %#v", got, want)
+	}
+	if users[1].Roles != nil || users[1].Permissions != nil {
+		t.Fatalf("ListUsers bob grants = roles %#v, permissions %#v; want nil slices", users[1].Roles, users[1].Permissions)
+	}
+	if got, want := aggregateRoleIDs(users), [][]string{{domain.RoleAdmin, domain.RoleViewer}, nil, {domain.RoleViewer}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListUsers role IDs = %#v, want %#v", got, want)
+	}
+
+	wantAlicePermissions := append([]string(nil), domain.SystemRolePermissionKeys(domain.RoleAdmin)...)
+	sort.Strings(wantAlicePermissions)
+	wantCharliePermissions := append([]string(nil), domain.SystemRolePermissionKeys(domain.RoleViewer)...)
+	sort.Strings(wantCharliePermissions)
+	if got, want := aggregatePermissionKeys(users), [][]string{wantAlicePermissions, nil, wantCharliePermissions}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListUsers permission keys = %#v, want %#v", got, want)
 	}
 }
 

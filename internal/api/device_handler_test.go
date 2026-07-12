@@ -401,6 +401,18 @@ func (r *mockSettingsRepo) GetAll() (map[string]string, error) {
 	return cp, nil
 }
 
+func (r *mockSettingsRepo) Update(key string, update func(string) (string, error)) (string, error) {
+	current, err := r.Get(key)
+	if err != nil {
+		return "", err
+	}
+	next, err := update(current)
+	if err != nil {
+		return "", err
+	}
+	return next, r.Set(key, next)
+}
+
 // --- Mock CredentialProfileRepo ---
 
 type mockCredentialProfileRepo struct {

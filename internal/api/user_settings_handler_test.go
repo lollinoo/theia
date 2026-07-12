@@ -116,6 +116,289 @@ func TestUserSettingsHandlerSecretReturnedOnlyOnMutation(t *testing.T) {
 	}
 }
 
+func TestUserSettingsHandlerBridgeSecretMutationsRejectMalformedBodies(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		handle func(*UserSettingsHandler, http.ResponseWriter, *http.Request)
+		calls  func(*fakeUserSettingsService) int
+	}{
+		{
+			name:   "rotate",
+			path:   "/api/v1/settings/bridge/secret/rotate",
+			handle: (*UserSettingsHandler).HandleBridgeSecret,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.rotateCalls },
+		},
+		{
+			name:   "revoke",
+			path:   "/api/v1/settings/bridge/secret/revoke",
+			handle: (*UserSettingsHandler).HandleBridgeSecretRevoke,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.revokeCalls },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeUserSettingsService{secret: &service.BridgeSecretResult{}}
+			handler := NewUserSettingsHandler(fake, "")
+			user := testAPIUser("alice", false, "account:manage")
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(`{"reason":`))
+			req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+			rec := httptest.NewRecorder()
+
+			tt.handle(handler, rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if calls := tt.calls(fake); calls != 0 {
+				t.Fatalf("service calls = %d, want 0", calls)
+			}
+		})
+	}
+}
+
+func TestUserSettingsHandlerBridgeSecretMutationsRejectOversizedBodies(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		handle func(*UserSettingsHandler, http.ResponseWriter, *http.Request)
+		calls  func(*fakeUserSettingsService) int
+	}{
+		{
+			name:   "rotate",
+			path:   "/api/v1/settings/bridge/secret/rotate",
+			handle: (*UserSettingsHandler).HandleBridgeSecret,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.rotateCalls },
+		},
+		{
+			name:   "revoke",
+			path:   "/api/v1/settings/bridge/secret/revoke",
+			handle: (*UserSettingsHandler).HandleBridgeSecretRevoke,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.revokeCalls },
+		},
+	}
+	bigJSON := `{"reason":"` + strings.Repeat("a", 2<<20) + `"}`
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeUserSettingsService{secret: &service.BridgeSecretResult{}}
+			handler := NewUserSettingsHandler(fake, "")
+			user := testAPIUser("alice", false, "account:manage")
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(bigJSON))
+			rec := httptest.NewRecorder()
+			req.Body = http.MaxBytesReader(rec, req.Body, 1<<20)
+			req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+
+			tt.handle(handler, rec, req)
+
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want 413; body=%s", rec.Code, rec.Body.String())
+			}
+			if calls := tt.calls(fake); calls != 0 {
+				t.Fatalf("service calls = %d, want 0", calls)
+			}
+		})
+	}
+}
+
+func TestUserSettingsHandlerBridgeSecretMutationsRejectTrailingContent(t *testing.T) {
+	mutations := []struct {
+		name   string
+		path   string
+		handle func(*UserSettingsHandler, http.ResponseWriter, *http.Request)
+		calls  func(*fakeUserSettingsService) int
+	}{
+		{
+			name:   "rotate",
+			path:   "/api/v1/settings/bridge/secret/rotate",
+			handle: (*UserSettingsHandler).HandleBridgeSecret,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.rotateCalls },
+		},
+		{
+			name:   "revoke",
+			path:   "/api/v1/settings/bridge/secret/revoke",
+			handle: (*UserSettingsHandler).HandleBridgeSecretRevoke,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.revokeCalls },
+		},
+	}
+	bodies := []struct {
+		name string
+		body string
+	}{
+		{name: "trailing garbage", body: `{"reason":"audit"} trailing`},
+		{name: "multiple JSON values", body: `{"reason":"audit"} {"reason":"second"}`},
+	}
+
+	for _, mutation := range mutations {
+		for _, body := range bodies {
+			t.Run(mutation.name+"/"+body.name, func(t *testing.T) {
+				fake := &fakeUserSettingsService{secret: &service.BridgeSecretResult{}}
+				handler := NewUserSettingsHandler(fake, "")
+				user := testAPIUser("alice", false, "account:manage")
+				req := httptest.NewRequest(http.MethodPost, mutation.path, strings.NewReader(body.body))
+				req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+				rec := httptest.NewRecorder()
+
+				mutation.handle(handler, rec, req)
+
+				if calls := mutation.calls(fake); calls != 0 {
+					t.Fatalf("service calls = %d, want 0", calls)
+				}
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestUserSettingsHandlerBridgeSecretMutationsRejectOversizedTrailingData(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		handle func(*UserSettingsHandler, http.ResponseWriter, *http.Request)
+		calls  func(*fakeUserSettingsService) int
+	}{
+		{
+			name:   "rotate",
+			path:   "/api/v1/settings/bridge/secret/rotate",
+			handle: (*UserSettingsHandler).HandleBridgeSecret,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.rotateCalls },
+		},
+		{
+			name:   "revoke",
+			path:   "/api/v1/settings/bridge/secret/revoke",
+			handle: (*UserSettingsHandler).HandleBridgeSecretRevoke,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.revokeCalls },
+		},
+	}
+	body := `{"reason":"audit"}` + strings.Repeat(" ", 2<<20)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeUserSettingsService{secret: &service.BridgeSecretResult{}}
+			handler := NewUserSettingsHandler(fake, "")
+			user := testAPIUser("alice", false, "account:manage")
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(body))
+			rec := httptest.NewRecorder()
+			req.Body = http.MaxBytesReader(rec, req.Body, 1<<20)
+			req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+
+			tt.handle(handler, rec, req)
+
+			if calls := tt.calls(fake); calls != 0 {
+				t.Fatalf("service calls = %d, want 0", calls)
+			}
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want 413; body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestUserSettingsHandlerBridgeSecretMutationsRejectEmptyBodies(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		handle func(*UserSettingsHandler, http.ResponseWriter, *http.Request)
+		calls  func(*fakeUserSettingsService) int
+	}{
+		{
+			name:   "rotate",
+			path:   "/api/v1/settings/bridge/secret/rotate",
+			handle: (*UserSettingsHandler).HandleBridgeSecret,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.rotateCalls },
+		},
+		{
+			name:   "revoke",
+			path:   "/api/v1/settings/bridge/secret/revoke",
+			handle: (*UserSettingsHandler).HandleBridgeSecretRevoke,
+			calls:  func(fake *fakeUserSettingsService) int { return fake.revokeCalls },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeUserSettingsService{secret: &service.BridgeSecretResult{}}
+			handler := NewUserSettingsHandler(fake, "")
+			user := testAPIUser("alice", false, "account:manage")
+			req := httptest.NewRequest(http.MethodPost, tt.path, nil)
+			req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+			rec := httptest.NewRecorder()
+
+			tt.handle(handler, rec, req)
+
+			if calls := tt.calls(fake); calls != 0 {
+				t.Fatalf("service calls = %d, want 0", calls)
+			}
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestUserSettingsHandlerBridgeSecretMutationsAcceptValidBodies(t *testing.T) {
+	t.Run("rotate", func(t *testing.T) {
+		secret := &service.BridgeSecretResult{
+			Credential: service.BridgeCredentialMetadata{ID: uuid.New(), Status: "active"},
+			Secret:     "theia_bridge_public.raw-secret",
+			ShownOnce:  true,
+		}
+		fake := &fakeUserSettingsService{secret: secret}
+		handler := NewUserSettingsHandler(fake, "")
+		user := testAPIUser("alice", false, "account:manage")
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/bridge/secret/rotate", strings.NewReader(`{"reason":"scheduled"}`))
+		req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+		rec := httptest.NewRecorder()
+
+		handler.HandleBridgeSecret(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+		}
+		if fake.rotateCalls != 1 || fake.rotateReason != "scheduled" {
+			t.Fatalf("rotate calls = %d, reason = %q; want 1, %q", fake.rotateCalls, fake.rotateReason, "scheduled")
+		}
+		var result service.BridgeSecretResult
+		if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if result.Secret != secret.Secret || result.Credential.ID != secret.Credential.ID {
+			t.Fatalf("response = %+v, want secret and credential from service", result)
+		}
+	})
+
+	t.Run("revoke", func(t *testing.T) {
+		secret := &service.BridgeSecretResult{
+			Credential: service.BridgeCredentialMetadata{ID: uuid.New(), Status: "revoked"},
+		}
+		fake := &fakeUserSettingsService{secret: secret}
+		handler := NewUserSettingsHandler(fake, "")
+		user := testAPIUser("alice", false, "account:manage")
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/bridge/secret/revoke", strings.NewReader(`{"reason":"retired"}`))
+		req = req.WithContext(withAuthenticatedUser(req.Context(), user))
+		rec := httptest.NewRecorder()
+
+		handler.HandleBridgeSecretRevoke(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+		}
+		if fake.revokeCalls != 1 || fake.revokeReason != "retired" {
+			t.Fatalf("revoke calls = %d, reason = %q; want 1, %q", fake.revokeCalls, fake.revokeReason, "retired")
+		}
+		var result service.BridgeCredentialMetadata
+		if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if result.ID != secret.Credential.ID || result.Status != secret.Credential.Status {
+			t.Fatalf("response = %+v, want credential from service", result)
+		}
+	})
+}
+
 func TestUserSettingsHandlerDuplicateIdentifierReturnsConflict(t *testing.T) {
 	handler := NewUserSettingsHandler(&fakeUserSettingsService{updateErr: service.ErrDuplicateUserIdentifier}, "")
 	user := testAPIUser("alice", false, "account:manage")
@@ -246,10 +529,14 @@ func TestUserSettingsHandlerConnectorConfigListsDownloadAvailability(t *testing.
 }
 
 type fakeUserSettingsService struct {
-	settings   *service.UserSettingsResult
-	secret     *service.BridgeSecretResult
-	updateErr  error
-	lastUpdate service.UpdateUserSettingsInput
+	settings     *service.UserSettingsResult
+	secret       *service.BridgeSecretResult
+	updateErr    error
+	lastUpdate   service.UpdateUserSettingsInput
+	rotateCalls  int
+	revokeCalls  int
+	rotateReason string
+	revokeReason string
 }
 
 func (f *fakeUserSettingsService) GetSettings(context.Context, *service.AuthenticatedUser) (*service.UserSettingsResult, error) {
@@ -274,11 +561,15 @@ func (f *fakeUserSettingsService) GenerateSecret(context.Context, *service.Authe
 	return f.secret, nil
 }
 
-func (f *fakeUserSettingsService) RotateSecret(context.Context, *service.AuthenticatedUser, string) (*service.BridgeSecretResult, error) {
+func (f *fakeUserSettingsService) RotateSecret(_ context.Context, _ *service.AuthenticatedUser, reason string) (*service.BridgeSecretResult, error) {
+	f.rotateCalls++
+	f.rotateReason = reason
 	return f.secret, nil
 }
 
-func (f *fakeUserSettingsService) RevokeSecret(context.Context, *service.AuthenticatedUser, string) (*service.BridgeCredentialMetadata, error) {
+func (f *fakeUserSettingsService) RevokeSecret(_ context.Context, _ *service.AuthenticatedUser, reason string) (*service.BridgeCredentialMetadata, error) {
+	f.revokeCalls++
+	f.revokeReason = reason
 	if f.secret == nil {
 		return nil, errors.New("missing secret")
 	}
