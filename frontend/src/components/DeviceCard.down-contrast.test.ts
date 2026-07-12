@@ -31,11 +31,11 @@ describe('DeviceCard down node contrast tokens', () => {
   it('uses high-contrast down reds in light mode', () => {
     const lightTheme = themeBlock('[data-theme="light"]');
 
-    expect(lightTheme).toContain('--nt-status-down: #b91c1c;');
-    expect(lightTheme).toContain('--nt-node-down-border: rgba(185, 28, 28, 0.94);');
-    expect(lightTheme).toContain('--nt-node-down-card-bg: #ffd8d2;');
-    expect(lightTheme).toContain('--nt-node-down-card-pulse-bg: #ffb8ad;');
-    expect(lightTheme).toContain('--nt-node-down-glow: rgba(185, 28, 28, 0.28);');
+    expect(lightTheme).toContain('--nt-status-down: #b4232d;');
+    expect(lightTheme).toContain('--nt-node-down-border: rgba(180, 35, 45, 0.78);');
+    expect(lightTheme).toContain('--nt-node-down-card-bg: #fff1f2;');
+    expect(lightTheme).toContain('--nt-node-down-card-pulse-bg: #ffe4e6;');
+    expect(lightTheme).toContain('--nt-node-down-glow: rgba(180, 35, 45, 0.16);');
   });
 
   it('accentuates the existing down pulse animation', () => {

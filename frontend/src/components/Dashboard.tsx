@@ -455,7 +455,7 @@ function SkeletonTable() {
             'Uptime',
             'Actions',
           ].map((h) => (
-            <th key={h} className="px-3 py-2 text-[12px] font-normal uppercase tracking-[0.16em]">
+            <th key={h} className="px-3 py-2 text-[12px] font-semibold uppercase">
               {h}
             </th>
           ))}

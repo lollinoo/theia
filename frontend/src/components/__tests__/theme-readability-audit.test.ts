@@ -30,6 +30,15 @@ const TASK7_SWEEP_FILES = [
   'components/dashboard/FilterSelect.tsx',
 ];
 
+const DAILY_USE_FILES = [
+  'components/NavigationPill.tsx',
+  'components/DeviceCard.tsx',
+  'components/SidePanel.tsx',
+  'components/Dashboard.tsx',
+  'components/InterfaceStatsPanel.tsx',
+  'components/LinkLabelLayer.tsx',
+];
+
 const CLASS_START = '(?:^|[\\s"\'`])';
 const CLASS_END = '(?=$|[\\s"\'`>])';
 const VARIANT_PREFIX = '(?:[a-z0-9_-]+:)*';
@@ -217,6 +226,27 @@ describe('enterprise NOC readability audit', () => {
           if (rule.pattern.test(line)) {
             violations.push(`${file}:${index + 1}: ${rule.reason}: ${line.trim()}`);
           }
+        }
+      });
+    }
+
+    if (violations.length > 0) {
+      console.error(violations.join('\n'));
+    }
+    expect(violations).toHaveLength(0);
+  });
+
+  it('keeps daily-use operational labels legible and compact', () => {
+    const violations: string[] = [];
+    const undersized = /text-\[(?:9|10)px\]/;
+    const expandedTracking = /tracking-(?:\[[^\]]+\]|wide|wider|widest)/;
+
+    for (const file of DAILY_USE_FILES) {
+      const lines = readFileSync(join(SRC_DIR, file), 'utf-8').split('\n');
+
+      lines.forEach((line, index) => {
+        if (undersized.test(line) || expandedTracking.test(line)) {
+          violations.push(`${file}:${index + 1}: ${line.trim()}`);
         }
       });
     }

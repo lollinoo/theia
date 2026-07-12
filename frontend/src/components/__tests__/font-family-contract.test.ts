@@ -16,4 +16,11 @@ describe('font family contract', () => {
       '--font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;',
     );
   });
+
+  it('enables variable-font and legibility features for operational text', () => {
+    expect(css).toContain('font-optical-sizing: auto;');
+    expect(css).toContain('font-synthesis: none;');
+    expect(css).toContain('text-rendering: optimizeLegibility;');
+    expect(css).toContain('font-feature-settings: "cv02" 1, "cv03" 1, "cv04" 1, "cv11" 1;');
+  });
 });

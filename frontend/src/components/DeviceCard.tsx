@@ -507,7 +507,7 @@ function physicalStatusAccent(status: DeviceVisualStatus): string | undefined {
 function PollingDisabledNotice({ className = '' }: { className?: string }) {
   return (
     <div
-      className={`rounded-2xl border border-outline-strong bg-surface-container-high px-3 py-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-on-bg-secondary ${className}`}
+      className={`rounded-2xl border border-outline-strong bg-surface-container-high px-3 py-2 text-center text-[11px] font-semibold uppercase text-on-bg-secondary ${className}`}
     >
       Continuous polling disabled
     </div>
@@ -635,7 +635,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           }}
         >
           <div data-testid="semantic-detail-node" className="topology-semantic-card px-3 py-2">
-            <p className="topology-semantic-detail-only truncate text-[11px] font-medium uppercase tracking-[0.14em] text-on-bg-secondary">
+            <p className="topology-semantic-detail-only truncate text-[11px] font-medium uppercase text-on-bg-secondary">
               cross-area
             </p>
             <p
@@ -678,14 +678,14 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           }}
           aria-label={`View details for self link ${formatSelfLinkSummary(primarySelfLink)}`}
         >
-          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">
+          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-primary">
             {formatSelfLinkLabel(primarySelfLink)}
           </span>
-          <span className="min-w-0 truncate font-mono text-[10px] text-on-bg-secondary">
+          <span className="min-w-0 truncate font-mono text-[11px] text-on-bg-secondary">
             {formatSelfLinkSummary(primarySelfLink)}
           </span>
           {selfLinks.length > 1 ? (
-            <span className="shrink-0 rounded-full border border-outline px-1.5 py-0.5 text-[9px] font-semibold text-on-bg-secondary">
+            <span className="shrink-0 rounded-full border border-outline px-1.5 py-0.5 text-[11px] font-semibold text-on-bg-secondary">
               +{selfLinks.length - 1}
             </span>
           ) : null}
@@ -809,7 +809,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               >
                 <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
                   <span
-                    className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
+                    className="truncate text-[11px] font-semibold uppercase leading-none text-on-bg-secondary"
                     style={readableFontStyle(9)}
                   >
                     CPU
@@ -823,7 +823,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 </div>
                 <div className="flex min-w-0 flex-col justify-center border-outline-subtle border-r px-2.5">
                   <span
-                    className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
+                    className="truncate text-[11px] font-semibold uppercase leading-none text-on-bg-secondary"
                     style={readableFontStyle(9)}
                   >
                     MEM
@@ -837,7 +837,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 </div>
                 <div className="flex min-w-0 flex-col justify-center px-2.5">
                   <span
-                    className="truncate text-[9px] font-semibold uppercase leading-none tracking-[0.14em] text-on-bg-secondary"
+                    className="truncate text-[11px] font-semibold uppercase leading-none text-on-bg-secondary"
                     style={readableFontStyle(9)}
                   >
                     Uptime
@@ -882,7 +882,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 <div className="topology-semantic-identity-frame min-w-0 flex-1">
                   <div
                     data-testid="virtual-node-type-label"
-                    className="topology-virtual-node-type-label truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-primary"
+                    className="topology-virtual-node-type-label truncate text-[11px] font-semibold uppercase text-primary"
                     style={{
                       ...readableFontStyle(10),
                       ...(virtualStatusTone?.textStyle ?? virtualAreaTextStyle(virtualToneColor)),
@@ -902,7 +902,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                 {renderModel.showVirtualStatusBadge ? (
                   <div
                     data-testid="virtual-node-status-badge"
-                    className={`topology-semantic-status-badge inline-flex max-w-[82px] shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusStyles.badgeClass}`}
+                    className={`topology-semantic-status-badge inline-flex max-w-[82px] shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusStyles.badgeClass}`}
                     style={mergeReadableFontStyle(statusStyles.badgeStyle, 10)}
                   >
                     <StatusDot status={headerState.dotStatus} />
@@ -926,7 +926,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
               {renderModel.showFreshnessMeta ? (
                 <div
                   data-testid="virtual-node-runtime-meta"
-                  className="topology-semantic-detail-only mt-1.5 flex w-full items-center justify-between gap-2 overflow-hidden text-[10px]"
+                  className="topology-semantic-detail-only mt-1.5 flex w-full items-center justify-between gap-2 overflow-hidden text-[11px]"
                 >
                   <div
                     className={`min-w-0 truncate font-medium ${readoutToneClass(freshness!.tone)}`}
@@ -956,7 +956,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
                   {runtimeBadges.map((badge) => (
                     <span
                       key={badge}
-                      className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-warning"
+                      className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-warning"
                     >
                       {badge}
                     </span>
