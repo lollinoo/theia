@@ -138,6 +138,11 @@ jobs:
       - name: Run backend-fast gate
         run: make backend-fast
 
+      - name: Run auth repository PostgreSQL regression
+        env:
+          THEIA_TEST_DB_DSN: postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable
+        run: go test ./internal/repository/postgres -run '^TestAuthRepoListUsersPostgresBatchAggregates$' -count=1
+
   frontend-fast:
     name: frontend-fast
     needs: changes
