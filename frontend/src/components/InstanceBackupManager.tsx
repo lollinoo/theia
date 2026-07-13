@@ -14,7 +14,7 @@ import {
   restoreInstanceBackup,
   updateSetting,
 } from '../api/client';
-import { ServerError, ValidationError } from '../api/errors';
+import { RestoreOutcomeUnknownError, ServerError, ValidationError } from '../api/errors';
 import { useAsyncPolling } from '../hooks/useAsyncPolling';
 import type { InstanceBackup, RestoreReport, RestoreStatus } from '../types/api';
 import { validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
@@ -57,6 +57,10 @@ export function InstanceBackupManager() {
   const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
   const [restoreError, setRestoreError] = useState('');
   const [restoreStatus, setRestoreStatus] = useState<RestoreStatus | null>(null);
+  const [restoreNotice, setRestoreNotice] = useState('');
+  const [restoreVerificationBaseline, setRestoreVerificationBaseline] = useState<string | null>(
+    null,
+  );
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreConfirmed, setRestoreConfirmed] = useState(false);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
@@ -86,6 +90,29 @@ export function InstanceBackupManager() {
       return next;
     });
   }, []);
+
+  const reconcileRestoreStatus = useCallback(
+    async (baselineOperationId: string, afterReconnect: boolean) => {
+      try {
+        const status = await fetchRestoreStatus();
+        setRestoreStatus(status);
+        clearInitialLoadError('restore');
+
+        if (status?.operation_id && status.operation_id !== baselineOperationId) {
+          setRestoreVerificationBaseline(null);
+          setRestoreNotice('');
+          return;
+        }
+        if (afterReconnect) {
+          setRestoreVerificationBaseline(null);
+          setRestoreNotice('Restore could not be confirmed. Check backend logs before retrying.');
+        }
+      } catch {
+        // The backend can remain unavailable while the staged restore is applied.
+      }
+    },
+    [clearInitialLoadError],
+  );
 
   const { start: startPolling, stop: stopPolling } = useAsyncPolling({
     intervalMs: 2000,
@@ -166,22 +193,26 @@ export function InstanceBackupManager() {
         .catch(() => {
           // non-fatal
         });
-      void fetchRestoreStatus()
-        .then((status) => {
-          if (cancelled) return;
-          setRestoreStatus(status);
-          clearInitialLoadError('restore');
-        })
-        .catch(() => {
-          // non-fatal
-        });
+      if (restoreVerificationBaseline !== null) {
+        void reconcileRestoreStatus(restoreVerificationBaseline, true);
+      } else {
+        void fetchRestoreStatus()
+          .then((status) => {
+            if (cancelled) return;
+            setRestoreStatus(status);
+            clearInitialLoadError('restore');
+          })
+          .catch(() => {
+            // non-fatal
+          });
+      }
     };
     window.addEventListener('backend-reconnected', handleReconnect);
     return () => {
       cancelled = true;
       window.removeEventListener('backend-reconnected', handleReconnect);
     };
-  }, [clearInitialLoadError]);
+  }, [clearInitialLoadError, reconcileRestoreStatus, restoreVerificationBaseline]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -387,17 +418,29 @@ export function InstanceBackupManager() {
     setRestoreLoading(true);
     setRestoreError('');
 
+    let baselineOperationId: string;
+    try {
+      const baselineStatus = await fetchRestoreStatus();
+      baselineOperationId = baselineStatus?.operation_id ?? '';
+      setRestoreStatus(baselineStatus);
+      clearInitialLoadError('restore');
+    } catch {
+      setRestoreError('Could not verify current restore status. Restore was not started.');
+      setRestoreLoading(false);
+      return;
+    }
+
     try {
       await restoreInstanceBackup(restoreFile, false);
-      setShowRestoreModal(false);
-      setRestoreError('');
-      setRestoreFile(null);
-      setRestoreReport(null);
-      setRestoreConfirmed(false);
-      setCreateError('Restore staged. Restart pending.');
+      clearRestoreSelection();
+      setRestoreVerificationBaseline(baselineOperationId);
+      setRestoreNotice('Restore staged. Restart pending.');
     } catch (err) {
-      if (err instanceof TypeError) {
-        setRestoreError('Restore request was interrupted. Reconnect and check restore status.');
+      if (err instanceof RestoreOutcomeUnknownError) {
+        clearRestoreSelection();
+        setRestoreVerificationBaseline(baselineOperationId);
+        setRestoreNotice('Connection interrupted during restart. Verifying restore status...');
+        void reconcileRestoreStatus(baselineOperationId, false);
         return;
       }
       const message = err instanceof Error ? err.message : 'Restore failed';
@@ -407,12 +450,16 @@ export function InstanceBackupManager() {
     }
   };
 
-  const handleRestoreCancel = () => {
+  const clearRestoreSelection = () => {
     setShowRestoreModal(false);
+    setRestoreError('');
     setRestoreFile(null);
     setRestoreReport(null);
     setRestoreConfirmed(false);
-    setRestoreError('');
+  };
+
+  const handleRestoreCancel = () => {
+    clearRestoreSelection();
   };
 
   const formatBytes = (bytes: number) => {
@@ -635,6 +682,12 @@ export function InstanceBackupManager() {
           {restoreMessages.map((message) => (
             <p key={message}>{message}</p>
           ))}
+        </div>
+      )}
+
+      {restoreNotice && (
+        <div className="rounded-md border border-outline-subtle bg-surface-high p-2 text-xs text-on-bg-secondary">
+          <p>{restoreNotice}</p>
         </div>
       )}
 
