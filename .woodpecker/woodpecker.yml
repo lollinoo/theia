@@ -1,12 +1,12 @@
 # Woodpecker repository settings required by this workflow:
-# - Pipeline path: woodpecker.yml
+# - Pipeline path: leave empty for default discovery, or set it to .woodpecker/
 # - Trusted Volumes: enabled for the Docker socket mount.
 when:
   - evaluate: 'CI_PIPELINE_EVENT == "push" || (CI_PIPELINE_EVENT == "pull_request" && CI_COMMIT_BRANCH == "master") || CI_PIPELINE_EVENT == "release" || CI_PIPELINE_EVENT == "manual"'
 
 services:
   - name: postgres
-    image: postgres:17
+    image: postgres:18-bookworm
     environment:
       POSTGRES_USER: theia
       POSTGRES_PASSWORD: theia
@@ -61,13 +61,13 @@ steps:
                 esac
 
                 case "$path" in
-                  cmd/winbox-bridge/*|scripts/build-winbox-bridge.ps1|scripts/test-build-winbox-bridge-safety.ps1|Makefile|go.mod|go.sum|woodpecker.yml)
+                  cmd/winbox-bridge/*|scripts/build-winbox-bridge.ps1|scripts/test-build-winbox-bridge-safety.ps1|Makefile|go.mod|go.sum|.woodpecker/*.yml|.woodpecker/*.yaml)
                     bridge=true
                     ;;
                 esac
 
                 case "$path" in
-                  woodpecker.yml)
+                  .woodpecker/*.yml|.woodpecker/*.yaml)
                     backend=true
                     frontend=true
                     browser_e2e=true
@@ -201,8 +201,8 @@ steps:
         docker buildx inspect theia >/dev/null 2>&1 || docker buildx create --name theia --driver docker-container --use
         docker buildx use theia
 
-        docker buildx build --push --file Dockerfile --target production --tag ghcr.io/lollinoo/theia-backend:master --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
-        docker buildx build --push --file Dockerfile.frontend --target production --tag ghcr.io/lollinoo/theia-frontend:master --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
+        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile --target production --tag ghcr.io/lollinoo/theia-backend:master --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
+        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag ghcr.io/lollinoo/theia-frontend:master --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
 
   - name: publish-branch-images
     image: docker:28-cli
@@ -231,8 +231,8 @@ steps:
         docker buildx inspect theia >/dev/null 2>&1 || docker buildx create --name theia --driver docker-container --use
         docker buildx use theia
 
-        docker buildx build --push --file Dockerfile --target production --tag "ghcr.io/lollinoo/theia-backend:$branch_tag" --tag "ghcr.io/lollinoo/theia-backend:sha-$short_sha" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
-        docker buildx build --push --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$branch_tag" --tag "ghcr.io/lollinoo/theia-frontend:sha-$short_sha" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
+        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile --target production --tag "ghcr.io/lollinoo/theia-backend:$branch_tag" --tag "ghcr.io/lollinoo/theia-backend:sha-$short_sha" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
+        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$branch_tag" --tag "ghcr.io/lollinoo/theia-frontend:sha-$short_sha" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
 
   - name: publish-release-images
     image: docker:28-cli
@@ -262,5 +262,5 @@ steps:
         docker buildx inspect theia >/dev/null 2>&1 || docker buildx create --name theia --driver docker-container --use
         docker buildx use theia
 
-        docker buildx build --push --file Dockerfile --target production --tag "ghcr.io/lollinoo/theia-backend:$release_tag" --tag ghcr.io/lollinoo/theia-backend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
-        docker buildx build --push --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$release_tag" --tag ghcr.io/lollinoo/theia-frontend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
+        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile --target production --tag "ghcr.io/lollinoo/theia-backend:$release_tag" --tag ghcr.io/lollinoo/theia-backend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
+        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$release_tag" --tag ghcr.io/lollinoo/theia-frontend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend

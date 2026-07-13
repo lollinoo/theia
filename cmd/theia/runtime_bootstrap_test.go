@@ -370,6 +370,119 @@ func TestDockerfileUsesPostgres18ClientTools(t *testing.T) {
 	}
 }
 
+func TestDeploymentConfigsUsePostgres18(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	imageFiles := []struct {
+		path      string
+		wantCount int
+	}{
+		{path: "docker-compose.yml", wantCount: 1},
+		{path: "docker-compose.prod.yml", wantCount: 1},
+		{path: "docker-compose.staging.yml", wantCount: 1},
+		{path: filepath.Join(".woodpecker", "woodpecker.yml"), wantCount: 1},
+		{path: filepath.Join(".github", "workflows", "ci.yml"), wantCount: 2},
+	}
+
+	for _, file := range imageFiles {
+		t.Run(file.path, func(t *testing.T) {
+			content, err := os.ReadFile(filepath.Join(repoRoot, file.path))
+			if err != nil {
+				t.Fatalf("read %s: %v", file.path, err)
+			}
+			var images []string
+			for _, line := range strings.Split(string(content), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "image: postgres:") {
+					images = append(images, strings.TrimPrefix(line, "image: "))
+				}
+			}
+			if len(images) != file.wantCount {
+				t.Fatalf("%s PostgreSQL image count = %d, want %d", file.path, len(images), file.wantCount)
+			}
+			for _, image := range images {
+				if image != "postgres:18-bookworm" {
+					t.Fatalf("%s PostgreSQL image = %q, want postgres:18-bookworm", file.path, image)
+				}
+			}
+		})
+	}
+
+	volumeFiles := []struct {
+		path       string
+		wantVolume string
+	}{
+		{path: "docker-compose.yml", wantVolume: "theia-postgres-data:/var/lib/postgresql"},
+		{path: "docker-compose.prod.yml", wantVolume: "theia-prod-postgres-data:/var/lib/postgresql"},
+		{path: "docker-compose.staging.yml", wantVolume: "theia-staging-postgres-data:/var/lib/postgresql"},
+	}
+	for _, file := range volumeFiles {
+		t.Run(file.path+"-volume", func(t *testing.T) {
+			content, err := os.ReadFile(filepath.Join(repoRoot, file.path))
+			if err != nil {
+				t.Fatalf("read %s: %v", file.path, err)
+			}
+			text := string(content)
+			if strings.Contains(text, ":/var/lib/postgresql/data") {
+				t.Fatalf("%s still uses the pre-18 PostgreSQL data mount", file.path)
+			}
+			if !strings.Contains(text, file.wantVolume) {
+				t.Fatalf("%s must contain PostgreSQL volume %q", file.path, file.wantVolume)
+			}
+		})
+	}
+}
+
+func TestWoodpeckerPipelineUsesWorkflowDirectory(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	legacyPath := filepath.Join(repoRoot, "woodpecker.yml")
+	if _, err := os.Stat(legacyPath); err == nil {
+		t.Fatalf("legacy Woodpecker pipeline %s still exists", legacyPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat legacy Woodpecker pipeline: %v", err)
+	}
+
+	workflowPath := filepath.Join(repoRoot, ".woodpecker", "woodpecker.yml")
+	content, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read Woodpecker workflow pipeline: %v", err)
+	}
+	var workflow map[string]any
+	if err := yaml.Unmarshal(content, &workflow); err != nil {
+		t.Fatalf("parse Woodpecker workflow pipeline: %v", err)
+	}
+	if workflow["steps"] == nil {
+		t.Fatal("Woodpecker workflow pipeline has no steps")
+	}
+}
+
+func TestWoodpeckerImageBuildsPublishPullableManifests(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	workflowPath := filepath.Join(repoRoot, ".woodpecker", "woodpecker.yml")
+	content, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read Woodpecker workflow pipeline: %v", err)
+	}
+
+	var builds []string
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "docker buildx build ") {
+			builds = append(builds, line)
+		}
+	}
+	if len(builds) != 6 {
+		t.Fatalf("Woodpecker image build count = %d, want 6", len(builds))
+	}
+
+	for _, build := range builds {
+		for _, option := range []string{"--push", "--platform linux/amd64", "--provenance=false", "--sbom=false"} {
+			if !strings.Contains(build, option) {
+				t.Fatalf("Woodpecker image build %q missing %s", build, option)
+			}
+		}
+	}
+}
+
 func TestPrometheusConfigsScrapeBackendMetrics(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	tests := []struct {

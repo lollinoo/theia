@@ -21,7 +21,7 @@ func TestRunPostgresDumpUsesSafeConnInfoAndPasswordEnv(t *testing.T) {
 			return nil, fmt.Errorf("unexpected command %s", name)
 		}
 		if commandArgsEqual(args, "--version") {
-			return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+			return []byte("pg_dump (PostgreSQL) 18.0\n"), nil
 		}
 		if commandEnvValue(env, "PGPASSWORD") != "strong-password" {
 			t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
@@ -60,7 +60,7 @@ func TestValidatePostgresDumpArchiveUsesPgRestoreList(t *testing.T) {
 			return nil, fmt.Errorf("unexpected command %s", name)
 		}
 		if commandArgsEqual(args, "--version") {
-			return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+			return []byte("pg_restore (PostgreSQL) 18.0\n"), nil
 		}
 		if !commandArgsEqual(args, "--list", dumpPath) {
 			return nil, fmt.Errorf("unexpected pg_restore args: %v", args)
@@ -101,7 +101,7 @@ func TestRunPostgresRestoreCleansSchemaBeforeRestore(t *testing.T) {
 		switch name {
 		case "pg_restore":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_restore (PostgreSQL) 18.0\n"), nil
 			}
 			if !cleanSchemaExecuted {
 				t.Fatal("pg_restore executed before schema cleanup")
@@ -113,7 +113,7 @@ func TestRunPostgresRestoreCleansSchemaBeforeRestore(t *testing.T) {
 			return nil, nil
 		case "psql":
 			if commandArgsEqual(args, "--version") {
-				return []byte("psql (PostgreSQL) 17.4\n"), nil
+				return []byte("psql (PostgreSQL) 18.0\n"), nil
 			}
 			if commandEnvValue(env, "PGPASSWORD") != "strong-password" {
 				t.Fatal("psql PGPASSWORD env does not match DSN password")

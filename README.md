@@ -197,7 +197,6 @@ Testing expectations depend on the scope of a change. Backend contract changes g
 
 - [SETUP.md](SETUP.md): complete setup, configuration, deployment, API, bridge, and troubleshooting guide.
 - [CONTRIBUTING.md](CONTRIBUTING.md): local development workflow, testing expectations, pull request guidance, and attribution notes.
-- `docs/`: project notes, generated plans, and supporting documentation.
 - `frontend/e2e/`: browser workflow tests that document key UI behavior.
 - `internal/repository/postgres/migrations/`: database schema history and runtime capabilities.
 
