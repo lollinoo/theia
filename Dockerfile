@@ -15,7 +15,7 @@ FROM postgres:18-bookworm AS postgres-tools
 # ---------------------------------------------------------------------------
 # Stage: dev — Development with Air hot-reload
 # ---------------------------------------------------------------------------
-FROM golang:1.26.4-bookworm AS dev
+FROM golang:1.26.5-bookworm AS dev
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl libpq5 libreadline8 && \
@@ -47,7 +47,7 @@ CMD ["air", "-c", ".air.toml"]
 # ---------------------------------------------------------------------------
 # Stage: builder — Compile production binary
 # ---------------------------------------------------------------------------
-FROM golang:1.26.4-bookworm AS builder
+FROM golang:1.26.5-bookworm AS builder
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
