@@ -127,6 +127,106 @@ PostgreSQL 18 Docker images store cluster data in a major-version-specific direc
 
 Existing PostgreSQL 17 volumes are not upgraded by changing the image tag or mount target. Before deploying this change over a persistent PostgreSQL 17 environment, stop application writes, take and verify a database backup, then migrate with `pg_dump`/`pg_restore` into a fresh PostgreSQL 18 volume or run `pg_upgrade` with both major versions available. Keep the original PostgreSQL 17 volume until the PostgreSQL 18 restore and application checks have completed successfully.
 
+The compose stacks use distinct volume names so an existing PostgreSQL 17 cluster is never mounted into PostgreSQL 18 automatically:
+
+| Stack | PostgreSQL 17 volume | PostgreSQL 18 volume |
+|-------|----------------------|----------------------|
+| Development | `theia-postgres-data` | `theia-postgres18-data` |
+| Staging | `theia-staging-postgres-data` | `theia-staging-postgres18-data` |
+| Production | `theia-prod-postgres-data` | `theia-prod-postgres18-data` |
+
+#### Migrating bundled production PostgreSQL 17 to 18
+
+The following dump/restore procedure preserves the original PostgreSQL 17 volume. Run every command in the same shell from the repository root with a completed `.env.prod`. Do not run `make prod-clean`, `docker compose down -v`, or `docker volume rm` during the migration.
+
+Load the production environment and derive `THEIA_DB_DSN` when it is intentionally left empty in `.env.prod`, matching the behavior of the production Make targets:
+
+```bash
+set -e
+set -a
+. ./.env.prod
+set +a
+
+if [ -z "$THEIA_DB_DSN" ]; then
+  : "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
+  THEIA_DB_DSN="$(printf '%s://%s:%s@postgres:5432/%s?sslmode=disable' \
+    postgres "${POSTGRES_USER:-theia}" "$POSTGRES_PASSWORD" "${POSTGRES_DB:-theia}")"
+  export THEIA_DB_DSN
+fi
+```
+
+First stop the production stack without removing volumes, then start PostgreSQL 17 temporarily against the legacy volume:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod down
+
+docker run --detach --rm \
+  --name theia-postgres17-migrate \
+  --env-file .env.prod \
+  --volume theia-prod-postgres-data:/var/lib/postgresql/data \
+  postgres:17-bookworm
+
+postgres17_ready=false
+for attempt in $(seq 1 30); do
+  if docker exec theia-postgres17-migrate \
+    sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'; then
+    postgres17_ready=true
+    break
+  fi
+
+  if [ "$(docker inspect --format '{{.State.Running}}' \
+    theia-postgres17-migrate 2>/dev/null || true)" != "true" ]; then
+    break
+  fi
+  sleep 2
+done
+
+if [ "$postgres17_ready" != "true" ]; then
+  docker logs theia-postgres17-migrate || true
+  docker stop theia-postgres17-migrate || true
+  exit 1
+fi
+```
+
+Create a custom-format dump on the host and verify that PostgreSQL can read its archive catalog before stopping the temporary PostgreSQL 17 container. This catalog check catches an unreadable archive structure; the full payload is validated by the atomic restore into PostgreSQL 18 in the next step:
+
+```bash
+mkdir -p backups
+docker exec theia-postgres17-migrate \
+  sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' \
+  > backups/theia-postgres17.dump
+
+test -s backups/theia-postgres17.dump
+docker exec -i theia-postgres17-migrate pg_restore --list \
+  < backups/theia-postgres17.dump > /dev/null
+
+docker stop theia-postgres17-migrate
+```
+
+Start only PostgreSQL 18. Compose creates and mounts the new `theia-prod-postgres18-data` volume, leaving `theia-prod-postgres-data` unchanged. Restore the archive into the freshly initialized database in a single transaction. `pg_restore` must exit successfully before starting any other service; otherwise the transaction is rolled back and `set -e` stops the procedure:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod \
+  up -d --wait postgres
+
+docker compose -f docker-compose.prod.yml --env-file .env.prod \
+  exec -T postgres sh -c \
+  'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --no-privileges --single-transaction --exit-on-error' \
+  < backups/theia-postgres17.dump
+```
+
+Confirm the server version and database identity, then start the remaining services and validate application data, authentication, settings, devices, and backups:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod \
+  exec -T postgres sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT current_database(), current_user, version();"'
+
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+```
+
+Retain both `backups/theia-postgres17.dump` and the `theia-prod-postgres-data` volume until the PostgreSQL 18 deployment has passed application checks and a new PostgreSQL 18 backup has been restore-validated.
+
 ### 5. How hot-reload works
 
 **Backend** — Air watches `internal/` and `cmd/`. On any `.go` file change, it recompiles and restarts the server automatically. The `./tmp/` directory holds the compiled binary; do not commit it.

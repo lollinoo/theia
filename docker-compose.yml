@@ -15,8 +15,8 @@
 volumes:
   theia-data:
     name: theia-data
-  theia-postgres-data:
-    name: theia-postgres-data
+  theia-postgres18-data:
+    name: theia-postgres18-data
 
 services:
   # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - "theia-postgres-data:/var/lib/postgresql"
+      - "theia-postgres18-data:/var/lib/postgresql"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U theia -d theia"]
       interval: 10s

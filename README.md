@@ -126,6 +126,9 @@ make wisp-seed-all
 
 For the full setup guide, including production, staging, configuration, keyring rotation, API auth, troubleshooting, and WISP lab details, read [SETUP.md](SETUP.md).
 
+> [!IMPORTANT]
+> The Docker Compose stacks use PostgreSQL 18 and dedicated PostgreSQL 18 volumes. An existing PostgreSQL 17 deployment cannot be upgraded safely with only `docker compose pull` and `docker compose up`: migrate the database into the new volume first. Follow the [PostgreSQL 17 to 18 production migration procedure](SETUP.md#migrating-bundled-production-postgresql-17-to-18), which preserves the original PostgreSQL 17 volume for rollback.
+
 ## Bridge Connector
 
 The Bridge Connector lets an authenticated user launch WinBox locally from Theia without exposing raw device passwords to the browser.
