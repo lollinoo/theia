@@ -109,19 +109,23 @@ make test-integration  # Run integration-tagged tests
 
 PostgreSQL is the standard database backend for Theia in development, staging, and production. The normal `make dev` flow starts the backend against the bundled PostgreSQL service and publishes PostgreSQL on `127.0.0.1:5432` for host tools.
 
-Instance backup / restore is supported on PostgreSQL deployments when compatible PostgreSQL client tools are available on `PATH`. PostgreSQL backup jobs require `pg_dump` 17.x; restore validation, staging, and apply require `pg_restore` 17.x; non-dry-run restore apply also requires `pg_dump` 17.x so Theia can take a pre-restore live database backup before changing the database, and `psql` 17.x so Theia can reset the target schema before loading the staged dump.
+Instance backup / restore is supported on PostgreSQL deployments when compatible PostgreSQL client tools are available on `PATH`. PostgreSQL backup jobs require `pg_dump` 18.x; restore validation, staging, and apply require `pg_restore` 18.x; non-dry-run restore apply also requires `pg_dump` 18.x so Theia can take a pre-restore live database backup before changing the database, and `psql` 18.x so Theia can reset the target schema before loading the staged dump.
 
 ### 4.2 PostgreSQL client tools
 
-The bundled development, staging, and production compose stacks use PostgreSQL 17. Official backend images bundle these PostgreSQL 17 client tools from `postgres:17-bookworm`; custom host or custom image deployments must place compatible tools on `PATH`.
+The bundled development, staging, and production compose stacks use `postgres:18-bookworm`. Official backend images bundle PostgreSQL 18 client tools from the same image; custom host or custom image deployments must place compatible tools on `PATH`.
 
 | Tool | Requirement | Supported version |
 |------|-------------|-------------------|
-| `pg_dump` | Required for PostgreSQL instance backup and pre-restore live DB backup | 17.x |
-| `pg_restore` | Required for PostgreSQL restore validation and apply | 17.x |
-| `psql` | Required for PostgreSQL restore apply schema cleanup | 17.x |
+| `pg_dump` | Required for PostgreSQL instance backup and pre-restore live DB backup | 18.x |
+| `pg_restore` | Required for PostgreSQL restore validation and apply | 18.x |
+| `psql` | Required for PostgreSQL restore apply schema cleanup | 18.x |
 
 Missing or incompatible PostgreSQL client tools fail the backup or restore job at startup with actionable diagnostics. Error output redacts connection strings and passwords.
+
+PostgreSQL 18 Docker images store cluster data in a major-version-specific directory below `/var/lib/postgresql`; the bundled compose stacks therefore mount their named database volumes at `/var/lib/postgresql`. PostgreSQL 17 and earlier used `/var/lib/postgresql/data`.
+
+Existing PostgreSQL 17 volumes are not upgraded by changing the image tag or mount target. Before deploying this change over a persistent PostgreSQL 17 environment, stop application writes, take and verify a database backup, then migrate with `pg_dump`/`pg_restore` into a fresh PostgreSQL 18 volume or run `pg_upgrade` with both major versions available. Keep the original PostgreSQL 17 volume until the PostgreSQL 18 restore and application checks have completed successfully.
 
 ### 5. How hot-reload works
 
