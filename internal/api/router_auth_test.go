@@ -999,6 +999,26 @@ func TestAuthMeReturnsUnauthenticatedWithoutSession(t *testing.T) {
 	}
 }
 
+func TestAuthMeClearsInvalidSessionCookies(t *testing.T) {
+	router := newAuthTestRouter(newFakeAPIAuthProvider())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	addSessionCookie(req, "revoked-restored-session")
+	req.AddCookie(&http.Cookie{Name: authCSRFCookieName, Value: "stale-restored-csrf"})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	for _, name := range []string{authSessionCookieName, authCSRFCookieName} {
+		cookie := findCookie(t, rec.Result().Cookies(), name)
+		if cookie.Value != "" || cookie.MaxAge >= 0 {
+			t.Fatalf("cleared cookie %s = %+v, want empty expired cookie", name, cookie)
+		}
+	}
+}
+
 func TestLegacyAuthMeAliasReturnsUnauthenticatedWithoutSession(t *testing.T) {
 	router := newAuthTestRouter(newFakeAPIAuthProvider())
 

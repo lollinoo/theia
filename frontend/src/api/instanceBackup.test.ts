@@ -182,4 +182,51 @@ describe('instance backup client', () => {
       ServerError,
     );
   });
+
+  it.each([
+    502, 503, 504,
+  ])('maps confirmed restore gateway status %d to an unknown outcome', async (status) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(null, {
+          ok: false,
+          status,
+          statusText: 'Gateway unavailable',
+        }),
+      ),
+    );
+
+    await expect(
+      restoreInstanceBackup(new File(['archive'], 'backup.tar.gz'), false),
+    ).rejects.toMatchObject({ name: 'RestoreOutcomeUnknownError' });
+  });
+
+  it('maps a confirmed restore transport interruption to an unknown outcome', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+
+    await expect(
+      restoreInstanceBackup(new File(['archive'], 'backup.tar.gz'), false),
+    ).rejects.toMatchObject({ name: 'RestoreOutcomeUnknownError' });
+  });
+
+  it('keeps a dry-run gateway response as a normal request failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(null, { ok: false, status: 502, statusText: 'Bad Gateway' }),
+        ),
+    );
+
+    try {
+      await restoreInstanceBackup(new File(['archive'], 'backup.tar.gz'), true);
+      throw new Error('expected dry-run restore to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).not.toBe('RestoreOutcomeUnknownError');
+      expect((error as Error).message).toContain('502');
+    }
+  });
 });

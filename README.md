@@ -126,6 +126,9 @@ make wisp-seed-all
 
 For the full setup guide, including production, staging, configuration, keyring rotation, API auth, troubleshooting, and WISP lab details, read [SETUP.md](SETUP.md).
 
+> [!IMPORTANT]
+> The Docker Compose stacks use PostgreSQL 18 and dedicated PostgreSQL 18 volumes. An existing PostgreSQL 17 deployment cannot be upgraded safely with only `docker compose pull` and `docker compose up`: migrate the database into the new volume first. Follow the [PostgreSQL 17 to 18 production migration procedure](SETUP.md#migrating-bundled-production-postgresql-17-to-18), which preserves the original PostgreSQL 17 volume for rollback.
+
 ## Bridge Connector
 
 The Bridge Connector lets an authenticated user launch WinBox locally from Theia without exposing raw device passwords to the browser.
@@ -153,6 +156,7 @@ For the full connector setup, stable install paths, advanced `config.json` shape
 - **Operational maps**: create saved maps, materialize area views, preserve manual device placement, and use ghost devices to keep cross-area context visible.
 - **Device access**: launch WinBox from a topology node through a local, audited, per-user bridge flow.
 - **Backup and recovery**: schedule or run device backups, download backup files, run bulk operations, and create or restore PostgreSQL instance backups.
+- **Restore session safety**: a completed instance restore revokes every login session restored from the archive; all connected users and devices are returned to the login page and must authenticate again.
 - **Team administration**: manage users, roles, permissions, audit logs, password resets, and account-level Bridge Connector settings.
 - **Development and demos**: use the WISP lab to reproduce topology discovery, OSPF/BGP checks, and radio access-layer scenarios without real hardware.
 

@@ -263,12 +263,12 @@ prod-logs: ## Follow production backend logs
 ifeq ($(IS_WINDOWS),1)
 prod-clean: ## Stop production stack and remove volumes (resets database)
 	docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics --profile postgres down -v
-	@docker volume rm -f theia-data theia-prometheus-data theia-prod-postgres-data 2>$$null; exit 0
+	@docker volume rm -f theia-data theia-prometheus-data theia-prod-postgres-data theia-prod-postgres18-data 2>$$null; exit 0
 	@Write-Output "Cleaned all production containers and volumes"
 else
 prod-clean: ## Stop production stack and remove volumes (resets database)
 	@$(PROD_COMPOSE_ENV); docker compose -f docker-compose.prod.yml --env-file .env.prod --profile metrics --profile postgres down -v
-	docker volume rm -f theia-data theia-prometheus-data theia-prod-postgres-data 2>/dev/null || true
+	docker volume rm -f theia-data theia-prometheus-data theia-prod-postgres-data theia-prod-postgres18-data 2>/dev/null || true
 	@echo "Cleaned all production containers and volumes"
 endif
 
@@ -310,12 +310,12 @@ staging-logs: ## Follow staging backend logs
 ifeq ($(IS_WINDOWS),1)
 clean: ## Stop containers, remove volumes, and prune build cache
 	docker compose $(DEV_COMPOSE_PROFILES) down -v
-	@docker volume rm -f theia-data 2>$$null; exit 0
+	@docker volume rm -f theia-data theia-postgres-data theia-postgres18-data 2>$$null; exit 0
 	@Write-Output "Cleaned all containers and volumes"
 else
 clean: ## Stop containers, remove volumes, and prune build cache
 	docker compose $(DEV_COMPOSE_PROFILES) down -v
-	docker volume rm -f theia-data 2>/dev/null || true
+	docker volume rm -f theia-data theia-postgres-data theia-postgres18-data 2>/dev/null || true
 	@echo "Cleaned all containers and volumes"
 endif
 

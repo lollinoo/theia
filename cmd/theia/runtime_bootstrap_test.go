@@ -408,12 +408,25 @@ func TestDeploymentConfigsUsePostgres18(t *testing.T) {
 	}
 
 	volumeFiles := []struct {
-		path       string
-		wantVolume string
+		path            string
+		wantVolume      string
+		forbiddenVolume string
 	}{
-		{path: "docker-compose.yml", wantVolume: "theia-postgres-data:/var/lib/postgresql"},
-		{path: "docker-compose.prod.yml", wantVolume: "theia-prod-postgres-data:/var/lib/postgresql"},
-		{path: "docker-compose.staging.yml", wantVolume: "theia-staging-postgres-data:/var/lib/postgresql"},
+		{
+			path:            "docker-compose.yml",
+			wantVolume:      "theia-postgres18-data:/var/lib/postgresql",
+			forbiddenVolume: "theia-postgres-data:/var/lib/postgresql",
+		},
+		{
+			path:            "docker-compose.prod.yml",
+			wantVolume:      "theia-prod-postgres18-data:/var/lib/postgresql",
+			forbiddenVolume: "theia-prod-postgres-data:/var/lib/postgresql",
+		},
+		{
+			path:            "docker-compose.staging.yml",
+			wantVolume:      "theia-staging-postgres18-data:/var/lib/postgresql",
+			forbiddenVolume: "theia-staging-postgres-data:/var/lib/postgresql",
+		},
 	}
 	for _, file := range volumeFiles {
 		t.Run(file.path+"-volume", func(t *testing.T) {
@@ -427,6 +440,9 @@ func TestDeploymentConfigsUsePostgres18(t *testing.T) {
 			}
 			if !strings.Contains(text, file.wantVolume) {
 				t.Fatalf("%s must contain PostgreSQL volume %q", file.path, file.wantVolume)
+			}
+			if strings.Contains(text, file.forbiddenVolume) {
+				t.Fatalf("%s still reuses legacy PostgreSQL volume %q", file.path, file.forbiddenVolume)
 			}
 		})
 	}

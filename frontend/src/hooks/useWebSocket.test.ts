@@ -1500,6 +1500,20 @@ describe('useWebSocket', () => {
     );
   });
 
+  it('requests a session check whenever the backend connection closes', () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateClose();
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'backend-session-check-required' }),
+    );
+  });
+
   it('full snapshot replaces state after resync_required', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 

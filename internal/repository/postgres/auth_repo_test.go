@@ -624,6 +624,50 @@ func TestAuthRepoSessionCreateGetRevokeAndTouch(t *testing.T) {
 	}
 }
 
+func TestAuthRepoRevokeAllSessions(t *testing.T) {
+	repo, ctx := newAuthRepoForTest(t)
+
+	firstUser := testAuthUser("restore-user-one", "restore-user-one@example.test")
+	secondUser := testAuthUser("restore-user-two", "restore-user-two@example.test")
+	for _, user := range []*domain.User{&firstUser, &secondUser} {
+		if err := repo.CreateUser(ctx, user); err != nil {
+			t.Fatalf("CreateUser(%s): %v", user.Username, err)
+		}
+	}
+
+	now := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+	sessions := []domain.AuthSession{
+		{
+			ID: uuid.New(), UserID: firstUser.ID, TokenHash: "restore-session-one",
+			CSRFTokenHash: "restore-csrf-one", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		},
+		{
+			ID: uuid.New(), UserID: secondUser.ID, TokenHash: "restore-session-two",
+			CSRFTokenHash: "restore-csrf-two", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		},
+	}
+	for i := range sessions {
+		if err := repo.CreateSession(ctx, &sessions[i]); err != nil {
+			t.Fatalf("CreateSession(%d): %v", i, err)
+		}
+	}
+
+	revokedAt := now.Add(5 * time.Minute)
+	if err := repo.RevokeAllSessions(ctx, revokedAt); err != nil {
+		t.Fatalf("RevokeAllSessions: %v", err)
+	}
+
+	for _, session := range sessions {
+		got, err := repo.GetSessionByTokenHash(ctx, session.TokenHash)
+		if err != nil {
+			t.Fatalf("GetSessionByTokenHash(%s): %v", session.TokenHash, err)
+		}
+		if got.RevokedAt == nil || !got.RevokedAt.Equal(revokedAt) {
+			t.Fatalf("session %s revoked_at = %#v, want %s", session.ID, got.RevokedAt, revokedAt)
+		}
+	}
+}
+
 func TestAuthRepoPasswordResetTokenPersistsExpiryAndUsedAt(t *testing.T) {
 	repo, ctx := newAuthRepoForTest(t)
 

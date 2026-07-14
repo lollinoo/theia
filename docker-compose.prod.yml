@@ -30,8 +30,8 @@ volumes:
     name: theia-data
   prometheus-data:
     name: theia-prometheus-data
-  theia-prod-postgres-data:
-    name: theia-prod-postgres-data
+  theia-prod-postgres18-data:
+    name: theia-prod-postgres18-data
 
 secrets:
   theia_metrics_token:
@@ -86,7 +86,7 @@ services:
     ports:
       - "${POSTGRES_BIND_ADDR:-127.0.0.1}:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
-      - theia-prod-postgres-data:/var/lib/postgresql
+      - theia-prod-postgres18-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-theia} -d ${POSTGRES_DB:-theia}"]
       interval: 10s

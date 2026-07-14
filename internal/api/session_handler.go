@@ -122,7 +122,6 @@ func (h *AuthHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
-	secure := security.SecureCookieForRequest(r)
 	rawSessionToken, hasSession := sessionTokenFromRequest(r)
 	if hasSession && h.auth != nil {
 		if !validateRequestCSRF(w, r, h.auth, rawSessionToken) {
@@ -133,8 +132,7 @@ func (h *AuthHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.SetCookie(w, clearAuthCookie(authSessionCookieName, true, secure))
-	http.SetCookie(w, clearAuthCookie(authCSRFCookieName, false, secure))
+	clearAuthCookies(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -241,6 +239,7 @@ func (h *AuthHandler) currentUserOrAnonymous(w http.ResponseWriter, r *http.Requ
 	user, err := h.auth.CurrentUser(r.Context(), rawSessionToken)
 	if err != nil {
 		if isInvalidCurrentUserError(err) {
+			clearAuthCookies(w, r)
 			return nil, true
 		}
 		writeError(w, http.StatusInternalServerError, "internal error", err)
@@ -308,6 +307,13 @@ func clearAuthCookie(name string, httpOnly bool, secure bool) *http.Cookie {
 		SameSite: http.SameSiteStrictMode,
 		Secure:   secure,
 	}
+}
+
+// clearAuthCookies expires both browser credentials after logout or invalid-session detection.
+func clearAuthCookies(w http.ResponseWriter, r *http.Request) {
+	secure := security.SecureCookieForRequest(r)
+	http.SetCookie(w, clearAuthCookie(authSessionCookieName, true, secure))
+	http.SetCookie(w, clearAuthCookie(authCSRFCookieName, false, secure))
 }
 
 func cookieMaxAge(expiresAt time.Time) int {
