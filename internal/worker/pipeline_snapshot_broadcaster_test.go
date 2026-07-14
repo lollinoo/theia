@@ -167,6 +167,135 @@ func TestSnapshotBroadcasterJournalFullSnapshotRotatesStreamAndClearsReplay(t *t
 	}
 }
 
+func TestRuntimeRecoveryRaceAck92Recovery94KeepsDelta95BehindBarrier(t *testing.T) {
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		nil,
+		nil,
+		hub,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+
+	conn, client, releaseWritePump := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		true,
+	)
+	defer releaseWritePump()
+
+	advanceRuntimeRecoveryState(t, pipeline, 92, 93, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "degraded"}},
+		Links:   map[string]map[string]any{},
+	})
+	advanceRuntimeRecoveryState(t, pipeline, 93, 94, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up_fresh"}},
+		Links:   map[string]map[string]any{},
+	})
+
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	advanceRuntimeRecoveryState(t, pipeline, 94, 95, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up"}},
+		Links:   map[string]map[string]any{},
+	})
+
+	releaseWritePump()
+	messages := readRuntimeRecoveryMessages(t, conn, 4)
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		messages,
+		ws.MessageTypeResyncRequired,
+		ws.MessageTypeRuntimeReplay,
+		ws.MessageTypeReady,
+		ws.MessageTypeRuntimeDelta,
+	)
+
+	var replay ws.RuntimeReplayMessagePayload
+	decodeRuntimeRecoveryPayload(t, messages[1], &replay)
+	if replay.FromVersion != 92 || replay.Version != 94 || replay.RuntimeStreamID != "runtime-stream-1" {
+		t.Fatalf("recovery replay = %#v, want runtime-stream-1 92->94", replay)
+	}
+	var ready ws.ReadyPayload
+	decodeRuntimeRecoveryPayload(t, messages[2], &ready)
+	if ready.RuntimeVersion != 94 || ready.RuntimeStreamID != "runtime-stream-1" || ready.SyncMode != string(ws.OverviewSyncModeReplay) {
+		t.Fatalf("recovery ready = %#v, want replay barrier runtime-stream-1/94", ready)
+	}
+	var next ws.RuntimeDeltaMessagePayload
+	decodeRuntimeRecoveryPayload(t, messages[3], &next)
+	if next.BaseVersion != 94 || next.Version != 95 || next.RuntimeStreamID != "runtime-stream-1" {
+		t.Fatalf("post-recovery delta = %#v, want runtime-stream-1 94->95", next)
+	}
+
+	resyncCount := 0
+	for _, message := range messages {
+		if message.Type == ws.MessageTypeResyncRequired {
+			resyncCount++
+		}
+	}
+	if resyncCount != 1 {
+		t.Fatalf("resync_required count = %d, want one recovery cycle", resyncCount)
+	}
+}
+
+func TestOverviewMailboxRecoveryFullSnapshotRotatesStreamAndInstallsCompleteBatch(t *testing.T) {
+	pipeline, hub, _, _, _ := newNoClientBroadcastTestPipeline(t)
+	go hub.Run()
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	initial := pipeline.GetOrBuildOverviewState()
+
+	conn, _, releaseWritePump := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: initial.StreamID, Version: initial.Version, Known: true},
+		true,
+	)
+	defer releaseWritePump()
+
+	if err := pipeline.broadcaster.broadcastFullSnapshot(context.Background(), refreshReloadReasonFullResync, false); err != nil {
+		t.Fatalf("broadcastFullSnapshot returned error: %v", err)
+	}
+	current := pipeline.GetOrBuildOverviewState()
+	if current.StreamID == initial.StreamID {
+		t.Fatalf("full snapshot kept runtime stream %q", current.StreamID)
+	}
+	if current.Version != initial.Version+1 {
+		t.Fatalf("full snapshot version = %d, want %d", current.Version, initial.Version+1)
+	}
+
+	releaseWritePump()
+	messages := readRuntimeRecoveryMessages(t, conn, 3)
+	assertRuntimeRecoveryMessageTypes(t, messages, ws.MessageTypeResyncRequired, ws.MessageTypeSnapshot, ws.MessageTypeReady)
+	var snapshot ws.SnapshotMessagePayload
+	decodeRuntimeRecoveryPayload(t, messages[1], &snapshot)
+	if snapshot.RuntimeStreamID != current.StreamID || snapshot.Version != current.Version {
+		t.Fatalf("full snapshot payload = %#v, want stream/version %s/%d", snapshot, current.StreamID, current.Version)
+	}
+	var ready ws.ReadyPayload
+	decodeRuntimeRecoveryPayload(t, messages[2], &ready)
+	if ready.RuntimeStreamID != current.StreamID || ready.RuntimeVersion != current.Version || ready.SyncMode != string(ws.OverviewSyncModeSnapshot) {
+		t.Fatalf("full snapshot ready = %#v, want snapshot barrier %s/%d", ready, current.StreamID, current.Version)
+	}
+}
+
 func capturePipelineDebugLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
 

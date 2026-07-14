@@ -4151,6 +4151,408 @@ func TestGetOrBuildOverviewStateConcurrentGettersObserveOneTuple(t *testing.T) {
 	}
 }
 
+func TestOverviewMailboxRecoverySelectsCurrentReplayAndLegacySnapshot(t *testing.T) {
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		nil,
+		nil,
+		hub,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+
+	v2Conn, v2Client, releaseV2 := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		false,
+	)
+	defer releaseV2()
+	legacyConn, legacyClient, releaseLegacy := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		0,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		false,
+	)
+	defer releaseLegacy()
+
+	if got := v2Client.RuntimeProtocol(); got != ws.RuntimeStreamProtocolVersion {
+		t.Fatalf("protocol-v2 client capability = %d, want %d", got, ws.RuntimeStreamProtocolVersion)
+	}
+	if got := v2Client.AckedRuntimeCursor(); got != (ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}) {
+		t.Fatalf("protocol-v2 ACK cursor = %#v, want runtime-stream-1/92", got)
+	}
+
+	pipeline.SyncOverviewClient(v2Client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	current := readRuntimeRecoveryMessages(t, v2Conn, 1)
+	assertRuntimeRecoveryMessageTypes(t, current, ws.MessageTypeReady)
+	var currentReady ws.ReadyPayload
+	decodeRuntimeRecoveryPayload(t, current[0], &currentReady)
+	if currentReady.SyncMode != string(ws.OverviewSyncModeCurrent) || currentReady.RuntimeVersion != 92 {
+		t.Fatalf("current ready payload = %#v, want current/92", currentReady)
+	}
+
+	advanceRuntimeRecoveryState(t, pipeline, 92, 93, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "degraded"}},
+		Links:   map[string]map[string]any{},
+	})
+	advanceRuntimeRecoveryState(t, pipeline, 93, 94, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up_fresh"}},
+		Links:   map[string]map[string]any{},
+	})
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, v2Conn, 2),
+		ws.MessageTypeRuntimeDelta,
+		ws.MessageTypeRuntimeDelta,
+	)
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, legacyConn, 2),
+		ws.MessageTypeRuntimeDelta,
+		ws.MessageTypeRuntimeDelta,
+	)
+
+	pipeline.SyncOverviewClient(v2Client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	replay := readRuntimeRecoveryMessages(t, v2Conn, 3)
+	assertRuntimeRecoveryMessageTypes(t, replay, ws.MessageTypeResyncRequired, ws.MessageTypeRuntimeReplay, ws.MessageTypeReady)
+	var replayState ws.RuntimeReplayMessagePayload
+	decodeRuntimeRecoveryPayload(t, replay[1], &replayState)
+	if replayState.FromVersion != 92 || replayState.Version != 94 || replayState.RuntimeStreamID != "runtime-stream-1" {
+		t.Fatalf("replay payload = %#v, want runtime-stream-1 92->94", replayState)
+	}
+
+	pipeline.SyncOverviewClient(legacyClient, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	legacy := readRuntimeRecoveryMessages(t, legacyConn, 3)
+	assertRuntimeRecoveryMessageTypes(t, legacy, ws.MessageTypeResyncRequired, ws.MessageTypeSnapshot, ws.MessageTypeReady)
+	for _, message := range legacy {
+		if message.Type == ws.MessageTypeRuntimeReplay {
+			t.Fatal("legacy client received runtime_replay")
+		}
+	}
+
+	pipeline.SyncOverviewClient(v2Client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "obsolete-stream", Version: 94, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	wrongStream := readRuntimeRecoveryMessages(t, v2Conn, 3)
+	assertRuntimeRecoveryMessageTypes(t, wrongStream, ws.MessageTypeResyncRequired, ws.MessageTypeSnapshot, ws.MessageTypeReady)
+}
+
+func TestOverviewMailboxRecoveryFallsBackWhenSameStreamClientCursorDiffersFromRequest(t *testing.T) {
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		nil,
+		nil,
+		hub,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+
+	conn, client, release := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		false,
+	)
+	defer release()
+
+	advanceRuntimeRecoveryState(t, pipeline, 92, 93, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "degraded"}},
+		Links:   map[string]map[string]any{},
+	})
+	advanceRuntimeRecoveryState(t, pipeline, 93, 94, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up_fresh"}},
+		Links:   map[string]map[string]any{},
+	})
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, conn, 2),
+		ws.MessageTypeRuntimeDelta,
+		ws.MessageTypeRuntimeDelta,
+	)
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeHello,
+		"payload": map[string]any{
+			"runtime_protocol":  ws.RuntimeStreamProtocolVersion,
+			"runtime_stream_id": "runtime-stream-1",
+			"runtime_version":   93,
+		},
+	}); err != nil {
+		t.Fatalf("advance runtime recovery client cursor: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for client.AckedRuntimeCursor().Version != 93 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := client.AckedRuntimeCursor(); got.StreamID != "runtime-stream-1" || got.Version != 93 {
+		t.Fatalf("advanced runtime cursor = %#v, want runtime-stream-1/93", got)
+	}
+
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	messages := readRuntimeRecoveryMessages(t, conn, 3)
+	assertRuntimeRecoveryMessageTypes(t, messages, ws.MessageTypeResyncRequired, ws.MessageTypeSnapshot, ws.MessageTypeReady)
+}
+
+func TestOverviewMailboxRecoveryCurrentRequestFallsBackWhenLiveClientCursorIsBehind(t *testing.T) {
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		nil,
+		nil,
+		hub,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 93)
+
+	conn, client, release := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 93, Known: true},
+		false,
+	)
+	defer release()
+	advanceRuntimeRecoveryState(t, pipeline, 93, 94, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up_fresh"}},
+		Links:   map[string]map[string]any{},
+	})
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, conn, 1),
+		ws.MessageTypeRuntimeDelta,
+	)
+	if got := client.AckedRuntimeCursor(); got != (ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 93, Known: true}) {
+		t.Fatalf("live client cursor = %#v, want runtime-stream-1/93", got)
+	}
+
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 94, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	first := readRuntimeRecoveryMessages(t, conn, 1)
+	if first[0].Type == ws.MessageTypeReady {
+		t.Fatal("current request emitted ready-only target 94 while live client ACK remained at 93")
+	}
+	recovery := append(first, readRuntimeRecoveryMessages(t, conn, 2)...)
+	assertRuntimeRecoveryMessageTypes(t, recovery, ws.MessageTypeResyncRequired, ws.MessageTypeSnapshot, ws.MessageTypeReady)
+}
+
+type runtimeRecoveryWireMessage struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+func configureRuntimeRecoveryState(t *testing.T, pipeline *PipelineOrchestrator, streamID string, version uint64) {
+	t.Helper()
+	snapshot := ws.EmptySnapshot()
+	snapshot.Devices["dev-1"] = ws.DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = snapshot
+	pipeline.runtime.prevHashes = computeSnapshotHashes(snapshot)
+	pipeline.runtime.overviewVersion = version
+	pipeline.runtime.overviewStreamID = streamID
+	pipeline.runtime.mu.Unlock()
+	pipeline.runtime.overviewJournal.Reset()
+	pipeline.overviewBuildMu.Unlock()
+}
+
+func advanceRuntimeRecoveryState(t *testing.T, pipeline *PipelineOrchestrator, baseVersion, version uint64, delta *ws.RuntimeDeltaPayload) {
+	t.Helper()
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.Lock()
+	actualVersion := pipeline.runtime.overviewVersion
+	if actualVersion != baseVersion {
+		pipeline.runtime.mu.Unlock()
+		pipeline.overviewBuildMu.Unlock()
+		t.Fatalf("runtime recovery base = %d, want %d", actualVersion, baseVersion)
+	}
+	streamID := pipeline.runtime.overviewStreamID
+	pipeline.runtime.overviewVersion = version
+	pipeline.runtime.mu.Unlock()
+	pipeline.runtime.overviewJournal.Append(baseVersion, version, delta)
+	overflowed := pipeline.hub.BroadcastOverviewStreamDelta(delta, baseVersion, version, streamID)
+	pipeline.overviewBuildMu.Unlock()
+	if len(overflowed) != 0 {
+		t.Fatalf("runtime recovery delta %d->%d overflowed %d clients", baseVersion, version, len(overflowed))
+	}
+}
+
+func attachRuntimeRecoveryClient(
+	t *testing.T,
+	hub *ws.Hub,
+	snapshotFunc func() (*ws.SnapshotPayload, uint64),
+	runtimeProtocol int,
+	cursor ws.RuntimeCursor,
+	holdWritePump bool,
+) (*websocket.Conn, *ws.Client, func()) {
+	t.Helper()
+
+	probeDeviceID := uuid.New()
+	gate := make(chan struct{})
+	gateEntered := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(gate)
+		})
+	}
+	if !holdWritePump {
+		release()
+	}
+
+	handler := ws.NewHandler(
+		hub,
+		snapshotFunc,
+		func() ws.AlertMessagePayload { return ws.AlertMessagePayload{Alerts: []ws.AlertDTO{}} },
+		func() ws.PrometheusStatusPayload {
+			close(gateEntered)
+			<-gate
+			return ws.PrometheusStatusPayload{}
+		},
+	)
+	server := httptest.NewServer(handler)
+	t.Cleanup(func() {
+		release()
+		server.Close()
+	})
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial runtime recovery client: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeHello,
+		"payload": map[string]any{
+			"runtime_protocol":  runtimeProtocol,
+			"runtime_stream_id": cursor.StreamID,
+			"runtime_version":   cursor.Version,
+		},
+	}); err != nil {
+		t.Fatalf("send runtime recovery hello: %v", err)
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeSubscribeDetail,
+		"payload": map[string]any{
+			"device_id": probeDeviceID.String(),
+		},
+	}); err != nil {
+		t.Fatalf("send runtime recovery probe subscription: %v", err)
+	}
+
+	bootstrap := readRuntimeRecoveryMessages(t, conn, 2)
+	assertRuntimeRecoveryMessageTypes(t, bootstrap, ws.MessageTypeReady, ws.MessageTypeAlert)
+	select {
+	case <-gateEntered:
+	case <-time.After(time.Second):
+		t.Fatal("runtime recovery handler did not reach write-pump gate")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		clients := hub.DetailSubscribers(probeDeviceID)
+		if len(clients) == 1 {
+			return conn, clients[0], release
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("runtime recovery client was not registered")
+	return nil, nil, release
+}
+
+func readRuntimeRecoveryMessages(t *testing.T, conn *websocket.Conn, count int) []runtimeRecoveryWireMessage {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set runtime recovery read deadline: %v", err)
+	}
+	defer conn.SetReadDeadline(time.Time{})
+
+	messages := make([]runtimeRecoveryWireMessage, 0, count)
+	for index := 0; index < count; index++ {
+		var message runtimeRecoveryWireMessage
+		if err := conn.ReadJSON(&message); err != nil {
+			t.Fatalf("read runtime recovery message %d/%d: %v", index+1, count, err)
+		}
+		messages = append(messages, message)
+	}
+	return messages
+}
+
+func decodeRuntimeRecoveryPayload(t *testing.T, message runtimeRecoveryWireMessage, target any) {
+	t.Helper()
+	if err := json.Unmarshal(message.Payload, target); err != nil {
+		t.Fatalf("decode %s payload: %v", message.Type, err)
+	}
+}
+
+func assertRuntimeRecoveryMessageTypes(t *testing.T, messages []runtimeRecoveryWireMessage, want ...string) {
+	t.Helper()
+	if len(messages) != len(want) {
+		t.Fatalf("runtime recovery message count = %d, want %d", len(messages), len(want))
+	}
+	for index := range want {
+		if messages[index].Type != want[index] {
+			t.Fatalf("runtime recovery message %d type = %q, want %q", index, messages[index].Type, want[index])
+		}
+	}
+}
+
 func TestPipelineOrchestratorBroadcastDirty_AlertResolutionWithoutRuntimeBaseFallsBackToFullSnapshotAndAlert(t *testing.T) {
 	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
 	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{

@@ -266,6 +266,103 @@ func (p *PipelineOrchestrator) GetOrBuildOverviewState() ws.RuntimeOverviewState
 	return p.getOrBuildOverviewStateLocked()
 }
 
+// SyncOverviewClient selects and installs one atomic runtime synchronization batch.
+func (p *PipelineOrchestrator) SyncOverviewClient(client *ws.Client, request ws.RuntimeSyncRequest) {
+	if p == nil || p.hub == nil || client == nil {
+		return
+	}
+	p.overviewBuildMu.Lock()
+	defer p.overviewBuildMu.Unlock()
+	p.syncOverviewClientLocked(client, request)
+}
+
+// syncOverviewClientLocked requires overviewBuildMu to remain held.
+func (p *PipelineOrchestrator) syncOverviewClientLocked(client *ws.Client, request ws.RuntimeSyncRequest) {
+	if p == nil || p.hub == nil || client == nil {
+		return
+	}
+	state := p.getOrBuildOverviewStateLocked()
+	reason := request.Reason
+	if reason == "" {
+		reason = ws.ResyncReasonClientResync
+	}
+
+	p.runtime.mu.RLock()
+	alertVersion := p.runtime.alertVersion
+	p.runtime.mu.RUnlock()
+	batch := ws.OverviewSyncBatch{
+		Reason:          reason,
+		RuntimeStreamID: state.StreamID,
+		TargetVersion:   state.Version,
+		RuntimeIdentity: ws.RuntimeIdentityForSnapshot(state.Snapshot),
+		AlertVersion:    alertVersion,
+	}
+
+	switch {
+	case request.Cursor.Known &&
+		request.Cursor.StreamID == state.StreamID &&
+		request.Cursor.Version == state.Version:
+		batch.Mode = ws.OverviewSyncModeCurrent
+	case client.RuntimeProtocol() >= ws.RuntimeStreamProtocolVersion &&
+		request.Cursor.Known &&
+		request.Cursor.StreamID == state.StreamID &&
+		request.Cursor.Version < state.Version:
+		if replay, ok := p.runtime.overviewJournal.Replay(request.Cursor.Version, state.Version); ok {
+			batch.Mode = ws.OverviewSyncModeReplay
+			batch.ReplayCursor = request.Cursor
+			batch.Replay = replay
+			break
+		}
+		fallthrough
+	default:
+		batch.Mode = ws.OverviewSyncModeSnapshot
+		batch.Snapshot = ws.CloneSnapshot(state.Snapshot)
+	}
+
+	if p.hub.ReplaceOverviewStream(client, batch) {
+		return
+	}
+	if batch.Mode != ws.OverviewSyncModeReplay && batch.Mode != ws.OverviewSyncModeCurrent {
+		return
+	}
+
+	// The client's acknowledged cursor or capability may have changed while the
+	// synchronization mode was selected. Fall back before releasing overviewBuildMu.
+	batch.Mode = ws.OverviewSyncModeSnapshot
+	batch.ReplayCursor = ws.RuntimeCursor{}
+	batch.Replay = nil
+	batch.Snapshot = ws.CloneSnapshot(state.Snapshot)
+	p.hub.ReplaceOverviewStream(client, batch)
+}
+
+func (p *PipelineOrchestrator) syncOverflowedOverviewClientsLocked(clients []*ws.Client, reason string) {
+	for _, client := range clients {
+		p.syncOverviewClientLocked(client, ws.RuntimeSyncRequest{
+			Cursor: client.AckedRuntimeCursor(),
+			Reason: reason,
+		})
+	}
+}
+
+func (p *PipelineOrchestrator) replaceOverviewClientsWithSnapshotLocked(state ws.RuntimeOverviewState, reason string) {
+	if p == nil || p.hub == nil {
+		return
+	}
+	p.runtime.mu.RLock()
+	alertVersion := p.runtime.alertVersion
+	p.runtime.mu.RUnlock()
+	batch := ws.OverviewSyncBatch{
+		Reason:          reason,
+		Mode:            ws.OverviewSyncModeSnapshot,
+		RuntimeStreamID: state.StreamID,
+		TargetVersion:   state.Version,
+		RuntimeIdentity: ws.RuntimeIdentityForSnapshot(state.Snapshot),
+		Snapshot:        ws.CloneSnapshot(state.Snapshot),
+		AlertVersion:    alertVersion,
+	}
+	p.hub.ReplaceOverviewStreams(batch)
+}
+
 // getOrBuildOverviewStateLocked requires overviewBuildMu to remain held.
 func (p *PipelineOrchestrator) getOrBuildOverviewStateLocked() ws.RuntimeOverviewState {
 	p.runtime.mu.RLock()
@@ -316,7 +413,7 @@ func (p *PipelineOrchestrator) getOrBuildOverviewStateLocked() ws.RuntimeOvervie
 	p.runtime.overviewJournal.Reset()
 
 	if p.hub != nil && p.hub.HasOverviewClients() {
-		p.hub.BroadcastOverviewSnapshot(snapshot, state.Version)
+		p.replaceOverviewClientsWithSnapshotLocked(state, ws.ResyncReasonClientResync)
 	}
 
 	return state

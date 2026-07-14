@@ -182,10 +182,15 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 		p.runtime.overviewVersion = currentVersion + 1
 		p.runtime.overviewStreamID = uuid.NewString()
 		version := p.runtime.overviewVersion
+		streamID := p.runtime.overviewStreamID
 		p.runtime.mu.Unlock()
 		p.runtime.overviewJournal.Reset()
 		observability.Default().IncRefreshTopologyReload(refreshReloadReasonStartup)
-		p.hub.BroadcastOverviewSnapshot(snapshot, version)
+		p.replaceOverviewClientsWithSnapshotLocked(ws.RuntimeOverviewState{
+			Snapshot: snapshot,
+			Version:  version,
+			StreamID: streamID,
+		}, ws.ResyncReasonClientResync)
 	default:
 		delta := buildDelta(snapshot, currentHashes, previousHashes)
 		if delta != nil {
@@ -195,9 +200,11 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 				baseVersion := p.runtime.overviewVersion
 				p.runtime.overviewVersion = baseVersion + 1
 				version := p.runtime.overviewVersion
+				streamID := p.runtime.overviewStreamID
 				p.runtime.mu.Unlock()
 				p.runtime.overviewJournal.Append(baseVersion, version, patch)
-				p.hub.BroadcastOverviewDelta(patch, baseVersion, version, snapshot)
+				overflowed := p.hub.BroadcastOverviewStreamDelta(patch, baseVersion, version, streamID)
+				p.syncOverflowedOverviewClientsLocked(overflowed, ws.ResyncReasonClientResync)
 			}
 		}
 	}
@@ -318,10 +325,12 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 	p.runtime.previousAlertRuntime = alertRuntimeSummaryFromSnapshot(merged)
 	p.runtime.overviewVersion++
 	version := p.runtime.overviewVersion
+	streamID := p.runtime.overviewStreamID
 	p.runtime.mu.Unlock()
 	p.runtime.overviewJournal.Append(baseVersion, version, patch)
 
-	p.hub.BroadcastOverviewDelta(patch, baseVersion, version, merged)
+	overflowed := p.hub.BroadcastOverviewStreamDelta(patch, baseVersion, version, streamID)
+	p.syncOverflowedOverviewClientsLocked(overflowed, ws.ResyncReasonClientResync)
 	p.overviewBuildMu.Unlock()
 	b.broadcastAlertsIfDirty(alertsDirty)
 
@@ -527,10 +536,15 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotLocked(_ context.Cont
 	p.runtime.overviewVersion++
 	p.runtime.overviewStreamID = uuid.NewString()
 	version := p.runtime.overviewVersion
+	streamID := p.runtime.overviewStreamID
 	p.runtime.mu.Unlock()
 	p.runtime.overviewJournal.Reset()
 
-	p.hub.BroadcastOverviewSnapshot(snapshot, version)
+	p.replaceOverviewClientsWithSnapshotLocked(ws.RuntimeOverviewState{
+		Snapshot: snapshot,
+		Version:  version,
+		StreamID: streamID,
+	}, ws.ResyncReasonClientResync)
 
 	if topologyChanged {
 		b.broadcastTopologyInvalidationLocked(refreshReloadReasonTopologyDirty)
@@ -564,10 +578,15 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotWithResyncLocked(_ co
 	p.runtime.overviewVersion++
 	p.runtime.overviewStreamID = uuid.NewString()
 	version := p.runtime.overviewVersion
+	streamID := p.runtime.overviewStreamID
 	p.runtime.mu.Unlock()
 	p.runtime.overviewJournal.Reset()
 
-	p.hub.BroadcastOverviewResync(resyncReason, snapshot, version)
+	p.replaceOverviewClientsWithSnapshotLocked(ws.RuntimeOverviewState{
+		Snapshot: snapshot,
+		Version:  version,
+		StreamID: streamID,
+	}, resyncReason)
 
 	if topologyChanged {
 		b.broadcastTopologyInvalidationLocked(refreshReloadReasonTopologyDirty)
