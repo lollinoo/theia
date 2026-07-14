@@ -1097,6 +1097,415 @@ func TestReplaceOverviewStreamCurrentQueuesReadyOnly(t *testing.T) {
 	}
 }
 
+func TestRuntimeAckCeilingRejectsBeyondInstalledSnapshot(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	client.ackedRuntimeCursor = RuntimeCursor{StreamID: "runtime-stream-1", Version: 5, Known: true}
+	observed := make([]RuntimeCursor, 0, 1)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true})
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor != (RuntimeCursor{StreamID: "runtime-stream-1", Version: 5, Known: true}) ||
+		pending == nil || pending.streamID != "runtime-stream-1" || pending.targetVersion != 10 || !needsResync {
+		t.Fatalf("future ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("future ACK observer calls = %#v, want none", observed)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	client.acceptRuntimeAck(want)
+	client.mu.Lock()
+	cursor = client.ackedRuntimeCursor
+	pending = client.pendingOverviewRecovery
+	needsResync = client.needsResync
+	client.mu.Unlock()
+	if cursor != want || pending != nil || needsResync {
+		t.Fatalf("target ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("target ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+}
+
+func TestReplaceOverviewStreamSanitizesFutureSameStreamHelloCursor(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	future := RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true}
+	client.ackedRuntimeCursor = future
+	observed := make([]RuntimeCursor, 0, 1)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+		Snapshot:        nil,
+	}); ok {
+		t.Fatal("ReplaceOverviewStream returned true for nil snapshot")
+	}
+	if got := client.AckedRuntimeCursor(); got != future {
+		t.Fatalf("failed replacement cursor = %#v, want %#v", got, future)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	if got := client.AckedRuntimeCursor(); got.Known {
+		t.Fatalf("installed replacement cursor = %#v, want unknown", got)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	client.acceptRuntimeAck(want)
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor != want || pending != nil || needsResync {
+		t.Fatalf("sanitized target ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("sanitized target ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+}
+
+func TestRuntimeAckCeilingSanitizesFutureHelloAfterReplacement(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.bootstrapping = true
+	observed := make([]RuntimeCursor, 0, 1)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor:   RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true},
+	})
+
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor.Known || pending == nil || pending.streamID != "runtime-stream-1" ||
+		pending.targetVersion != 10 || !needsResync {
+		t.Fatalf("future hello state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	client.acceptRuntimeAck(want)
+	client.mu.Lock()
+	cursor = client.ackedRuntimeCursor
+	pending = client.pendingOverviewRecovery
+	needsResync = client.needsResync
+	client.mu.Unlock()
+	if cursor != want || pending != nil || needsResync {
+		t.Fatalf("target ACK after future hello = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("target ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+
+	legacyClient := registerTestClient(NewHub())
+	legacyClient.bootstrapping = true
+	legacyCursor := RuntimeCursor{StreamID: "legacy-stream", Version: 99, Known: true}
+	legacyClient.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor:   legacyCursor,
+	})
+	if got := legacyClient.AckedRuntimeCursor(); got != legacyCursor {
+		t.Fatalf("ceiling-unknown hello cursor = %#v, want preserved %#v", got, legacyCursor)
+	}
+
+	rotatedClient := registerTestClient(hub)
+	rotatedClient.bootstrapping = true
+	if ok := hub.ReplaceOverviewStream(rotatedClient, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-A",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("rotated ReplaceOverviewStream returned false")
+	}
+	rotatedCursor := RuntimeCursor{StreamID: "runtime-stream-B", Version: 99, Known: true}
+	rotatedClient.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor:   rotatedCursor,
+	})
+	rotatedClient.mu.Lock()
+	gotRotatedCursor := rotatedClient.ackedRuntimeCursor
+	rotatedPending := rotatedClient.pendingOverviewRecovery
+	rotatedNeedsResync := rotatedClient.needsResync
+	rotatedClient.mu.Unlock()
+	if gotRotatedCursor != rotatedCursor || rotatedPending == nil ||
+		rotatedPending.streamID != "runtime-stream-A" || !rotatedNeedsResync {
+		t.Fatalf(
+			"different-stream hello state = cursor %#v pending %#v needs_resync %t",
+			gotRotatedCursor,
+			rotatedPending,
+			rotatedNeedsResync,
+		)
+	}
+}
+
+func TestStreamlessReplacementClearsRuntimeAckCeiling(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	initial := RuntimeCursor{StreamID: "runtime-stream-1", Version: 5, Known: true}
+	client.ackedRuntimeCursor = initial
+	observed := make([]RuntimeCursor, 0, 1)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("stream-aware ReplaceOverviewStream returned false")
+	}
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:        ResyncReasonClientResync,
+		Mode:          OverviewSyncModeSnapshot,
+		TargetVersion: 11,
+		Snapshot:      EmptySnapshot(),
+	}); !ok {
+		t.Fatal("streamless ReplaceOverviewStream returned false")
+	}
+	if got := client.AckedRuntimeCursor(); got != initial {
+		t.Fatalf("streamless replacement cursor = %#v, want preserved %#v", got, initial)
+	}
+
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 6, Known: true})
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor != initial || pending == nil || pending.streamID != "" || pending.targetVersion != 11 || !needsResync {
+		t.Fatalf("obsolete ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("obsolete ACK observer calls = %#v, want none", observed)
+	}
+}
+
+func TestRuntimeAckCeilingAdvancesWithQueuedDelta(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	client.ackedRuntimeCursor = RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	observed := make([]RuntimeCursor, 0, 2)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeCurrent,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true})
+	observed = observed[:0]
+
+	if overflowed := hub.BroadcastOverviewStreamDelta(
+		EmptyRuntimeDeltaPayload(),
+		10,
+		11,
+		"runtime-stream-1",
+	); len(overflowed) != 0 {
+		t.Fatalf("queued delta overflowed %d clients", len(overflowed))
+	}
+
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 12, Known: true})
+	if got := client.AckedRuntimeCursor(); got != (RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}) {
+		t.Fatalf("future delta ACK cursor = %#v, want runtime-stream-1/10", got)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("future delta ACK observer calls = %#v, want none", observed)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true}
+	client.acceptRuntimeAck(want)
+	if got := client.AckedRuntimeCursor(); got != want {
+		t.Fatalf("queued delta ACK cursor = %#v, want %#v", got, want)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("queued delta ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+}
+
+func TestRuntimeAckCeilingRejectsOldAndFutureCursorsAfterStreamRotation(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	oldCursor := RuntimeCursor{StreamID: "runtime-stream-1", Version: 5, Known: true}
+	client.ackedRuntimeCursor = oldCursor
+	observed := make([]RuntimeCursor, 0, 1)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-2",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	if got := client.AckedRuntimeCursor(); got != oldCursor {
+		t.Fatalf("rotated replacement cursor = %#v, want preserved %#v", got, oldCursor)
+	}
+
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 6, Known: true})
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-2", Version: 11, Known: true})
+	if got := client.AckedRuntimeCursor(); got != oldCursor {
+		t.Fatalf("invalid rotated ACK cursor = %#v, want preserved %#v", got, oldCursor)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("invalid rotated ACK observer calls = %#v, want none", observed)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-2", Version: 10, Known: true}
+	client.acceptRuntimeAck(want)
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor != want || pending != nil || needsResync {
+		t.Fatalf("rotated target ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("rotated target ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+}
+
+func TestRuntimeAckCeilingDoesNotAdvanceForOverflowPending(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	client.ackedRuntimeCursor = RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	observed := make([]RuntimeCursor, 0, 2)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeCurrent,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true})
+	observed = observed[:0]
+
+	client.mu.Lock()
+	for len(client.overviewSend) < cap(client.overviewSend) {
+		client.overviewSend <- []byte(`{"type":"placeholder"}`)
+	}
+	client.mu.Unlock()
+	if overflowed := hub.BroadcastOverviewStreamDelta(
+		EmptyRuntimeDeltaPayload(),
+		10,
+		11,
+		"runtime-stream-1",
+	); len(overflowed) != 1 || overflowed[0] != client {
+		t.Fatalf("overflowed clients = %#v, want only target client", overflowed)
+	}
+
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true})
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor != (RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}) ||
+		pending == nil || pending.streamID != "runtime-stream-1" || pending.targetVersion != 11 || !needsResync {
+		t.Fatalf("pending-only ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("pending-only ACK observer calls = %#v, want none", observed)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonHubBufferFull,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   11,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("replacement after overflow returned false")
+	}
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true}
+	client.acceptRuntimeAck(want)
+	client.mu.Lock()
+	cursor = client.ackedRuntimeCursor
+	pending = client.pendingOverviewRecovery
+	needsResync = client.needsResync
+	client.mu.Unlock()
+	if cursor != want || pending != nil || needsResync {
+		t.Fatalf("replacement target ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("replacement target ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+}
+
 func TestOverviewMailboxRecoveryFullReplacementIncludesBootstrappingClient(t *testing.T) {
 	hub := NewHub()
 	client := newObservedTestClient(hub)

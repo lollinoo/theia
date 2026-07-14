@@ -1482,7 +1482,7 @@ func TestHandlerAckRuntimeUpdatesOnlyMonotonicSameStreamCursor(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
 
-	bootstrapSynced := make(chan struct{}, 1)
+	bootstrapSynced := make(chan bool, 1)
 	type ackEvent struct {
 		cursor       RuntimeCursor
 		clientCursor RuntimeCursor
@@ -1493,8 +1493,14 @@ func TestHandlerAckRuntimeUpdatesOnlyMonotonicSameStreamCursor(t *testing.T) {
 		func() (*SnapshotPayload, uint64) { return EmptySnapshot(), 10 },
 		func() AlertMessagePayload { return AlertMessagePayload{} },
 		nil,
-		WithRuntimeSync(func(_ *Client, _ RuntimeSyncRequest) {
-			bootstrapSynced <- struct{}{}
+		WithRuntimeSync(func(client *Client, _ RuntimeSyncRequest) {
+			bootstrapSynced <- hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+				Reason:          ResyncReasonClientResync,
+				Mode:            OverviewSyncModeSnapshot,
+				RuntimeStreamID: "runtime-stream-1",
+				TargetVersion:   7,
+				Snapshot:        EmptySnapshot(),
+			})
 		}),
 		WithRuntimeAck(func(client *Client, cursor RuntimeCursor) {
 			acks <- ackEvent{cursor: cursor, clientCursor: client.AckedRuntimeCursor()}
@@ -1516,7 +1522,10 @@ func TestHandlerAckRuntimeUpdatesOnlyMonotonicSameStreamCursor(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	select {
-	case <-bootstrapSynced:
+	case installed := <-bootstrapSynced:
+		if !installed {
+			t.Fatal("failed to install ACK ceiling batch")
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for bootstrap sync callback")
 	}

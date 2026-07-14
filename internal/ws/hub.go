@@ -86,6 +86,7 @@ type Client struct {
 	bootstrapping            bool
 	runtimeProtocol          int
 	ackedRuntimeCursor       RuntimeCursor
+	runtimeAckCeiling        RuntimeCursor
 	runtimeSync              RuntimeSyncFunc
 	runtimeAck               RuntimeAckFunc
 	pendingOverviewRecovery  *overviewRecoveryState
@@ -461,6 +462,7 @@ func (h *Hub) ReplaceOverviewStream(client *Client, batch OverviewSyncBatch) boo
 		for _, payload := range payloads {
 			client.overviewSend <- payload
 		}
+		client.installRuntimeAckCeilingLocked(batch.RuntimeStreamID, batch.TargetVersion)
 		client.mu.Unlock()
 
 		h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonExplicitResync, cleared)
@@ -724,6 +726,7 @@ func (h *Hub) enqueueOverviewStreamDelta(client *Client, payload []byte, streamI
 	select {
 	case client.overviewSend <- payload:
 		client.overviewEpoch++
+		client.advanceRuntimeAckCeilingLocked(streamID, version)
 		return false
 	default:
 		return h.markOverviewRecoveryPendingLocked(client, streamID, version)
@@ -830,16 +833,20 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	c.mu.Lock()
 	bootstrapping := c.bootstrapping
 	runtimeSync := c.runtimeSync
+	acceptedCursor := cmd.RuntimeCursor
 	if bootstrapping || runtimeSync == nil {
 		c.initializeRuntimeHelloLocked(cmd)
+		if cmd.RuntimeCursor.Known {
+			acceptedCursor = c.ackedRuntimeCursor
+		}
 	} else {
 		c.usesHTTPRuntimeBootstrap = true
 		c.runtimeProtocol = cmd.RuntimeProtocol
 	}
-	if runtimeSync == nil && cmd.RuntimeCursor.Known {
+	if runtimeSync == nil && acceptedCursor.Known {
 		if pending := c.pendingOverviewRecovery; pending != nil &&
-			pending.streamID == cmd.RuntimeCursor.StreamID &&
-			cmd.RuntimeCursor.Version >= pending.targetVersion {
+			pending.streamID == acceptedCursor.StreamID &&
+			acceptedCursor.Version >= pending.targetVersion {
 			c.pendingOverviewRecovery = nil
 			c.needsResync = false
 		}
@@ -875,7 +882,7 @@ func (c *Client) initializeRuntimeHelloLocked(cmd clientControlMessage) {
 	c.usesHTTPRuntimeBootstrap = true
 	c.runtimeProtocol = cmd.RuntimeProtocol
 	if cmd.RuntimeCursor.Known {
-		c.ackedRuntimeCursor = cmd.RuntimeCursor
+		c.ackedRuntimeCursor = c.sanitizeRuntimeCursorForCeilingLocked(cmd.RuntimeCursor)
 	}
 }
 
@@ -899,6 +906,10 @@ func (c *Client) acceptRuntimeAck(cursor RuntimeCursor) {
 	}
 
 	c.mu.Lock()
+	if !c.runtimeAckWithinCeilingLocked(cursor) {
+		c.mu.Unlock()
+		return
+	}
 	current := c.ackedRuntimeCursor
 	pending := c.pendingOverviewRecovery
 	sameStreamAdvance := current.Known &&
@@ -927,6 +938,44 @@ func (c *Client) acceptRuntimeAck(cursor RuntimeCursor) {
 	if runtimeAck != nil {
 		runtimeAck(c, cursor)
 	}
+}
+
+// installRuntimeAckCeilingLocked publishes the exact cursor offered by a
+// complete replacement and discards an impossible future same-stream claim.
+func (c *Client) installRuntimeAckCeilingLocked(streamID string, version uint64) {
+	c.runtimeAckCeiling = RuntimeCursor{}
+	if streamID == "" {
+		return
+	}
+	c.runtimeAckCeiling = RuntimeCursor{StreamID: streamID, Version: version, Known: true}
+	if current := c.ackedRuntimeCursor; current.Known && current.StreamID == streamID && current.Version > version {
+		c.ackedRuntimeCursor = RuntimeCursor{}
+	}
+}
+
+// advanceRuntimeAckCeilingLocked records a successfully queued live delta.
+func (c *Client) advanceRuntimeAckCeilingLocked(streamID string, version uint64) {
+	if streamID == "" {
+		return
+	}
+	current := c.runtimeAckCeiling
+	if current.Known && current.StreamID == streamID && current.Version >= version {
+		return
+	}
+	c.runtimeAckCeiling = RuntimeCursor{StreamID: streamID, Version: version, Known: true}
+}
+
+func (c *Client) sanitizeRuntimeCursorForCeilingLocked(cursor RuntimeCursor) RuntimeCursor {
+	ceiling := c.runtimeAckCeiling
+	if ceiling.Known && cursor.StreamID == ceiling.StreamID && cursor.Version > ceiling.Version {
+		return RuntimeCursor{}
+	}
+	return cursor
+}
+
+func (c *Client) runtimeAckWithinCeilingLocked(cursor RuntimeCursor) bool {
+	ceiling := c.runtimeAckCeiling
+	return ceiling.Known && cursor.StreamID == ceiling.StreamID && cursor.Version <= ceiling.Version
 }
 
 // RuntimeProtocol reports the negotiated runtime stream protocol capability.
