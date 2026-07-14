@@ -462,6 +462,9 @@ export function useWebSocket(
           });
           publishRuntimeSnapshot(response.runtime_snapshot);
           runtimeAckScheduler.schedule(cursor);
+          runtimeAckScheduler.flush();
+          // Resume opens a new server recovery attempt whose ready barrier may repeat this cursor.
+          runtimeAckScheduler.reset();
           ws.send(
             JSON.stringify({
               type: 'resume_runtime',

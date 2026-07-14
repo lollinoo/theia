@@ -1194,6 +1194,24 @@ describe('useWebSocket', () => {
         },
       ]),
     );
+    const fallbackControls = sentControls() as Array<{
+      type: string;
+      payload: { runtime_stream_id?: string; runtime_version?: number };
+    }>;
+    const fallbackAckIndex = fallbackControls.findIndex(
+      (control) =>
+        control.type === 'runtime_ack' &&
+        control.payload.runtime_stream_id === 'runtime-stream-2' &&
+        control.payload.runtime_version === 5,
+    );
+    const fallbackResumeIndex = fallbackControls.findIndex(
+      (control) =>
+        control.type === 'resume_runtime' &&
+        control.payload.runtime_stream_id === 'runtime-stream-2' &&
+        control.payload.runtime_version === 5,
+    );
+    expect(fallbackAckIndex).toBeGreaterThanOrEqual(0);
+    expect(fallbackResumeIndex).toBeGreaterThan(fallbackAckIndex);
 
     sendFrames([
       runtimeReplayFrame({
@@ -1221,6 +1239,46 @@ describe('useWebSocket', () => {
       expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
     );
     expect(fetchMock.mock.calls.every(([path]) => path === '/api/v1/runtime/overview')).toBe(true);
+  });
+
+  it('acknowledges the current barrier after an HTTP fallback pre-resume ACK', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        runtimeOverviewResponse({
+          streamId: 'runtime-stream-2',
+          version: 5,
+          cpuPercent: 60,
+        }),
+      ),
+    );
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+    sendRuntimeGap();
+    await advanceTimersByTime(5_000);
+
+    sendFrames([readyFrame(5, 'runtime-stream-2', 'current')]);
+
+    const controls = sentControls() as Array<{
+      type: string;
+      payload: { runtime_stream_id?: string; runtime_version?: number };
+    }>;
+    const fallbackBarrierControls = controls.filter(
+      (control) =>
+        control.payload.runtime_stream_id === 'runtime-stream-2' &&
+        control.payload.runtime_version === 5,
+    );
+    expect(fallbackBarrierControls.map((control) => control.type)).toEqual([
+      'runtime_ack',
+      'resume_runtime',
+      'runtime_ack',
+    ]);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      lastRuntimeRecoveryMode: 'http-fallback',
+      lastRuntimeAckVersion: '5',
+    });
   });
 
   it('lets an exact current ready win while the HTTP fallback request is pending', async () => {
