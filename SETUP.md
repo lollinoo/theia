@@ -961,6 +961,8 @@ The backend exports these metric families:
 | `theia_ws_runtime_ack_lag_versions` | Histogram of the validated client ACK distance behind the current runtime version |
 | `theia_ws_runtime_replay_versions` | Histogram of the version span selected for installed replay recoveries |
 
+Protocol-v2 recovery completion is recorded when the validated target ACK arrives. Legacy clients cannot send `runtime_ack`, so their snapshot recovery completes when the replacement batch is successfully installed in the client mailbox. Repeated protocol-v2 requests for the same pending mode, reason, stream, and target remain one logical recovery attempt.
+
 Bounded recovery labels are:
 
 - Modes: `current`, `replay`, `snapshot`, `http_fallback`

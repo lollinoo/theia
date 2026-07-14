@@ -444,7 +444,7 @@ func (p *PipelineOrchestrator) syncOverviewClientLocked(client *ws.Client, reque
 
 	installStartedAt := p.clockNow()
 	if p.hub.ReplaceOverviewStream(client, batch) {
-		p.recordRuntimeRecoveryScheduledLocked(client, batch, metricReason, installStartedAt)
+		p.recordRuntimeRecoveryInstalledLocked(client, batch, metricReason, installStartedAt)
 		p.armRuntimeRecoveryTimerLocked(p.clockNow())
 		return
 	}
@@ -461,11 +461,39 @@ func (p *PipelineOrchestrator) syncOverviewClientLocked(client *ws.Client, reque
 	batch.Snapshot = ws.CloneSnapshot(state.Snapshot)
 	installStartedAt = p.clockNow()
 	if p.hub.ReplaceOverviewStream(client, batch) {
-		p.recordRuntimeRecoveryScheduledLocked(client, batch, metricReason, installStartedAt)
+		p.recordRuntimeRecoveryInstalledLocked(client, batch, metricReason, installStartedAt)
 		p.armRuntimeRecoveryTimerLocked(p.clockNow())
 		return
 	}
 	p.recordRuntimeRecoveryInstallFailure(batch, metricReason, installStartedAt)
+}
+
+// recordRuntimeRecoveryInstalledLocked tracks ACK completion only for protocol-v2 clients.
+// Legacy clients have no runtime ACK, so a successfully queued batch is their terminal signal.
+func (p *PipelineOrchestrator) recordRuntimeRecoveryInstalledLocked(
+	client *ws.Client,
+	batch ws.OverviewSyncBatch,
+	reason string,
+	startedAt time.Time,
+) {
+	if client.RuntimeProtocol() >= ws.RuntimeStreamProtocolVersion {
+		p.recordRuntimeRecoveryScheduledLocked(client, batch, reason, startedAt)
+		return
+	}
+
+	now := p.clockNow()
+	if startedAt.IsZero() {
+		startedAt = now
+	}
+	attempt := runtimeRecoveryAttempt{
+		mode:          string(batch.Mode),
+		reason:        reason,
+		streamID:      batch.RuntimeStreamID,
+		targetVersion: batch.TargetVersion,
+		startedAt:     startedAt,
+	}
+	observability.Default().IncWSRuntimeRecovery(attempt.mode, attempt.reason, "scheduled")
+	p.recordRuntimeRecoveryTerminal(attempt, "completed", now)
 }
 
 // recordRuntimeRecoveryScheduledLocked requires overviewBuildMu to remain held.
@@ -480,14 +508,6 @@ func (p *PipelineOrchestrator) recordRuntimeRecoveryScheduledLocked(
 	if p.runtimeRecoveryAttempts == nil {
 		p.runtimeRecoveryAttempts = make(map[*ws.Client]runtimeRecoveryAttempt)
 	}
-	previous, replacing := p.runtimeRecoveryAttempts[client]
-	if replacing {
-		p.recordRuntimeRecoveryTerminal(previous, "failed", now)
-	}
-	if !replacing && len(p.runtimeRecoveryAttempts) >= runtimeRecoveryAttemptLimit {
-		p.evictOldestRuntimeRecoveryAttemptLocked(now)
-	}
-
 	attempt := runtimeRecoveryAttempt{
 		mode:          string(batch.Mode),
 		reason:        reason,
@@ -498,6 +518,20 @@ func (p *PipelineOrchestrator) recordRuntimeRecoveryScheduledLocked(
 	if attempt.startedAt.IsZero() {
 		attempt.startedAt = now
 	}
+	previous, replacing := p.runtimeRecoveryAttempts[client]
+	if replacing && previous.mode == attempt.mode &&
+		previous.reason == attempt.reason &&
+		previous.streamID == attempt.streamID &&
+		previous.targetVersion == attempt.targetVersion {
+		return
+	}
+	if replacing {
+		p.recordRuntimeRecoveryTerminal(previous, "failed", now)
+	}
+	if !replacing && len(p.runtimeRecoveryAttempts) >= runtimeRecoveryAttemptLimit {
+		p.evictOldestRuntimeRecoveryAttemptLocked(now)
+	}
+
 	p.runtimeRecoveryAttempts[client] = attempt
 
 	registry := observability.Default()
@@ -676,7 +710,7 @@ func (p *PipelineOrchestrator) replaceOverviewClientsWithSnapshotLocked(state ws
 	metricReason := runtimeRecoveryBatchReason(reason)
 	result := p.hub.ReplaceOverviewStreams(batch)
 	for _, client := range result.Installed {
-		p.recordRuntimeRecoveryScheduledLocked(client, batch, metricReason, startedAt)
+		p.recordRuntimeRecoveryInstalledLocked(client, batch, metricReason, startedAt)
 	}
 	for _, client := range result.Failed {
 		if previous, ok := p.runtimeRecoveryAttempts[client]; ok {

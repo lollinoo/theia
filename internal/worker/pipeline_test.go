@@ -4942,6 +4942,46 @@ func TestRuntimeRecoveryMetricsTrackCurrentAndSnapshotSelections(t *testing.T) {
 	}
 }
 
+func TestRuntimeRecoveryMetricsKeepIdenticalPendingSyncIdempotent(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+	conn, client, release := attachRuntimeRecoveryClient(
+		t, hub, pipeline.GetOverviewSnapshot, ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}, false,
+	)
+	defer release()
+
+	request := ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	}
+	pipeline.SyncOverviewClient(client, request)
+	assertRuntimeRecoveryMessageTypes(t, readRuntimeRecoveryMessages(t, conn, 1), ws.MessageTypeReady)
+	pipeline.SyncOverviewClient(client, request)
+	assertRuntimeRecoveryMessageTypes(t, readRuntimeRecoveryMessages(t, conn, 1), ws.MessageTypeReady)
+
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="scheduled",reason="client_resync_scheduled"} 1`)
+	if strings.Contains(body, `mode="current",outcome="failed"`) {
+		t.Fatalf("identical pending sync recorded a failed recovery\n%s", body)
+	}
+	pipeline.overviewBuildMu.Lock()
+	attempts := len(pipeline.runtimeRecoveryAttempts)
+	pipeline.overviewBuildMu.Unlock()
+	if attempts != 1 {
+		t.Fatalf("identical pending sync left attempts = %d, want 1", attempts)
+	}
+
+	pipeline.ObserveRuntimeAck(client, request.Cursor)
+	body = string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="completed",reason="client_resync_scheduled"} 1`)
+}
+
 func TestRuntimeRecoveryMetricsRecordFailedSnapshotInstallation(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	hub := ws.NewHub()
@@ -5075,7 +5115,7 @@ func TestRuntimeRecoveryTimerIgnoresStaleGenerationAfterReplacement(t *testing.T
 	pipeline.recordRuntimeRecoveryScheduledLocked(client, batch, ws.ResyncReasonClientResync, pipeline.clockNow())
 	pipeline.armRuntimeRecoveryTimerLocked(pipeline.clockNow())
 	staleGeneration := pipeline.runtimeRecoveryTimerGen
-	pipeline.recordRuntimeRecoveryScheduledLocked(client, batch, ws.ResyncReasonClientResync, pipeline.clockNow())
+	pipeline.recordRuntimeRecoveryScheduledLocked(client, batch, ws.ResyncReasonStateChangesDrop, pipeline.clockNow())
 	pipeline.armRuntimeRecoveryTimerLocked(pipeline.clockNow())
 	currentGeneration := pipeline.runtimeRecoveryTimerGen
 	pipeline.overviewBuildMu.Unlock()
@@ -5087,7 +5127,7 @@ func TestRuntimeRecoveryTimerIgnoresStaleGenerationAfterReplacement(t *testing.T
 	pipeline.overviewBuildMu.Lock()
 	attempt, ok := pipeline.runtimeRecoveryAttempts[client]
 	pipeline.overviewBuildMu.Unlock()
-	if !ok || attempt.targetVersion != 42 {
+	if !ok || attempt.targetVersion != 42 || attempt.reason != ws.ResyncReasonStateChangesDrop {
 		t.Fatalf("stale timer removed replacement attempt: %#v, present=%t", attempt, ok)
 	}
 
@@ -5105,7 +5145,7 @@ func TestRuntimeRecoveryTimerIgnoresStaleGenerationAfterReplacement(t *testing.T
 	}
 	body := string(registry.MarshalPrometheus())
 	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="failed",reason="client_resync_scheduled"} 1`)
-	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="completed",reason="client_resync_scheduled"} 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="completed",reason="state_changes_dropped"} 1`)
 }
 
 func TestRuntimeRecoveryTrackingCapDoesNotEvictOnExistingClientReplacement(t *testing.T) {
@@ -5280,6 +5320,46 @@ func TestRuntimeRecoveryMetricsTrackBulkSnapshotInstallAndFailure(t *testing.T) 
 	pipeline.overviewBuildMu.Unlock()
 	if got := remainingAttempts; got != 0 {
 		t.Fatalf("runtime recovery attempts after failed bulk install = %d, want 0", got)
+	}
+}
+
+func TestRuntimeRecoveryMetricsCompleteLegacyBulkSnapshotWithoutAck(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+	conn, _, release := attachRuntimeRecoveryClient(
+		t, hub, pipeline.GetOverviewSnapshot, 0,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}, false,
+	)
+	defer release()
+
+	state := pipeline.GetOrBuildOverviewState()
+	pipeline.overviewBuildMu.Lock()
+	pipeline.replaceOverviewClientsWithSnapshotLocked(state, ws.ResyncReasonStateChangesDrop)
+	pipeline.overviewBuildMu.Unlock()
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, conn, 3),
+		ws.MessageTypeResyncRequired,
+		ws.MessageTypeSnapshot,
+		ws.MessageTypeReady,
+	)
+
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="scheduled",reason="state_changes_dropped"} 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="completed",reason="state_changes_dropped"} 1`)
+	if strings.Contains(body, `mode="snapshot",outcome="failed"`) {
+		t.Fatalf("legacy snapshot recorded a failed recovery without ACK support\n%s", body)
+	}
+	pipeline.overviewBuildMu.Lock()
+	attempts := len(pipeline.runtimeRecoveryAttempts)
+	pipeline.overviewBuildMu.Unlock()
+	if attempts != 0 {
+		t.Fatalf("legacy snapshot left ACK-tracked attempts = %d, want 0", attempts)
 	}
 }
 
