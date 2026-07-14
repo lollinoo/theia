@@ -36,6 +36,66 @@ func captureDebugLogs(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
+func TestClientHelloFromRequest_ParsesRuntimeProtocolCursor(t *testing.T) {
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "42")
+	req := httptest.NewRequest(http.MethodGet, "/ws?"+params.Encode(), nil)
+
+	hello, ok := clientHelloFromRequest(req)
+	if !ok {
+		t.Fatal("clientHelloFromRequest returned no hello")
+	}
+	if hello.RuntimeProtocol != RuntimeStreamProtocolVersion {
+		t.Fatalf("RuntimeProtocol = %d, want %d", hello.RuntimeProtocol, RuntimeStreamProtocolVersion)
+	}
+	wantCursor := RuntimeCursor{StreamID: "runtime-stream-1", Version: 42, Known: true}
+	if hello.RuntimeCursor != wantCursor {
+		t.Fatalf("RuntimeCursor = %#v, want %#v", hello.RuntimeCursor, wantCursor)
+	}
+}
+
+func TestClientHelloFromRequest_RecognizesRuntimeProtocolOnlyHello(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/ws?runtime_protocol=2", nil)
+
+	hello, ok := clientHelloFromRequest(req)
+	if !ok {
+		t.Fatal("clientHelloFromRequest returned no hello")
+	}
+	if hello.RuntimeProtocol != RuntimeStreamProtocolVersion {
+		t.Fatalf("RuntimeProtocol = %d, want %d", hello.RuntimeProtocol, RuntimeStreamProtocolVersion)
+	}
+	if hello.RuntimeCursor.Known {
+		t.Fatalf("RuntimeCursor = %#v, want unknown cursor", hello.RuntimeCursor)
+	}
+}
+
+func TestClientHelloFromRequest_PreservesLegacyHello(t *testing.T) {
+	params := url.Values{}
+	params.Set("canvas_schema_version", "1")
+	params.Set("runtime_identity", "rt-sha256:abc")
+	params.Set("runtime_version", "42")
+	req := httptest.NewRequest(http.MethodGet, "/ws?"+params.Encode(), nil)
+
+	hello, ok := clientHelloFromRequest(req)
+	if !ok {
+		t.Fatal("clientHelloFromRequest returned no hello")
+	}
+	if hello.RuntimeProtocol != 0 {
+		t.Fatalf("RuntimeProtocol = %d, want legacy default 0", hello.RuntimeProtocol)
+	}
+	if hello.RuntimeCursor.Known {
+		t.Fatalf("RuntimeCursor = %#v, want unknown legacy cursor", hello.RuntimeCursor)
+	}
+	if hello.RuntimeVersion == nil || *hello.RuntimeVersion != 42 {
+		t.Fatalf("RuntimeVersion = %#v, want 42", hello.RuntimeVersion)
+	}
+	if hello.RuntimeIdentity != "rt-sha256:abc" {
+		t.Fatalf("RuntimeIdentity = %q, want rt-sha256:abc", hello.RuntimeIdentity)
+	}
+}
+
 func TestHandlerServeHTTP_BootstrapIncludesAlertMessage(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()

@@ -80,12 +80,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		hub:          h.hub,
-		conn:         conn,
-		send:         make(chan []byte, sendBufferSize),
-		overviewSend: make(chan []byte, overviewBufferSize),
-		hello:        make(chan clientControlMessage, clientHelloBuffer),
-		disconnected: make(chan struct{}),
+		hub:           h.hub,
+		conn:          conn,
+		send:          make(chan []byte, sendBufferSize),
+		overviewSend:  make(chan []byte, overviewBufferSize),
+		hello:         make(chan clientControlMessage, clientHelloBuffer),
+		disconnected:  make(chan struct{}),
 		bootstrapping: true,
 	}
 
@@ -237,6 +237,8 @@ func debugRuntimeVersion(version *uint64) string {
 func clientHelloFromRequest(r *http.Request) (clientControlMessage, bool) {
 	query := r.URL.Query()
 	if query.Get("canvas_schema_version") == "" &&
+		query.Get("runtime_protocol") == "" &&
+		query.Get("runtime_stream_id") == "" &&
 		query.Get("topology_version") == "" &&
 		query.Get("runtime_version") == "" &&
 		query.Get("runtime_identity") == "" &&
@@ -255,6 +257,11 @@ func clientHelloFromRequest(r *http.Request) (clientControlMessage, bool) {
 			hello.CanvasSchemaVersion = parsed
 		}
 	}
+	if runtimeProtocol := query.Get("runtime_protocol"); runtimeProtocol != "" {
+		if parsed, err := strconv.Atoi(runtimeProtocol); err == nil {
+			hello.RuntimeProtocol = parsed
+		}
+	}
 
 	if runtimeVersion := query.Get("runtime_version"); runtimeVersion != "" {
 		if parsed, err := strconv.ParseUint(runtimeVersion, 10, 64); err == nil {
@@ -267,6 +274,7 @@ func clientHelloFromRequest(r *http.Request) (clientControlMessage, bool) {
 			hello.AlertVersion = &parsed
 		}
 	}
+	hello.RuntimeCursor = runtimeCursor(query.Get("runtime_stream_id"), hello.RuntimeVersion)
 
 	return hello, true
 }

@@ -101,6 +101,116 @@ func TestParseClientControlMessage_HelloAllowsKnownVersions(t *testing.T) {
 	if cmd.CanvasSchemaVersion != 1 {
 		t.Fatalf("CanvasSchemaVersion = %d, want 1", cmd.CanvasSchemaVersion)
 	}
+	if cmd.RuntimeProtocol != 0 {
+		t.Fatalf("RuntimeProtocol = %d, want legacy default 0", cmd.RuntimeProtocol)
+	}
+	if cmd.RuntimeCursor.Known {
+		t.Fatalf("RuntimeCursor = %#v, want unknown legacy cursor", cmd.RuntimeCursor)
+	}
+}
+
+func TestParseClientControlMessage_HelloParsesRuntimeCapabilityCursor(t *testing.T) {
+	cmd, err := parseClientControlMessage([]byte(`{
+		"type":"hello",
+		"payload":{
+			"canvas_schema_version":1,
+			"runtime_protocol":2,
+			"runtime_stream_id":"runtime-stream-1",
+			"runtime_version":42
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("parseClientControlMessage returned error: %v", err)
+	}
+
+	if cmd.RuntimeProtocol != RuntimeStreamProtocolVersion {
+		t.Fatalf("RuntimeProtocol = %d, want %d", cmd.RuntimeProtocol, RuntimeStreamProtocolVersion)
+	}
+	wantCursor := RuntimeCursor{StreamID: "runtime-stream-1", Version: 42, Known: true}
+	if cmd.RuntimeCursor != wantCursor {
+		t.Fatalf("RuntimeCursor = %#v, want %#v", cmd.RuntimeCursor, wantCursor)
+	}
+}
+
+func TestParseClientControlMessage_RuntimeCursorControls(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        string
+		wantType   string
+		wantCursor RuntimeCursor
+	}{
+		{
+			name:       "resume from zero",
+			raw:        `{"type":"resume_runtime","payload":{"runtime_stream_id":"runtime-stream-1","runtime_version":0}}`,
+			wantType:   MessageTypeResumeRuntime,
+			wantCursor: RuntimeCursor{StreamID: "runtime-stream-1", Version: 0, Known: true},
+		},
+		{
+			name:       "acknowledge applied version",
+			raw:        `{"type":"runtime_ack","payload":{"runtime_stream_id":"runtime-stream-2","runtime_version":42}}`,
+			wantType:   MessageTypeRuntimeAck,
+			wantCursor: RuntimeCursor{StreamID: "runtime-stream-2", Version: 42, Known: true},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := parseClientControlMessage([]byte(tc.raw))
+			if err != nil {
+				t.Fatalf("parseClientControlMessage returned error: %v", err)
+			}
+			if cmd.Type != tc.wantType {
+				t.Fatalf("Type = %q, want %q", cmd.Type, tc.wantType)
+			}
+			if cmd.RuntimeCursor != tc.wantCursor {
+				t.Fatalf("RuntimeCursor = %#v, want %#v", cmd.RuntimeCursor, tc.wantCursor)
+			}
+		})
+	}
+}
+
+func TestParseClientControlMessage_RejectsInvalidRuntimeCursorControls(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "missing stream id",
+			raw:  `{"type":"resume_runtime","payload":{"runtime_version":1}}`,
+		},
+		{
+			name: "empty stream id",
+			raw:  `{"type":"runtime_ack","payload":{"runtime_stream_id":"","runtime_version":1}}`,
+		},
+		{
+			name: "blank stream id",
+			raw:  `{"type":"runtime_ack","payload":{"runtime_stream_id":"  ","runtime_version":1}}`,
+		},
+		{
+			name: "missing version",
+			raw:  `{"type":"resume_runtime","payload":{"runtime_stream_id":"runtime-stream-1"}}`,
+		},
+		{
+			name: "negative version",
+			raw:  `{"type":"runtime_ack","payload":{"runtime_stream_id":"runtime-stream-1","runtime_version":-1}}`,
+		},
+		{
+			name: "fractional version",
+			raw:  `{"type":"resume_runtime","payload":{"runtime_stream_id":"runtime-stream-1","runtime_version":1.5}}`,
+		},
+		{
+			name: "non finite version",
+			raw:  `{"type":"runtime_ack","payload":{"runtime_stream_id":"runtime-stream-1","runtime_version":1e309}}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseClientControlMessage([]byte(tc.raw)); err == nil {
+				t.Fatal("parseClientControlMessage error = nil, want invalid runtime cursor error")
+			}
+		})
+	}
 }
 
 func TestCloneSnapshot_PreservesNormalizedRuntimeFields(t *testing.T) {
@@ -282,6 +392,121 @@ func TestNewRuntimeDeltaMessageUsesStableEnvelope(t *testing.T) {
 	}
 	if strings.Contains(string(raw), `"primary_health"`) {
 		t.Fatalf("message = %s, want partial device patch without unchanged fields", raw)
+	}
+}
+
+func TestNewStreamSnapshotMessageIncludesRuntimeStreamID(t *testing.T) {
+	msg := NewStreamSnapshotMessage(EmptySnapshot(), 7, "runtime-stream-1")
+	payload, ok := msg.Payload.(SnapshotMessagePayload)
+	if !ok {
+		t.Fatalf("Payload = %T, want SnapshotMessagePayload", msg.Payload)
+	}
+	if payload.RuntimeStreamID != "runtime-stream-1" {
+		t.Fatalf("RuntimeStreamID = %q, want runtime-stream-1", payload.RuntimeStreamID)
+	}
+}
+
+func TestNewStreamRuntimeDeltaMessageIncludesRuntimeStreamID(t *testing.T) {
+	msg := NewStreamRuntimeDeltaMessage(EmptyRuntimeDeltaPayload(), 7, 8, "runtime-stream-1")
+	payload, ok := msg.Payload.(RuntimeDeltaMessagePayload)
+	if !ok {
+		t.Fatalf("Payload = %T, want RuntimeDeltaMessagePayload", msg.Payload)
+	}
+	if payload.RuntimeStreamID != "runtime-stream-1" {
+		t.Fatalf("RuntimeStreamID = %q, want runtime-stream-1", payload.RuntimeStreamID)
+	}
+}
+
+func TestNewRuntimeReplayMessageUsesVersionedClonedSparseDelta(t *testing.T) {
+	delta := &RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{
+			"dev-1": {
+				"cpu_percent":   42.5,
+				"runtime_flags": []string{"partial_telemetry"},
+			},
+		},
+		Links: map[string]map[string]any{},
+	}
+
+	msg := NewRuntimeReplayMessage(delta, 7, 9, "runtime-stream-1")
+	payload, ok := msg.Payload.(RuntimeReplayMessagePayload)
+	if !ok {
+		t.Fatalf("Payload = %T, want RuntimeReplayMessagePayload", msg.Payload)
+	}
+	if payload.Delta == delta {
+		t.Fatal("Delta points to caller-owned payload, want clone")
+	}
+
+	delta.Devices["dev-1"]["cpu_percent"] = 99.0
+	delta.Devices["dev-1"]["runtime_flags"].([]string)[0] = "mutated"
+
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	serialized := string(raw)
+	for _, want := range []string{
+		`"type":"runtime_replay"`,
+		`"from_version":7`,
+		`"version":9`,
+		`"runtime_stream_id":"runtime-stream-1"`,
+		`"cpu_percent":42.5`,
+		`"runtime_flags":["partial_telemetry"]`,
+	} {
+		if !strings.Contains(serialized, want) {
+			t.Fatalf("message = %s, want %s", raw, want)
+		}
+	}
+	if strings.Contains(serialized, `"primary_health"`) || strings.Contains(serialized, `"mutated"`) {
+		t.Fatalf("message = %s, want cloned sparse delta", raw)
+	}
+}
+
+func TestNewStreamReadyMessageIncludesRecoveryMetadata(t *testing.T) {
+	msg := NewStreamReadyMessage(42, 7, "rt-sha256:abc", "runtime-stream-1", "replay")
+	payload, ok := msg.Payload.(ReadyPayload)
+	if !ok {
+		t.Fatalf("Payload = %T, want ReadyPayload", msg.Payload)
+	}
+	if payload.RuntimeStreamID != "runtime-stream-1" {
+		t.Fatalf("RuntimeStreamID = %q, want runtime-stream-1", payload.RuntimeStreamID)
+	}
+	if payload.SyncMode != "replay" {
+		t.Fatalf("SyncMode = %q, want replay", payload.SyncMode)
+	}
+}
+
+func TestResyncRequiredPayloadSupportsOptionalRuntimeRecoveryMetadata(t *testing.T) {
+	targetVersion := uint64(9)
+	raw, err := json.Marshal(ResyncRequiredPayload{
+		Scope:           ResyncScopeOverview,
+		Reason:          ResyncReasonClientResync,
+		Strategy:        RuntimeSyncStrategyStream,
+		TargetVersion:   &targetVersion,
+		RuntimeStreamID: "runtime-stream-1",
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	serialized := string(raw)
+	for _, want := range []string{
+		`"strategy":"stream"`,
+		`"target_version":9`,
+		`"runtime_stream_id":"runtime-stream-1"`,
+	} {
+		if !strings.Contains(serialized, want) {
+			t.Fatalf("payload = %s, want %s", raw, want)
+		}
+	}
+
+	legacyRaw, err := json.Marshal(ResyncRequiredPayload{Scope: ResyncScopeOverview, Reason: ResyncReasonClientResync})
+	if err != nil {
+		t.Fatalf("Marshal legacy payload: %v", err)
+	}
+	if strings.Contains(string(legacyRaw), `"strategy"`) ||
+		strings.Contains(string(legacyRaw), `"target_version"`) ||
+		strings.Contains(string(legacyRaw), `"runtime_stream_id"`) {
+		t.Fatalf("legacy payload = %s, want recovery metadata omitted", legacyRaw)
 	}
 }
 

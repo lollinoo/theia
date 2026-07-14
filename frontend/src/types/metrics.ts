@@ -8,6 +8,7 @@ export type WSMessageType =
   | 'snapshot'
   | 'snapshot_delta'
   | 'runtime_delta'
+  | 'runtime_replay'
   | 'topology_delta'
   | 'metrics'
   | 'link_metrics'
@@ -189,6 +190,9 @@ export interface ResyncRequiredPayload {
     | 'client_missing_runtime_snapshot'
     | 'state_changes_dropped'
     | 'hub_buffer_full';
+  strategy?: 'stream';
+  target_version?: number;
+  runtime_stream_id?: string;
 }
 
 /** TopologyChangedPayload advertises canonical topology changes and the recommended resync endpoint. */
@@ -201,13 +205,16 @@ export interface TopologyChangedPayload {
 /** ReadyPayload acknowledges that the client's hello already matches server runtime state. */
 export interface ReadyPayload {
   runtime_version?: number;
+  runtime_stream_id?: string;
   runtime_identity?: string;
   alert_version?: number;
+  sync_mode?: string;
 }
 
 /** SnapshotEnvelopePayload wraps a full runtime snapshot with version and identity metadata. */
 export interface SnapshotEnvelopePayload {
   version: number | null;
+  runtime_stream_id?: string;
   runtime_identity?: string;
   snapshot: SnapshotPayload;
 }
@@ -224,7 +231,16 @@ export interface SnapshotDeltaEnvelopePayload {
 export interface RuntimeDeltaEnvelopePayload {
   base_version?: number;
   version?: number;
+  runtime_stream_id?: string;
   runtime_identity?: string;
+  delta: RuntimePatchPayload;
+}
+
+/** RuntimeReplayEnvelopePayload wraps a required resumable sparse runtime range. */
+export interface RuntimeReplayEnvelopePayload {
+  from_version: number;
+  version: number;
+  runtime_stream_id: string;
   delta: RuntimePatchPayload;
 }
 
@@ -276,6 +292,12 @@ export interface SnapshotDeltaWSMessage extends Omit<WSMessage, 'type' | 'payloa
 export interface RuntimeDeltaWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'runtime_delta';
   payload: RuntimeDeltaEnvelopePayload;
+}
+
+/** Describes the runtime replay wsmessage contract used by the frontend domain model. */
+export interface RuntimeReplayWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
+  type: 'runtime_replay';
+  payload: RuntimeReplayEnvelopePayload;
 }
 
 /** Describes the polling health changed wsmessage contract used by the frontend domain model. */
@@ -393,6 +415,15 @@ function readRequiredString(record: APIRecord, key: string, allowEmpty = false):
     return value;
   }
   throw new Error(`invalid required field: ${key}`);
+}
+
+// readRequiredRuntimeVersion accepts only JavaScript integers that can represent a uint64 cursor exactly.
+function readRequiredRuntimeVersion(record: APIRecord, key: string): number {
+  const value = record[key];
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+  throw new Error(`invalid runtime replay version: ${key}`);
 }
 
 // readRequiredNullableString accepts explicit null while rejecting absent or non-string values.
@@ -911,6 +942,7 @@ export function parseWSMessage(
   | SnapshotWSMessage
   | SnapshotDeltaWSMessage
   | RuntimeDeltaWSMessage
+  | RuntimeReplayWSMessage
   | PrometheusStatusWSMessage
   | PollingHealthChangedWSMessage
   | ResyncRequiredWSMessage
@@ -927,6 +959,7 @@ export function parseWSMessage(
     type !== 'snapshot' &&
     type !== 'snapshot_delta' &&
     type !== 'runtime_delta' &&
+    type !== 'runtime_replay' &&
     type !== 'topology_delta' &&
     type !== 'metrics' &&
     type !== 'link_metrics' &&
@@ -948,12 +981,16 @@ export function parseWSMessage(
           typeof payload.runtime_version === 'number' && Number.isFinite(payload.runtime_version)
             ? payload.runtime_version
             : undefined,
+        ...(typeof payload.runtime_stream_id === 'string'
+          ? { runtime_stream_id: payload.runtime_stream_id }
+          : {}),
         runtime_identity:
           typeof payload.runtime_identity === 'string' ? payload.runtime_identity : undefined,
         alert_version:
           typeof payload.alert_version === 'number' && Number.isFinite(payload.alert_version)
             ? payload.alert_version
             : undefined,
+        ...(typeof payload.sync_mode === 'string' ? { sync_mode: payload.sync_mode } : {}),
       },
     } as ReadyWSMessage;
   }
@@ -969,6 +1006,9 @@ export function parseWSMessage(
         type,
         payload: {
           version,
+          ...(typeof payload.runtime_stream_id === 'string'
+            ? { runtime_stream_id: payload.runtime_stream_id }
+            : {}),
           runtime_identity:
             typeof payload.runtime_identity === 'string' ? payload.runtime_identity : undefined,
           snapshot: parseSnapshotPayload(payload.snapshot),
@@ -1030,6 +1070,9 @@ export function parseWSMessage(
         payload: {
           base_version: baseVersion,
           version,
+          ...(typeof payload.runtime_stream_id === 'string'
+            ? { runtime_stream_id: payload.runtime_stream_id }
+            : {}),
           runtime_identity:
             typeof payload.runtime_identity === 'string' ? payload.runtime_identity : undefined,
           delta: parseRuntimePatchPayload(payload.delta),
@@ -1042,6 +1085,28 @@ export function parseWSMessage(
         delta: parseRuntimePatchPayload(value.payload),
       },
     } as RuntimeDeltaWSMessage;
+  }
+
+  if (type === 'runtime_replay') {
+    if (!isRecord(value.payload)) {
+      throw new Error('invalid runtime replay payload');
+    }
+    const payload = value.payload;
+    const fromVersion = readRequiredRuntimeVersion(payload, 'from_version');
+    const version = readRequiredRuntimeVersion(payload, 'version');
+    if (fromVersion > version) {
+      throw new Error('invalid runtime replay version range');
+    }
+
+    return {
+      type,
+      payload: {
+        from_version: fromVersion,
+        version,
+        runtime_stream_id: readRequiredString(payload, 'runtime_stream_id'),
+        delta: parseRuntimePatchPayload(payload.delta),
+      },
+    } as RuntimeReplayWSMessage;
   }
 
   if (type === 'polling_health_changed') {
@@ -1129,6 +1194,15 @@ export function parseWSMessage(
       payload: {
         scope,
         reason,
+        ...(payload.strategy === 'stream' ? { strategy: payload.strategy } : {}),
+        ...(typeof payload.target_version === 'number' &&
+        Number.isSafeInteger(payload.target_version) &&
+        payload.target_version >= 0
+          ? { target_version: payload.target_version }
+          : {}),
+        ...(typeof payload.runtime_stream_id === 'string'
+          ? { runtime_stream_id: payload.runtime_stream_id }
+          : {}),
       },
     } as ResyncRequiredWSMessage;
   }
