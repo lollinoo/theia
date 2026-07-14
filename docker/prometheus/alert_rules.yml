@@ -59,6 +59,14 @@ groups:
         annotations:
           summary: "WebSocket backpressure is dropping {{ $labels.scope }} messages"
 
+      - alert: WebSocketResyncRequired
+        expr: sum by (job, instance, scope, reason, bootstrap) (increase(theia_ws_client_resync_required_total[5m])) > 10
+        for: 60s
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket clients require repeated {{ $labels.scope }} resyncs"
+
       - alert: RuntimeRecoveryFailures
         expr: sum by (job, instance, mode, reason) (increase(theia_ws_runtime_recovery_total{outcome="failed"}[5m])) > 0
         for: 10m
