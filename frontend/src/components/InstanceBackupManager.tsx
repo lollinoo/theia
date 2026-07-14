@@ -35,6 +35,12 @@ const statusIcons: Record<string, string> = {
 
 type InitialLoadSection = 'history' | 'settings' | 'restore';
 
+type RestoreVerificationAttempt = {
+  token: number;
+  baselineOperationId: string;
+  phase: 'pending' | 'unconfirmed';
+};
+
 const initialLoadErrorMessages: Record<InitialLoadSection, string> = {
   history: 'Could not load backup history.',
   settings: 'Could not load backup settings.',
@@ -58,9 +64,12 @@ export function InstanceBackupManager() {
   const [restoreError, setRestoreError] = useState('');
   const [restoreStatus, setRestoreStatus] = useState<RestoreStatus | null>(null);
   const [restoreNotice, setRestoreNotice] = useState('');
-  const [restoreVerificationBaseline, setRestoreVerificationBaseline] = useState<string | null>(
+  const [restoreVerification, setRestoreVerification] = useState<RestoreVerificationAttempt | null>(
     null,
   );
+  const restoreVerificationRef = useRef<RestoreVerificationAttempt | null>(null);
+  const restoreVerificationTokenRef = useRef(0);
+  const restoreReconciliationRequestRef = useRef(0);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreConfirmed, setRestoreConfirmed] = useState(false);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
@@ -91,20 +100,44 @@ export function InstanceBackupManager() {
     });
   }, []);
 
+  const beginRestoreVerification = useCallback((baselineOperationId: string, notice: string) => {
+    const attempt = {
+      token: ++restoreVerificationTokenRef.current,
+      baselineOperationId,
+      phase: 'pending' as const,
+    };
+    restoreReconciliationRequestRef.current += 1;
+    restoreVerificationRef.current = attempt;
+    setRestoreVerification(attempt);
+    setRestoreNotice(notice);
+    return attempt;
+  }, []);
+
   const reconcileRestoreStatus = useCallback(
-    async (baselineOperationId: string, afterReconnect: boolean) => {
+    async (attempt: RestoreVerificationAttempt, afterReconnect: boolean) => {
+      const requestToken = ++restoreReconciliationRequestRef.current;
       try {
         const status = await fetchRestoreStatus();
-        setRestoreStatus(status);
-        clearInitialLoadError('restore');
+        const currentAttempt = restoreVerificationRef.current;
+        if (
+          currentAttempt?.token !== attempt.token ||
+          requestToken !== restoreReconciliationRequestRef.current
+        ) {
+          return;
+        }
 
-        if (status?.operation_id && status.operation_id !== baselineOperationId) {
-          setRestoreVerificationBaseline(null);
+        clearInitialLoadError('restore');
+        if (status?.operation_id && status.operation_id !== attempt.baselineOperationId) {
+          setRestoreStatus(status);
+          restoreVerificationRef.current = null;
+          setRestoreVerification(null);
           setRestoreNotice('');
           return;
         }
         if (afterReconnect) {
-          setRestoreVerificationBaseline(null);
+          const unconfirmedAttempt = { ...currentAttempt, phase: 'unconfirmed' as const };
+          restoreVerificationRef.current = unconfirmedAttempt;
+          setRestoreVerification(unconfirmedAttempt);
           setRestoreNotice('Restore could not be confirmed. Check backend logs before retrying.');
         }
       } catch {
@@ -160,14 +193,23 @@ export function InstanceBackupManager() {
         if (!cancelled) setInitialLoadError('settings');
       });
 
+    const restoreStatusRequestToken = ++restoreReconciliationRequestRef.current;
     const restoreStatusRequest = fetchRestoreStatus()
       .then((status) => {
-        if (cancelled) return;
+        if (
+          cancelled ||
+          restoreStatusRequestToken !== restoreReconciliationRequestRef.current ||
+          restoreVerificationRef.current !== null
+        ) {
+          return;
+        }
         setRestoreStatus(status);
         clearInitialLoadError('restore');
       })
       .catch(() => {
-        if (!cancelled) setInitialLoadError('restore');
+        if (!cancelled && restoreStatusRequestToken === restoreReconciliationRequestRef.current) {
+          setInitialLoadError('restore');
+        }
       });
 
     void Promise.all([backupsRequest, settingsRequest, restoreStatusRequest]).then(() => {
@@ -193,12 +235,20 @@ export function InstanceBackupManager() {
         .catch(() => {
           // non-fatal
         });
-      if (restoreVerificationBaseline !== null) {
-        void reconcileRestoreStatus(restoreVerificationBaseline, true);
+      const verification = restoreVerificationRef.current;
+      if (verification !== null) {
+        void reconcileRestoreStatus(verification, true);
       } else {
+        const restoreStatusRequestToken = ++restoreReconciliationRequestRef.current;
         void fetchRestoreStatus()
           .then((status) => {
-            if (cancelled) return;
+            if (
+              cancelled ||
+              restoreVerificationRef.current !== null ||
+              restoreStatusRequestToken !== restoreReconciliationRequestRef.current
+            ) {
+              return;
+            }
             setRestoreStatus(status);
             clearInitialLoadError('restore');
           })
@@ -212,11 +262,13 @@ export function InstanceBackupManager() {
       cancelled = true;
       window.removeEventListener('backend-reconnected', handleReconnect);
     };
-  }, [clearInitialLoadError, reconcileRestoreStatus, restoreVerificationBaseline]);
+  }, [clearInitialLoadError, reconcileRestoreStatus]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      restoreVerificationRef.current = null;
+      restoreReconciliationRequestRef.current += 1;
       stopPolling();
       if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
       if (scheduleTimerRef.current) clearTimeout(scheduleTimerRef.current);
@@ -376,6 +428,11 @@ export function InstanceBackupManager() {
   };
 
   const handleRestoreClick = () => {
+    if (restoreVerificationRef.current?.phase === 'unconfirmed') {
+      restoreVerificationRef.current = null;
+      setRestoreVerification(null);
+      setRestoreNotice('');
+    }
     fileInputRef.current?.click();
   };
 
@@ -420,7 +477,11 @@ export function InstanceBackupManager() {
 
     let baselineOperationId: string;
     try {
+      const baselineRequestToken = ++restoreReconciliationRequestRef.current;
       const baselineStatus = await fetchRestoreStatus();
+      if (baselineRequestToken !== restoreReconciliationRequestRef.current) {
+        throw new Error('restore status changed while preparing restore');
+      }
       baselineOperationId = baselineStatus?.operation_id ?? '';
       setRestoreStatus(baselineStatus);
       clearInitialLoadError('restore');
@@ -433,14 +494,15 @@ export function InstanceBackupManager() {
     try {
       await restoreInstanceBackup(restoreFile, false);
       clearRestoreSelection();
-      setRestoreVerificationBaseline(baselineOperationId);
-      setRestoreNotice('Restore staged. Restart pending.');
+      beginRestoreVerification(baselineOperationId, 'Restore staged. Restart pending.');
     } catch (err) {
       if (err instanceof RestoreOutcomeUnknownError) {
         clearRestoreSelection();
-        setRestoreVerificationBaseline(baselineOperationId);
-        setRestoreNotice('Connection interrupted during restart. Verifying restore status...');
-        void reconcileRestoreStatus(baselineOperationId, false);
+        const attempt = beginRestoreVerification(
+          baselineOperationId,
+          'Connection interrupted during restart. Verifying restore status...',
+        );
+        void reconcileRestoreStatus(attempt, false);
         return;
       }
       const message = err instanceof Error ? err.message : 'Restore failed';
@@ -516,7 +578,7 @@ export function InstanceBackupManager() {
     }
   };
 
-  const restoreMessages = restoreStatusMessages(restoreStatus);
+  const restoreMessages = restoreVerification ? [] : restoreStatusMessages(restoreStatus);
 
   const formatProgress = (backup: InstanceBackup): string => {
     if (!backup.progress) return '';
@@ -552,7 +614,7 @@ export function InstanceBackupManager() {
           <button
             type="button"
             onClick={handleRestoreClick}
-            disabled={restoreLoading || hasRunning}
+            disabled={restoreLoading || hasRunning || restoreVerification?.phase === 'pending'}
             className="flex items-center gap-1 rounded-lg border border-primary/30 bg-transparent px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/10 disabled:opacity-50 transition-colors"
           >
             {restoreLoading ? (
