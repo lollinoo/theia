@@ -53,7 +53,7 @@ export function buildTopologyRecoveryNotice(
   if (hasResync) {
     return {
       tone: 'success',
-      message: 'Live topology resynced',
+      message: 'Topology refreshed after backend resync',
     };
   }
 
