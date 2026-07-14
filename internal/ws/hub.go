@@ -81,10 +81,13 @@ type Client struct {
 	needsResync              bool
 	overviewEpoch            uint64
 	overviewRecoveryGen      uint64
+	bootstrapRecoveryGen     uint64
 	usesHTTPRuntimeBootstrap bool
 	bootstrapping            bool
 	runtimeProtocol          int
 	ackedRuntimeCursor       RuntimeCursor
+	runtimeSync              RuntimeSyncFunc
+	runtimeAck               RuntimeAckFunc
 	pendingOverviewRecovery  *overviewRecoveryState
 	detailDeviceID           uuid.UUID
 }
@@ -786,6 +789,10 @@ func (c *Client) readPump() {
 		switch cmd.Type {
 		case MessageTypeHello:
 			c.acceptHello(cmd)
+		case MessageTypeResumeRuntime:
+			c.acceptRuntimeResume(cmd.RuntimeCursor)
+		case MessageTypeRuntimeAck:
+			c.acceptRuntimeAck(cmd.RuntimeCursor)
 		case MessageTypeSubscribeDetail:
 			c.hub.SetDetailSubscription(c, cmd.DeviceID)
 		case MessageTypeUnsubscribeDetail:
@@ -805,10 +812,15 @@ func (c *Client) markDisconnected() {
 
 func (c *Client) acceptHello(cmd clientControlMessage) {
 	c.mu.Lock()
-	c.usesHTTPRuntimeBootstrap = true
-	c.runtimeProtocol = cmd.RuntimeProtocol
-	if cmd.RuntimeCursor.Known {
-		c.ackedRuntimeCursor = cmd.RuntimeCursor
+	bootstrapping := c.bootstrapping
+	runtimeSync := c.runtimeSync
+	if bootstrapping || runtimeSync == nil {
+		c.initializeRuntimeHelloLocked(cmd)
+	} else {
+		c.usesHTTPRuntimeBootstrap = true
+		c.runtimeProtocol = cmd.RuntimeProtocol
+	}
+	if runtimeSync == nil && cmd.RuntimeCursor.Known {
 		if pending := c.pendingOverviewRecovery; pending != nil &&
 			pending.streamID == cmd.RuntimeCursor.StreamID &&
 			cmd.RuntimeCursor.Version >= pending.targetVersion {
@@ -818,6 +830,15 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	}
 	c.mu.Unlock()
 
+	if !bootstrapping {
+		if runtimeSync != nil {
+			runtimeSync(c, RuntimeSyncRequest{
+				Cursor: cmd.RuntimeCursor,
+				Reason: ResyncReasonClientResync,
+			})
+		}
+		return
+	}
 	if c.hello == nil {
 		return
 	}
@@ -825,6 +846,70 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	select {
 	case c.hello <- cmd:
 	default:
+	}
+}
+
+func (c *Client) initializeRuntimeHello(cmd clientControlMessage) {
+	c.mu.Lock()
+	c.initializeRuntimeHelloLocked(cmd)
+	c.mu.Unlock()
+}
+
+func (c *Client) initializeRuntimeHelloLocked(cmd clientControlMessage) {
+	c.usesHTTPRuntimeBootstrap = true
+	c.runtimeProtocol = cmd.RuntimeProtocol
+	if cmd.RuntimeCursor.Known {
+		c.ackedRuntimeCursor = cmd.RuntimeCursor
+	}
+}
+
+func (c *Client) acceptRuntimeResume(cursor RuntimeCursor) {
+	c.mu.Lock()
+	bootstrapping := c.bootstrapping
+	runtimeSync := c.runtimeSync
+	c.mu.Unlock()
+	if bootstrapping || runtimeSync == nil {
+		return
+	}
+	runtimeSync(c, RuntimeSyncRequest{
+		Cursor: cursor,
+		Reason: ResyncReasonClientResync,
+	})
+}
+
+func (c *Client) acceptRuntimeAck(cursor RuntimeCursor) {
+	if !cursor.Known {
+		return
+	}
+
+	c.mu.Lock()
+	current := c.ackedRuntimeCursor
+	pending := c.pendingOverviewRecovery
+	sameStreamAdvance := current.Known &&
+		cursor.StreamID == current.StreamID &&
+		cursor.Version > current.Version
+	// A matching recovery may complete at the current same-stream cursor, but
+	// an ACK without pending recovery must still advance monotonically.
+	pendingRecoveryCompletion := pending != nil &&
+		pending.streamID == cursor.StreamID &&
+		cursor.Version >= pending.targetVersion &&
+		(!current.Known || cursor.StreamID != current.StreamID || cursor.Version >= current.Version)
+	if !sameStreamAdvance && !pendingRecoveryCompletion {
+		c.mu.Unlock()
+		return
+	}
+	c.ackedRuntimeCursor = cursor
+	if pending != nil &&
+		pending.streamID == cursor.StreamID &&
+		cursor.Version >= pending.targetVersion {
+		c.pendingOverviewRecovery = nil
+		c.needsResync = false
+	}
+	runtimeAck := c.runtimeAck
+	c.mu.Unlock()
+
+	if runtimeAck != nil {
+		runtimeAck(c, cursor)
 	}
 }
 
@@ -861,6 +946,7 @@ func (c *Client) runtimeState() overviewClientRuntimeState {
 func (c *Client) beginBootstrapSnapshotSelection() overviewBootstrapSelection {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.bootstrapRecoveryGen = c.overviewRecoveryGen
 	return overviewBootstrapSelection{
 		mailboxEpoch:       c.overviewEpoch,
 		recoveryGeneration: c.overviewRecoveryGen,
@@ -896,7 +982,10 @@ func (c *Client) usesHTTPBootstrap() bool {
 func (c *Client) canReceiveOverviewBroadcast() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return !c.closed && !c.bootstrapping
+	// A complete recovery batch makes later deltas safe because they queue
+	// behind its ready barrier even if an early ACK cleared pending metadata.
+	completeRecoveryInstalled := c.overviewRecoveryGen != c.bootstrapRecoveryGen
+	return !c.closed && (!c.bootstrapping || completeRecoveryInstalled)
 }
 
 func (c *Client) writePump() {

@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
+	"github.com/lollinoo/theia/internal/ws"
 	"gopkg.in/yaml.v3"
 )
 
@@ -61,6 +63,90 @@ func (stubRuntimeServer) Shutdown(context.Context) error {
 
 type runtimeDebugSettingsRepo struct {
 	values map[string]string
+}
+
+type runtimeWebSocketPipelineStub struct {
+	hub       *ws.Hub
+	syncCalls chan ws.RuntimeSyncRequest
+	ackCalls  chan ws.RuntimeCursor
+}
+
+func (s *runtimeWebSocketPipelineStub) GetOrBuildOverviewSnapshot() (*ws.SnapshotPayload, uint64) {
+	return ws.EmptySnapshot(), 42
+}
+
+func (s *runtimeWebSocketPipelineStub) GetAlerts() ws.AlertMessagePayload {
+	return ws.AlertMessagePayload{}
+}
+
+func (s *runtimeWebSocketPipelineStub) GetPrometheusStatus() ws.PrometheusStatusPayload {
+	return ws.PrometheusStatusPayload{}
+}
+
+func (s *runtimeWebSocketPipelineStub) SyncOverviewClient(client *ws.Client, request ws.RuntimeSyncRequest) {
+	snapshot := ws.EmptySnapshot()
+	s.hub.ReplaceOverviewStream(client, ws.OverviewSyncBatch{
+		Reason:          ws.ResyncReasonClientResync,
+		Mode:            ws.OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   42,
+		RuntimeIdentity: ws.RuntimeIdentityForSnapshot(snapshot),
+		Snapshot:        snapshot,
+	})
+	s.syncCalls <- request
+}
+
+func (s *runtimeWebSocketPipelineStub) ObserveRuntimeAck(_ *ws.Client, cursor ws.RuntimeCursor) {
+	s.ackCalls <- cursor
+}
+
+func TestRuntimeBootstrapWebSocketHandlerWiresRuntimeControls(t *testing.T) {
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := &runtimeWebSocketPipelineStub{
+		hub:       hub,
+		syncCalls: make(chan ws.RuntimeSyncRequest, 1),
+		ackCalls:  make(chan ws.RuntimeCursor, 1),
+	}
+	server := httptest.NewServer(newRuntimeWebSocketHandler(hub, pipeline, nil))
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") +
+		"?runtime_protocol=2&runtime_stream_id=runtime-stream-1&runtime_version=41"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial runtime WebSocket handler: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	wantBootstrapCursor := ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 41, Known: true}
+	select {
+	case request := <-pipeline.syncCalls:
+		if request.Cursor != wantBootstrapCursor {
+			t.Fatalf("bootstrap sync cursor = %#v, want %#v", request.Cursor, wantBootstrapCursor)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for production runtime sync callback")
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeRuntimeAck,
+		"payload": map[string]any{
+			"runtime_stream_id": "runtime-stream-1",
+			"runtime_version":   42,
+		},
+	}); err != nil {
+		t.Fatalf("write production runtime ACK: %v", err)
+	}
+	wantAck := ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 42, Known: true}
+	select {
+	case cursor := <-pipeline.ackCalls:
+		if cursor != wantAck {
+			t.Fatalf("observed runtime ACK = %#v, want %#v", cursor, wantAck)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for production runtime ACK observer")
+	}
 }
 
 func (r runtimeDebugSettingsRepo) Get(key string) (string, error) {

@@ -276,6 +276,10 @@ func (p *PipelineOrchestrator) SyncOverviewClient(client *ws.Client, request ws.
 	p.syncOverviewClientLocked(client, request)
 }
 
+// ObserveRuntimeAck receives a runtime ACK after the WebSocket client validates
+// a monotonic cursor or completion of its installed recovery batch.
+func (p *PipelineOrchestrator) ObserveRuntimeAck(_ *ws.Client, _ ws.RuntimeCursor) {}
+
 // syncOverviewClientLocked requires overviewBuildMu to remain held.
 func (p *PipelineOrchestrator) syncOverviewClientLocked(client *ws.Client, request ws.RuntimeSyncRequest) {
 	if p == nil || p.hub == nil || client == nil {

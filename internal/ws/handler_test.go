@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1331,4 +1332,1026 @@ func TestHandlerServeHTTP_StaleHelloMarksClientAwaitingHTTPResync(t *testing.T) 
 		t.Fatal("expected stale hello client to be marked as awaiting HTTP resync")
 	}
 	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerRuntimeV2QueryCursorInvokesSyncBeforeBroadcastReady(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	type syncEvent struct {
+		request        RuntimeSyncRequest
+		broadcastReady bool
+		protocol       int
+		cursor         RuntimeCursor
+	}
+	events := make(chan syncEvent, 2)
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return EmptySnapshot(), 42 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(client *Client, request RuntimeSyncRequest) {
+			events <- syncEvent{
+				request:        request,
+				broadcastReady: client.canReceiveOverviewBroadcast(),
+				protocol:       client.RuntimeProtocol(),
+				cursor:         client.AckedRuntimeCursor(),
+			}
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "41")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	wantCursor := RuntimeCursor{StreamID: "runtime-stream-1", Version: 41, Known: true}
+	select {
+	case event := <-events:
+		if event.request.Cursor != wantCursor {
+			t.Fatalf("sync request cursor = %#v, want %#v", event.request.Cursor, wantCursor)
+		}
+		if event.broadcastReady {
+			t.Fatal("runtime sync callback ran after overview broadcasts became eligible")
+		}
+		if event.protocol != RuntimeStreamProtocolVersion || event.cursor != wantCursor {
+			t.Fatalf("client runtime state = protocol %d cursor %#v, want protocol %d cursor %#v", event.protocol, event.cursor, RuntimeStreamProtocolVersion, wantCursor)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for protocol-v2 bootstrap sync callback")
+	}
+
+	select {
+	case event := <-events:
+		t.Fatalf("protocol-v2 query invoked duplicate sync callback: %#v", event.request)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestHandlerResumeRuntimeInvokesSyncAfterBootstrap(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	events := make(chan RuntimeSyncRequest, 2)
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return EmptySnapshot(), 42 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(client *Client, request RuntimeSyncRequest) {
+			_ = client.AckedRuntimeCursor()
+			events <- request
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "41")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case <-events:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bootstrap sync callback")
+	}
+	deadline := time.Now().Add(time.Second)
+	for !hub.HasOverviewClients() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !hub.HasOverviewClients() {
+		t.Fatal("client did not become overview-broadcast ready after bootstrap sync")
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": MessageTypeResumeRuntime,
+		"payload": map[string]any{
+			"runtime_stream_id": "runtime-stream-1",
+			"runtime_version":   42,
+		},
+	}); err != nil {
+		t.Fatalf("write resume_runtime: %v", err)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 42, Known: true}
+	select {
+	case request := <-events:
+		if request.Cursor != want {
+			t.Fatalf("resume sync cursor = %#v, want %#v", request.Cursor, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for resume_runtime sync callback")
+	}
+}
+
+func TestHandlerAckRuntimeUpdatesOnlyMonotonicSameStreamCursor(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	bootstrapSynced := make(chan struct{}, 1)
+	type ackEvent struct {
+		cursor       RuntimeCursor
+		clientCursor RuntimeCursor
+	}
+	acks := make(chan ackEvent, 3)
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return EmptySnapshot(), 10 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(_ *Client, _ RuntimeSyncRequest) {
+			bootstrapSynced <- struct{}{}
+		}),
+		WithRuntimeAck(func(client *Client, cursor RuntimeCursor) {
+			acks <- ackEvent{cursor: cursor, clientCursor: client.AckedRuntimeCursor()}
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "5")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case <-bootstrapSynced:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bootstrap sync callback")
+	}
+
+	writeAck := func(streamID string, version uint64) {
+		t.Helper()
+		if err := conn.WriteJSON(map[string]any{
+			"type": MessageTypeRuntimeAck,
+			"payload": map[string]any{
+				"runtime_stream_id": streamID,
+				"runtime_version":   version,
+			},
+		}); err != nil {
+			t.Fatalf("write runtime_ack %s/%d: %v", streamID, version, err)
+		}
+	}
+	assertAck := func(want RuntimeCursor) {
+		t.Helper()
+		select {
+		case event := <-acks:
+			if event.cursor != want || event.clientCursor != want {
+				t.Fatalf("ack event = cursor %#v client cursor %#v, want %#v", event.cursor, event.clientCursor, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for runtime ACK %#v", want)
+		}
+	}
+
+	writeAck("runtime-stream-1", 6)
+	assertAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 6, Known: true})
+	writeAck("runtime-stream-1", 4)
+	writeAck("runtime-stream-2", 7)
+	select {
+	case event := <-acks:
+		t.Fatalf("invalid ACK invoked observer: %#v", event.cursor)
+	case <-time.After(100 * time.Millisecond):
+	}
+	writeAck("runtime-stream-1", 7)
+	assertAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 7, Known: true})
+}
+
+func TestHandlerAckRuntimeAcceptsInstalledRecoveryStreamTransition(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	bootstrapSynced := make(chan bool, 1)
+	acks := make(chan RuntimeCursor, 1)
+	snapshot := EmptySnapshot()
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return snapshot, 10 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(client *Client, _ RuntimeSyncRequest) {
+			bootstrapSynced <- hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+				Reason:          ResyncReasonClientResync,
+				Mode:            OverviewSyncModeSnapshot,
+				RuntimeStreamID: "runtime-stream-2",
+				TargetVersion:   10,
+				RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+				Snapshot:        snapshot,
+			})
+		}),
+		WithRuntimeAck(func(client *Client, _ RuntimeCursor) {
+			acks <- client.AckedRuntimeCursor()
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "5")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case ok := <-bootstrapSynced:
+		if !ok {
+			t.Fatal("failed to install rotated-stream snapshot recovery")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for rotated-stream snapshot recovery")
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"type": MessageTypeRuntimeAck,
+		"payload": map[string]any{
+			"runtime_stream_id": "runtime-stream-2",
+			"runtime_version":   10,
+		},
+	}); err != nil {
+		t.Fatalf("write rotated-stream runtime ACK: %v", err)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-2", Version: 10, Known: true}
+	select {
+	case cursor := <-acks:
+		if cursor != want {
+			t.Fatalf("acknowledged rotated-stream cursor = %#v, want %#v", cursor, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for rotated-stream runtime ACK")
+	}
+}
+
+func TestHandlerAckRuntimeUnknownCursorRequiresInstalledRecoveryStream(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	type syncResult struct {
+		client    *Client
+		installed bool
+	}
+	bootstrapSynced := make(chan syncResult, 1)
+	acks := make(chan RuntimeCursor, 2)
+	snapshot := EmptySnapshot()
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return snapshot, 10 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(client *Client, _ RuntimeSyncRequest) {
+			bootstrapSynced <- syncResult{
+				client: client,
+				installed: hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+					Reason:          ResyncReasonClientResync,
+					Mode:            OverviewSyncModeSnapshot,
+					RuntimeStreamID: "runtime-stream-A",
+					TargetVersion:   10,
+					RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+					Snapshot:        snapshot,
+				}),
+			}
+		}),
+		WithRuntimeAck(func(_ *Client, cursor RuntimeCursor) {
+			acks <- cursor
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client without cursor: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	var client *Client
+	select {
+	case result := <-bootstrapSynced:
+		if !result.installed {
+			t.Fatal("failed to install unknown-cursor snapshot recovery")
+		}
+		client = result.client
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for unknown-cursor snapshot recovery")
+	}
+	if got := client.AckedRuntimeCursor(); got.Known {
+		t.Fatalf("initial acknowledged cursor = %#v, want unknown", got)
+	}
+
+	writeAck := func(streamID string, version uint64) {
+		t.Helper()
+		if err := conn.WriteJSON(map[string]any{
+			"type": MessageTypeRuntimeAck,
+			"payload": map[string]any{
+				"runtime_stream_id": streamID,
+				"runtime_version":   version,
+			},
+		}); err != nil {
+			t.Fatalf("write runtime_ack %s/%d: %v", streamID, version, err)
+		}
+	}
+
+	writeAck("runtime-stream-B", 1)
+	select {
+	case cursor := <-acks:
+		t.Fatalf("arbitrary first ACK invoked observer with %#v", cursor)
+	case <-time.After(100 * time.Millisecond):
+	}
+	client.mu.Lock()
+	invalidCursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if invalidCursor.Known {
+		t.Fatalf("arbitrary first ACK changed cursor to %#v", invalidCursor)
+	}
+	if pending == nil || pending.streamID != "runtime-stream-A" || pending.targetVersion != 10 || !needsResync {
+		t.Fatalf("arbitrary first ACK changed recovery state: pending=%#v needs_resync=%t", pending, needsResync)
+	}
+
+	writeAck("runtime-stream-A", 10)
+	want := RuntimeCursor{StreamID: "runtime-stream-A", Version: 10, Known: true}
+	select {
+	case cursor := <-acks:
+		if cursor != want {
+			t.Fatalf("observed recovery ACK = %#v, want %#v", cursor, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for installed recovery-stream ACK")
+	}
+	client.mu.Lock()
+	acceptedCursor := client.ackedRuntimeCursor
+	pending = client.pendingOverviewRecovery
+	needsResync = client.needsResync
+	client.mu.Unlock()
+	if acceptedCursor != want || pending != nil || needsResync {
+		t.Fatalf("accepted recovery ACK state = cursor %#v pending %#v needs_resync %t", acceptedCursor, pending, needsResync)
+	}
+}
+
+func TestHandlerAckRuntimeCompletesInstalledSameCursorRecovery(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	type syncResult struct {
+		client    *Client
+		installed bool
+	}
+	bootstrapSynced := make(chan syncResult, 1)
+	acks := make(chan RuntimeCursor, 2)
+	snapshot := EmptySnapshot()
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return snapshot, 10 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(client *Client, _ RuntimeSyncRequest) {
+			bootstrapSynced <- syncResult{
+				client: client,
+				installed: hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+					Reason:          ResyncReasonClientResync,
+					Mode:            OverviewSyncModeSnapshot,
+					RuntimeStreamID: "runtime-stream-1",
+					TargetVersion:   10,
+					RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+					Snapshot:        snapshot,
+				}),
+			}
+		}),
+		WithRuntimeAck(func(_ *Client, cursor RuntimeCursor) {
+			acks <- cursor
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "10")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial same-cursor recovery client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	var client *Client
+	select {
+	case result := <-bootstrapSynced:
+		if !result.installed {
+			t.Fatal("failed to install same-cursor snapshot recovery")
+		}
+		client = result.client
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for same-cursor snapshot recovery")
+	}
+
+	writeAck := func() {
+		t.Helper()
+		if err := conn.WriteJSON(map[string]any{
+			"type": MessageTypeRuntimeAck,
+			"payload": map[string]any{
+				"runtime_stream_id": "runtime-stream-1",
+				"runtime_version":   10,
+			},
+		}); err != nil {
+			t.Fatalf("write same-cursor runtime ACK: %v", err)
+		}
+	}
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	writeAck()
+	select {
+	case cursor := <-acks:
+		if cursor != want {
+			t.Fatalf("observed same-cursor recovery ACK = %#v, want %#v", cursor, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for same-cursor recovery ACK")
+	}
+	client.mu.Lock()
+	acceptedCursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if acceptedCursor != want || pending != nil || needsResync {
+		t.Fatalf("same-cursor recovery ACK state = cursor %#v pending %#v needs_resync %t", acceptedCursor, pending, needsResync)
+	}
+
+	writeAck()
+	select {
+	case cursor := <-acks:
+		t.Fatalf("duplicate same-cursor ACK without pending recovery invoked observer with %#v", cursor)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestHandlerRuntimeV2HelloRoutesRequestWithoutRegressingAckCursor(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	type syncEvent struct {
+		request RuntimeSyncRequest
+		cursor  RuntimeCursor
+	}
+	events := make(chan syncEvent, 2)
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return EmptySnapshot(), 6 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(client *Client, request RuntimeSyncRequest) {
+			events <- syncEvent{request: request, cursor: client.AckedRuntimeCursor()}
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "5")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case <-events:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bootstrap sync callback")
+	}
+	deadline := time.Now().Add(time.Second)
+	for !hub.HasOverviewClients() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !hub.HasOverviewClients() {
+		t.Fatal("client did not become overview-broadcast ready")
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": MessageTypeHello,
+		"payload": map[string]any{
+			"runtime_protocol":  RuntimeStreamProtocolVersion,
+			"runtime_stream_id": "runtime-stream-1",
+			"runtime_version":   3,
+		},
+	}); err != nil {
+		t.Fatalf("write post-bootstrap hello: %v", err)
+	}
+
+	wantRequest := RuntimeCursor{StreamID: "runtime-stream-1", Version: 3, Known: true}
+	wantAck := RuntimeCursor{StreamID: "runtime-stream-1", Version: 5, Known: true}
+	select {
+	case event := <-events:
+		if event.request.Cursor != wantRequest {
+			t.Fatalf("hello sync request cursor = %#v, want %#v", event.request.Cursor, wantRequest)
+		}
+		if event.cursor != wantAck {
+			t.Fatalf("hello regressed acknowledged cursor to %#v, want %#v", event.cursor, wantAck)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for post-bootstrap hello sync callback")
+	}
+}
+
+func TestHandlerLegacyHelloRoutesSyncWithoutClearingRecovery(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	type syncEvent struct {
+		client      *Client
+		request     RuntimeSyncRequest
+		needsResync bool
+		pending     bool
+	}
+	events := make(chan syncEvent, 2)
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return EmptySnapshot(), 6 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(client *Client, request RuntimeSyncRequest) {
+			client.mu.Lock()
+			event := syncEvent{
+				client:      client,
+				request:     request,
+				needsResync: client.needsResync,
+				pending:     client.pendingOverviewRecovery != nil,
+			}
+			client.mu.Unlock()
+			events <- event
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "5")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	var client *Client
+	select {
+	case event := <-events:
+		client = event.client
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bootstrap sync callback")
+	}
+	deadline := time.Now().Add(time.Second)
+	for !hub.HasOverviewClients() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !hub.HasOverviewClients() {
+		t.Fatal("client did not become overview-broadcast ready")
+	}
+
+	client.mu.Lock()
+	client.needsResync = true
+	client.pendingOverviewRecovery = &overviewRecoveryState{
+		streamID:      "runtime-stream-1",
+		targetVersion: 6,
+		mode:          OverviewSyncModeReplay,
+	}
+	client.mu.Unlock()
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": MessageTypeHello,
+		"payload": map[string]any{
+			"canvas_schema_version": 1,
+			"runtime_version":       6,
+		},
+	}); err != nil {
+		t.Fatalf("write post-bootstrap legacy hello: %v", err)
+	}
+
+	select {
+	case event := <-events:
+		if event.request.Cursor.Known {
+			t.Fatalf("legacy hello sync cursor = %#v, want unknown", event.request.Cursor)
+		}
+		if !event.needsResync || !event.pending {
+			t.Fatalf("legacy hello recovery state = needs_resync %t pending %t, want true true", event.needsResync, event.pending)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for post-bootstrap legacy hello sync callback")
+	}
+}
+
+func TestHandlerRuntimeV2BootstrapInstallsOneAtomicSyncBatch(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	var snapshotMu sync.Mutex
+	snapshotCalls := 0
+	recoverySnapshot := EmptySnapshot()
+	recoverySnapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+	syncResults := make(chan bool, 1)
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			snapshotMu.Lock()
+			defer snapshotMu.Unlock()
+			snapshotCalls++
+			return EmptySnapshot(), 42
+		},
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(client *Client, _ RuntimeSyncRequest) {
+			syncResults <- hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+				Reason:          ResyncReasonClientResync,
+				Mode:            OverviewSyncModeSnapshot,
+				RuntimeStreamID: "runtime-stream-1",
+				TargetVersion:   43,
+				RuntimeIdentity: RuntimeIdentityForSnapshot(recoverySnapshot),
+				Snapshot:        recoverySnapshot,
+			})
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "42")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case ok := <-syncResults:
+		if !ok {
+			t.Fatal("runtime sync callback could not install atomic snapshot batch")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for runtime sync batch installation")
+	}
+
+	runtimeTypes := make([]string, 0, 3)
+	for len(runtimeTypes) < 3 {
+		if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatalf("set bootstrap read deadline: %v", err)
+		}
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read protocol-v2 bootstrap message: %v", err)
+		}
+		var message struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &message); err != nil {
+			t.Fatalf("decode protocol-v2 bootstrap message: %v", err)
+		}
+		if message.Type == MessageTypeAlert || message.Type == MessageTypePrometheusStatus {
+			continue
+		}
+		runtimeTypes = append(runtimeTypes, message.Type)
+	}
+	want := []string{MessageTypeResyncRequired, MessageTypeSnapshot, MessageTypeReady}
+	for i := range want {
+		if runtimeTypes[i] != want[i] {
+			t.Fatalf("runtime bootstrap message types = %v, want %v", runtimeTypes, want)
+		}
+	}
+	snapshotMu.Lock()
+	gotSnapshotCalls := snapshotCalls
+	snapshotMu.Unlock()
+	if gotSnapshotCalls != 1 {
+		t.Fatalf("snapshot callback calls = %d, want 1 without writeRuntimeCatchUp", gotSnapshotCalls)
+	}
+	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerRuntimeV2SyncBatchQueuesDeltaBeforeBroadcastReady(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	snapshot := EmptySnapshot()
+	batchInstalled := make(chan *Client, 1)
+	releaseSync := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseSync) })
+	}
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return snapshot, 10 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(client *Client, _ RuntimeSyncRequest) {
+			if !hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+				Reason:          ResyncReasonClientResync,
+				Mode:            OverviewSyncModeSnapshot,
+				RuntimeStreamID: "runtime-stream-1",
+				TargetVersion:   10,
+				RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+				Snapshot:        snapshot,
+			}) {
+				batchInstalled <- nil
+				return
+			}
+			batchInstalled <- client
+			<-releaseSync
+		}),
+	))
+	t.Cleanup(func() {
+		release()
+		server.Close()
+	})
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "9")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case client := <-batchInstalled:
+		if client == nil {
+			t.Fatal("runtime sync callback could not install bootstrap batch")
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type": MessageTypeRuntimeAck,
+			"payload": map[string]any{
+				"runtime_stream_id": "runtime-stream-1",
+				"runtime_version":   10,
+			},
+		}); err != nil {
+			t.Fatalf("acknowledge queued bootstrap batch: %v", err)
+		}
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			client.mu.Lock()
+			pending := client.pendingOverviewRecovery
+			cursor := client.ackedRuntimeCursor
+			queued := len(client.overviewSend)
+			client.mu.Unlock()
+			if pending == nil && cursor.Version == 10 {
+				if queued != 3 {
+					t.Fatalf("ACK-cleared bootstrap batch queued messages = %d, want 3", queued)
+				}
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		client.mu.Lock()
+		pending := client.pendingOverviewRecovery
+		cursor := client.ackedRuntimeCursor
+		client.mu.Unlock()
+		if pending != nil || cursor.Version != 10 {
+			t.Fatalf("bootstrap ACK state = pending %#v cursor %#v, want nil cursor version 10", pending, cursor)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bootstrap batch installation")
+	}
+	hub.BroadcastOverviewStreamDelta(
+		EmptyRuntimeDeltaPayload(),
+		10,
+		11,
+		"runtime-stream-1",
+	)
+	release()
+
+	runtimeTypes := make([]string, 0, 4)
+	for len(runtimeTypes) < 4 {
+		if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatalf("set bootstrap read deadline: %v", err)
+		}
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read bootstrap/delta message %d: %v", len(runtimeTypes)+1, err)
+		}
+		var message struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &message); err != nil {
+			t.Fatalf("decode bootstrap/delta message: %v", err)
+		}
+		if message.Type == MessageTypeAlert || message.Type == MessageTypePrometheusStatus {
+			continue
+		}
+		runtimeTypes = append(runtimeTypes, message.Type)
+	}
+	want := []string{
+		MessageTypeResyncRequired,
+		MessageTypeSnapshot,
+		MessageTypeReady,
+		MessageTypeRuntimeDelta,
+	}
+	for i := range want {
+		if runtimeTypes[i] != want[i] {
+			t.Fatalf("runtime bootstrap/delta types = %v, want %v", runtimeTypes, want)
+		}
+	}
+	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerRuntimeV2WithoutSyncOptionPreservesLegacyBootstrap(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return EmptySnapshot(), 42 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "42")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client without sync option: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set bootstrap read deadline: %v", err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read legacy-compatible bootstrap message: %v", err)
+	}
+	var message struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("decode legacy-compatible bootstrap message: %v", err)
+	}
+	if message.Type != MessageTypeReady {
+		t.Fatalf("bootstrap message type = %q, want legacy-compatible ready", message.Type)
+	}
+	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerRuntimeV2PrometheusBootstrapPrecedesQueuedNewerStatus(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return EmptySnapshot(), 42 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		func() PrometheusStatusPayload {
+			hub.Broadcast(Message{
+				Type: MessageTypePrometheusStatus,
+				Payload: PrometheusStatusPayload{
+					Enabled:   true,
+					Available: true,
+				},
+			})
+			return PrometheusStatusPayload{Enabled: true, Available: false}
+		},
+		WithRuntimeSync(func(_ *Client, _ RuntimeSyncRequest) {}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "42")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	availability := make([]bool, 0, 2)
+	for len(availability) < 2 {
+		if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatalf("set Prometheus status read deadline: %v", err)
+		}
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read Prometheus status message: %v", err)
+		}
+		var message struct {
+			Type    string                  `json:"type"`
+			Payload PrometheusStatusPayload `json:"payload"`
+		}
+		if err := json.Unmarshal(raw, &message); err != nil {
+			t.Fatalf("decode Prometheus status message: %v", err)
+		}
+		if message.Type == MessageTypePrometheusStatus {
+			availability = append(availability, message.Payload.Available)
+		}
+	}
+	if availability[0] || !availability[1] {
+		t.Fatalf("Prometheus availability order = %v, want bootstrap false then queued newer true", availability)
+	}
+	conn.SetReadDeadline(time.Time{})
+}
+
+func TestHandlerBootstrapFailureRemovesRegisteredClient(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	unsupported := math.NaN()
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", CPUPercent: &unsupported}
+	snapshotCalled := make(chan struct{})
+	var snapshotOnce sync.Once
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			snapshotOnce.Do(func() { close(snapshotCalled) })
+			return snapshot, 42
+		},
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+	))
+	t.Cleanup(server.Close)
+
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial bootstrap failure client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	select {
+	case <-snapshotCalled:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for failing snapshot callback")
+	}
+	registeredDeadline := time.Now().Add(time.Second)
+	for len(hub.copyClients()) == 0 && time.Now().Before(registeredDeadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(hub.copyClients()) != 1 {
+		t.Fatalf("registered clients = %d, want 1 before bootstrap failure", len(hub.copyClients()))
+	}
+	removedDeadline := time.Now().Add(2 * time.Second)
+	for len(hub.copyClients()) != 0 && time.Now().Before(removedDeadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := len(hub.copyClients()); got != 0 {
+		t.Fatalf("registered clients after bootstrap failure = %d, want 0", got)
+	}
 }
