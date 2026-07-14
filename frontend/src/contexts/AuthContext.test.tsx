@@ -1,7 +1,7 @@
 /**
  * Exercises auth context shared context behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AuthUser, fetchCurrentUser, logoutUser } from '../api/client';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -55,6 +55,14 @@ function renderProbe() {
   );
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 describe('AuthContext', () => {
   beforeEach(() => {
     vi.mocked(fetchCurrentUser).mockReset();
@@ -104,5 +112,72 @@ describe('AuthContext', () => {
     });
     expect(screen.getByTestId('auth-user')).toHaveTextContent('none');
     expect(screen.getByTestId('auth-error')).toHaveTextContent('none');
+  });
+
+  it('rechecks and clears a restored session after a backend disconnect', async () => {
+    vi.mocked(fetchCurrentUser)
+      .mockResolvedValueOnce({ authenticated: true, user: authUser() })
+      .mockResolvedValueOnce({ authenticated: false });
+
+    renderProbe();
+
+    expect(await screen.findByTestId('auth-status')).toHaveTextContent('authenticated');
+
+    act(() => {
+      window.dispatchEvent(new Event('backend-session-check-required'));
+    });
+
+    await waitFor(() => {
+      expect(fetchCurrentUser).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('auth-status')).toHaveTextContent('unauthenticated');
+    });
+    expect(screen.getByTestId('auth-user')).toHaveTextContent('none');
+  });
+
+  it('keeps the current UI session while the backend is unavailable', async () => {
+    vi.mocked(fetchCurrentUser)
+      .mockResolvedValueOnce({ authenticated: true, user: authUser() })
+      .mockRejectedValueOnce(new Error('backend restarting'));
+
+    renderProbe();
+
+    expect(await screen.findByTestId('auth-status')).toHaveTextContent('authenticated');
+
+    act(() => {
+      window.dispatchEvent(new Event('backend-session-check-required'));
+    });
+
+    await waitFor(() => expect(fetchCurrentUser).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('auth-status')).toHaveTextContent('authenticated');
+    expect(screen.getByTestId('auth-user')).toHaveTextContent('alice');
+  });
+
+  it('ignores a stale authenticated probe after a newer probe confirms revocation', async () => {
+    const staleProbe = deferred<Awaited<ReturnType<typeof fetchCurrentUser>>>();
+    vi.mocked(fetchCurrentUser)
+      .mockResolvedValueOnce({ authenticated: true, user: authUser() })
+      .mockReturnValueOnce(staleProbe.promise)
+      .mockResolvedValueOnce({ authenticated: false });
+
+    renderProbe();
+    expect(await screen.findByTestId('auth-status')).toHaveTextContent('authenticated');
+
+    act(() => {
+      window.dispatchEvent(new Event('backend-session-check-required'));
+      window.dispatchEvent(new Event('backend-session-check-required'));
+    });
+
+    await waitFor(() => {
+      expect(fetchCurrentUser).toHaveBeenCalledTimes(3);
+      expect(screen.getByTestId('auth-status')).toHaveTextContent('unauthenticated');
+    });
+
+    await act(async () => {
+      staleProbe.resolve({ authenticated: true, user: authUser() });
+      await staleProbe.promise;
+    });
+
+    expect(screen.getByTestId('auth-status')).toHaveTextContent('unauthenticated');
+    expect(screen.getByTestId('auth-user')).toHaveTextContent('none');
   });
 });

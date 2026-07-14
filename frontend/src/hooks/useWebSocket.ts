@@ -8,6 +8,7 @@ import {
   recordCanvasDiagnosticEvent,
   updateCanvasDiagnosticsState,
 } from '../components/canvas/canvasDiagnostics';
+import { BACKEND_SESSION_CHECK_REQUIRED_EVENT } from '../events/backend';
 import {
   type AlertDTO,
   type AlertWSMessage,
@@ -627,6 +628,7 @@ export function useWebSocket(
           socketRef.current = null;
         }
         if (disposed.current) return;
+        window.dispatchEvent(new Event(BACKEND_SESSION_CHECK_REQUIRED_EVENT));
         setConnected(false);
         updateCanvasDiagnosticsState({
           websocket: {

@@ -156,6 +156,7 @@ For the full connector setup, stable install paths, advanced `config.json` shape
 - **Operational maps**: create saved maps, materialize area views, preserve manual device placement, and use ghost devices to keep cross-area context visible.
 - **Device access**: launch WinBox from a topology node through a local, audited, per-user bridge flow.
 - **Backup and recovery**: schedule or run device backups, download backup files, run bulk operations, and create or restore PostgreSQL instance backups.
+- **Restore session safety**: a completed instance restore revokes every login session restored from the archive; all connected users and devices are returned to the login page and must authenticate again.
 - **Team administration**: manage users, roles, permissions, audit logs, password resets, and account-level Bridge Connector settings.
 - **Development and demos**: use the WISP lab to reproduce topology discovery, OSPF/BGP checks, and radio access-layer scenarios without real hardware.
 
