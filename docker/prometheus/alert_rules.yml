@@ -59,13 +59,21 @@ groups:
         annotations:
           summary: "WebSocket backpressure is dropping {{ $labels.scope }} messages"
 
-      - alert: WebSocketResyncRequired
-        expr: sum by (job, instance, scope, reason, bootstrap) (increase(theia_ws_client_resync_required_total[5m])) > 10
-        for: 60s
+      - alert: RuntimeRecoveryFailures
+        expr: sum by (job, instance, mode, reason) (increase(theia_ws_runtime_recovery_total{outcome="failed"}[5m])) > 0
+        for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "WebSocket clients require repeated {{ $labels.scope }} resyncs"
+          summary: "Runtime recovery is failing in {{ $labels.mode }} mode"
+
+      - alert: RuntimeAckLagHigh
+        expr: histogram_quantile(0.95, sum by (job, instance, le) (rate(theia_ws_runtime_ack_lag_versions_bucket[5m]))) > 32
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Runtime ACK lag p95 is above 32 versions"
 
       - alert: PollingEssentialOverloaded
         expr: theia_polling_essential_overloaded == 1

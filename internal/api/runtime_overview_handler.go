@@ -5,7 +5,9 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/ws"
 )
 
@@ -45,7 +47,16 @@ func (h *RuntimeOverviewHandler) Handle(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+
+	startedAt := time.Now()
+	registry := observability.Default()
+	registry.IncWSRuntimeRecovery("http_fallback", "timeout", "scheduled")
+	recordOutcome := func(outcome string) {
+		registry.IncWSRuntimeRecovery("http_fallback", "timeout", outcome)
+		registry.ObserveWSRuntimeRecoveryDuration("http_fallback", outcome, time.Since(startedAt))
+	}
 	if h.runtimeStateFunc == nil {
+		recordOutcome("failed")
 		writeError(w, http.StatusServiceUnavailable, "runtime overview unavailable")
 		return
 	}
@@ -55,7 +66,12 @@ func (h *RuntimeOverviewHandler) Handle(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
+		recordOutcome("completed")
 		return
 	}
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		recordOutcome("failed")
+		return
+	}
+	recordOutcome("completed")
 }

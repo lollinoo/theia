@@ -14,6 +14,8 @@ import (
 	"github.com/lollinoo/theia/internal/cache"
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
+	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/pollingbudget"
 	"github.com/lollinoo/theia/internal/scheduler"
@@ -39,6 +41,10 @@ const (
 	refreshReloadReasonTopologyDrainFallback = "topology_drain_fallback"
 	refreshReloadReasonStateChangesDropped   = ws.ResyncReasonStateChangesDrop
 	refreshReloadReasonHubBufferFull         = ws.ResyncReasonHubBufferFull
+
+	runtimeRecoveryAttemptLimit      = 4096
+	defaultRuntimeRecoveryAttemptTTL = 2 * time.Minute
+	minimumRuntimeRecoveryTimerDelay = time.Millisecond
 )
 
 type pipelineScheduler interface {
@@ -85,15 +91,30 @@ type PipelineOrchestrator struct {
 	broadcastCoalesceWindow time.Duration
 	fullResyncInterval      time.Duration
 	lifecycleMu             sync.Mutex
+	stopping                atomic.Bool
+	stopDone                chan struct{}
+	runtimeCallbacksBlocked atomic.Bool
 	running                 atomic.Bool
 	cancel                  context.CancelFunc
 	done                    chan struct{}
 	healthDone              chan struct{}
 	runtime                 *pipelineRuntimeState
 	overviewBuildMu         sync.Mutex
+	runtimeRecoveryAttempts map[*ws.Client]runtimeRecoveryAttempt
+	runtimeRecoveryTTL      time.Duration
+	runtimeRecoveryTimer    *time.Timer
+	runtimeRecoveryTimerGen uint64
 	staticPersistenceMu     sync.Mutex
 	staticPersistenceCache  map[uuid.UUID]staticPersistenceCacheEntry
 	staticPersistenceNow    func() time.Time
+}
+
+type runtimeRecoveryAttempt struct {
+	mode          string
+	reason        string
+	streamID      string
+	targetVersion uint64
+	startedAt     time.Time
 }
 
 type staticPersistenceCacheEntry struct {
@@ -144,6 +165,8 @@ func NewPipelineOrchestrator(
 		done:                    make(chan struct{}),
 		healthDone:              make(chan struct{}),
 		runtime:                 newPipelineRuntimeState(initialPrometheusStatus(settingsRepo)),
+		runtimeRecoveryAttempts: make(map[*ws.Client]runtimeRecoveryAttempt),
+		runtimeRecoveryTTL:      defaultRuntimeRecoveryAttemptTTL,
 		staticPersistenceNow:    time.Now,
 	}
 	p.taskRunner = &pipelineTaskRunner{pipeline: p}
@@ -155,7 +178,7 @@ func NewPipelineOrchestrator(
 func (p *PipelineOrchestrator) Start(ctx context.Context) error {
 	p.lifecycleMu.Lock()
 	defer p.lifecycleMu.Unlock()
-	if p.cancel != nil {
+	if p.cancel != nil || p.stopping.Load() {
 		return ErrAlreadyStarted
 	}
 
@@ -188,6 +211,7 @@ func (p *PipelineOrchestrator) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	p.runtimeCallbacksBlocked.Store(false)
 	p.running.Store(true)
 
 	go func() {
@@ -223,19 +247,40 @@ func (p *PipelineOrchestrator) Start(ctx context.Context) error {
 		}
 		wg.Wait()
 
-		p.lifecycleMu.Lock()
-		p.cancel = nil
-		p.lifecycleMu.Unlock()
+		p.runtimeCallbacksBlocked.Store(true)
+		p.clearRuntimeRecoveryTracking()
 		p.running.Store(false)
+		p.lifecycleMu.Lock()
+		if p.done == done && !p.stopping.Load() {
+			p.cancel = nil
+		}
+		p.lifecycleMu.Unlock()
 	}()
 
 	return nil
 }
 
 func (p *PipelineOrchestrator) Stop() {
+	if p == nil {
+		return
+	}
 	p.lifecycleMu.Lock()
+	if p.stopping.Load() {
+		stopDone := p.stopDone
+		p.lifecycleMu.Unlock()
+		if stopDone != nil {
+			<-stopDone
+		}
+		return
+	}
+	p.stopping.Store(true)
+	p.runtimeCallbacksBlocked.Store(true)
+	stopDone := make(chan struct{})
+	p.stopDone = stopDone
 	if p.cancel == nil {
 		p.lifecycleMu.Unlock()
+		p.clearRuntimeRecoveryTracking()
+		p.finishStop(stopDone, nil)
 		return
 	}
 	cancel := p.cancel
@@ -244,8 +289,37 @@ func (p *PipelineOrchestrator) Stop() {
 	p.lifecycleMu.Unlock()
 
 	cancel()
+	p.clearRuntimeRecoveryTracking()
 	<-done
 	<-healthDone
+	p.clearRuntimeRecoveryTracking()
+	p.finishStop(stopDone, done)
+}
+
+// finishStop publishes lifecycle completion only after recovery teardown.
+func (p *PipelineOrchestrator) finishStop(stopDone chan struct{}, runDone chan struct{}) {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+	if runDone == nil || p.done == runDone {
+		p.cancel = nil
+	}
+	p.running.Store(false)
+	p.stopping.Store(false)
+	p.stopDone = nil
+	close(stopDone)
+}
+
+// clearRuntimeRecoveryTracking invalidates pending callbacks without treating
+// process shutdown as a failed client recovery.
+func (p *PipelineOrchestrator) clearRuntimeRecoveryTracking() {
+	p.overviewBuildMu.Lock()
+	defer p.overviewBuildMu.Unlock()
+	p.runtimeRecoveryTimerGen++
+	if p.runtimeRecoveryTimer != nil {
+		p.runtimeRecoveryTimer.Stop()
+		p.runtimeRecoveryTimer = nil
+	}
+	clear(p.runtimeRecoveryAttempts)
 }
 
 // GetOverviewSnapshot retrieves overview snapshot data from the background worker lifecycle.
@@ -268,17 +342,61 @@ func (p *PipelineOrchestrator) GetOrBuildOverviewState() ws.RuntimeOverviewState
 
 // SyncOverviewClient selects and installs one atomic runtime synchronization batch.
 func (p *PipelineOrchestrator) SyncOverviewClient(client *ws.Client, request ws.RuntimeSyncRequest) {
-	if p == nil || p.hub == nil || client == nil {
+	if p == nil || p.hub == nil || client == nil || p.runtimeCallbacksBlocked.Load() {
 		return
 	}
 	p.overviewBuildMu.Lock()
 	defer p.overviewBuildMu.Unlock()
+	if p.runtimeCallbacksBlocked.Load() {
+		return
+	}
 	p.syncOverviewClientLocked(client, request)
 }
 
 // ObserveRuntimeAck receives a runtime ACK after the WebSocket client validates
 // a monotonic cursor or completion of its installed recovery batch.
-func (p *PipelineOrchestrator) ObserveRuntimeAck(_ *ws.Client, _ ws.RuntimeCursor) {}
+func (p *PipelineOrchestrator) ObserveRuntimeAck(client *ws.Client, cursor ws.RuntimeCursor) {
+	if p == nil || p.runtime == nil || client == nil || !cursor.Known || p.runtimeCallbacksBlocked.Load() {
+		return
+	}
+
+	p.overviewBuildMu.Lock()
+	defer p.overviewBuildMu.Unlock()
+	if p.runtimeCallbacksBlocked.Load() {
+		return
+	}
+
+	p.runtime.mu.RLock()
+	currentStreamID := p.runtime.overviewStreamID
+	currentVersion := p.runtime.overviewVersion
+	p.runtime.mu.RUnlock()
+	if cursor.StreamID != currentStreamID {
+		logging.Debugf("runtime ACK ignored reason=stream_mismatch")
+		return
+	}
+	if cursor.Version > currentVersion {
+		logging.Debugf("runtime ACK ignored reason=beyond_current")
+		return
+	}
+
+	now := p.clockNow()
+	p.pruneRuntimeRecoveryAttemptsLocked(now)
+	defer p.armRuntimeRecoveryTimerLocked(now)
+	observability.Default().ObserveWSRuntimeAckLag(currentVersion - cursor.Version)
+	attempt, ok := p.runtimeRecoveryAttempts[client]
+	if !ok || cursor.StreamID != attempt.streamID || cursor.Version < attempt.targetVersion {
+		return
+	}
+
+	delete(p.runtimeRecoveryAttempts, client)
+	registry := observability.Default()
+	registry.IncWSRuntimeRecovery(attempt.mode, attempt.reason, "completed")
+	registry.ObserveWSRuntimeRecoveryDuration(
+		attempt.mode,
+		"completed",
+		runtimeRecoveryDuration(attempt.startedAt, now),
+	)
+}
 
 // syncOverviewClientLocked requires overviewBuildMu to remain held.
 func (p *PipelineOrchestrator) syncOverviewClientLocked(client *ws.Client, request ws.RuntimeSyncRequest) {
@@ -290,6 +408,7 @@ func (p *PipelineOrchestrator) syncOverviewClientLocked(client *ws.Client, reque
 	if reason == "" {
 		reason = ws.ResyncReasonClientResync
 	}
+	metricReason := runtimeRecoveryReason(request, state)
 
 	p.runtime.mu.RLock()
 	alertVersion := p.runtime.alertVersion
@@ -323,10 +442,14 @@ func (p *PipelineOrchestrator) syncOverviewClientLocked(client *ws.Client, reque
 		batch.Snapshot = ws.CloneSnapshot(state.Snapshot)
 	}
 
+	installStartedAt := p.clockNow()
 	if p.hub.ReplaceOverviewStream(client, batch) {
+		p.recordRuntimeRecoveryScheduledLocked(client, batch, metricReason, installStartedAt)
+		p.armRuntimeRecoveryTimerLocked(p.clockNow())
 		return
 	}
 	if batch.Mode != ws.OverviewSyncModeReplay && batch.Mode != ws.OverviewSyncModeCurrent {
+		p.recordRuntimeRecoveryInstallFailure(batch, metricReason, installStartedAt)
 		return
 	}
 
@@ -336,7 +459,192 @@ func (p *PipelineOrchestrator) syncOverviewClientLocked(client *ws.Client, reque
 	batch.ReplayCursor = ws.RuntimeCursor{}
 	batch.Replay = nil
 	batch.Snapshot = ws.CloneSnapshot(state.Snapshot)
-	p.hub.ReplaceOverviewStream(client, batch)
+	installStartedAt = p.clockNow()
+	if p.hub.ReplaceOverviewStream(client, batch) {
+		p.recordRuntimeRecoveryScheduledLocked(client, batch, metricReason, installStartedAt)
+		p.armRuntimeRecoveryTimerLocked(p.clockNow())
+		return
+	}
+	p.recordRuntimeRecoveryInstallFailure(batch, metricReason, installStartedAt)
+}
+
+// recordRuntimeRecoveryScheduledLocked requires overviewBuildMu to remain held.
+func (p *PipelineOrchestrator) recordRuntimeRecoveryScheduledLocked(
+	client *ws.Client,
+	batch ws.OverviewSyncBatch,
+	reason string,
+	startedAt time.Time,
+) {
+	now := p.clockNow()
+	p.pruneRuntimeRecoveryAttemptsLocked(now)
+	if p.runtimeRecoveryAttempts == nil {
+		p.runtimeRecoveryAttempts = make(map[*ws.Client]runtimeRecoveryAttempt)
+	}
+	previous, replacing := p.runtimeRecoveryAttempts[client]
+	if replacing {
+		p.recordRuntimeRecoveryTerminal(previous, "failed", now)
+	}
+	if !replacing && len(p.runtimeRecoveryAttempts) >= runtimeRecoveryAttemptLimit {
+		p.evictOldestRuntimeRecoveryAttemptLocked(now)
+	}
+
+	attempt := runtimeRecoveryAttempt{
+		mode:          string(batch.Mode),
+		reason:        reason,
+		streamID:      batch.RuntimeStreamID,
+		targetVersion: batch.TargetVersion,
+		startedAt:     startedAt,
+	}
+	if attempt.startedAt.IsZero() {
+		attempt.startedAt = now
+	}
+	p.runtimeRecoveryAttempts[client] = attempt
+
+	registry := observability.Default()
+	registry.IncWSRuntimeRecovery(attempt.mode, attempt.reason, "scheduled")
+	if batch.Mode == ws.OverviewSyncModeReplay &&
+		batch.ReplayCursor.Known &&
+		batch.TargetVersion >= batch.ReplayCursor.Version {
+		registry.ObserveWSRuntimeReplayVersions(batch.TargetVersion - batch.ReplayCursor.Version)
+	}
+}
+
+// recordRuntimeRecoveryInstallFailure records one final batch that could not be queued.
+func (p *PipelineOrchestrator) recordRuntimeRecoveryInstallFailure(
+	batch ws.OverviewSyncBatch,
+	reason string,
+	startedAt time.Time,
+) {
+	registry := observability.Default()
+	mode := string(batch.Mode)
+	registry.IncWSRuntimeRecovery(mode, reason, "scheduled")
+	registry.IncWSRuntimeRecovery(mode, reason, "failed")
+	registry.ObserveWSRuntimeRecoveryDuration(
+		mode,
+		"failed",
+		runtimeRecoveryDuration(startedAt, p.clockNow()),
+	)
+}
+
+// pruneRuntimeRecoveryAttemptsLocked requires overviewBuildMu to remain held.
+func (p *PipelineOrchestrator) pruneRuntimeRecoveryAttemptsLocked(now time.Time) {
+	cutoff := now.Add(-p.runtimeRecoveryAttemptTTL())
+	for client, attempt := range p.runtimeRecoveryAttempts {
+		if attempt.startedAt.After(cutoff) {
+			continue
+		}
+		delete(p.runtimeRecoveryAttempts, client)
+		p.recordRuntimeRecoveryTerminal(attempt, "failed", now)
+	}
+}
+
+// armRuntimeRecoveryTimerLocked keeps one timer for the earliest tracked deadline.
+// It requires overviewBuildMu to remain held.
+func (p *PipelineOrchestrator) armRuntimeRecoveryTimerLocked(now time.Time) {
+	p.runtimeRecoveryTimerGen++
+	generation := p.runtimeRecoveryTimerGen
+	if p.runtimeRecoveryTimer != nil {
+		p.runtimeRecoveryTimer.Stop()
+		p.runtimeRecoveryTimer = nil
+	}
+	if len(p.runtimeRecoveryAttempts) == 0 {
+		return
+	}
+
+	var earliest time.Time
+	for _, attempt := range p.runtimeRecoveryAttempts {
+		deadline := attempt.startedAt.Add(p.runtimeRecoveryAttemptTTL())
+		if earliest.IsZero() || deadline.Before(earliest) {
+			earliest = deadline
+		}
+	}
+	delay := earliest.Sub(now)
+	if delay < minimumRuntimeRecoveryTimerDelay {
+		delay = minimumRuntimeRecoveryTimerDelay
+	}
+	p.runtimeRecoveryTimer = time.AfterFunc(delay, func() {
+		p.expireRuntimeRecoveryAttempts(generation)
+	})
+}
+
+func (p *PipelineOrchestrator) expireRuntimeRecoveryAttempts(generation uint64) {
+	if p == nil {
+		return
+	}
+	p.overviewBuildMu.Lock()
+	defer p.overviewBuildMu.Unlock()
+	if generation != p.runtimeRecoveryTimerGen {
+		return
+	}
+	p.runtimeRecoveryTimer = nil
+	now := p.clockNow()
+	p.pruneRuntimeRecoveryAttemptsLocked(now)
+	p.armRuntimeRecoveryTimerLocked(now)
+}
+
+func (p *PipelineOrchestrator) runtimeRecoveryAttemptTTL() time.Duration {
+	if p.runtimeRecoveryTTL > 0 {
+		return p.runtimeRecoveryTTL
+	}
+	return defaultRuntimeRecoveryAttemptTTL
+}
+
+// evictOldestRuntimeRecoveryAttemptLocked requires overviewBuildMu to remain held.
+func (p *PipelineOrchestrator) evictOldestRuntimeRecoveryAttemptLocked(now time.Time) {
+	var oldestClient *ws.Client
+	var oldestAttempt runtimeRecoveryAttempt
+	for client, attempt := range p.runtimeRecoveryAttempts {
+		if oldestClient == nil || attempt.startedAt.Before(oldestAttempt.startedAt) {
+			oldestClient = client
+			oldestAttempt = attempt
+		}
+	}
+	if oldestClient == nil {
+		return
+	}
+	delete(p.runtimeRecoveryAttempts, oldestClient)
+	p.recordRuntimeRecoveryTerminal(oldestAttempt, "failed", now)
+}
+
+func (p *PipelineOrchestrator) recordRuntimeRecoveryTerminal(
+	attempt runtimeRecoveryAttempt,
+	outcome string,
+	now time.Time,
+) {
+	registry := observability.Default()
+	registry.IncWSRuntimeRecovery(attempt.mode, attempt.reason, outcome)
+	registry.ObserveWSRuntimeRecoveryDuration(
+		attempt.mode,
+		outcome,
+		runtimeRecoveryDuration(attempt.startedAt, now),
+	)
+}
+
+func runtimeRecoveryReason(request ws.RuntimeSyncRequest, state ws.RuntimeOverviewState) string {
+	switch request.Reason {
+	case ws.ResyncReasonClientMissingRuntimeSnapshot,
+		ws.ResyncReasonStateChangesDrop,
+		ws.ResyncReasonHubBufferFull,
+		"timeout":
+		return request.Reason
+	}
+	if !request.Cursor.Known {
+		return "connect"
+	}
+	if request.Cursor.StreamID != state.StreamID {
+		return "stream_mismatch"
+	}
+	if request.Cursor.Version < state.Version {
+		return "client_gap"
+	}
+	return ws.ResyncReasonClientResync
+}
+
+func runtimeRecoveryDuration(startedAt, completedAt time.Time) time.Duration {
+	if startedAt.IsZero() || completedAt.Before(startedAt) {
+		return 0
+	}
+	return completedAt.Sub(startedAt)
 }
 
 func (p *PipelineOrchestrator) syncOverflowedOverviewClientsLocked(clients []*ws.Client, reason string) {
@@ -349,7 +657,7 @@ func (p *PipelineOrchestrator) syncOverflowedOverviewClientsLocked(clients []*ws
 }
 
 func (p *PipelineOrchestrator) replaceOverviewClientsWithSnapshotLocked(state ws.RuntimeOverviewState, reason string) {
-	if p == nil || p.hub == nil {
+	if p == nil || p.hub == nil || p.runtimeCallbacksBlocked.Load() {
 		return
 	}
 	p.runtime.mu.RLock()
@@ -364,7 +672,33 @@ func (p *PipelineOrchestrator) replaceOverviewClientsWithSnapshotLocked(state ws
 		Snapshot:        ws.CloneSnapshot(state.Snapshot),
 		AlertVersion:    alertVersion,
 	}
-	p.hub.ReplaceOverviewStreams(batch)
+	startedAt := p.clockNow()
+	metricReason := runtimeRecoveryBatchReason(reason)
+	result := p.hub.ReplaceOverviewStreams(batch)
+	for _, client := range result.Installed {
+		p.recordRuntimeRecoveryScheduledLocked(client, batch, metricReason, startedAt)
+	}
+	for _, client := range result.Failed {
+		if previous, ok := p.runtimeRecoveryAttempts[client]; ok {
+			delete(p.runtimeRecoveryAttempts, client)
+			p.recordRuntimeRecoveryTerminal(previous, "failed", p.clockNow())
+		}
+		p.recordRuntimeRecoveryInstallFailure(batch, metricReason, startedAt)
+	}
+	p.armRuntimeRecoveryTimerLocked(p.clockNow())
+}
+
+func runtimeRecoveryBatchReason(reason string) string {
+	switch reason {
+	case ws.ResyncReasonClientResync,
+		ws.ResyncReasonClientMissingRuntimeSnapshot,
+		ws.ResyncReasonStateChangesDrop,
+		ws.ResyncReasonHubBufferFull,
+		"timeout":
+		return reason
+	default:
+		return ws.ResyncReasonClientResync
+	}
 }
 
 // getOrBuildOverviewStateLocked requires overviewBuildMu to remain held.

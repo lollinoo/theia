@@ -30,6 +30,7 @@ var runtimeMetricsGatherer = newRuntimeMetricsGatherer()
 var (
 	durationBucketsSeconds = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
 	payloadBucketsBytes    = []float64{128, 512, 1024, 4096, 16384, 65536, 262144, 1048576}
+	runtimeVersionBuckets  = []float64{0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024}
 )
 
 type taskResultKey struct {
@@ -108,6 +109,17 @@ type wsClientResyncKey struct {
 	Scope     string
 	Reason    string
 	Bootstrap string
+}
+
+type wsRuntimeRecoveryKey struct {
+	Mode    string
+	Reason  string
+	Outcome string
+}
+
+type wsRuntimeRecoveryDurationKey struct {
+	Mode    string
+	Outcome string
 }
 
 type refreshSnapshotBuildKey struct {
@@ -202,6 +214,10 @@ type Registry struct {
 	wsOverviewMailboxClear            map[string]uint64
 	wsOverviewResyncSuppressed        map[string]uint64
 	wsPayloadBytes                    map[wsMetricKey]*histogram
+	wsRuntimeRecoveryTotal            map[wsRuntimeRecoveryKey]uint64
+	wsRuntimeRecoveryDuration         map[wsRuntimeRecoveryDurationKey]*histogram
+	wsRuntimeAckLag                   *histogram
+	wsRuntimeReplayVersions           *histogram
 	unknownNeighborsTotal             map[deviceProtocolKey]uint64
 	stateChangesDroppedTotal          uint64
 }
@@ -268,6 +284,10 @@ func NewRegistry() *Registry {
 		wsOverviewMailboxClear:     make(map[string]uint64),
 		wsOverviewResyncSuppressed: make(map[string]uint64),
 		wsPayloadBytes:             make(map[wsMetricKey]*histogram),
+		wsRuntimeRecoveryTotal:     make(map[wsRuntimeRecoveryKey]uint64),
+		wsRuntimeRecoveryDuration:  make(map[wsRuntimeRecoveryDurationKey]*histogram),
+		wsRuntimeAckLag:            newHistogram(runtimeVersionBuckets),
+		wsRuntimeReplayVersions:    newHistogram(runtimeVersionBuckets),
 		unknownNeighborsTotal:      make(map[deviceProtocolKey]uint64),
 	}
 }
@@ -579,6 +599,26 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_ws_message_payload_bytes",
 		"WebSocket payload sizes emitted by scope and type.",
 		sortedWSHistogramRows(r.wsPayloadBytes),
+	)
+	writeCounterVec(&b,
+		"theia_ws_runtime_recovery_total",
+		"Runtime recovery attempts by bounded mode, reason, and outcome.",
+		sortedWSRuntimeRecoveryRows(r.wsRuntimeRecoveryTotal),
+	)
+	writeHistogramVec(&b,
+		"theia_ws_runtime_recovery_duration_seconds",
+		"Runtime recovery completion latency by bounded mode and outcome.",
+		sortedWSRuntimeRecoveryDurationRows(r.wsRuntimeRecoveryDuration),
+	)
+	writeHistogramVec(&b,
+		"theia_ws_runtime_ack_lag_versions",
+		"Runtime cursor lag in versions observed on valid client acknowledgements.",
+		[]histogramRow{{value: r.wsRuntimeAckLag.snapshot()}},
+	)
+	writeHistogramVec(&b,
+		"theia_ws_runtime_replay_versions",
+		"Runtime version span carried by installed replay recoveries.",
+		[]histogramRow{{value: r.wsRuntimeReplayVersions.snapshot()}},
 	)
 	writeCounterVec(&b,
 		"theia_unknown_neighbors_total",
@@ -1087,6 +1127,90 @@ func (r *Registry) IncWSOverviewResyncSuppressed(reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.wsOverviewResyncSuppressed[reason]++
+}
+
+// IncWSRuntimeRecovery records one bounded runtime recovery lifecycle event.
+func (r *Registry) IncWSRuntimeRecovery(mode, reason, outcome string) {
+	if !wsRuntimeRecoveryModeAllowed(mode) ||
+		!wsRuntimeRecoveryReasonAllowed(reason) ||
+		!wsRuntimeRecoveryOutcomeAllowed(outcome) {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsRuntimeRecoveryTotal[wsRuntimeRecoveryKey{
+		Mode:    mode,
+		Reason:  reason,
+		Outcome: outcome,
+	}]++
+}
+
+// ObserveWSRuntimeRecoveryDuration records terminal recovery latency.
+func (r *Registry) ObserveWSRuntimeRecoveryDuration(mode, outcome string, duration time.Duration) {
+	if !wsRuntimeRecoveryModeAllowed(mode) ||
+		(outcome != "completed" && outcome != "failed") ||
+		duration < 0 {
+		return
+	}
+
+	key := wsRuntimeRecoveryDurationKey{Mode: mode, Outcome: outcome}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h, ok := r.wsRuntimeRecoveryDuration[key]
+	if !ok {
+		h = newHistogram(durationBucketsSeconds)
+		r.wsRuntimeRecoveryDuration[key] = h
+	}
+	h.observe(duration.Seconds())
+}
+
+// ObserveWSRuntimeAckLag records lag for a validated current-stream cursor.
+func (r *Registry) ObserveWSRuntimeAckLag(versions uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsRuntimeAckLag.observe(float64(versions))
+}
+
+// ObserveWSRuntimeReplayVersions records the bounded journal span selected for replay.
+func (r *Registry) ObserveWSRuntimeReplayVersions(versions uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsRuntimeReplayVersions.observe(float64(versions))
+}
+
+func wsRuntimeRecoveryModeAllowed(mode string) bool {
+	switch mode {
+	case "current", "replay", "snapshot", "http_fallback":
+		return true
+	default:
+		return false
+	}
+}
+
+func wsRuntimeRecoveryOutcomeAllowed(outcome string) bool {
+	switch outcome {
+	case "scheduled", "completed", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func wsRuntimeRecoveryReasonAllowed(reason string) bool {
+	switch reason {
+	case "client_resync_scheduled",
+		"client_missing_runtime_snapshot",
+		"state_changes_dropped",
+		"hub_buffer_full",
+		"connect",
+		"client_gap",
+		"stream_mismatch",
+		"timeout":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Registry) SetWSConnectedClients(count int) {
@@ -1913,6 +2037,60 @@ func sortedWSClientResyncRows(values map[wsClientResyncKey]uint64) []counterRow 
 				"scope":     key.Scope,
 			},
 			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedWSRuntimeRecoveryRows(values map[wsRuntimeRecoveryKey]uint64) []counterRow {
+	keys := make([]wsRuntimeRecoveryKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Mode != keys[j].Mode {
+			return keys[i].Mode < keys[j].Mode
+		}
+		if keys[i].Outcome != keys[j].Outcome {
+			return keys[i].Outcome < keys[j].Outcome
+		}
+		return keys[i].Reason < keys[j].Reason
+	})
+
+	rows := make([]counterRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, counterRow{
+			labels: map[string]string{
+				"mode":    key.Mode,
+				"outcome": key.Outcome,
+				"reason":  key.Reason,
+			},
+			value: values[key],
+		})
+	}
+	return rows
+}
+
+func sortedWSRuntimeRecoveryDurationRows(values map[wsRuntimeRecoveryDurationKey]*histogram) []histogramRow {
+	keys := make([]wsRuntimeRecoveryDurationKey, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Mode != keys[j].Mode {
+			return keys[i].Mode < keys[j].Mode
+		}
+		return keys[i].Outcome < keys[j].Outcome
+	})
+
+	rows := make([]histogramRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, histogramRow{
+			labels: map[string]string{
+				"mode":    key.Mode,
+				"outcome": key.Outcome,
+			},
+			value: values[key].snapshot(),
 		})
 	}
 	return rows

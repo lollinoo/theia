@@ -161,6 +161,47 @@ func TestHandlerRendersGoAndProcessMetrics(t *testing.T) {
 	assertContainsMetric(t, body, `theia_scheduler_in_flight_tasks 2`)
 }
 
+func TestRegistryRuntimeRecoveryMetricsUseBoundedLabels(t *testing.T) {
+	registry := NewRegistry()
+
+	registry.IncWSRuntimeRecovery("current", "connect", "scheduled")
+	registry.IncWSRuntimeRecovery("replay", "client_gap", "completed")
+	registry.IncWSRuntimeRecovery("snapshot", "stream_mismatch", "failed")
+	registry.IncWSRuntimeRecovery("http_fallback", "timeout", "scheduled")
+	registry.IncWSRuntimeRecovery("http_fallback", "timeout", "completed")
+	registry.ObserveWSRuntimeRecoveryDuration("replay", "completed", 250*time.Millisecond)
+	registry.ObserveWSRuntimeRecoveryDuration("snapshot", "failed", 2*time.Second)
+	registry.ObserveWSRuntimeAckLag(0)
+	registry.ObserveWSRuntimeAckLag(5)
+	registry.ObserveWSRuntimeReplayVersions(2)
+	registry.ObserveWSRuntimeReplayVersions(40)
+
+	registry.IncWSRuntimeRecovery("client-stream-id", "connect", "scheduled")
+	registry.IncWSRuntimeRecovery("replay", "client-address", "completed")
+	registry.IncWSRuntimeRecovery("snapshot", "timeout", "unknown-outcome")
+	registry.ObserveWSRuntimeRecoveryDuration("unknown-mode", "failed", time.Second)
+	registry.ObserveWSRuntimeRecoveryDuration("current", "scheduled", time.Second)
+	registry.ObserveWSRuntimeRecoveryDuration("current", "completed", -time.Second)
+
+	body := string(registry.MarshalPrometheus())
+	assertContainsMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="scheduled",reason="connect"} 1`)
+	assertContainsMetric(t, body, `theia_ws_runtime_recovery_total{mode="replay",outcome="completed",reason="client_gap"} 1`)
+	assertContainsMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="failed",reason="stream_mismatch"} 1`)
+	assertContainsMetric(t, body, `theia_ws_runtime_recovery_total{mode="http_fallback",outcome="scheduled",reason="timeout"} 1`)
+	assertContainsMetric(t, body, `theia_ws_runtime_recovery_total{mode="http_fallback",outcome="completed",reason="timeout"} 1`)
+	assertContainsMetric(t, body, `theia_ws_runtime_recovery_duration_seconds_count{mode="replay",outcome="completed"} 1`)
+	assertContainsMetric(t, body, `theia_ws_runtime_recovery_duration_seconds_sum{mode="snapshot",outcome="failed"} 2`)
+	assertContainsMetric(t, body, `theia_ws_runtime_ack_lag_versions_count 2`)
+	assertContainsMetric(t, body, `theia_ws_runtime_ack_lag_versions_sum 5`)
+	assertContainsMetric(t, body, `theia_ws_runtime_replay_versions_count 2`)
+	assertContainsMetric(t, body, `theia_ws_runtime_replay_versions_sum 42`)
+	for _, forbidden := range []string{"client-stream-id", "client-address", "unknown-outcome", "unknown-mode"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("metrics output contains unbounded label %q\n%s", forbidden, body)
+		}
+	}
+}
+
 func assertContainsMetric(t *testing.T, body, needle string) {
 	t.Helper()
 	if !strings.Contains(body, needle) {

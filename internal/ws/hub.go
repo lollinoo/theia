@@ -120,6 +120,13 @@ type OverviewSyncBatch struct {
 	AlertVersion    uint64
 }
 
+// OverviewSyncReplacementResult reports clients whose replacement batch was
+// installed atomically and clients for which installation failed.
+type OverviewSyncReplacementResult struct {
+	Installed []*Client
+	Failed    []*Client
+}
+
 type overviewRecoveryState struct {
 	streamID      string
 	targetVersion uint64
@@ -483,10 +490,14 @@ func overviewSyncClientStateMatchesBatch(batch OverviewSyncBatch, clientState ov
 
 // ReplaceOverviewStreams records one logical state broadcast and atomically
 // installs the complete replacement for every eligible overview client.
-func (h *Hub) ReplaceOverviewStreams(batch OverviewSyncBatch) {
+func (h *Hub) ReplaceOverviewStreams(batch OverviewSyncBatch) OverviewSyncReplacementResult {
 	clients := h.copyClients()
+	result := OverviewSyncReplacementResult{
+		Installed: make([]*Client, 0, len(clients)),
+		Failed:    make([]*Client, 0),
+	}
 	if len(clients) == 0 {
-		return
+		return result
 	}
 
 	if stateMessage, ok := overviewSyncStateMessage(batch); ok {
@@ -497,8 +508,13 @@ func (h *Hub) ReplaceOverviewStreams(batch OverviewSyncBatch) {
 	}
 
 	for _, client := range clients {
-		h.ReplaceOverviewStream(client, batch)
+		if h.ReplaceOverviewStream(client, batch) {
+			result.Installed = append(result.Installed, client)
+		} else {
+			result.Failed = append(result.Failed, client)
+		}
 	}
+	return result
 }
 
 func overviewSyncStateMessage(batch OverviewSyncBatch) (Message, bool) {
