@@ -9,11 +9,13 @@ type RuntimeDeltaMessageType = 'snapshot_delta' | 'runtime_delta';
 interface RuntimeDeltaEnvelope {
   base_version?: number;
   version?: number;
+  runtime_stream_id?: string;
   runtime_identity?: string;
 }
 
 interface RuntimeDeltaClientState {
   currentVersion: number | null;
+  currentStreamId?: string | null;
   hasRuntimeSnapshot: boolean;
 }
 
@@ -21,7 +23,8 @@ interface RuntimeDeltaClientState {
 export type RuntimeDeltaResyncDiagnosticReason =
   | 'base_version_mismatch'
   | 'invalid_delta_version'
-  | 'missing_base_snapshot';
+  | 'missing_base_snapshot'
+  | 'runtime_stream_mismatch';
 
 /** Describes the runtime delta decision contract used by the React hook lifecycle. */
 export type RuntimeDeltaDecision =
@@ -70,14 +73,52 @@ export function classifyRuntimeDelta(
   state: RuntimeDeltaClientState,
 ): RuntimeDeltaDecision {
   const hasVersionEnvelope = payload.version !== undefined || payload.base_version !== undefined;
-  if (!hasVersionEnvelope) {
+  const hasCurrentStreamValue =
+    state.currentStreamId !== undefined && state.currentStreamId !== null;
+  const hasIncomingStreamValue = payload.runtime_stream_id !== undefined;
+  const hasEstablishedStream = hasCurrentStreamValue && state.currentStreamId!.trim().length > 0;
+  const hasIncomingStream = hasIncomingStreamValue && payload.runtime_stream_id!.trim().length > 0;
+  if (
+    (hasCurrentStreamValue && !hasEstablishedStream) ||
+    (hasIncomingStreamValue && !hasIncomingStream)
+  ) {
+    return {
+      kind: 'request_resync',
+      payloadReason: 'client_resync_scheduled',
+      diagnosticReason: 'runtime_stream_mismatch',
+    };
+  }
+  if (!hasVersionEnvelope && !hasEstablishedStream && !hasIncomingStream) {
     // Older backend streams sent unversioned deltas; keep their local reject behavior unchanged.
     return state.hasRuntimeSnapshot
       ? { kind: 'apply_unversioned' }
       : { kind: 'reject_missing_unversioned_base' };
   }
 
+  if (
+    (hasEstablishedStream && payload.runtime_stream_id !== state.currentStreamId) ||
+    (!hasEstablishedStream && hasIncomingStream)
+  ) {
+    return {
+      kind: 'request_resync',
+      payloadReason: 'client_resync_scheduled',
+      diagnosticReason: 'runtime_stream_mismatch',
+    };
+  }
+
   if (payload.version === undefined || payload.base_version === undefined) {
+    return {
+      kind: 'request_resync',
+      payloadReason: 'client_resync_scheduled',
+      diagnosticReason: 'invalid_delta_version',
+    };
+  }
+
+  if (
+    !isRuntimeVersion(payload.version) ||
+    !isRuntimeVersion(payload.base_version) ||
+    payload.version <= payload.base_version
+  ) {
     return {
       kind: 'request_resync',
       payloadReason: 'client_resync_scheduled',
@@ -116,4 +157,8 @@ export function classifyRuntimeDelta(
     nextVersion: payload.version,
     runtimeIdentity: payload.runtime_identity,
   };
+}
+
+function isRuntimeVersion(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
 }

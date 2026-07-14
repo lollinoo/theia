@@ -4,6 +4,65 @@
  */
 import { recordCanvasDiagnosticEvent } from '../../components/canvas/canvasDiagnostics';
 import type { ResyncRequiredPayload } from '../../types/metrics';
+import type { RuntimeRecoveryState } from './runtimeRecovery';
+
+/** Describes stable event metadata derived from the pure runtime recovery state. */
+export type RuntimeRecoveryDiagnosticMetadata =
+  | { phase: 'idle'; generation: number }
+  | {
+      phase: 'stream';
+      generation: number;
+      durationMs: number;
+      reason: string;
+      targetVersion: number | null;
+    }
+  | {
+      phase: 'http-fallback';
+      generation: number;
+      durationMs: number;
+      reason: string;
+    }
+  | { phase: 'failed'; generation: number; reason: string };
+
+/** Builds runtime recovery event metadata without recording or mutating diagnostics. */
+export function buildRuntimeRecoveryDiagnosticMetadata(
+  state: RuntimeRecoveryState,
+  now: number,
+): RuntimeRecoveryDiagnosticMetadata {
+  if (state.phase === 'stream') {
+    return {
+      phase: state.phase,
+      generation: state.generation,
+      durationMs: getRuntimeRecoveryDuration(state.startedAt, now),
+      reason: state.reason,
+      targetVersion: state.targetVersion,
+    };
+  }
+  if (state.phase === 'http-fallback') {
+    return {
+      phase: state.phase,
+      generation: state.generation,
+      durationMs: getRuntimeRecoveryDuration(state.startedAt, now),
+      reason: state.reason,
+    };
+  }
+  if (state.phase === 'failed') {
+    return {
+      phase: state.phase,
+      generation: state.generation,
+      reason: state.reason,
+    };
+  }
+  return { phase: state.phase, generation: state.generation };
+}
+
+function getRuntimeRecoveryDuration(startedAt: number, now: number): number {
+  if (!Number.isFinite(startedAt) || startedAt < 0 || !Number.isFinite(now) || now < startedAt) {
+    return 0;
+  }
+  const durationMs = now - startedAt;
+  return Number.isFinite(durationMs) ? durationMs : 0;
+}
 
 /** Dispatch backend resync required for the React hook lifecycle. */
 export function dispatchBackendResyncRequired(payload: ResyncRequiredPayload): void {
