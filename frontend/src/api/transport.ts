@@ -58,8 +58,12 @@ function serverErrorFromMessage(errorMessage: string): ServerError {
 }
 
 // requestJSON performs a GET JSON request and preserves the legacy generic Error shape.
-export async function requestJSON(path: string): Promise<unknown> {
+export async function requestJSON(
+  path: string,
+  options: Pick<RequestInit, 'cache'> = {},
+): Promise<unknown> {
   const response = await fetch(path, {
+    ...options,
     headers: {
       Accept: 'application/json',
     },

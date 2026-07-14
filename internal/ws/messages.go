@@ -483,13 +483,17 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 	}
 
 	for key, value := range snapshot.Links {
-		cloned.Links[key] = value
+		cloned.Links[key] = cloneLinkRuntimeDTO(value)
 	}
 	for key, value := range snapshot.DeviceMetrics {
 		cloned.DeviceMetrics[key] = cloneDeviceRuntimeDTO(value)
 	}
 	for key, value := range snapshot.LinkMetrics {
-		cloned.LinkMetrics[key] = append([]LinkRuntimeDTO(nil), value...)
+		clonedMetrics := append([]LinkRuntimeDTO(nil), value...)
+		for index := range clonedMetrics {
+			clonedMetrics[index] = cloneLinkRuntimeDTO(clonedMetrics[index])
+		}
+		cloned.LinkMetrics[key] = clonedMetrics
 	}
 	for key, value := range snapshot.DeviceStatuses {
 		cloned.DeviceStatuses[key] = value
@@ -507,7 +511,31 @@ func cloneDeviceRuntimeDTO(value DeviceRuntimeDTO) DeviceRuntimeDTO {
 		}
 		value.FieldStates = cloned
 	}
+	value.LastCollectedAt = clonePointer(value.LastCollectedAt)
+	value.LastPolledAt = clonePointer(value.LastPolledAt)
+	value.ExpectedPollIntervalSeconds = clonePointer(value.ExpectedPollIntervalSeconds)
+	value.CPUPercent = clonePointer(value.CPUPercent)
+	value.MemPercent = clonePointer(value.MemPercent)
+	value.TempCelsius = clonePointer(value.TempCelsius)
+	value.UptimeSecs = clonePointer(value.UptimeSecs)
+	value.Stale = clonePointer(value.Stale)
 	return value
+}
+
+func cloneLinkRuntimeDTO(value LinkRuntimeDTO) LinkRuntimeDTO {
+	value.LastCollectedAt = clonePointer(value.LastCollectedAt)
+	value.TxBps = clonePointer(value.TxBps)
+	value.RxBps = clonePointer(value.RxBps)
+	value.Utilization = clonePointer(value.Utilization)
+	return value
+}
+
+func clonePointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func parseClientControlMessage(raw []byte) (clientControlMessage, error) {

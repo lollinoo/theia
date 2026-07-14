@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
+	"github.com/lollinoo/theia/internal/ws"
 )
 
 const (
@@ -63,6 +64,7 @@ func TestRequiredPermissionsForRegisteredProtectedRoutes(t *testing.T) {
 		{name: "websocket", method: http.MethodGet, path: "/api/v1/ws", want: []string{domain.PermissionTopologyRead}},
 		{name: "health", method: http.MethodGet, path: "/api/v1/health", want: []string{domain.PermissionSettingsRead}},
 		{name: "prometheus health", method: http.MethodGet, path: "/api/v1/prometheus/health", want: []string{domain.PermissionSettingsRead}},
+		{name: "runtime overview", method: http.MethodGet, path: "/api/v1/runtime/overview", want: []string{domain.PermissionTopologyRead}},
 
 		{name: "settings list", method: http.MethodGet, path: "/api/v1/settings", want: []string{domain.PermissionSettingsRead}},
 		{name: "settings key read", method: http.MethodGet, path: "/api/v1/settings/" + domain.SettingBridgePort, want: []string{domain.PermissionSettingsRead}},
@@ -207,6 +209,53 @@ func TestRequiredPermissionsForRegisteredProtectedRoutes(t *testing.T) {
 			}
 			if !sameStringSlice(got, tt.want) {
 				t.Fatalf("permissions = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRouterRuntimeOverviewRequiresTopologyReadForGETAndHEAD(t *testing.T) {
+	stateFunc := func() ws.RuntimeOverviewState {
+		return ws.RuntimeOverviewState{
+			Snapshot: ws.EmptySnapshot(),
+			Version:  9,
+			StreamID: "runtime-stream-9",
+		}
+	}
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		router := newRuntimeOverviewAuthTestRouter(newFakeAPIAuthProvider(), stateFunc)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/runtime/overview", nil))
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", response.Code)
+		}
+	})
+
+	t.Run("permission denied", func(t *testing.T) {
+		auth := newFakeAPIAuthProvider()
+		auth.setSession(testSessionToken, testCSRFToken, testAPIUser("alice", false, domain.PermissionSettingsRead))
+		router := newRuntimeOverviewAuthTestRouter(auth, stateFunc)
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/runtime/overview", nil)
+		addSessionCookie(request, testSessionToken)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403; body=%s", response.Code, response.Body.String())
+		}
+	})
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run(method, func(t *testing.T) {
+			auth := newFakeAPIAuthProvider()
+			auth.setSession(testSessionToken, testCSRFToken, testAPIUser("alice", false, domain.PermissionTopologyRead))
+			router := newRuntimeOverviewAuthTestRouter(auth, stateFunc)
+			request := httptest.NewRequest(method, "/api/v1/runtime/overview", nil)
+			addSessionCookie(request, testSessionToken)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
 			}
 		})
 	}
@@ -1086,6 +1135,31 @@ func newAuthTestRouter(auth *fakeAPIAuthProvider) http.Handler {
 		nil,
 		"",
 		nil,
+		nil,
+		withAuthProvider(auth),
+	)
+}
+
+func newRuntimeOverviewAuthTestRouter(auth *fakeAPIAuthProvider, stateFunc ws.RuntimeOverviewStateFunc) http.Handler {
+	return NewRouter(
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"",
+		stateFunc,
 		nil,
 		withAuthProvider(auth),
 	)

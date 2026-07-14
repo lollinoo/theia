@@ -164,6 +164,7 @@ export interface CanvasTopologyCapabilities {
 export interface CanvasTopologyResponse {
   schema_version: 1;
   topology_version: string;
+  runtime_stream_id?: string;
   runtime_version?: number;
   runtime_identity?: string;
   runtime_snapshot?: SnapshotPayload;
@@ -179,6 +180,15 @@ export interface CanvasTopologyResponse {
       version: number;
     };
   };
+}
+
+/** RuntimeOverviewResponse is the compact runtime-only recovery snapshot contract. */
+export interface RuntimeOverviewResponse {
+  schema_version: 1;
+  runtime_stream_id: string;
+  runtime_version: number;
+  runtime_identity: string;
+  runtime_snapshot: SnapshotPayload;
 }
 
 /** InterfaceInfo describes selectable interfaces when creating or editing manual links. */
@@ -685,6 +695,8 @@ export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyRes
   return {
     schema_version: 1,
     topology_version: readString(payload, 'topology_version'),
+    runtime_stream_id:
+      typeof payload.runtime_stream_id === 'string' ? payload.runtime_stream_id : undefined,
     runtime_version:
       typeof payload.runtime_version === 'number' && Number.isFinite(payload.runtime_version)
         ? payload.runtime_version
@@ -718,6 +730,41 @@ export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyRes
       },
     },
   };
+}
+
+/** Parses the strict runtime-only recovery response without retaining mutable payload aliases. */
+export function parseRuntimeOverviewResponse(payload: unknown): RuntimeOverviewResponse {
+  if (!isRecord(payload)) {
+    throw new Error('invalid runtime overview response');
+  }
+
+  const streamID = payload.runtime_stream_id;
+  const version = payload.runtime_version;
+  const identity = payload.runtime_identity;
+  if (
+    payload.schema_version !== 1 ||
+    typeof streamID !== 'string' ||
+    streamID.trim() === '' ||
+    typeof version !== 'number' ||
+    !Number.isSafeInteger(version) ||
+    version < 0 ||
+    typeof identity !== 'string' ||
+    identity.trim() === ''
+  ) {
+    throw new Error('invalid runtime overview response');
+  }
+
+  try {
+    return {
+      schema_version: 1,
+      runtime_stream_id: streamID,
+      runtime_version: version,
+      runtime_identity: identity,
+      runtime_snapshot: parseSnapshotPayload(payload.runtime_snapshot),
+    };
+  } catch {
+    throw new Error('invalid runtime overview response');
+  }
 }
 
 // parseInterfacesResponse converts interface list responses for device detail screens.

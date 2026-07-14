@@ -71,6 +71,7 @@ const (
 	routeHandlerLinkItem                    routeHandlerKey = "linkItem"
 	routeHandlerPositionCollection          routeHandlerKey = "positionCollection"
 	routeHandlerPrometheusHealth            routeHandlerKey = "prometheusHealth"
+	routeHandlerRuntimeOverview             routeHandlerKey = "runtimeOverview"
 	routeHandlerSettingsCollection          routeHandlerKey = "settingsCollection"
 	routeHandlerSettingsBridge              routeHandlerKey = "settingsBridge"
 	routeHandlerSettingsBridgeConnector     routeHandlerKey = "settingsBridgeConnector"
@@ -397,6 +398,7 @@ var apiRouteSpecs = []apiRouteSpec{
 		methodPolicy(http.MethodHead, domain.PermissionSettingsRead),
 		methodPolicy(http.MethodPut, domain.PermissionSettingsUpdate),
 	)),
+	protectedRoute("runtime overview", "/api/v1/runtime/overview", "/api/v1/runtime/overview", routeHandlerRuntimeOverview, routeMiddlewareNormalJSON, readPolicy(domain.PermissionTopologyRead)),
 
 	protectedRoute("topology canvas", "/api/v1/topology/canvas", "/api/v1/topology/canvas", routeHandlerTopologyCanvas, routeMiddlewareNormalJSON, readPolicy(domain.PermissionTopologyRead)),
 	protectedRoute("canvas", "/api/v1/canvas", "/api/v1/canvas", routeHandlerCanvas, routeMiddlewareNormalJSON, readPolicy(domain.PermissionTopologyRead)),

@@ -269,6 +269,153 @@ func TestCloneSnapshot_PreservesNormalizedRuntimeFields(t *testing.T) {
 	}
 }
 
+func TestCloneSnapshot_DeepCopiesEveryRuntimePointerField(t *testing.T) {
+	snapshot := &SnapshotPayload{
+		Devices: map[string]DeviceRuntimeDTO{
+			"device-1": cloneTestDeviceRuntime("device", 10, true),
+		},
+		Links: map[string]LinkRuntimeDTO{
+			"link-1": cloneTestLinkRuntime("link", 20),
+		},
+		DeviceMetrics: map[string]DeviceRuntimeDTO{
+			"metric-device-1": cloneTestDeviceRuntime("metric-device", 30, false),
+		},
+		LinkMetrics: map[string][]LinkRuntimeDTO{
+			"metric-link-group": {
+				cloneTestLinkRuntime("metric-link-1", 40),
+				cloneTestLinkRuntime("metric-link-2", 50),
+			},
+		},
+	}
+
+	cloned := CloneSnapshot(snapshot)
+
+	assertDeviceRuntimePointersIndependent(
+		t,
+		"Devices[device-1]",
+		snapshot.Devices["device-1"],
+		cloned.Devices["device-1"],
+	)
+	assertLinkRuntimePointersIndependent(
+		t,
+		"Links[link-1]",
+		snapshot.Links["link-1"],
+		cloned.Links["link-1"],
+	)
+	assertDeviceRuntimePointersIndependent(
+		t,
+		"DeviceMetrics[metric-device-1]",
+		snapshot.DeviceMetrics["metric-device-1"],
+		cloned.DeviceMetrics["metric-device-1"],
+	)
+
+	sourceLinkMetrics := snapshot.LinkMetrics["metric-link-group"]
+	clonedLinkMetrics := cloned.LinkMetrics["metric-link-group"]
+	if len(clonedLinkMetrics) != len(sourceLinkMetrics) {
+		t.Fatalf("LinkMetrics element count = %d, want %d", len(clonedLinkMetrics), len(sourceLinkMetrics))
+	}
+	for index := range sourceLinkMetrics {
+		assertLinkRuntimePointersIndependent(
+			t,
+			"LinkMetrics element",
+			sourceLinkMetrics[index],
+			clonedLinkMetrics[index],
+		)
+	}
+}
+
+func cloneTestDeviceRuntime(prefix string, base float64, stale bool) DeviceRuntimeDTO {
+	return DeviceRuntimeDTO{
+		DeviceID:                    prefix,
+		LastCollectedAt:             cloneTestStringPtr(prefix + "-collected"),
+		LastPolledAt:                cloneTestStringPtr(prefix + "-polled"),
+		ExpectedPollIntervalSeconds: float64Ptr(base + 1),
+		CPUPercent:                  float64Ptr(base + 2),
+		MemPercent:                  float64Ptr(base + 3),
+		TempCelsius:                 float64Ptr(base + 4),
+		UptimeSecs:                  float64Ptr(base + 5),
+		Stale:                       cloneTestBoolPtr(stale),
+	}
+}
+
+func cloneTestLinkRuntime(prefix string, base float64) LinkRuntimeDTO {
+	return LinkRuntimeDTO{
+		LinkID:          prefix,
+		LastCollectedAt: cloneTestStringPtr(prefix + "-collected"),
+		TxBps:           float64Ptr(base + 1),
+		RxBps:           float64Ptr(base + 2),
+		Utilization:     float64Ptr(base + 3),
+	}
+}
+
+func assertDeviceRuntimePointersIndependent(
+	t *testing.T,
+	container string,
+	source DeviceRuntimeDTO,
+	cloned DeviceRuntimeDTO,
+) {
+	t.Helper()
+	assertPointerIndependent(t, container+".LastCollectedAt", source.LastCollectedAt, cloned.LastCollectedAt, "source-collected", "clone-collected")
+	assertPointerIndependent(t, container+".LastPolledAt", source.LastPolledAt, cloned.LastPolledAt, "source-polled", "clone-polled")
+	assertPointerIndependent(t, container+".ExpectedPollIntervalSeconds", source.ExpectedPollIntervalSeconds, cloned.ExpectedPollIntervalSeconds, -101.0, -201.0)
+	assertPointerIndependent(t, container+".CPUPercent", source.CPUPercent, cloned.CPUPercent, -102.0, -202.0)
+	assertPointerIndependent(t, container+".MemPercent", source.MemPercent, cloned.MemPercent, -103.0, -203.0)
+	assertPointerIndependent(t, container+".TempCelsius", source.TempCelsius, cloned.TempCelsius, -104.0, -204.0)
+	assertPointerIndependent(t, container+".UptimeSecs", source.UptimeSecs, cloned.UptimeSecs, -105.0, -205.0)
+	assertPointerIndependent(t, container+".Stale", source.Stale, cloned.Stale, !*source.Stale, *source.Stale)
+}
+
+func assertLinkRuntimePointersIndependent(
+	t *testing.T,
+	container string,
+	source LinkRuntimeDTO,
+	cloned LinkRuntimeDTO,
+) {
+	t.Helper()
+	assertPointerIndependent(t, container+".LastCollectedAt", source.LastCollectedAt, cloned.LastCollectedAt, "source-collected", "clone-collected")
+	assertPointerIndependent(t, container+".TxBps", source.TxBps, cloned.TxBps, -111.0, -211.0)
+	assertPointerIndependent(t, container+".RxBps", source.RxBps, cloned.RxBps, -112.0, -212.0)
+	assertPointerIndependent(t, container+".Utilization", source.Utilization, cloned.Utilization, -113.0, -213.0)
+}
+
+func assertPointerIndependent[T comparable](
+	t *testing.T,
+	field string,
+	source *T,
+	cloned *T,
+	sourceMutation T,
+	cloneMutation T,
+) {
+	t.Helper()
+	if source == nil || cloned == nil {
+		t.Fatalf("%s pointers = (%p, %p), want non-nil", field, source, cloned)
+	}
+	initial := *source
+	if *cloned != initial {
+		t.Fatalf("%s cloned value = %#v, want %#v", field, *cloned, initial)
+	}
+	if source == cloned {
+		t.Fatalf("%s cloned address aliases source: %p", field, source)
+	}
+
+	*source = sourceMutation
+	if *cloned != initial {
+		t.Fatalf("%s clone changed after source mutation: got %#v want %#v", field, *cloned, initial)
+	}
+	*cloned = cloneMutation
+	if *source != sourceMutation {
+		t.Fatalf("%s source changed after clone mutation: got %#v want %#v", field, *source, sourceMutation)
+	}
+}
+
+func cloneTestStringPtr(value string) *string {
+	return &value
+}
+
+func cloneTestBoolPtr(value bool) *bool {
+	return &value
+}
+
 func TestNewSnapshotMessage_UsesNormalizedRuntimeContract(t *testing.T) {
 	deviceID := uuid.New().String()
 	lastCollectedAt := "2026-04-13T13:00:00Z"
