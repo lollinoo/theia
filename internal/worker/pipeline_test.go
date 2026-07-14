@@ -4044,6 +4044,113 @@ func TestPipelineOrchestratorGetOrBuildOverviewSnapshotConcurrentRebuildsShareSi
 	}
 }
 
+func TestGetOrBuildOverviewStateReturnsClonedAtomicState(t *testing.T) {
+	pipeline, _, _, _, deviceID := newNoClientBroadcastTestPipeline(t)
+
+	first := pipeline.GetOrBuildOverviewState()
+	if first.StreamID == "" {
+		t.Fatal("overview stream ID is empty")
+	}
+	if _, err := uuid.Parse(first.StreamID); err != nil {
+		t.Fatalf("overview stream ID %q is not a UUID: %v", first.StreamID, err)
+	}
+	if first.Snapshot == nil {
+		t.Fatal("overview snapshot is nil")
+	}
+	if _, ok := first.Snapshot.Devices[deviceID.String()]; !ok {
+		t.Fatalf("overview snapshot does not contain device %s", deviceID)
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.RLock()
+	storedSnapshot := pipeline.runtime.lastSnapshot
+	storedVersion := pipeline.runtime.overviewVersion
+	storedStreamID := pipeline.runtime.overviewStreamID
+	pipeline.runtime.mu.RUnlock()
+	pipeline.overviewBuildMu.Unlock()
+	if first.Snapshot == storedSnapshot {
+		t.Fatal("GetOrBuildOverviewState leaked the stored snapshot")
+	}
+	if first.Version != storedVersion || first.StreamID != storedStreamID {
+		t.Fatalf(
+			"overview state tuple = (%d, %q), want (%d, %q)",
+			first.Version,
+			first.StreamID,
+			storedVersion,
+			storedStreamID,
+		)
+	}
+
+	delete(first.Snapshot.Devices, deviceID.String())
+	second := pipeline.GetOrBuildOverviewState()
+	if second.Version != first.Version || second.StreamID != first.StreamID {
+		t.Fatalf(
+			"unchanged overview state tuple = (%d, %q), want (%d, %q)",
+			second.Version,
+			second.StreamID,
+			first.Version,
+			first.StreamID,
+		)
+	}
+	if _, ok := second.Snapshot.Devices[deviceID.String()]; !ok {
+		t.Fatalf("mutating returned state removed stored device %s", deviceID)
+	}
+}
+
+func TestGetOrBuildOverviewStateConcurrentGettersObserveOneTuple(t *testing.T) {
+	pipeline, _, _, _, _ := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = ws.EmptySnapshot()
+	pipeline.runtime.prevHashes = computeSnapshotHashes(pipeline.runtime.lastSnapshot)
+	pipeline.runtime.overviewVersion = 1
+	pipeline.runtime.overviewStreamID = "stream-1"
+	pipeline.runtime.mu.Unlock()
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.overviewVersion = 2
+	pipeline.runtime.mu.Unlock()
+
+	const callers = 8
+	results := make(chan ws.RuntimeOverviewState, callers)
+	start := make(chan struct{})
+	var ready sync.WaitGroup
+	ready.Add(callers)
+	for range callers {
+		go func() {
+			ready.Done()
+			<-start
+			results <- pipeline.GetOrBuildOverviewState()
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	select {
+	case state := <-results:
+		pipeline.overviewBuildMu.Unlock()
+		t.Fatalf("getter returned while overview tuple was incomplete: %#v", state)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.overviewStreamID = "stream-2"
+	pipeline.runtime.mu.Unlock()
+	pipeline.overviewBuildMu.Unlock()
+
+	for range callers {
+		select {
+		case state := <-results:
+			if state.Version != 2 || state.StreamID != "stream-2" {
+				t.Fatalf("concurrent overview state tuple = (%d, %q), want (2, %q)", state.Version, state.StreamID, "stream-2")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for concurrent overview state getter")
+		}
+	}
+}
+
 func TestPipelineOrchestratorBroadcastDirty_AlertResolutionWithoutRuntimeBaseFallsBackToFullSnapshotAndAlert(t *testing.T) {
 	pipeline, hub, _, _, deviceID := newBroadcastTestPipeline(t)
 	pipeline.runtime.setAlerts(map[uuid.UUID][]domain.AlertState{

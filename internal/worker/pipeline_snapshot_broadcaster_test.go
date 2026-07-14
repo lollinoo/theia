@@ -4,15 +4,168 @@ package worker
 
 import (
 	"bytes"
+	"context"
 	"log"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/polling"
+	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/ws"
 )
+
+func TestSnapshotBroadcasterJournalBroadcastOnceDeltaKeepsStream(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+	initial := pipeline.GetOrBuildOverviewState()
+
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  floatPtr(51),
+			CollectedAt: time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC),
+	})
+	pipeline.broadcaster.broadcastOnce(context.Background())
+
+	current := pipeline.GetOrBuildOverviewState()
+	if current.StreamID != initial.StreamID {
+		t.Fatalf("sparse delta stream ID = %q, want stable %q", current.StreamID, initial.StreamID)
+	}
+	if current.Version != initial.Version+1 {
+		t.Fatalf("sparse delta version = %d, want %d", current.Version, initial.Version+1)
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	replay, ok := pipeline.runtime.overviewJournal.Replay(initial.Version, current.Version)
+	pipeline.overviewBuildMu.Unlock()
+	if !ok || replay == nil {
+		t.Fatalf("journal replay = (%#v, %t), want sparse delta", replay, ok)
+	}
+	if _, ok := replay.Devices[deviceID.String()]; !ok {
+		t.Fatalf("journal replay does not contain device %s", deviceID)
+	}
+}
+
+func TestSnapshotBroadcasterJournalDirtyDeltaKeepsStream(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+	initial := pipeline.GetOrBuildOverviewState()
+
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  floatPtr(52),
+			CollectedAt: time.Date(2026, 7, 14, 10, 1, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 7, 14, 10, 1, 0, 0, time.UTC),
+	})
+	if err := pipeline.broadcaster.broadcastDirty(
+		context.Background(),
+		map[uuid.UUID]struct{}{deviceID: {}},
+		false,
+		false,
+		false,
+	); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+
+	current := pipeline.GetOrBuildOverviewState()
+	if current.StreamID != initial.StreamID {
+		t.Fatalf("dirty delta stream ID = %q, want stable %q", current.StreamID, initial.StreamID)
+	}
+	if current.Version != initial.Version+1 {
+		t.Fatalf("dirty delta version = %d, want %d", current.Version, initial.Version+1)
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	replay, ok := pipeline.runtime.overviewJournal.Replay(initial.Version, current.Version)
+	pipeline.overviewBuildMu.Unlock()
+	if !ok || replay == nil {
+		t.Fatalf("journal replay = (%#v, %t), want dirty delta", replay, ok)
+	}
+	if _, ok := replay.Devices[deviceID.String()]; !ok {
+		t.Fatalf("journal replay does not contain device %s", deviceID)
+	}
+}
+
+func TestSnapshotBroadcasterJournalFullSnapshotRotatesStreamAndClearsReplay(t *testing.T) {
+	pipeline, hub, store, _, deviceID := newBroadcastTestPipeline(t)
+	pipeline.broadcaster.broadcastOnce(context.Background())
+	drainBroadcastCh(hub)
+	initial := pipeline.GetOrBuildOverviewState()
+
+	store.Update(state.StateUpdate{
+		DeviceID:        deviceID,
+		VolatilityClass: domain.VolatilityClassPerformance,
+		Metrics: &domain.DeviceMetrics{
+			DeviceID:    deviceID,
+			CPUPercent:  floatPtr(53),
+			CollectedAt: time.Date(2026, 7, 14, 10, 2, 0, 0, time.UTC),
+		},
+		PollSuccess:      true,
+		ExpectedInterval: 30 * time.Second,
+		Timestamp:        time.Date(2026, 7, 14, 10, 2, 0, 0, time.UTC),
+	})
+	if err := pipeline.broadcaster.broadcastDirty(
+		context.Background(),
+		map[uuid.UUID]struct{}{deviceID: {}},
+		false,
+		false,
+		false,
+	); err != nil {
+		t.Fatalf("broadcastDirty returned error: %v", err)
+	}
+	beforeFull := pipeline.GetOrBuildOverviewState()
+
+	pipeline.overviewBuildMu.Lock()
+	_, replayableBefore := pipeline.runtime.overviewJournal.Replay(initial.Version, beforeFull.Version)
+	pipeline.overviewBuildMu.Unlock()
+	if !replayableBefore {
+		t.Fatal("expected sparse delta to be replayable before full snapshot")
+	}
+
+	if err := pipeline.broadcaster.broadcastFullSnapshot(context.Background(), refreshReloadReasonFullResync, false); err != nil {
+		t.Fatalf("broadcastFullSnapshot returned error: %v", err)
+	}
+	afterFull := pipeline.GetOrBuildOverviewState()
+	if afterFull.StreamID == beforeFull.StreamID {
+		t.Fatalf("full snapshot kept stream ID %q", afterFull.StreamID)
+	}
+	if _, err := uuid.Parse(afterFull.StreamID); err != nil {
+		t.Fatalf("rotated stream ID %q is not a UUID: %v", afterFull.StreamID, err)
+	}
+	if afterFull.Version != beforeFull.Version+1 {
+		t.Fatalf("full snapshot version = %d, want %d", afterFull.Version, beforeFull.Version+1)
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	replay, ok := pipeline.runtime.overviewJournal.Replay(initial.Version, beforeFull.Version)
+	entries := len(pipeline.runtime.overviewJournal.entries)
+	pipeline.overviewBuildMu.Unlock()
+	if ok || replay != nil {
+		t.Fatalf("old stream replay survived full snapshot: (%#v, %t)", replay, ok)
+	}
+	if entries != 0 {
+		t.Fatalf("journal contains %d entries after full snapshot, want 0", entries)
+	}
+}
 
 func capturePipelineDebugLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()

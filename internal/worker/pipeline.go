@@ -253,44 +253,73 @@ func (p *PipelineOrchestrator) GetOverviewSnapshot() (*ws.SnapshotPayload, uint6
 	return p.runtime.getOverviewSnapshot()
 }
 
-// GetOrBuildOverviewSnapshot retrieves or build overview snapshot data from the background worker lifecycle.
+// GetOrBuildOverviewSnapshot retrieves or builds overview snapshot data from the background worker lifecycle.
 func (p *PipelineOrchestrator) GetOrBuildOverviewSnapshot() (*ws.SnapshotPayload, uint64) {
+	state := p.GetOrBuildOverviewState()
+	return state.Snapshot, state.Version
+}
+
+// GetOrBuildOverviewState retrieves or builds one atomic overview snapshot lineage state.
+func (p *PipelineOrchestrator) GetOrBuildOverviewState() ws.RuntimeOverviewState {
 	p.overviewBuildMu.Lock()
 	defer p.overviewBuildMu.Unlock()
+	return p.getOrBuildOverviewStateLocked()
+}
 
+// getOrBuildOverviewStateLocked requires overviewBuildMu to remain held.
+func (p *PipelineOrchestrator) getOrBuildOverviewStateLocked() ws.RuntimeOverviewState {
 	p.runtime.mu.RLock()
 	if p.runtime.prevHashes != nil {
-		snapshot := ws.CloneSnapshot(p.runtime.lastSnapshot)
-		version := p.runtime.overviewVersion
+		state := ws.RuntimeOverviewState{
+			Snapshot: ws.CloneSnapshot(p.runtime.lastSnapshot),
+			Version:  p.runtime.overviewVersion,
+			StreamID: p.runtime.overviewStreamID,
+		}
 		p.runtime.mu.RUnlock()
-		return snapshot, version
+		return state
 	}
 	p.runtime.mu.RUnlock()
 
 	snapshot, err := p.buildFullOverviewSnapshot()
 	if err != nil {
-		return p.runtime.getOverviewSnapshot()
+		p.runtime.mu.RLock()
+		state := ws.RuntimeOverviewState{
+			Snapshot: ws.CloneSnapshot(p.runtime.lastSnapshot),
+			Version:  p.runtime.overviewVersion,
+			StreamID: p.runtime.overviewStreamID,
+		}
+		p.runtime.mu.RUnlock()
+		return state
 	}
 	hashes := computeSnapshotHashes(snapshot)
 
 	p.runtime.mu.Lock()
 	if p.runtime.prevHashes != nil {
-		snapshot := ws.CloneSnapshot(p.runtime.lastSnapshot)
-		version := p.runtime.overviewVersion
+		state := ws.RuntimeOverviewState{
+			Snapshot: ws.CloneSnapshot(p.runtime.lastSnapshot),
+			Version:  p.runtime.overviewVersion,
+			StreamID: p.runtime.overviewStreamID,
+		}
 		p.runtime.mu.Unlock()
-		return snapshot, version
+		return state
 	}
 	p.runtime.lastSnapshot = snapshot
 	p.runtime.prevHashes = hashes
 	p.runtime.overviewVersion++
-	version := p.runtime.overviewVersion
+	p.runtime.overviewStreamID = uuid.NewString()
+	state := ws.RuntimeOverviewState{
+		Snapshot: ws.CloneSnapshot(snapshot),
+		Version:  p.runtime.overviewVersion,
+		StreamID: p.runtime.overviewStreamID,
+	}
 	p.runtime.mu.Unlock()
+	p.runtime.overviewJournal.Reset()
 
 	if p.hub != nil && p.hub.HasOverviewClients() {
-		p.hub.BroadcastOverviewSnapshot(snapshot, version)
+		p.hub.BroadcastOverviewSnapshot(snapshot, state.Version)
 	}
 
-	return ws.CloneSnapshot(snapshot), version
+	return state
 }
 
 func (p *PipelineOrchestrator) IsPromAvailable() bool {

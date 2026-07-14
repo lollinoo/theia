@@ -105,6 +105,16 @@ type RuntimeCursor struct {
 	Known    bool
 }
 
+// RuntimeOverviewState is one atomic, cloned view of the runtime overview lineage.
+type RuntimeOverviewState struct {
+	Snapshot *SnapshotPayload
+	Version  uint64
+	StreamID string
+}
+
+// RuntimeOverviewStateFunc retrieves one atomic runtime overview state.
+type RuntimeOverviewStateFunc func() RuntimeOverviewState
+
 // SnapshotMessagePayload is the versioned full overview payload sent to clients.
 type SnapshotMessagePayload struct {
 	Version         uint64           `json:"version"`

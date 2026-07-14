@@ -180,8 +180,10 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 	case previousHashes == nil:
 		p.runtime.mu.Lock()
 		p.runtime.overviewVersion = currentVersion + 1
+		p.runtime.overviewStreamID = uuid.NewString()
 		version := p.runtime.overviewVersion
 		p.runtime.mu.Unlock()
+		p.runtime.overviewJournal.Reset()
 		observability.Default().IncRefreshTopologyReload(refreshReloadReasonStartup)
 		p.hub.BroadcastOverviewSnapshot(snapshot, version)
 	default:
@@ -194,6 +196,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastOnce(context.Context) {
 				p.runtime.overviewVersion = baseVersion + 1
 				version := p.runtime.overviewVersion
 				p.runtime.mu.Unlock()
+				p.runtime.overviewJournal.Append(baseVersion, version, patch)
 				p.hub.BroadcastOverviewDelta(patch, baseVersion, version, snapshot)
 			}
 		}
@@ -316,6 +319,7 @@ func (b *pipelineSnapshotBroadcaster) broadcastDirty(ctx context.Context, dirtyD
 	p.runtime.overviewVersion++
 	version := p.runtime.overviewVersion
 	p.runtime.mu.Unlock()
+	p.runtime.overviewJournal.Append(baseVersion, version, patch)
 
 	p.hub.BroadcastOverviewDelta(patch, baseVersion, version, merged)
 	p.overviewBuildMu.Unlock()
@@ -521,8 +525,10 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotLocked(_ context.Cont
 	p.runtime.prevHashes = computeSnapshotHashes(snapshot)
 	p.runtime.previousAlertRuntime = alertRuntimeSummaryFromSnapshot(snapshot)
 	p.runtime.overviewVersion++
+	p.runtime.overviewStreamID = uuid.NewString()
 	version := p.runtime.overviewVersion
 	p.runtime.mu.Unlock()
+	p.runtime.overviewJournal.Reset()
 
 	p.hub.BroadcastOverviewSnapshot(snapshot, version)
 
@@ -556,8 +562,10 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotWithResyncLocked(_ co
 	p.runtime.prevHashes = computeSnapshotHashes(snapshot)
 	p.runtime.previousAlertRuntime = alertRuntimeSummaryFromSnapshot(snapshot)
 	p.runtime.overviewVersion++
+	p.runtime.overviewStreamID = uuid.NewString()
 	version := p.runtime.overviewVersion
 	p.runtime.mu.Unlock()
+	p.runtime.overviewJournal.Reset()
 
 	p.hub.BroadcastOverviewResync(resyncReason, snapshot, version)
 
