@@ -20,10 +20,27 @@ import (
 	"github.com/lollinoo/theia/internal/observability"
 )
 
-func captureDebugLogs(t *testing.T) *bytes.Buffer {
+type synchronizedLogBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedLogBuffer) Write(payload []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(payload)
+}
+
+func (b *synchronizedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+func captureDebugLogs(t *testing.T) *synchronizedLogBuffer {
 	t.Helper()
 
-	var buf bytes.Buffer
+	var buf synchronizedLogBuffer
 	originalWriter := log.Writer()
 	originalFlags := log.Flags()
 	log.SetOutput(&buf)
