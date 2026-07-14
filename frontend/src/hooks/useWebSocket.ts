@@ -3,8 +3,10 @@
  * Keeps reconnect, resync, and subscription behavior isolated from canvas rendering.
  */
 import { useEffect, useRef, useState } from 'react';
+import { fetchRuntimeOverview } from '../api/runtime';
 import {
   getCanvasDiagnosticsSnapshot,
+  incrementCanvasDiagnosticCount,
   recordCanvasDiagnosticEvent,
   updateCanvasDiagnosticsState,
 } from '../components/canvas/canvasDiagnostics';
@@ -21,6 +23,7 @@ import {
   type ResyncRequiredPayload,
   type ResyncRequiredWSMessage,
   type RuntimeDeltaWSMessage,
+  type RuntimeReplayWSMessage,
   type SnapshotDeltaWSMessage,
   type SnapshotPayload,
   type SnapshotWSMessage,
@@ -31,12 +34,26 @@ import {
   subscribeCanvasRuntimeBootstrap,
 } from './canvasRuntimeBootstrap';
 import {
+  buildRuntimeRecoveryDiagnosticMetadata,
   dispatchBackendResyncRequired,
   getRawWebSocketMessageType,
   recordIgnoredStaleRuntimeDelta,
   recordIgnoredStaleRuntimeSnapshot,
 } from './websocket/diagnostics';
 import { buildCanvasHelloPayload, type CanvasHelloPayload } from './websocket/hello';
+import { createRuntimeAckScheduler, type RuntimeAckScheduler } from './websocket/runtimeAck';
+import {
+  advanceRuntimeRecoveryDeadline,
+  applyRuntimeRecoveryReady,
+  applyRuntimeRecoverySnapshot,
+  beginRuntimeRecovery,
+  classifyRuntimeReplay,
+  createRuntimeRecoveryState,
+  failRuntimeRecovery,
+  RUNTIME_RECOVERY_DEADLINE_MS,
+  type RuntimeCursor,
+  type RuntimeRecoveryState,
+} from './websocket/runtimeRecovery';
 import { classifyRuntimeDelta, shouldIgnoreStaleRuntimeSnapshot } from './websocket/runtimeState';
 import { appendHelloQueryParams, buildWebSocketURL } from './websocket/url';
 
@@ -99,8 +116,21 @@ export function useWebSocket(
   const runtimeIdentityRef = useRef<string | null>(
     initialRuntimeBootstrap?.runtimeIdentity ?? null,
   );
+  const runtimeStreamIdRef = useRef<string | null>(
+    initialRuntimeBootstrap?.runtimeStreamId ?? null,
+  );
   const alertVersionRef = useRef<number | null>(null);
-  const awaitingResyncRef = useRef(false);
+  const runtimeRecoveryStateRef = useRef<RuntimeRecoveryState>(createRuntimeRecoveryState());
+  const runtimeAckSchedulerRef = useRef<RuntimeAckScheduler | null>(null);
+  const awaitingLegacyRuntimeBootstrapRef = useRef(false);
+  const runtimeRecoveryModeRef = useRef<'current' | 'replay' | 'snapshot' | 'http-fallback' | null>(
+    null,
+  );
+  const runtimeRecoveryCountRef = useRef(0);
+  const runtimeReplayRecoveryCountRef = useRef(0);
+  const runtimeSnapshotRecoveryCountRef = useRef(0);
+  const runtimeHttpFallbackCountRef = useRef(0);
+  const runtimeRecoveryFailureCountRef = useRef(0);
 
   const reconnectAttemptRef = useRef(0);
   const reconnectCountRef = useRef(0);
@@ -111,10 +141,12 @@ export function useWebSocket(
   /** Builds the hello payload from diagnostics and the last applied runtime/alert versions. */
   function buildHelloPayload(): CanvasHelloPayload {
     const diagnostics = getCanvasDiagnosticsSnapshot();
+    const cursor = getAppliedRuntimeCursor();
     return buildCanvasHelloPayload({
       topologyVersion: diagnostics.topology.topologyVersion,
       hasRuntimeSnapshot: hasRuntimeSnapshotRef.current,
-      runtimeVersion: snapshotVersionRef.current,
+      runtimeStreamId: cursor?.streamId,
+      runtimeVersion: cursor?.version ?? null,
       runtimeIdentity: runtimeIdentityRef.current,
       alertVersion: alertVersionRef.current,
       detailDeviceId: detailDeviceIdRef.current,
@@ -165,6 +197,23 @@ export function useWebSocket(
     setAlerts([]);
   }
 
+  /** Returns the last fully applied protocol-v2 cursor when both lineage fields are valid. */
+  function getAppliedRuntimeCursor(): RuntimeCursor | null {
+    const streamId = runtimeStreamIdRef.current;
+    const version = snapshotVersionRef.current;
+    if (
+      !hasRuntimeSnapshotRef.current ||
+      streamId === null ||
+      streamId.trim().length === 0 ||
+      version === null ||
+      !Number.isSafeInteger(version) ||
+      version < 0
+    ) {
+      return null;
+    }
+    return { streamId, version };
+  }
+
   /** Sends detail subscription changes for the current device without opening a second socket. */
   function sendDetailControl(type: DetailControlType, deviceId: string | null): void {
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
@@ -186,9 +235,23 @@ export function useWebSocket(
 
     return subscribeCanvasRuntimeBootstrap((bootstrap) => {
       hasRuntimeSnapshotRef.current = true;
+      const previousStreamId = runtimeStreamIdRef.current;
+      runtimeStreamIdRef.current = bootstrap.runtimeStreamId ?? null;
+      if (previousStreamId !== runtimeStreamIdRef.current) {
+        runtimeAckSchedulerRef.current?.reset();
+      }
       snapshotVersionRef.current = bootstrap.runtimeVersion ?? null;
       runtimeIdentityRef.current = bootstrap.runtimeIdentity ?? null;
-      awaitingResyncRef.current = false;
+      runtimeRecoveryStateRef.current = {
+        phase: 'idle',
+        generation: runtimeRecoveryStateRef.current.generation,
+      };
+      awaitingLegacyRuntimeBootstrapRef.current = false;
+      updateCanvasDiagnosticsState({
+        websocket: {
+          runtimeRecoveryPhase: 'idle',
+        },
+      });
       publishRuntimeSnapshot(bootstrap.snapshot);
       setRuntimeBootstrapReady(true);
       updateCanvasDiagnosticsState({
@@ -198,6 +261,7 @@ export function useWebSocket(
           ...(bootstrap.runtimeIdentity !== undefined
             ? { lastAppliedRuntimeIdentity: bootstrap.runtimeIdentity }
             : {}),
+          runtimeStreamId: bootstrap.runtimeStreamId,
           lastRejectedDeltaReason: undefined,
         },
       });
@@ -250,11 +314,20 @@ export function useWebSocket(
 
     disposed.current = false;
     let reconnectTimer: number | null = null;
+    let runtimeRecoveryDeadlineTimer: number | null = null;
+    let activeRuntimeFallback: { generation: number; socket: WebSocket } | null = null;
 
     function clearReconnectTimer() {
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer);
         reconnectTimer = null;
+      }
+    }
+
+    function clearRuntimeRecoveryDeadline() {
+      if (runtimeRecoveryDeadlineTimer !== null) {
+        window.clearTimeout(runtimeRecoveryDeadlineTimer);
+        runtimeRecoveryDeadlineTimer = null;
       }
     }
 
@@ -278,6 +351,7 @@ export function useWebSocket(
       if (disposed.current) return;
 
       clearReconnectTimer();
+      clearRuntimeRecoveryDeadline();
 
       // Close any existing socket before opening a new one
       if (socketRef.current) {
@@ -290,19 +364,216 @@ export function useWebSocket(
       }
 
       resetAlertState();
+      runtimeRecoveryStateRef.current = {
+        phase: 'idle',
+        generation: runtimeRecoveryStateRef.current.generation,
+      };
+      runtimeRecoveryModeRef.current = null;
+      updateCanvasDiagnosticsState({
+        websocket: {
+          runtimeRecoveryPhase: 'idle',
+        },
+      });
       const initialHelloPayload = buildHelloPayload();
       const ws = new WebSocket(appendHelloQueryParams(buildWebSocketURL(url), initialHelloPayload));
       socketRef.current = ws;
 
+      runtimeAckSchedulerRef.current?.cancel();
+      const runtimeAckScheduler = createRuntimeAckScheduler({
+        send(control) {
+          ws.send(JSON.stringify(control));
+          updateCanvasDiagnosticsState({
+            websocket: {
+              runtimeStreamId: control.payload.runtime_stream_id,
+              lastRuntimeAckVersion: String(control.payload.runtime_version),
+            },
+          });
+        },
+      });
+      runtimeAckSchedulerRef.current = runtimeAckScheduler;
+
+      /** Applies the compact HTTP snapshot only while its socket and recovery generation are current. */
+      async function runRuntimeFallback(generation: number): Promise<void> {
+        if (
+          activeRuntimeFallback?.socket === ws &&
+          activeRuntimeFallback.generation === generation
+        ) {
+          return;
+        }
+        const fallbackToken = { generation, socket: ws };
+        activeRuntimeFallback = fallbackToken;
+
+        try {
+          const response = await fetchRuntimeOverview();
+          const recoveryState = runtimeRecoveryStateRef.current;
+          if (
+            disposed.current ||
+            socketRef.current !== ws ||
+            recoveryState.phase !== 'http-fallback' ||
+            recoveryState.generation !== generation
+          ) {
+            return;
+          }
+
+          const currentCursor = getAppliedRuntimeCursor();
+          if (
+            currentCursor !== null &&
+            currentCursor.streamId === response.runtime_stream_id &&
+            response.runtime_version < currentCursor.version
+          ) {
+            throw new Error('runtime fallback cursor regressed');
+          }
+
+          if (runtimeStreamIdRef.current !== response.runtime_stream_id) {
+            runtimeAckScheduler.reset();
+          }
+          hasRuntimeSnapshotRef.current = true;
+          runtimeStreamIdRef.current = response.runtime_stream_id;
+          snapshotVersionRef.current = response.runtime_version;
+          runtimeIdentityRef.current = response.runtime_identity;
+          const cursor = getAppliedRuntimeCursor();
+          if (cursor === null) {
+            throw new Error('invalid runtime fallback cursor');
+          }
+
+          const appliedSnapshot = applyRuntimeRecoverySnapshot(recoveryState, cursor);
+          runtimeRecoveryStateRef.current = appliedSnapshot.state;
+          runtimeRecoveryModeRef.current = 'http-fallback';
+          updateCanvasDiagnosticsState({
+            websocket: {
+              lastAppliedSnapshotVersion: String(cursor.version),
+              lastAppliedRuntimeIdentity: response.runtime_identity,
+              runtimeStreamId: cursor.streamId,
+              runtimeRecoveryPhase: appliedSnapshot.state.phase,
+              lastRejectedDeltaReason: undefined,
+            },
+          });
+          recordCanvasDiagnosticEvent({
+            level: 'warn',
+            source: 'runtime',
+            event: 'runtime.recovery.http_snapshot_applied',
+            message: 'Runtime-only HTTP recovery snapshot applied',
+            metadata: {
+              generation,
+              version: cursor.version,
+              deviceCount: Object.keys(response.runtime_snapshot.devices).length,
+              linkCount: Object.keys(response.runtime_snapshot.links).length,
+            },
+          });
+          publishRuntimeSnapshot(response.runtime_snapshot);
+          runtimeAckScheduler.schedule(cursor);
+          ws.send(
+            JSON.stringify({
+              type: 'resume_runtime',
+              payload: {
+                runtime_stream_id: cursor.streamId,
+                runtime_version: cursor.version,
+              },
+            }),
+          );
+        } catch (error) {
+          const recoveryState = runtimeRecoveryStateRef.current;
+          if (
+            disposed.current ||
+            socketRef.current !== ws ||
+            (recoveryState.phase !== 'stream' && recoveryState.phase !== 'http-fallback') ||
+            recoveryState.generation !== generation
+          ) {
+            return;
+          }
+
+          const recoveryMetadata = buildRuntimeRecoveryDiagnosticMetadata(
+            recoveryState,
+            Date.now(),
+          );
+          runtimeRecoveryStateRef.current = failRuntimeRecovery(
+            recoveryState,
+            error instanceof Error ? error.message : 'runtime fallback failed',
+          );
+          runtimeRecoveryFailureCountRef.current = incrementCanvasDiagnosticCount(
+            runtimeRecoveryFailureCountRef.current,
+          );
+          updateCanvasDiagnosticsState({
+            websocket: {
+              runtimeRecoveryPhase: 'failed',
+              lastRuntimeRecoveryMode: 'http-fallback',
+              lastRuntimeRecoveryDurationMs:
+                recoveryMetadata.phase === 'stream' || recoveryMetadata.phase === 'http-fallback'
+                  ? recoveryMetadata.durationMs
+                  : undefined,
+              runtimeRecoveryFailureCount: runtimeRecoveryFailureCountRef.current,
+            },
+          });
+          recordCanvasDiagnosticEvent({
+            level: 'error',
+            source: 'runtime',
+            event: 'runtime.recovery.failed',
+            message: 'Runtime stream recovery failed; reconnecting the WebSocket',
+            metadata: {
+              generation,
+              reason: error instanceof Error ? error.message : 'runtime fallback failed',
+            },
+          });
+          runtimeAckScheduler.cancel();
+          ws.close();
+        } finally {
+          if (activeRuntimeFallback === fallbackToken) {
+            activeRuntimeFallback = null;
+          }
+        }
+      }
+
+      /** Arms the single fixed recovery deadline for the active stream generation. */
+      function scheduleRuntimeRecoveryDeadline(state: RuntimeRecoveryState): void {
+        if (state.phase !== 'stream' || runtimeRecoveryDeadlineTimer !== null) {
+          return;
+        }
+        const remainingMs = Math.max(
+          0,
+          state.startedAt + RUNTIME_RECOVERY_DEADLINE_MS - Date.now(),
+        );
+        const generation = state.generation;
+        runtimeRecoveryDeadlineTimer = window.setTimeout(() => {
+          runtimeRecoveryDeadlineTimer = null;
+          const currentState = runtimeRecoveryStateRef.current;
+          if (
+            disposed.current ||
+            socketRef.current !== ws ||
+            currentState.phase !== 'stream' ||
+            currentState.generation !== generation
+          ) {
+            return;
+          }
+
+          const fallbackState = advanceRuntimeRecoveryDeadline(currentState, Date.now());
+          if (fallbackState.phase !== 'http-fallback') {
+            scheduleRuntimeRecoveryDeadline(currentState);
+            return;
+          }
+
+          runtimeRecoveryStateRef.current = fallbackState;
+          runtimeHttpFallbackCountRef.current = incrementCanvasDiagnosticCount(
+            runtimeHttpFallbackCountRef.current,
+          );
+          updateCanvasDiagnosticsState({
+            websocket: {
+              runtimeRecoveryPhase: 'http-fallback',
+              runtimeHttpFallbackCount: runtimeHttpFallbackCountRef.current,
+            },
+          });
+          void runRuntimeFallback(generation);
+        }, remainingMs);
+      }
+
       /** Records a rejected runtime base and triggers the HTTP bootstrap/resync path. */
-      function requestClientResync(
+      function requestLegacyResync(
         payloadReason: ResyncRequiredPayload['reason'] = 'client_resync_scheduled',
         diagnosticReason = 'base_version_mismatch',
       ): void {
-        if (awaitingResyncRef.current) {
+        if (awaitingLegacyRuntimeBootstrapRef.current) {
           return;
         }
-        awaitingResyncRef.current = true;
+        awaitingLegacyRuntimeBootstrapRef.current = true;
         resyncRequiredCountRef.current += 1;
         updateCanvasDiagnosticsState({
           websocket: {
@@ -327,6 +598,68 @@ export function useWebSocket(
         if (!requireRuntimeBootstrap) {
           ws.close();
         }
+      }
+
+      /** Enters one protocol-v2 recovery generation and optionally asks the server to resume it. */
+      function requestRuntimeRecovery(
+        reason: string,
+        targetVersion: number | null,
+        sendResume: boolean,
+      ): void {
+        const previousState = runtimeRecoveryStateRef.current;
+        const nextState = beginRuntimeRecovery(previousState, {
+          now: Date.now(),
+          reason,
+          targetVersion,
+        });
+        runtimeRecoveryStateRef.current = nextState;
+        scheduleRuntimeRecoveryDeadline(nextState);
+        if (previousState.phase === 'idle' && nextState.phase === 'stream') {
+          runtimeRecoveryModeRef.current = null;
+        }
+        if (previousState.phase !== 'idle' || nextState.phase !== 'stream') {
+          if (nextState.phase === 'stream') {
+            updateCanvasDiagnosticsState({
+              websocket: {
+                runtimeRecoveryTargetVersion:
+                  nextState.targetVersion === null ? undefined : String(nextState.targetVersion),
+              },
+            });
+          }
+          return;
+        }
+
+        resyncRequiredCountRef.current += 1;
+        runtimeRecoveryCountRef.current = incrementCanvasDiagnosticCount(
+          runtimeRecoveryCountRef.current,
+        );
+        updateCanvasDiagnosticsState({
+          websocket: {
+            resyncRequiredCount: resyncRequiredCountRef.current,
+            lastRejectedDeltaReason: reason,
+            runtimeRecoveryPhase: 'stream',
+            runtimeRecoveryTargetVersion:
+              nextState.targetVersion === null ? undefined : String(nextState.targetVersion),
+            runtimeRecoveryCount: runtimeRecoveryCountRef.current,
+          },
+        });
+        if (!sendResume) {
+          return;
+        }
+
+        const cursor = getAppliedRuntimeCursor();
+        if (cursor === null) {
+          return;
+        }
+        ws.send(
+          JSON.stringify({
+            type: 'resume_runtime',
+            payload: {
+              runtime_stream_id: cursor.streamId,
+              runtime_version: cursor.version,
+            },
+          }),
+        );
       }
 
       ws.onopen = () => {
@@ -379,19 +712,128 @@ export function useWebSocket(
           if (message.type === 'ready') {
             const payload = (message as ReadyWSMessage).payload;
             if (!hasRuntimeSnapshotRef.current) {
-              requestClientResync('client_missing_runtime_snapshot', 'missing_base_snapshot');
+              if (payload.runtime_stream_id !== undefined) {
+                requestRuntimeRecovery(
+                  'missing_base_snapshot',
+                  payload.runtime_version ?? null,
+                  true,
+                );
+              } else {
+                requestLegacyResync('client_missing_runtime_snapshot', 'missing_base_snapshot');
+              }
               return;
             }
-            if (payload.runtime_version !== undefined) {
-              snapshotVersionRef.current = payload.runtime_version;
+            const downgradeCandidate =
+              runtimeRecoveryStateRef.current.phase === 'idle' &&
+              runtimeStreamIdRef.current !== null &&
+              payload.runtime_stream_id === undefined;
+            const hasV2Cursor =
+              !downgradeCandidate &&
+              (runtimeStreamIdRef.current !== null || payload.runtime_stream_id !== undefined);
+            if (hasV2Cursor) {
+              const readyCursor =
+                payload.runtime_stream_id !== undefined && payload.runtime_version !== undefined
+                  ? {
+                      streamId: payload.runtime_stream_id,
+                      version: payload.runtime_version,
+                    }
+                  : null;
+              const readyDecision = applyRuntimeRecoveryReady(
+                runtimeRecoveryStateRef.current,
+                getAppliedRuntimeCursor(),
+                readyCursor,
+              );
+              if (readyDecision.kind === 'reject') {
+                if (runtimeRecoveryStateRef.current.phase === 'idle') {
+                  requestRuntimeRecovery(
+                    readyDecision.reason,
+                    payload.runtime_version ?? null,
+                    true,
+                  );
+                }
+                return;
+              }
+              const recoveryStateBeforeReady = runtimeRecoveryStateRef.current;
+              runtimeRecoveryStateRef.current = readyDecision.state;
+              awaitingLegacyRuntimeBootstrapRef.current = false;
+              clearRuntimeRecoveryDeadline();
+              if (payload.runtime_identity !== undefined) {
+                runtimeIdentityRef.current = payload.runtime_identity;
+              }
+              if (payload.alert_version !== undefined) {
+                alertVersionRef.current = payload.alert_version;
+              }
+              runtimeAckScheduler.schedule(readyDecision.cursor);
+              runtimeAckScheduler.flush();
+              const recoveryMetadata = buildRuntimeRecoveryDiagnosticMetadata(
+                recoveryStateBeforeReady,
+                Date.now(),
+              );
+              if (
+                recoveryStateBeforeReady.phase === 'stream' ||
+                recoveryStateBeforeReady.phase === 'http-fallback'
+              ) {
+                if (runtimeRecoveryModeRef.current === null) {
+                  if (
+                    payload.sync_mode === 'current' ||
+                    payload.sync_mode === 'replay' ||
+                    payload.sync_mode === 'snapshot'
+                  ) {
+                    runtimeRecoveryModeRef.current = payload.sync_mode;
+                  }
+                }
+                const completedMode = runtimeRecoveryModeRef.current;
+                if (completedMode === 'replay') {
+                  runtimeReplayRecoveryCountRef.current = incrementCanvasDiagnosticCount(
+                    runtimeReplayRecoveryCountRef.current,
+                  );
+                } else if (completedMode === 'snapshot') {
+                  runtimeSnapshotRecoveryCountRef.current = incrementCanvasDiagnosticCount(
+                    runtimeSnapshotRecoveryCountRef.current,
+                  );
+                }
+                updateCanvasDiagnosticsState({
+                  websocket: {
+                    runtimeRecoveryPhase: readyDecision.state.phase,
+                    ...(completedMode !== null ? { lastRuntimeRecoveryMode: completedMode } : {}),
+                    lastRuntimeRecoveryDurationMs:
+                      recoveryMetadata.phase === 'stream' ||
+                      recoveryMetadata.phase === 'http-fallback'
+                        ? recoveryMetadata.durationMs
+                        : undefined,
+                    runtimeReplayRecoveryCount: runtimeReplayRecoveryCountRef.current,
+                    runtimeSnapshotRecoveryCount: runtimeSnapshotRecoveryCountRef.current,
+                  },
+                });
+              }
+            } else {
+              const hasExactLegacyReady =
+                payload.runtime_version !== undefined &&
+                Number.isSafeInteger(payload.runtime_version) &&
+                payload.runtime_version >= 0 &&
+                snapshotVersionRef.current !== null &&
+                payload.runtime_version === snapshotVersionRef.current;
+              if (!hasExactLegacyReady) {
+                requestLegacyResync('client_resync_scheduled', 'ready_version_mismatch');
+                return;
+              }
+              if (downgradeCandidate) {
+                runtimeAckScheduler.reset();
+                runtimeStreamIdRef.current = null;
+                updateCanvasDiagnosticsState({
+                  websocket: {
+                    runtimeStreamId: undefined,
+                  },
+                });
+              }
+              awaitingLegacyRuntimeBootstrapRef.current = false;
+              if (payload.runtime_identity !== undefined) {
+                runtimeIdentityRef.current = payload.runtime_identity;
+              }
+              if (payload.alert_version !== undefined) {
+                alertVersionRef.current = payload.alert_version;
+              }
             }
-            if (payload.runtime_identity !== undefined) {
-              runtimeIdentityRef.current = payload.runtime_identity;
-            }
-            if (payload.alert_version !== undefined) {
-              alertVersionRef.current = payload.alert_version;
-            }
-            awaitingResyncRef.current = false;
             updateCanvasDiagnosticsState({
               websocket: {
                 ...(payload.runtime_identity !== undefined
@@ -414,7 +856,53 @@ export function useWebSocket(
           } else if (message.type === 'snapshot') {
             const payload = (message as SnapshotWSMessage).payload;
             const currentVersion = snapshotVersionRef.current;
+            const hasRuntimeStreamField = payload.runtime_stream_id !== undefined;
+            const incomingStreamId = payload.runtime_stream_id?.trim();
+            const hasIncomingRuntimeStream =
+              incomingStreamId !== undefined && incomingStreamId.length > 0;
+            const hasSafeIncomingVersion =
+              payload.version !== null &&
+              Number.isSafeInteger(payload.version) &&
+              payload.version >= 0;
+            const isActiveRuntimeRecovery =
+              runtimeRecoveryStateRef.current.phase === 'stream' ||
+              runtimeRecoveryStateRef.current.phase === 'http-fallback';
+            const hasValidIncomingCursor = hasIncomingRuntimeStream && hasSafeIncomingVersion;
+            if (isActiveRuntimeRecovery && !hasValidIncomingCursor) {
+              updateCanvasDiagnosticsState({
+                websocket: {
+                  lastRejectedDeltaReason: 'invalid_snapshot_cursor',
+                },
+              });
+              recordCanvasDiagnosticEvent({
+                level: 'warn',
+                source: 'runtime',
+                event: 'runtime.snapshot.rejected',
+                message: 'Runtime recovery snapshot rejected because its cursor is invalid',
+                metadata: {
+                  version: payload.version,
+                  runtimeStreamId: payload.runtime_stream_id,
+                },
+              });
+              return;
+            }
+            if (hasRuntimeStreamField && !hasIncomingRuntimeStream) {
+              requestRuntimeRecovery('invalid_snapshot_cursor', payload.version, true);
+              return;
+            }
+            if (hasIncomingRuntimeStream && !hasSafeIncomingVersion) {
+              requestRuntimeRecovery('invalid_snapshot_cursor', null, true);
+              return;
+            }
+            const isLegacyDowngrade =
+              !isActiveRuntimeRecovery &&
+              runtimeStreamIdRef.current !== null &&
+              !hasIncomingRuntimeStream;
+            const hasDifferentRuntimeLineage =
+              (hasIncomingRuntimeStream && incomingStreamId !== runtimeStreamIdRef.current) ||
+              isLegacyDowngrade;
             if (
+              !hasDifferentRuntimeLineage &&
               shouldIgnoreStaleRuntimeSnapshot(
                 payload.version,
                 currentVersion,
@@ -429,9 +917,37 @@ export function useWebSocket(
               return;
             }
             hasRuntimeSnapshotRef.current = true;
+            awaitingLegacyRuntimeBootstrapRef.current = false;
+            if (hasIncomingRuntimeStream) {
+              if (runtimeStreamIdRef.current !== incomingStreamId) {
+                runtimeAckScheduler.reset();
+              }
+              runtimeStreamIdRef.current = incomingStreamId;
+            } else if (isLegacyDowngrade) {
+              runtimeAckScheduler.reset();
+              runtimeStreamIdRef.current = null;
+            }
             snapshotVersionRef.current = payload.version;
             runtimeIdentityRef.current = payload.runtime_identity ?? null;
-            awaitingResyncRef.current = false;
+            const snapshotCursor = getAppliedRuntimeCursor();
+            if (
+              snapshotCursor !== null &&
+              (runtimeRecoveryStateRef.current.phase === 'stream' ||
+                runtimeRecoveryStateRef.current.phase === 'http-fallback')
+            ) {
+              const appliedSnapshot = applyRuntimeRecoverySnapshot(
+                runtimeRecoveryStateRef.current,
+                snapshotCursor,
+              );
+              runtimeRecoveryStateRef.current = appliedSnapshot.state;
+              if (
+                (appliedSnapshot.state.phase === 'stream' ||
+                  appliedSnapshot.state.phase === 'http-fallback') &&
+                runtimeRecoveryModeRef.current === null
+              ) {
+                runtimeRecoveryModeRef.current = 'snapshot';
+              }
+            }
             updateCanvasDiagnosticsState({
               websocket: {
                 lastAppliedSnapshotVersion:
@@ -439,6 +955,8 @@ export function useWebSocket(
                 ...(payload.runtime_identity !== undefined
                   ? { lastAppliedRuntimeIdentity: payload.runtime_identity }
                   : {}),
+                runtimeStreamId: runtimeStreamIdRef.current ?? undefined,
+                runtimeRecoveryPhase: runtimeRecoveryStateRef.current.phase,
                 lastRejectedDeltaReason: undefined,
               },
             });
@@ -455,21 +973,90 @@ export function useWebSocket(
               },
             });
             publishRuntimeSnapshot(payload.snapshot);
+            runtimeAckScheduler.schedule(getAppliedRuntimeCursor());
+          } else if (message.type === 'runtime_replay') {
+            const payload = (message as RuntimeReplayWSMessage).payload;
+            const cursor = getAppliedRuntimeCursor();
+            const currentSnapshot = snapshotStateRef.current;
+            if (cursor === null || currentSnapshot === null) {
+              requestRuntimeRecovery('missing_base_snapshot', payload.version, true);
+              return;
+            }
+            const replayDecision = classifyRuntimeReplay(cursor, payload);
+            if (replayDecision.kind === 'reject') {
+              requestRuntimeRecovery(replayDecision.reason, payload.version, true);
+              return;
+            }
+
+            snapshotVersionRef.current = replayDecision.cursor.version;
+            if (
+              (runtimeRecoveryStateRef.current.phase === 'stream' ||
+                runtimeRecoveryStateRef.current.phase === 'http-fallback') &&
+              runtimeRecoveryModeRef.current === null
+            ) {
+              runtimeRecoveryModeRef.current = 'replay';
+            }
+            const nextSnapshot = mergeRuntimeDeltaPatch(currentSnapshot, payload.delta);
+            updateCanvasDiagnosticsState({
+              websocket: {
+                lastAppliedDeltaVersion: String(replayDecision.cursor.version),
+                runtimeStreamId: replayDecision.cursor.streamId,
+                runtimeRecoveryPhase: runtimeRecoveryStateRef.current.phase,
+                lastRejectedDeltaReason: undefined,
+              },
+            });
+            recordCanvasDiagnosticEvent({
+              level: 'debug',
+              source: 'runtime',
+              event: 'runtime.replay.applied',
+              message: 'Runtime replay applied',
+              metadata: {
+                fromVersion: payload.from_version,
+                version: payload.version,
+                deviceCount: Object.keys(payload.delta.devices).length,
+                linkCount: Object.keys(payload.delta.links).length,
+              },
+            });
+            publishRuntimeSnapshot(nextSnapshot);
+            runtimeAckScheduler.schedule(replayDecision.cursor);
           } else if (message.type === 'snapshot_delta' || message.type === 'runtime_delta') {
             const payload =
               message.type === 'runtime_delta'
                 ? (message as RuntimeDeltaWSMessage).payload
                 : (message as SnapshotDeltaWSMessage).payload;
-            if (awaitingResyncRef.current) {
+            const incomingRuntimeStreamId =
+              message.type === 'runtime_delta'
+                ? (payload as RuntimeDeltaWSMessage['payload']).runtime_stream_id
+                : undefined;
+            if (awaitingLegacyRuntimeBootstrapRef.current) {
+              return;
+            }
+            if (runtimeRecoveryStateRef.current.phase !== 'idle') {
+              requestRuntimeRecovery(
+                runtimeRecoveryStateRef.current.phase === 'stream'
+                  ? runtimeRecoveryStateRef.current.reason
+                  : 'runtime_recovery_in_progress',
+                payload.version ?? null,
+                true,
+              );
               return;
             }
 
             const deltaDecision = classifyRuntimeDelta(message.type, payload, {
               currentVersion: snapshotVersionRef.current,
+              currentStreamId: runtimeStreamIdRef.current,
               hasRuntimeSnapshot: hasRuntimeSnapshotRef.current,
             });
             if (deltaDecision.kind === 'request_resync') {
-              requestClientResync(deltaDecision.payloadReason, deltaDecision.diagnosticReason);
+              if (runtimeStreamIdRef.current !== null || incomingRuntimeStreamId !== undefined) {
+                requestRuntimeRecovery(
+                  deltaDecision.diagnosticReason,
+                  payload.version ?? null,
+                  true,
+                );
+              } else {
+                requestLegacyResync(deltaDecision.payloadReason, deltaDecision.diagnosticReason);
+              }
               return;
             }
             if (deltaDecision.kind === 'ignore_stale') {
@@ -537,6 +1124,9 @@ export function useWebSocket(
                     (payload as SnapshotDeltaWSMessage['payload']).delta,
                   );
             publishRuntimeSnapshot(nextSnapshot);
+            if (deltaDecision.kind === 'apply_versioned') {
+              runtimeAckScheduler.schedule(getAppliedRuntimeCursor());
+            }
           } else if (message.type === 'prometheus_status') {
             const payload = message.payload as PrometheusStatusPayload;
             setPrometheusStatus(payload);
@@ -567,7 +1157,19 @@ export function useWebSocket(
             }
             setAlerts(payload.alerts);
           } else if (message.type === 'resync_required') {
-            awaitingResyncRef.current = true;
+            const payload = (message as ResyncRequiredWSMessage).payload;
+            if (payload.strategy === 'stream') {
+              requestRuntimeRecovery(payload.reason, payload.target_version ?? null, false);
+              recordCanvasDiagnosticEvent({
+                level: 'warn',
+                source: 'websocket',
+                event: 'websocket.resync_required',
+                message: 'Backend scheduled runtime stream recovery',
+                metadata: { ...payload },
+              });
+              return;
+            }
+            awaitingLegacyRuntimeBootstrapRef.current = true;
             resyncRequiredCountRef.current += 1;
             updateCanvasDiagnosticsState({
               websocket: {
@@ -579,10 +1181,10 @@ export function useWebSocket(
               source: 'websocket',
               event: 'websocket.resync_required',
               message: 'Backend requested a canvas runtime resync',
-              metadata: { ...(message as ResyncRequiredWSMessage).payload },
+              metadata: { ...payload },
             });
             resetAlertState();
-            dispatchBackendResyncRequired((message as ResyncRequiredWSMessage).payload);
+            dispatchBackendResyncRequired(payload);
           } else if (message.type === 'topology_changed' || message.type === 'topology_delta') {
             const topologyPayload =
               message.type === 'topology_changed'
@@ -613,8 +1215,29 @@ export function useWebSocket(
         } catch (error) {
           console.error('Failed to parse WebSocket message', error);
           const messageType = getRawWebSocketMessageType(raw);
-          if (messageType === 'runtime_delta' || messageType === 'snapshot_delta') {
-            requestClientResync('client_resync_scheduled', 'invalid_runtime_delta_payload');
+          const rawPayload =
+            raw !== null &&
+            typeof raw === 'object' &&
+            'payload' in raw &&
+            raw.payload !== null &&
+            typeof raw.payload === 'object'
+              ? (raw.payload as Record<string, unknown>)
+              : null;
+          const rawRuntimeStreamId = rawPayload?.runtime_stream_id;
+          const hasProtocolV2Lineage =
+            getAppliedRuntimeCursor() !== null ||
+            (typeof rawRuntimeStreamId === 'string' && rawRuntimeStreamId.trim().length > 0);
+          if (
+            hasProtocolV2Lineage &&
+            (messageType === 'runtime_delta' || messageType === 'runtime_replay')
+          ) {
+            requestRuntimeRecovery(
+              'invalid_runtime_delta_payload',
+              typeof rawPayload?.version === 'number' ? rawPayload.version : null,
+              true,
+            );
+          } else if (messageType === 'runtime_delta' || messageType === 'snapshot_delta') {
+            requestLegacyResync('client_resync_scheduled', 'invalid_runtime_delta_payload');
           }
         }
       };
@@ -624,10 +1247,17 @@ export function useWebSocket(
       };
 
       ws.onclose = () => {
+        clearRuntimeRecoveryDeadline();
+        runtimeAckScheduler.cancel();
         if (socketRef.current === ws) {
           socketRef.current = null;
         }
         if (disposed.current) return;
+        runtimeRecoveryStateRef.current = {
+          phase: 'idle',
+          generation: runtimeRecoveryStateRef.current.generation,
+        };
+        runtimeRecoveryModeRef.current = null;
         window.dispatchEvent(new Event(BACKEND_SESSION_CHECK_REQUIRED_EVENT));
         setConnected(false);
         updateCanvasDiagnosticsState({
@@ -653,6 +1283,7 @@ export function useWebSocket(
     return () => {
       disposed.current = true;
       clearReconnectTimer();
+      clearRuntimeRecoveryDeadline();
       setConnected(false);
       setReconnecting(false);
       hasRuntimeSnapshotRef.current = false;
@@ -661,6 +1292,7 @@ export function useWebSocket(
       pollingHealthStateRef.current = null;
       pendingPollingHealthFlushRef.current = false;
       snapshotVersionRef.current = null;
+      runtimeStreamIdRef.current = null;
       runtimeIdentityRef.current = null;
       updateCanvasDiagnosticsState({
         websocket: {
@@ -668,7 +1300,13 @@ export function useWebSocket(
         },
       });
       resetAlertState();
-      awaitingResyncRef.current = false;
+      runtimeAckSchedulerRef.current?.cancel();
+      runtimeAckSchedulerRef.current = null;
+      runtimeRecoveryStateRef.current = {
+        phase: 'idle',
+        generation: runtimeRecoveryStateRef.current.generation,
+      };
+      awaitingLegacyRuntimeBootstrapRef.current = false;
 
       if (socketRef.current) {
         // Detach handlers so no callbacks fire after cleanup
