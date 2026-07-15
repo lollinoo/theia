@@ -51,6 +51,7 @@ import {
   createRuntimeRecoveryState,
   failRuntimeRecovery,
   RUNTIME_HTTP_FALLBACK_DEADLINE_MS,
+  RUNTIME_HTTP_READY_BARRIER_DEADLINE_MS,
   RUNTIME_RECOVERY_DEADLINE_MS,
   type RuntimeCursor,
   type RuntimeRecoveryState,
@@ -321,6 +322,7 @@ export function useWebSocket(
       socket: WebSocket;
       controller: AbortController;
       deadlineTimer: number | null;
+      phase: 'request' | 'ready-barrier';
     } | null = null;
 
     function clearReconnectTimer() {
@@ -426,7 +428,7 @@ export function useWebSocket(
       runtimeAckSchedulerRef.current = runtimeAckScheduler;
 
       /** Marks the current fallback generation failed and advances through socket reconnect. */
-      function failRuntimeFallbackRequest(generation: number, error: unknown): void {
+      function failRuntimeFallbackGeneration(generation: number, error: unknown): void {
         const recoveryState = runtimeRecoveryStateRef.current;
         if (
           disposed.current ||
@@ -470,6 +472,26 @@ export function useWebSocket(
         ws.close();
       }
 
+      /** Arms one phase-owned HTTP recovery deadline without leaving timer gaps. */
+      function armRuntimeFallbackDeadline(
+        token: NonNullable<typeof activeRuntimeFallback>,
+        phase: 'request' | 'ready-barrier',
+        timeoutMs: number,
+        failureReason: string,
+      ): void {
+        if (token.deadlineTimer !== null) {
+          window.clearTimeout(token.deadlineTimer);
+        }
+        token.phase = phase;
+        token.deadlineTimer = window.setTimeout(() => {
+          if (activeRuntimeFallback !== token || token.phase !== phase) {
+            return;
+          }
+          releaseRuntimeFallback(token, true);
+          failRuntimeFallbackGeneration(token.generation, new Error(failureReason));
+        }, timeoutMs);
+      }
+
       /** Applies the compact HTTP snapshot only while its socket and recovery generation are current. */
       async function runRuntimeFallback(generation: number): Promise<void> {
         if (
@@ -479,23 +501,20 @@ export function useWebSocket(
           return;
         }
         abortRuntimeFallback();
-        const fallbackToken = {
+        const fallbackToken: NonNullable<typeof activeRuntimeFallback> = {
           generation,
           socket: ws,
           controller: new AbortController(),
           deadlineTimer: null as number | null,
+          phase: 'request',
         };
         activeRuntimeFallback = fallbackToken;
-        fallbackToken.deadlineTimer = window.setTimeout(() => {
-          if (activeRuntimeFallback !== fallbackToken) {
-            return;
-          }
-          releaseRuntimeFallback(fallbackToken, true);
-          failRuntimeFallbackRequest(
-            generation,
-            new Error('runtime fallback request deadline exceeded'),
-          );
-        }, RUNTIME_HTTP_FALLBACK_DEADLINE_MS);
+        armRuntimeFallbackDeadline(
+          fallbackToken,
+          'request',
+          RUNTIME_HTTP_FALLBACK_DEADLINE_MS,
+          'runtime fallback request deadline exceeded',
+        );
 
         try {
           const response = await fetchRuntimeOverview(fallbackToken.controller.signal);
@@ -559,6 +578,12 @@ export function useWebSocket(
           runtimeAckScheduler.flush();
           // Resume opens a new server recovery attempt whose ready barrier may repeat this cursor.
           runtimeAckScheduler.reset();
+          armRuntimeFallbackDeadline(
+            fallbackToken,
+            'ready-barrier',
+            RUNTIME_HTTP_READY_BARRIER_DEADLINE_MS,
+            'runtime fallback ready barrier deadline exceeded',
+          );
           ws.send(
             JSON.stringify({
               type: 'resume_runtime',
@@ -569,9 +594,17 @@ export function useWebSocket(
             }),
           );
         } catch (error) {
-          failRuntimeFallbackRequest(generation, error);
+          failRuntimeFallbackGeneration(generation, error);
         } finally {
-          releaseRuntimeFallback(fallbackToken, false);
+          const recoveryState = runtimeRecoveryStateRef.current;
+          const waitingForReady =
+            activeRuntimeFallback === fallbackToken &&
+            fallbackToken.phase === 'ready-barrier' &&
+            recoveryState.phase === 'http-fallback' &&
+            recoveryState.generation === generation;
+          if (!waitingForReady) {
+            releaseRuntimeFallback(fallbackToken, false);
+          }
         }
       }
 

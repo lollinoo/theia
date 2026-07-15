@@ -81,7 +81,7 @@ type PrometheusStatusPayload struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// ResyncRequiredPayload tells clients why the overview stream is degraded.
+// ResyncRequiredPayload selects stream recovery with an exact target barrier or legacy HTTP when Strategy is empty.
 type ResyncRequiredPayload struct {
 	Scope           string              `json:"scope"`
 	Reason          string              `json:"reason"`
@@ -306,7 +306,7 @@ func NewAlertMessage(alerts []AlertDTO, version uint64) Message {
 	}
 }
 
-// clientControlMessage is the normalized form of client hello/detail subscription messages.
+// clientControlMessage normalizes hello, runtime resume/ACK, and detail subscription controls.
 type clientControlMessage struct {
 	Type                string
 	DeviceID            uuid.UUID

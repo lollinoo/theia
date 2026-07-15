@@ -182,7 +182,7 @@ export interface PrometheusStatusPayload {
   error?: string;
 }
 
-/** ResyncRequiredPayload tells the client why overview recovery must use the stream or legacy HTTP. */
+/** Announces required overview recovery; stream strategy carries a WS barrier, while omission selects legacy HTTP. */
 export interface ResyncRequiredPayload {
   scope: 'overview';
   reason:
@@ -202,7 +202,7 @@ export interface TopologyChangedPayload {
   recommended_endpoint?: string;
 }
 
-/** ReadyPayload confirms the runtime synchronization result and its exact ready barrier. */
+/** Confirms the exact runtime cursor barrier and whether current, replay, or snapshot synchronization reached it. */
 export interface ReadyPayload {
   runtime_version?: number;
   runtime_stream_id?: string;

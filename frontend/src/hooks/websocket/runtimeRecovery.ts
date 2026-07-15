@@ -8,6 +8,9 @@ export const RUNTIME_RECOVERY_DEADLINE_MS = 5_000;
 /** Maximum time allowed for the runtime-only HTTP recovery request. */
 export const RUNTIME_HTTP_FALLBACK_DEADLINE_MS = 10_000;
 
+/** Maximum time allowed for ready to confirm an HTTP fallback resume. */
+export const RUNTIME_HTTP_READY_BARRIER_DEADLINE_MS = RUNTIME_RECOVERY_DEADLINE_MS;
+
 /** Identifies one locally applied position in a server runtime stream. */
 export interface RuntimeCursor {
   streamId: string;

@@ -4503,7 +4503,7 @@ func TestGetOrBuildOverviewStateReturnsClonedAtomicState(t *testing.T) {
 	}
 }
 
-func TestGetOrBuildOverviewStateConcurrentGettersObserveOneTuple(t *testing.T) {
+func TestGetOrBuildOverviewStateConcurrentGettersObservePublishedTuple(t *testing.T) {
 	pipeline, _, _, _, _ := newNoClientBroadcastTestPipeline(t)
 
 	pipeline.runtime.mu.Lock()
@@ -4520,33 +4520,32 @@ func TestGetOrBuildOverviewStateConcurrentGettersObserveOneTuple(t *testing.T) {
 
 	const callers = 8
 	results := make(chan ws.RuntimeOverviewState, callers)
-	start := make(chan struct{})
-	reachedGetter := make(chan struct{})
+	releaseGetters := make(chan struct{})
+	var ready sync.WaitGroup
+	var done sync.WaitGroup
+	ready.Add(callers)
+	done.Add(callers)
 	for range callers {
 		go func() {
-			<-start
-			reachedGetter <- struct{}{}
+			defer done.Done()
+			ready.Done()
+			<-releaseGetters
 			results <- pipeline.GetOrBuildOverviewState()
 		}()
 	}
-	close(start)
-	for range callers {
-		<-reachedGetter
-	}
+	ready.Wait()
 
 	pipeline.runtime.mu.Lock()
 	pipeline.runtime.overviewStreamID = "stream-2"
 	pipeline.runtime.mu.Unlock()
 	pipeline.overviewBuildMu.Unlock()
+	close(releaseGetters)
+	done.Wait()
+	close(results)
 
-	for range callers {
-		select {
-		case state := <-results:
-			if state.Version != 2 || state.StreamID != "stream-2" {
-				t.Fatalf("concurrent overview state tuple = (%d, %q), want (2, %q)", state.Version, state.StreamID, "stream-2")
-			}
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for concurrent overview state getter")
+	for state := range results {
+		if state.Version != 2 || state.StreamID != "stream-2" {
+			t.Fatalf("concurrent overview state tuple = (%d, %q), want (2, %q)", state.Version, state.StreamID, "stream-2")
 		}
 	}
 }

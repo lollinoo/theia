@@ -1283,6 +1283,76 @@ describe('useWebSocket', () => {
       lastRuntimeRecoveryMode: 'http-fallback',
       lastRuntimeAckVersion: '5',
     });
+
+    await advanceTimersByTime(5_000);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+    expect(getWebSocketDiagnostics().runtimeRecoveryFailureCount).toBe(0);
+  });
+
+  it('fails and reconnects when HTTP recovery resume never reaches its ready barrier', async () => {
+    let fallbackSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_path: RequestInfo | URL, options?: RequestInit) => {
+      fallbackSignal = options?.signal ?? undefined;
+      return Promise.resolve(
+        runtimeOverviewResponse({
+          streamId: 'runtime-stream-2',
+          version: 5,
+          cpuPercent: 60,
+        }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+    sendRuntimeGap();
+
+    await advanceTimersByTime(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentControls()).toEqual(
+      expect.arrayContaining([
+        {
+          type: 'runtime_ack',
+          payload: {
+            runtime_stream_id: 'runtime-stream-2',
+            runtime_version: 5,
+          },
+        },
+        {
+          type: 'resume_runtime',
+          payload: {
+            runtime_stream_id: 'runtime-stream-2',
+            runtime_version: 5,
+          },
+        },
+      ]),
+    );
+    expect(getWebSocketDiagnostics().runtimeRecoveryPhase).toBe('http-fallback');
+    expect(fallbackSignal?.aborted).toBe(false);
+
+    await advanceTimersByTime(4_999);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+
+    await advanceTimersByTime(1);
+    expect(fallbackSignal?.aborted).toBe(true);
+    expect(mockInstance.close).toHaveBeenCalledTimes(1);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'failed',
+      lastRuntimeRecoveryMode: 'http-fallback',
+      lastRuntimeRecoveryDurationMs: 10_000,
+      runtimeRecoveryFailureCount: 1,
+    });
+
+    await advanceTimersByTime(5_000);
+    expect(mockInstance.close).toHaveBeenCalledTimes(1);
+    expect(getWebSocketDiagnostics().runtimeRecoveryFailureCount).toBe(1);
+
+    const failedSocket = mockInstance;
+    act(() => {
+      failedSocket.simulateClose();
+    });
+    await advanceTimersByTime(1_000);
+    expect(mockInstances).toHaveLength(2);
   });
 
   it('lets an exact current ready win while the HTTP fallback request is pending', async () => {
