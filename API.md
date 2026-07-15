@@ -1077,15 +1077,274 @@ Backend handler JSON remains authoritative where TypeScript is deliberately perm
 
 ## Operational Endpoints
 
-Health, Prometheus integration status, runtime recovery, backup bulk status, restore status, and binary downloads are protected API surfaces, not unauthenticated infrastructure probes. Deployments should use an authenticated session with the cataloged permission or a separate process-level health mechanism supplied by the deployment stack.
+Health, Prometheus integration status, runtime recovery, backup bulk status, restore status, and binary downloads are protected API surfaces, not unauthenticated infrastructure probes. Deployments should use an authenticated session with the cataloged permission or a separate process-level health mechanism supplied by the deployment stack. Download handlers stream directly and may replace the normal JSON content type; restore and bulk-download endpoints enforce route-specific quotas/concurrency in addition to middleware limits.
 
-Download handlers stream directly and may replace the normal JSON content type. Restore and bulk-download endpoints enforce route-specific quotas/concurrency in addition to middleware limits. Runtime overview is explicitly uncached and records an HTTP-fallback recovery observation on every authenticated `GET` or `HEAD` that reaches it.
+### Health and process endpoints
+
+| Endpoint | Authentication/exposure | Response and operational use |
+| --- | --- | --- |
+| `GET /api/v1/health` | Password session, first-login policy, `settings:read` | `status` (`ok` or `degraded`), `environment`, `components` (`db`, fixed `db_dialect=postgres`, `snmp_poller`), and the polling-health snapshot. Database failure degrades the body; this is not a public load-balancer probe. |
+| `GET /api/v1/prometheus/health` | Password session, first-login policy, `settings:read` | `enabled`, `available`, `url`, and optional `error`. A configured Prometheus URL is checked with a five-second context deadline. This endpoint describes the upstream integration, not Theia's own `/metrics` exporter. |
+| `GET` or `HEAD /api/v1/runtime/overview` | Password session and `topology:read` | Atomic `schema_version=1` runtime snapshot with `Cache-Control: no-store`. Every authenticated request reaching the handler records an `http_fallback`/`timeout` recovery schedule and one terminal result, including manual probes. |
+| `/metrics` | Process endpoint outside `/api/v1`; optional `Authorization: Bearer <THEIA_METRICS_TOKEN>` in development, mandatory configured secret in staging/production | Prometheus text exposition from [`observability.Registry`](internal/observability/registry.go) plus Go runtime metrics. Missing/wrong configured token returns `401` and `WWW-Authenticate: Bearer realm="theia-metrics"`; comparison is constant-time. |
+| `/debug/pprof`, `/debug/pprof/` | Process endpoint on the backend listener; same bearer-token check as `/metrics` when configured | pprof index. The process recognizes it in every runtime environment, but supported edge exposure is development-only: production/staging nginx proxies `/api/`, not `/debug`. Direct backend access remains possible if an operator publishes the backend listener. |
+| `/debug/pprof/cmdline`, `/debug/pprof/profile`, `/debug/pprof/symbol`, `/debug/pprof/trace`, `/debug/pprof/{name}` | Same process exposure and bearer policy | Named profiles use the standard Go handlers; `{name}` is delegated to `pprof.Handler`, including profiles such as `goroutine`, `heap`, `allocs`, `block`, `mutex`, and `threadcreate` when available. |
+
+The development compose stack publishes the backend port directly, so `/metrics` and pprof are reachable on that port. The supported production compose keeps the backend on the internal network: nginx exposes only the frontend and `/api/`, while Prometheus scrapes `backend:<port>/metrics` directly with its bearer credential. Publishing or reverse-proxying the backend listener changes that boundary and must preserve the token policy. Staging/production startup rejects a missing, known-placeholder, or shorter-than-32-character `THEIA_METRICS_TOKEN`; development permits an empty token, which makes both process endpoint families unauthenticated on that listener. See [`runtimeHTTPHandler`](cmd/theia/runtime_bootstrap.go), [`frontend/nginx.conf.template`](frontend/nginx.conf.template), and [`prometheus.prod.yml`](docker/prometheus/prometheus.prod.yml).
+
+### Recovery metric dimensions and accounting
+
+`theia_ws_runtime_recovery_total` bounds label cardinality by accepting exactly four modes, eight reasons, and three outcomes. Registry construction initializes every combination, so `/metrics` exposes `4 × 8 × 3 = 96` counter series even before traffic.
+
+| Dimension | Allowed values and interpretation |
+| --- | --- |
+| `mode` | `current` (cursor already current), `replay` (journal range), `snapshot` (full WebSocket runtime state), `http_fallback` (runtime-only HTTP request). |
+| `reason` | `client_resync_scheduled`, `client_missing_runtime_snapshot`, `state_changes_dropped`, `hub_buffer_full`, `connect` (no known cursor), `client_gap` (same-stream older cursor), `stream_mismatch`, `timeout`. The first four are also wire resync reasons; the latter four are bounded observability classifications. |
+| `outcome` | `scheduled`, `completed`, `failed`. A terminal observation never replaces `scheduled`; it increments the corresponding second series. |
+
+For a protocol-v2 WebSocket attempt, `scheduled` means a complete batch was installed, not that the browser applied it. `completed` requires a validated ACK for the batch stream at or beyond its target. Install failure, replacement by a different attempt, two-minute server expiry, or eviction from the 4,096-attempt bound records `failed`. An identical pending batch is deduplicated. Legacy clients complete when the batch is successfully queued because they have no runtime ACK. The HTTP handler records `scheduled` and `completed`/`failed` around each request; it cannot observe the frontend's later five-second `ready` barrier.
+
+During incident response, compare increases over the same process-uptime window: `scheduled - completed - failed` approximates currently pending protocol-v2 work, subject to scrape timing. A growing positive remainder older than the two-minute expiry suggests missing scrapes or lifecycle-accounting regression. Rising `failed` identifies installation/ACK timeout pressure; a high `scheduled` rate with matching `completed` is churn, not failure. Process restarts reset these in-memory counters, and authenticated manual runtime-overview probes add `http_fallback{reason="timeout"}` observations.
+
+### WebSocket and recovery metrics
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `theia_ws_runtime_recovery_total` | `mode`, `reason`, `outcome` | The 96 preinitialized lifecycle counters described above. |
+| `theia_ws_runtime_recovery_duration_seconds` | `mode`, `outcome` | Terminal completion/failure latency histogram. |
+| `theia_ws_runtime_ack_lag_versions` | none | Histogram of `current_server_version - validated_ack_version`; version buckets are `0,1,2,4,...,1024`. |
+| `theia_ws_runtime_replay_versions` | none | Histogram of target minus source version for installed replay batches. |
+| `theia_ws_backpressure_total` | `scope`, `reason` | Bounded-queue pressure, including broadcast recorder, ordinary client send, and overview mailbox scopes. |
+| `theia_ws_client_resync_required_total` | `scope`, `reason`, `bootstrap` | Emitted resync markers; `bootstrap` distinguishes `http` from `legacy` client mode. |
+| `theia_ws_overview_mailbox_clear_total` | `reason` | Number of stale overview messages removed during snapshot/resync/mailbox replacement. |
+| `theia_ws_overview_resync_suppressed_total` | `reason` | Duplicate overview resync markers suppressed while one is already pending. |
+| `theia_state_changes_dropped_total` | none | Non-blocking state-store change batches dropped; the pipeline converts this degradation signal into a full runtime resync. |
+| `theia_ws_messages_total`, `theia_ws_message_payload_bytes` | `scope`, `type` | Message count and payload-size histogram by discriminator/delivery scope. |
+| `theia_ws_connections_total`, `theia_ws_connected_clients` | `event`; none | Connection lifecycle counter and current-client gauge. |
+
+### Prometheus alerts
+
+The shipped rules in [`docker/prometheus/alert_rules.yml`](docker/prometheus/alert_rules.yml) define these exact warning alerts:
+
+| Alert | Expression | `for` | Incident signal |
+| --- | --- | --- | --- |
+| `WebSocketBackpressure` | `sum by (job, instance, scope, reason) (increase(theia_ws_backpressure_total[5m])) > 25` | `60s` | A bounded WebSocket queue is repeatedly dropping or replacing work. |
+| `WebSocketResyncRequired` | `sum by (job, instance, scope, reason, bootstrap) (increase(theia_ws_client_resync_required_total[5m])) > 10` | `60s` | Clients repeatedly require overview resynchronization. |
+| `RuntimeRecoveryFailures` | `sum by (job, instance, mode, reason) (increase(theia_ws_runtime_recovery_total{outcome="failed"}[5m])) > 0` | `10m` | Recovery failures persist for a mode/reason combination. |
+| `RuntimeAckLagHigh` | `histogram_quantile(0.95, sum by (job, instance, le) (rate(theia_ws_runtime_ack_lag_versions_bucket[5m]))) > 32` | `10m` | Validated ACK lag p95 stays above 32 runtime versions. |
 
 ## WebSocket Protocol
 
 `GET /api/v1/ws` first passes password-session validation, first-login restriction, `topology:read` authorization, and exact-origin validation. A successful response upgrades to a bidirectional JSON message stream used for topology/runtime bootstrap, live updates, recovery, acknowledgement, and detail subscriptions. The HTTP route catalog owns only the upgrade boundary; message schemas and sequencing remain authoritative in [`internal/ws`](internal/ws).
 
 The special WebSocket middleware does not wrap the response writer, because the Gorilla upgrader requires `http.Hijacker`. It also bypasses the normal JSON body limit and request-logger wrapper.
+
+### Connection and negotiation
+
+The browser sends the HttpOnly `theia_session` cookie during the same-origin upgrade; WebSocket controls do not use the CSRF header because the handshake is a `GET`. Missing, invalid, expired, disabled-user, or password-change-restricted sessions fail before upgrade, as does a user without `topology:read`. [`OriginAllowed`](internal/security/http.go) accepts an absent `Origin`, the normalized origin for the request `Host`, or an exact normalized entry from `THEIA_ALLOWED_ORIGINS`; every other browser origin receives `403`. The handler accepts only `GET`, so the centrally registered `HEAD` policy still reaches a `405` dispatcher result.
+
+Use `ws://` behind an HTTP page and `wss://` behind HTTPS. [`buildWebSocketURL`](frontend/src/hooks/websocket/url.ts) preserves explicit WebSocket URLs, converts explicit `http(s)` URLs, and derives the scheme and host for relative URLs. The supported nginx proxy forwards `Upgrade`, `Connection`, `Host`, and `X-Forwarded-Proto` and keeps the upgraded connection open; TLS normally terminates there. Cookies therefore remain same-origin while the proxy opens a plain backend WebSocket. See [`frontend/nginx.conf.template`](frontend/nginx.conf.template).
+
+The frontend appends its retained cursor before constructing the socket and still sends the same `hello` after `open`. Query parsing is tolerant: malformed integer fields are ignored, and the presence of any recognized query field still selects the hello/bootstrap path.
+
+| Query field | Type | Protocol meaning |
+| --- | --- | --- |
+| `canvas_schema_version` | decimal integer | Current frontend canvas schema is `1`; advisory to the server. |
+| `runtime_protocol` | decimal integer | `2` opts into resumable runtime synchronization; absent or less than `2` selects compatibility behavior. |
+| `runtime_stream_id` | nonblank string | Runtime lineage. It forms a known cursor only when `runtime_version` also parses. |
+| `runtime_version` | non-negative decimal integer | Last fully applied runtime version. |
+| `runtime_identity` | string | Deterministic `rt-sha256:...` identity of the last full JSON-visible runtime snapshot; used by legacy current-state matching. |
+| `topology_version` | string | Last canonical topology version known by the canvas; advisory in the current handler. |
+| `alert_version` | non-negative decimal integer | Last alert-set version known by the client; advisory in the current handler. |
+
+Every text message uses `{"type":"<discriminator>","payload":...}`. In the table, **R** means present in the authoritative Go wire struct or required by control validation, **O** means omitted/empty is accepted for compatibility, and **declared** means the discriminator remains recognized but has no current production emitter.
+
+| Discriminator | Direction | Payload fields | Status | Purpose |
+| --- | --- | --- | --- | --- |
+| `snapshot` | Server → client | **R** `version`, `snapshot`; **O** `runtime_stream_id`, `runtime_identity` | Current; stream fields are required semantically for protocol-v2 recovery | Full runtime overview baseline. |
+| `snapshot_delta` | Server → client | **R** `base_version`, `version`, `delta` | Compatibility and subscribed-detail path | Full-shape sparse update used by older broadcast code and current detail wiring. |
+| `runtime_delta` | Server → client | **R** `base_version`, `version`, `delta`; **O** `runtime_stream_id` | Current protocol-v2 live path | Ordered sparse device/link runtime patches. |
+| `runtime_replay` | Server → client | **R** `from_version`, `version`, `runtime_stream_id`, `delta` | Protocol v2 only | One compacted, gap-free journal range. |
+| `topology_delta` | Server → client | No current backend payload contract | Declared; capability currently advertises `false` | Legacy structural-change discriminator; the frontend treats it as an invalidation. |
+| `polling_health_changed` | Server → client | **R** health summary fields; **O** `queues`, `warnings` | Current | Scheduler pressure and worker-health update outside runtime versioning. |
+| `metrics` | Server → client | No current typed backend payload | Declared; not currently emitted | Reserved compatibility discriminator for device metrics. |
+| `link_metrics` | Server → client | No current typed backend payload | Declared; not currently emitted | Reserved compatibility discriminator for link metrics. |
+| `alert` | Server → client | **R** `version`, `alerts` | Current | Versioned alert-summary replacement. |
+| `prometheus_status` | Server → client | **R** `enabled`, `available`; **O** `error` | Current when Prometheus is enabled or availability changes | Integration availability without changing the runtime cursor. |
+| `resync_required` | Server → client | **R** `scope`, `reason`; **O** `strategy`, `target_version`, `runtime_stream_id` | Current; protocol-v2 stream recovery includes all three optional fields | Selects stream recovery or legacy HTTP/topology recovery. |
+| `topology_changed` | Server → client | **R** `topology_version`; **O** `reason`, `recommended_endpoint` | Current | Invalidates canonical topology; constructor recommends `/api/v1/topology/canvas`. |
+| `hello` | Client → server | **O** `canvas_schema_version`, `runtime_protocol`, `runtime_stream_id`, `runtime_version`, `runtime_identity`, `topology_version`, `alert_version` | Current; protocol-v2 cursor requires both stream ID and version | Announces capabilities and retained state at query time and after `open`. |
+| `ready` | Server → client | **R** `runtime_version`, `alert_version`; **O** `runtime_stream_id`, `runtime_identity`, `sync_mode` | Current; protocol v2 requires an exact stream/version barrier | Confirms `current`, `replay`, or `snapshot` synchronization. |
+| `subscribe_detail` | Client → server | **R** non-nil UUID `device_id` | Current control | Replaces this connection's active device-detail subscription. |
+| `unsubscribe_detail` | Client → server | **O** UUID `device_id`; absent/empty clears the subscription | Current control | Clears this connection's detail subscription. |
+| `resume_runtime` | Client → server | **R** nonblank `runtime_stream_id`, non-negative `runtime_version` | Protocol v2 after bootstrap | Requests synchronization from the last locally applied cursor. |
+| `runtime_ack` | Client → server | **R** nonblank `runtime_stream_id`, non-negative `runtime_version` | Protocol v2 | Acknowledges the newest cursor actually applied by the client. |
+
+### Runtime and server payloads
+
+Backend JSON tags in [`internal/ws/messages.go`](internal/ws/messages.go) are authoritative. The TypeScript parser deliberately accepts several older shapes, so its optional properties do not make current Go fields optional. `SnapshotPayload` emits only `devices` and `links`; its server-side compatibility maps carry `json:"-"`. Complete device/link rows are defined under [Runtime overview, health, metrics, and alert](#runtime-overview-health-metrics-and-alert).
+
+| Message | Field | JSON type | Required and semantics |
+| --- | --- | --- | --- |
+| `snapshot` | `version` | non-negative integer | Required target version. |
+| `snapshot` | `runtime_stream_id` | string | Omitted on legacy constructors; nonblank lineage for protocol v2. |
+| `snapshot` | `runtime_identity` | string | Omitted only when empty; SHA-256 identity over the cloned JSON-visible snapshot. |
+| `snapshot` | `snapshot.devices`, `snapshot.links` | objects keyed by canonical ID | Required complete runtime baseline; every key must equal the nested `device_id` or `link_id`. |
+| `snapshot_delta` | `base_version`, `version` | non-negative integers | Required by the current Go envelope. Overview deltas normally advance from the exact base; see the detail-subscription caveat below. |
+| `snapshot_delta` | `delta.devices`, `delta.links` | objects keyed by canonical ID | Required full-shape rows for changed records; untouched keys remain unchanged client-side. |
+| `runtime_delta` | `base_version`, `version` | non-negative integers | Required, ordered interval. A client applies only when `base_version` equals its current version, ignores an older base, and recovers from an ahead/invalid base. |
+| `runtime_delta` | `runtime_stream_id` | string | `omitempty` in Go for legacy constructors; required semantically and checked exactly in protocol v2. |
+| `runtime_delta` | `delta.devices`, `delta.links` | objects keyed by canonical ID | Required sparse patch maps. Each device patch requires matching `device_id`; each link patch requires matching `link_id`; omitted row fields retain their prior values. |
+| `runtime_replay` | `from_version`, `version` | non-negative integers | Required compacted range with `from_version < version`; an overlapping stale prefix is allowed client-side, but a gap is not. |
+| `runtime_replay` | `runtime_stream_id` | nonblank string | Required and must equal the applied cursor's stream. |
+| `runtime_replay` | `delta.devices`, `delta.links` | objects keyed by canonical ID | Required compacted sparse patches covering a gap-free journal range. |
+| `ready` | `runtime_version`, `alert_version` | non-negative integers | Required by Go. For protocol v2, `runtime_version` must exactly equal the locally applied cursor before recovery completes. |
+| `ready` | `runtime_stream_id` | string | Omitted for legacy mode; required and exact for protocol v2. |
+| `ready` | `runtime_identity` | string | Omitted when empty; replaces the retained identity after the barrier is accepted. |
+| `ready` | `sync_mode` | `current`, `replay`, `snapshot`, or omitted | Selected synchronization mode; omitted by legacy constructors. |
+
+The runtime journal stores at most 512 consecutive one-version deltas and 16 MiB of cloned JSON data. A discontinuity, unsupported/cyclic patch value, oversized entry, or reset invalidates the journal. Replay compacts the exact requested range; if it cannot reach the target without a gap, the pipeline sends a full snapshot instead. See [`overview_journal.go`](internal/worker/overview_journal.go).
+
+| Message | Payload fields | Contract |
+| --- | --- | --- |
+| `resync_required` | `scope`, `reason`, optional `strategy`, `target_version`, `runtime_stream_id` | `scope` is `overview`. Reasons are `client_resync_scheduled`, `client_missing_runtime_snapshot`, `state_changes_dropped`, or `hub_buffer_full`. Protocol v2 uses `strategy="stream"` with an exact target and stream; omitted strategy selects legacy HTTP/topology recovery. |
+| `topology_changed` | `topology_version`, optional `reason`, `recommended_endpoint` | `topology_version` is a required unsigned integer in Go. The constructor advertises `/api/v1/topology/canvas`; the frontend accepts number/string legacy versions and treats the message as structural invalidation. |
+| `alert` | `version`, `alerts[]` | Both are required in Go. Each alert has `device_id`, `severity`, `alert_name`, `state`, and `summary`. The frontend also accepts legacy arrays/singletons and an omitted version. |
+| `prometheus_status` | `enabled`, `available`, optional `error` | Both booleans are required in Go. The connection bootstrap omits this message when integration is disabled; later status broadcasts do not advance runtime versions. |
+| `polling_health_changed` | `essential_overloaded`, `degraded_risk`, `essential_queue_lag_seconds`, `deadline_miss_total`, `active_workers`, `configured_workers`, optional `queues`, `warnings` | Mirrors [`polling.HealthSnapshot`](internal/polling/health.go). Queue rows contain `ready_depth`, `lag_seconds`, `active_workers`, and `configured_workers`; warnings contain `code` and `message`. |
+| `metrics`, `link_metrics` | implementation-defined legacy payload | The discriminators remain declared and the frontend passes their payloads through, but current backend production paths do not emit them. Runtime metrics use `snapshot_delta`/`runtime_delta`; process metrics use `/metrics`. |
+| `topology_delta` | no current payload | The current canvas capability is `supports_topology_delta=false`; the frontend normalizes the payload to `null` and performs structural invalidation. |
+
+### Client controls and transport lifecycle
+
+| Control | Validation and effect |
+| --- | --- |
+| `hello` | The envelope and payload must decode as JSON. All tagged fields may be absent; a known runtime cursor requires both nonblank `runtime_stream_id` and a parsed `runtime_version`. The frontend's nested `subscriptions` object is intentionally ignored by the Go decoder; device detail uses explicit controls. |
+| `subscribe_detail` | `device_id` must parse as a non-nil UUID. The hub stores exactly one active detail device per connection; another subscription replaces it. |
+| `unsubscribe_detail` | Missing/empty `device_id` or the nil UUID clears the subscription; another malformed UUID is rejected. There is no control ACK. |
+| `resume_runtime` | Requires a known cursor. It is ignored while the connection is still bootstrapping or when no runtime-sync callback is installed; otherwise it starts the same mode selection as `hello`. |
+| `runtime_ack` | Requires a known cursor. The hub accepts only a same-stream cursor at or below the highest version actually offered to that client, and only a monotonic advance or completion of a pending recovery. The pipeline then rejects a wrong current stream or a version beyond server state. |
+
+The read pump accepts text controls up to 4,096 bytes. Binary messages are ignored. Malformed JSON, unsupported discriminators, invalid UUIDs, and invalid cursors are logged and ignored without a protocol response or forced close. The read deadline is 60 seconds and every pong extends it by 60 seconds. The write pump sets a 60-second write deadline, sends a ping every 54 seconds, prioritizes the overview mailbox, and writes a WebSocket close frame when a mailbox is closed. The frontend closes on `error`, checks the session after `close`, and reconnects exponentially from one second to a 30-second cap.
+
+When no recognized hello query is present, the backend waits up to 500 milliseconds for a `hello`; timeout falls back to a full legacy snapshot. With protocol v2, the pipeline selects `current` for an exact cursor, `replay` for a same-stream older cursor still covered by the journal, and `snapshot` otherwise. For legacy clients, an equal version or equal runtime identity produces `ready`; a mismatched hello produces `resync_required` without a stream strategy, and a connection without hello receives a full snapshot.
+
+The query cursor and retained frontend `hello` intentionally coexist. After initializing a protocol-v2 query cursor, the server suppresses exactly one subsequent `hello` only when its `runtime_protocol` and runtime cursor exactly match the query. The suppression token is consumed by that first hello even if it differs, so a changed cursor performs a real synchronization. Other hello metadata is not part of the echo comparison.
+
+Synthetic protocol-v2 controls and barriers:
+
+```json
+{"type":"hello","payload":{"canvas_schema_version":1,"runtime_protocol":2,"runtime_stream_id":"runtime-example-01","runtime_version":41,"runtime_identity":"rt-sha256:0000000000000000000000000000000000000000000000000000000000000000","alert_version":7,"subscriptions":{"runtime":true,"topology":true,"alerts":true,"details_device_id":null}}}
+{"type":"resync_required","payload":{"scope":"overview","reason":"client_resync_scheduled","strategy":"stream","target_version":43,"runtime_stream_id":"runtime-example-01"}}
+{"type":"runtime_replay","payload":{"from_version":41,"version":43,"runtime_stream_id":"runtime-example-01","delta":{"devices":{},"links":{}}}}
+{"type":"ready","payload":{"runtime_version":43,"runtime_stream_id":"runtime-example-01","runtime_identity":"rt-sha256:1111111111111111111111111111111111111111111111111111111111111111","alert_version":8,"sync_mode":"replay"}}
+{"type":"runtime_ack","payload":{"runtime_stream_id":"runtime-example-01","runtime_version":43}}
+```
+
+### Protocol v2 bootstrap and live delivery
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as React useWebSocket
+    participant WS as WebSocket handler/client
+    participant P as Runtime pipeline
+    participant H as Hub overview mailbox
+
+    UI->>WS: GET /api/v1/ws?runtime_protocol=2&runtime_stream_id=S&runtime_version=N (session cookie)
+    WS->>WS: Validate session, topology:read, origin; install query cursor and one-shot echo token
+    WS->>P: SyncOverviewClient(cursor S:N, reason client_resync_scheduled)
+    P->>P: Read one atomic state; select current, journal replay, or snapshot
+    P->>H: Atomically replace bounded mailbox with complete synchronization batch
+    UI->>WS: hello with retained protocol/cursor S:N after open
+    WS->>WS: Consume and suppress the one exact query/hello echo
+    alt Cursor already current
+        H-->>UI: ready(S:N, sync_mode=current)
+    else Journal covers N..T
+        H-->>UI: resync_required(strategy=stream, target=T)
+        H-->>UI: runtime_replay(S, from=N, version=T)
+        H-->>UI: ready(S:T, sync_mode=replay)
+    else Unknown stream or replay unavailable
+        H-->>UI: resync_required(strategy=stream, target=T)
+        H-->>UI: snapshot(S:T, runtime_identity, snapshot)
+        H-->>UI: ready(S:T, sync_mode=snapshot)
+    end
+    UI->>UI: Accept ready only after exact locally applied S:version
+    UI->>WS: runtime_ack(S:version)
+    WS->>P: Validated ACK at/below offered ceiling
+    P->>P: Complete scheduled recovery and observe ACK lag
+    loop Ordered live state
+        P->>H: runtime_delta(S, base=V, version=V+1)
+        H-->>UI: Prioritized overview delivery
+        UI->>UI: Validate stream/base, apply sparse patch
+        UI->>WS: runtime_ack(S:V+1) on the 250 ms coalescing timer
+    end
+```
+
+### Gap and reconnect recovery
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as React useWebSocket
+    participant WS as WebSocket handler/client
+    participant P as Runtime pipeline and journal
+    participant API as GET /api/v1/runtime/overview
+
+    alt Gap or malformed protocol-v2 delta on the active socket
+        UI->>WS: resume_runtime(last applied S:N)
+    else Transport reconnect
+        UI->>UI: Close/error, session check, exponential reconnect
+        UI->>WS: New query cursor S:N and retained hello
+    end
+    WS->>P: Synchronize cursor S:N
+    alt Same stream and journal covers N..T
+        P-->>UI: resync_required + runtime_replay + ready(S:T)
+    else Cursor is current
+        P-->>UI: ready(S:N)
+    else Stream changed or journal cannot cover the gap
+        P-->>UI: resync_required + full WebSocket snapshot + ready(S:T)
+    end
+    Note over UI,WS: One stream-recovery generation has a fixed 5-second deadline
+    alt Exact ready arrives before the deadline
+        UI->>WS: runtime_ack(exact applied cursor)
+        UI->>UI: Resume live delivery
+    else Five-second stream deadline expires
+        UI->>API: Uncached runtime-only snapshot request (AbortController, 10-second request deadline)
+        API-->>UI: schema_version=1, stream, version, identity, runtime_snapshot
+        UI->>UI: Apply only if socket and recovery generation still own the response
+        UI->>WS: runtime_ack(HTTP cursor), then reset ACK scheduler
+        UI->>WS: resume_runtime(HTTP cursor)
+        Note over UI,WS: A new 5-second ready barrier starts with no unowned timer gap
+        alt Exact ready confirms the HTTP cursor
+            WS-->>UI: ready(current/replay/snapshot target)
+            UI->>WS: runtime_ack(exact applied cursor)
+            UI->>UI: Complete the same generation and resume live delivery
+        else HTTP request or ready barrier times out/fails
+            UI->>UI: Abort owned request, fail generation, cancel ACK timer
+            UI->>WS: Close socket and reconnect with the retained cursor
+        end
+    end
+    Note over UI: New sockets abort old fallback tokens; stale socket/generation callbacks cannot mutate state
+```
+
+### Protocol and concurrency invariants
+
+| Invariant | Enforced behavior |
+| --- | --- |
+| Stream identity | A known cursor is the pair `(runtime_stream_id, runtime_version)`. Replay/delta/ready must stay on that stream. `runtime_identity` is a deterministic full-snapshot hash used for legacy matching and diagnostics, not a substitute for the protocol-v2 stream ID. |
+| Monotonic versions | Live runtime state advances by consecutive versions; the journal resets on a non-unit or discontinuous append. Stale snapshots/deltas are ignored, not rolled back. |
+| Base-version matching | A versioned delta applies only at the exact current base. An older base is stale; an ahead, missing, invalid, or wrong-stream base starts recovery. |
+| ACK ceiling | The hub publishes a ceiling only for a complete replacement or successfully queued live delta. ACKs must be same-stream, at or below that ceiling, and monotonically advance or complete the exact pending target; the pipeline also checks current server stream/version. |
+| Ready barrier | Snapshot/replay application alone does not finish recovery. `ready` must exactly match the locally applied stream/version; recovery then flushes an ACK. Complete batches queue later deltas behind their `ready` barrier. |
+| One logical outcome | During a running pipeline, each installed recovery increments one bounded `scheduled` series and reaches exactly one `completed` or `failed` terminal series. Identical pending replacements are deduplicated; replacement, install failure, expiry, or bounded-attempt eviction fails the superseded attempt. Controlled pipeline shutdown invalidates pending callbacks without manufacturing terminal failures because the registry is process-local. |
+| Server ownership | Synchronization selection and installation hold `overviewBuildMu`. Protocol-v2 attempts are owned per client and expire after two minutes; one generation-numbered timer owns the next expiry, and pipeline stop invalidates timers/callbacks. At most 4,096 attempts are retained. |
+| Frontend ownership | One recovery generation owns the five-second stream deadline. HTTP fallback additionally owns its socket, generation, `AbortController`, ten-second request timer, and five-second ready timer. Cleanup/new connection aborts the token; every callback rechecks socket and generation. |
+| Immutable bulk state | Full snapshots and runtime patches are cloned before sharing. A bulk replacement marshals one immutable batch once and installs those bytes into eligible client mailboxes without mutable snapshot aliases. |
+| Bounded mailboxes | Per client, ordinary sends are capped at 16 messages, overview sends at 32, and the hello channel at one; inbound controls are capped at 4 KiB. Hub registration/unregistration and optional broadcast recording are also bounded at 32. |
+| Backpressure and resync | Ordinary-send overflow increments backpressure and drops that send. Overview overflow clears stale queued deltas, marks recovery pending, and makes the pipeline install a complete current/replay/snapshot batch. Dropped state-store change batches force a full resync snapshot. |
+| Recovery layers stay distinct | Transport reconnect establishes a new socket and query cursor. HTTP runtime recovery replaces only runtime state through `/api/v1/runtime/overview`. A legacy `resync_required` or `topology_changed` dispatches structural/user-visible canvas resync; protocol-v2 replay/snapshot recovery does not reload topology or promise a user-visible notice. |
+| Alert and health independence | `alert`, `prometheus_status`, and `polling_health_changed` have their own state/version semantics and do not advance the runtime cursor. |
 
 ## Examples
 
@@ -1166,6 +1425,12 @@ Content-Type: application/json
 - SameSite cookies and origin checks complement, but do not replace, CSRF validation. Non-local deployments should use HTTPS so cookies receive `Secure` and bridge credentials are protected in transit.
 - Internal-error responses expose only a short correlation reference. Do not replace them with raw service/database errors at the HTTP boundary.
 - Route metadata is the authority for central registration and RBAC, but a handler may impose additional validation, permissions, state checks, quotas, or deprecation behavior.
+- Backend Go JSON tags are authoritative for current WebSocket output. [`frontend/src/types/metrics.ts`](frontend/src/types/metrics.ts) deliberately accepts legacy raw snapshots, unversioned deltas, array/singleton alerts, optional `enabled`, optional ready versions, and number/string topology versions; these parser allowances are not promises that the backend omits current required fields. Conversely, the frontend's optional `runtime_identity` on delta envelopes is compatibility-only: current `RuntimeDeltaMessagePayload` does not emit it.
+- Protocol v2 requires `runtime_protocol >= 2` plus a valid stream/version cursor for replay and ACK semantics. A missing/older capability remains supported through full snapshots, identity/version current checks, and strategy-less `resync_required`; clients must not infer v2 from a version field alone. `runtime_identity` detects equal JSON-visible snapshots but is neither an authorization credential nor a cryptographic message-authentication code.
+- Detail subscription controls are accepted and wired, but current delivery is not a frontend guarantee: [`publishSubscribedDetailDelta`](internal/worker/pipeline_task_runner.go) emits `snapshot_delta` with `base_version == version`, while [`classifyRuntimeDelta`](frontend/src/hooks/websocket/runtimeState.ts) requires every versioned delta to satisfy `version > base_version`. The current protocol-v2 client therefore rejects that detail delta and enters recovery. Preserve this as a compatibility/maintenance caveat until producer and consumer are reconciled and covered together.
+- `topology_delta`, `metrics`, and `link_metrics` are declared compatibility discriminators, not current production-delivery guarantees. Canonical topology is reloaded after invalidation, runtime metrics use snapshot/runtime envelopes, and exporter metrics use `/metrics`.
+- WebSocket cookie authentication is safe only with the origin boundary intact. Browser clients should use same-origin `wss`; non-browser clients with no `Origin` are still required to present a valid session cookie and permission. Do not place session tokens, metrics bearer tokens, or credentials in WebSocket query parameters or synthetic diagnostics.
+- `/metrics` and pprof use the process bearer policy, not the password-session/CSRF stack. Production/staging nginx intentionally does not proxy either path. If the backend listener is published or a new proxy location is added, treat that as a security-boundary change and require the configured bearer token and network controls.
 
 ## Maintenance Checklist
 
@@ -1175,6 +1440,13 @@ Content-Type: application/json
 - Audit middleware profiles when changing body limits, download behavior, restore streaming, public routes, authentication, CSRF, or WebSocket upgrades.
 - Treat `HEAD` as an explicit maintenance caveat: [`routes.go`](internal/api/routes.go) registers `HEAD` alongside many read policies and RBAC authorizes it; [`runtime_overview_handler.go`](internal/api/runtime_overview_handler.go) handles `HEAD` explicitly with no body, while the other current GET-only dispatchers in [`router_handlers.go`](internal/api/router_handlers.go) respond `405` to `HEAD`. Preserve the metadata in this catalog until code and metadata are deliberately reconciled; do not document those other dispatchers as successful GET-equivalent `HEAD` implementations.
 - Re-run the route-row count and Markdown hygiene checks after every catalog change.
+- When [`messages.go`](internal/ws/messages.go) changes a discriminator, JSON tag, resync reason, protocol version, or control validation rule, update the 18-row message catalog, payload tables, examples, and corresponding TypeScript parser/control contracts in the same review.
+- When [`handler.go`](internal/ws/handler.go) or [`hub.go`](internal/ws/hub.go) changes query parsing, hello suppression, handshake timing, ping/pong deadlines, queue sizes, ACK ceilings, ready ordering, or backpressure behavior, re-check both sequence diagrams and every concurrency invariant.
+- When [`pipeline.go`](internal/worker/pipeline.go) or [`overview_journal.go`](internal/worker/overview_journal.go) changes synchronization selection, attempt ownership/expiry, journal capacity, replay compaction, or recovery-reason mapping, update mode/reason accounting and the recovery diagrams before release.
+- When [`useWebSocket.ts`](frontend/src/hooks/useWebSocket.ts), [`runtimeRecovery.ts`](frontend/src/hooks/websocket/runtimeRecovery.ts), or [`runtimeAck.ts`](frontend/src/hooks/websocket/runtimeAck.ts) changes reconnect, HTTP fallback, deadline, generation, ready, or ACK behavior, reconcile the server description against executable frontend lifecycle tests. Do not remove the detail-subscription caveat until a strictly compatible producer/consumer contract is tested.
+- When [`runtime_bootstrap.go`](cmd/theia/runtime_bootstrap.go), [`nginx.conf.template`](frontend/nginx.conf.template), compose networking, or Prometheus scrape configuration changes, re-audit direct-backend versus edge exposure, bearer requirements, and pprof's development-only supported edge boundary.
+- When bounded recovery labels in [`registry.go`](internal/observability/registry.go) change, recalculate the initialized-series total (`modes × reasons × outcomes`), update all metric tables, and validate label cardinality. When [`alert_rules.yml`](docker/prometheus/alert_rules.yml) changes, copy the exact expression, duration, severity, and grouping labels here.
+- Re-run focused `internal/api` and `internal/ws` tests whenever route metadata, upgrade handling, wire structs, or operational handlers change; verify synthetic examples contain only documentation hosts, IDs, and placeholder hashes.
 
 ## Authoritative Sources
 
@@ -1185,3 +1457,14 @@ Content-Type: application/json
 - Shared `writeError` and `decodeJSON` response/decoder behavior: [`internal/api/device_handler.go`](internal/api/device_handler.go)
 - Frontend transport and session boundary: [`frontend/src/api/transport.ts`](frontend/src/api/transport.ts), [`frontend/src/api/errors.ts`](frontend/src/api/errors.ts), [`frontend/src/api/auth.ts`](frontend/src/api/auth.ts), [`frontend/src/contexts/AuthContext.tsx`](frontend/src/contexts/AuthContext.tsx)
 - Deployment URLs and proxy model: [`SETUP.md`](SETUP.md)
+- WebSocket discriminators, Go JSON payloads, control decoding, protocol version, and runtime identities: [`internal/ws/messages.go`](internal/ws/messages.go)
+- Upgrade/bootstrap/query behavior and runtime handler wiring: [`internal/ws/handler.go`](internal/ws/handler.go), [`cmd/theia/runtime_bootstrap.go`](cmd/theia/runtime_bootstrap.go)
+- Client mailboxes, complete synchronization batches, ACK ceilings, read/write pumps, backpressure, and one-shot hello echo suppression: [`internal/ws/hub.go`](internal/ws/hub.go)
+- Runtime synchronization selection, ACK completion, bounded recovery ownership, and recovery label mapping: [`internal/worker/pipeline.go`](internal/worker/pipeline.go)
+- Journal limits and replay compaction: [`internal/worker/overview_journal.go`](internal/worker/overview_journal.go)
+- Live overview and detail-delta producers: [`internal/worker/pipeline_snapshot_broadcaster.go`](internal/worker/pipeline_snapshot_broadcaster.go), [`internal/worker/pipeline_task_runner.go`](internal/worker/pipeline_task_runner.go)
+- Frontend connection/recovery lifecycle and control helpers: [`frontend/src/hooks/useWebSocket.ts`](frontend/src/hooks/useWebSocket.ts), [`frontend/src/hooks/websocket/hello.ts`](frontend/src/hooks/websocket/hello.ts), [`frontend/src/hooks/websocket/url.ts`](frontend/src/hooks/websocket/url.ts), [`frontend/src/hooks/websocket/runtimeState.ts`](frontend/src/hooks/websocket/runtimeState.ts), [`frontend/src/hooks/websocket/runtimeAck.ts`](frontend/src/hooks/websocket/runtimeAck.ts), [`frontend/src/hooks/websocket/runtimeRecovery.ts`](frontend/src/hooks/websocket/runtimeRecovery.ts)
+- Frontend server-message parser and HTTP runtime fallback boundary: [`frontend/src/types/metrics.ts`](frontend/src/types/metrics.ts), [`frontend/src/api/runtime.ts`](frontend/src/api/runtime.ts), [`frontend/src/types/api.ts`](frontend/src/types/api.ts), [`internal/api/runtime_overview_handler.go`](internal/api/runtime_overview_handler.go)
+- Protected health response contracts: [`internal/api/health_handler.go`](internal/api/health_handler.go), [`internal/api/prometheus_handler.go`](internal/api/prometheus_handler.go)
+- Process metrics, bounded recovery series, and alert rules: [`internal/observability/registry.go`](internal/observability/registry.go), [`docker/prometheus/alert_rules.yml`](docker/prometheus/alert_rules.yml)
+- Supported reverse-proxy and Prometheus scrape exposure: [`frontend/nginx.conf.template`](frontend/nginx.conf.template), [`docker/prometheus/prometheus.prod.yml`](docker/prometheus/prometheus.prod.yml), [`docker-compose.prod.yml`](docker-compose.prod.yml)
