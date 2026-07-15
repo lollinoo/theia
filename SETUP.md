@@ -12,6 +12,7 @@ Network topology visualizer with SNMP monitoring, real-time metrics, and link ma
 - [Credential Encryption Keyring](#credential-encryption-keyring)
 - [Configuration Reference](#configuration-reference)
 - [API Quick Reference](#api-quick-reference)
+- [Resumable Runtime Stream Operations](#resumable-runtime-stream-operations)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -820,6 +821,7 @@ Programmatic API clients should first `POST /auth/login` with `{"identifier":"<u
 | DELETE | `/links/:id` | Delete a link |
 | GET | `/settings` | Get runtime settings |
 | PUT | `/settings` | Update runtime settings |
+| GET | `/runtime/overview` | Get an uncached runtime-only recovery snapshot |
 | GET | `/ws` | WebSocket: live metrics stream |
 
 ### Device payload example
@@ -909,6 +911,155 @@ Backup jobs select targets by address role: `backup` first, then `management`, t
   "target_if_name": "GigabitEthernet1/0/1"
 }
 ```
+
+---
+
+## Resumable Runtime Stream Operations
+
+The protocol v2 runtime stream keeps canvas runtime state current without repeatedly reloading structural topology. A v2 client declares `runtime_protocol=2` and identifies its last applied cursor with `runtime_stream_id` and `runtime_version`. The stream ID identifies one backend runtime lineage; the version advances monotonically within that lineage. On reconnect, the client reports its cursor and the backend selects the smallest safe response:
+
+| Mode | When it is selected | Result |
+|------|---------------------|--------|
+| `current` | The client cursor exactly matches the backend cursor | A `ready` barrier confirms that no runtime payload is needed |
+| `replay` | The stream ID matches and the bounded in-process journal still covers the missing versions | A compact `runtime_replay` advances the client to the current cursor |
+| `snapshot` | The cursor is missing, belongs to another lineage, is outside the journal, or queued deltas must be replaced | An atomic runtime snapshot replaces the stale runtime state |
+| `http_fallback` | WebSocket recovery does not complete before the client timeout | The client fetches the compact runtime-only HTTP snapshot |
+
+Runtime deltas are contiguous: their `base_version` must match the client's applied `runtime_version`. After applying `ready`, replay, snapshot, or live delta state, a v2 client sends `runtime_ack` for the applied stream ID and version. The backend accepts only monotonic ACKs within the cursor range it has offered to that connection; an arbitrary future ACK cannot advance server-side client state. Messages without a stream ID retain legacy snapshot behavior and do not establish a v2 ACK ceiling.
+
+Legacy clients remain supported by the v2 backend, never receive `runtime_replay`, and recover through a snapshot. Snapshot and `ready` payloads may include `runtime_stream_id` and runtime version fields; legacy clients safely ignore or tolerate those fields, so compatibility does not depend on the payload being streamless. The v2 frontend also recognizes truly streamless backend messages and safely falls back to legacy snapshot behavior during a mixed-version deployment.
+
+### Production rollout and rollback
+
+Roll out in this order:
+
+1. Deploy the backend to every replica and wait for health checks to pass. Confirm `/metrics` exposes the four `theia_ws_runtime_*` metric families below and that an authenticated `GET /api/v1/runtime/overview` succeeds.
+2. Deploy the frontend only after all backend replicas support protocol v2. Existing frontend sessions remain compatible while the backend rollout completes.
+3. Reconnect a small client cohort, verify `current` or `replay` completions, and then expand the frontend rollout.
+
+Rollback in the reverse order:
+
+1. Roll back the frontend first so new reconnects use the legacy client flow while the v2 backend is still available.
+2. After the old frontend is serving all users, roll back the backend replicas.
+
+A backend restart, rollback, or reconnect to a replica with another lineage can make the saved stream ID unknown. The expected response is a runtime snapshot, not an unsafe replay. This can increase snapshot traffic, but protocol-v2 snapshot recovery remains runtime-only: it does not require a structural topology reload and does not emit the structural "Live Topology resynced" notice.
+
+### Compact HTTP fallback
+
+`GET /api/v1/runtime/overview` is the authenticated fallback for a timed-out WebSocket recovery and requires topology-read permission. It returns an uncached (`Cache-Control: no-store`) atomic tuple containing `schema_version`, `runtime_stream_id`, `runtime_version`, `runtime_identity`, and `runtime_snapshot`. It intentionally omits structural topology so recovery is smaller than reloading the canvas endpoint. `HEAD` is also supported for checking endpoint availability without a response body.
+
+Every authenticated GET or HEAD that reaches this handler records an `http_fallback` `scheduled` event followed by `completed` or `failed`, including manual checks and health probes. Do not poll this endpoint as a generic health check. Run validation probes before recording soak baselines, or account for their metric increments in dashboards and acceptance queries.
+
+### Metrics and PromQL
+
+The backend exports these metric families:
+
+| Metric | Meaning and labels |
+|--------|--------------------|
+| `theia_ws_runtime_recovery_total` | Recovery lifecycle counter labeled by `mode`, `reason`, and `outcome` |
+| `theia_ws_runtime_recovery_duration_seconds` | Terminal recovery duration histogram labeled by `mode` and `outcome` |
+| `theia_ws_runtime_ack_lag_versions` | Histogram of the validated client ACK distance behind the current runtime version |
+| `theia_ws_runtime_replay_versions` | Histogram of the version span selected for installed replay recoveries |
+
+Protocol-v2 recovery completion is recorded when the validated target ACK arrives. Legacy clients cannot send `runtime_ack`, so their snapshot recovery completes when the replacement batch is successfully installed in the client mailbox. Repeated protocol-v2 requests for the same pending mode, reason, stream, and target remain one logical recovery attempt.
+
+Bounded recovery labels are:
+
+- Modes: `current`, `replay`, `snapshot`, `http_fallback`
+- Outcomes: `scheduled`, `completed`, `failed`
+- Reasons: `client_resync_scheduled`, `client_missing_runtime_snapshot`, `state_changes_dropped`, `hub_buffer_full`, `connect`, `client_gap`, `stream_mismatch`, `timeout`
+
+Scheduled recovery rate by target, mode, and reason:
+
+```promql
+sum by (job, instance, mode, reason) (
+  rate(theia_ws_runtime_recovery_total{outcome="scheduled"}[5m])
+)
+```
+
+Recovery failures during the last five minutes:
+
+```promql
+sum by (job, instance, mode, reason) (
+  increase(theia_ws_runtime_recovery_total{outcome="failed"}[5m])
+)
+```
+
+Completed recovery duration p95:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (job, instance, mode, le) (
+    rate(theia_ws_runtime_recovery_duration_seconds_bucket{outcome="completed"}[5m])
+  )
+)
+```
+
+ACK lag p95 in versions:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (job, instance, le) (
+    rate(theia_ws_runtime_ack_lag_versions_bucket[5m])
+  )
+)
+```
+
+Installed replay span p95 in versions:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (job, instance, le) (
+    rate(theia_ws_runtime_replay_versions_bucket[5m])
+  )
+)
+```
+
+The related rules in `docker/prometheus/alert_rules.yml` mean:
+
+- `RuntimeRecoveryFailures`: at least one failed recovery occurred in the rolling five-minute window, grouped by target, mode, and reason, and that condition persisted for ten minutes. Inspect the failure reason before increasing capacity; snapshot, replay, and HTTP failures have different causes.
+- `RuntimeAckLagHigh`: the target's five-minute ACK lag p95 stayed above 32 versions for ten minutes. This usually indicates a slow client, event-loop stalls, network delay, or sustained producer/backpressure pressure.
+- `WebSocketBackpressure`: more than 25 WebSocket backpressure events occurred in five minutes for a target/scope/reason and the condition persisted for 60 seconds. It is a useful corroborating signal for `hub_buffer_full` snapshot recoveries.
+
+### Thirty-minute staging soak
+
+Use production-like replica and proxy settings. Deployments restart process-local metrics, so establish the Prometheus counter baselines only after the backend rollout and any manual `/api/v1/runtime/overview` validation probes:
+
+1. Deploy every backend replica, wait for healthy targets, run the manual validation probes, and deploy the frontend second.
+2. After the frontend is healthy, record the Prometheus counter baselines and start the 30-minute soak window.
+3. Keep multiple canvases open while normal polling produces runtime changes.
+4. Exercise foreground/background tab transitions and several short network disconnects so clients reconnect with saved cursors.
+5. If the production load balancer is multi-replica, include both sticky reconnects and at least one deliberate cross-replica reconnect. The latter should complete through a snapshot.
+6. Watch the PromQL queries above together with `theia_ws_backpressure_total`, `theia_state_changes_dropped_total`, and `theia_ws_connected_clients`.
+
+Accept the rollout when all of these signals hold for the soak window:
+
+- `failed` recovery counters do not increase, and scheduled/completed counts converge after allowing for recoveries still in flight at the end of the query window.
+- Neither `RuntimeRecoveryFailures` nor `RuntimeAckLagHigh` fires; ACK lag p95 remains below the alert threshold of 32 versions.
+- Reconnects on the same lineage normally use `current` or `replay`. Snapshot recovery is limited to expected deployment or restart, journal-gap, overflow or dropped-change recovery, cross-replica routing, and full snapshot or topology rebuilds that rotate the lineage even on the same replica.
+- Excluding documented manual/probe calls, `http_fallback` is absent or isolated and completes successfully rather than recurring continuously.
+- WebSocket client count returns to its baseline after reconnects, with no sustained backpressure or dropped state-change growth.
+- The canvas keeps its structural topology and applies fresh runtime values. Protocol-v2 current, replay, snapshot, and HTTP fallback recoveries do not add a structural canvas-bootstrap request or emit the structural "Live Topology resynced" notice.
+
+### Horizontal replicas
+
+The replay journal and runtime lineage are in-process state. A reconnect to another backend replica therefore presents a different `runtime_stream_id`; the receiving replica safely selects snapshot recovery instead of attempting a replay from an unrelated journal. Sticky WebSocket routing improves replay hit rate and reduces snapshot bandwidth, but correctness does not depend on affinity. No shared journal, synchronized lineage, or deployment flag is required.
+
+### Repeated "Live Topology resynced"
+
+The literal `Live Topology resynced` text belongs to an older frontend asset or session; the current frontend reports structural recovery as `Topology refreshed`, `Topology refreshed after reconnect`, or `Topology refreshed after backend resync`. Protocol-v2 runtime recovery is a separate path: `current`, replay, runtime snapshot, and `/api/v1/runtime/overview` fallback update runtime state without reloading structural topology and do not emit any of these notices. Diagnose the notice first as a structural recovery, then use runtime metrics to determine whether a separate runtime issue happened at the same time:
+
+1. In browser network tools, correlate the notice timestamp with reconnects and requests to the saved-map canvas bootstrap or other structural topology endpoint. Repeated structural requests explain the notice; a v2 runtime snapshot or runtime-overview request alone does not.
+2. Verify whether the connection advertises protocol 2 and the last `runtime_stream_id`/`runtime_version`. A legacy connection or a reconnect that enters the legacy structural fallback is the relevant notice path.
+3. Break down `theia_ws_runtime_recovery_total` by `mode`, `reason`, and `outcome`. Completed runtime-only recovery without a matching structural request is not the source of the notice. Repeated `stream_mismatch` can still explain runtime snapshots after restarts, cross-replica routing, or full rebuilds that rotate the lineage on the same replica, but those snapshots do not themselves emit the structural notice.
+4. Check `RuntimeRecoveryFailures`, recovery duration p95, and `theia_ws_runtime_ack_lag_versions` for a concurrent runtime problem. High ACK lag with increasing `theia_ws_backpressure_total` or `theia_ws_overview_mailbox_clear_total` indicates a slow runtime consumer, not proof of structural topology recovery.
+5. If WebSocket runtime recovery times out, make one authenticated `GET /api/v1/runtime/overview`. A `503` or `theia_ws_runtime_recovery_total{mode="http_fallback",outcome="failed"}` growth identifies the compact runtime boundary; remember that the diagnostic request itself increments the `http_fallback` scheduled and terminal counters.
+6. On multiple replicas, compare the replica serving the old connection with the one serving the reconnect. Sticky routing improves runtime replay efficiency, while the separate structural notice still needs evidence from topology requests or the legacy recovery path.
+
+Investigate repeated notices even when runtime recovery metrics are healthy. Conversely, treat a lineage-change runtime snapshot as expected unless it fails or repeats excessively; do not attribute the structural notice to that snapshot without a matching topology recovery event.
 
 ---
 

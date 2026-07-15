@@ -7,6 +7,7 @@ import {
   clearCanvasDiagnosticEvents,
   exportCanvasDiagnostics,
   getCanvasDiagnosticsSnapshot,
+  incrementCanvasDiagnosticCount,
   recordCanvasDiagnosticEvent,
   resetCanvasDiagnostics,
   subscribeCanvasDiagnostics,
@@ -40,6 +41,12 @@ describe('canvasDiagnostics', () => {
         reconnectCount: 0,
         resyncRequiredCount: 0,
         topologyChangedCount: 0,
+        runtimeRecoveryPhase: 'idle',
+        runtimeRecoveryCount: 0,
+        runtimeReplayRecoveryCount: 0,
+        runtimeSnapshotRecoveryCount: 0,
+        runtimeHttpFallbackCount: 0,
+        runtimeRecoveryFailureCount: 0,
       },
       graph: {
         canonicalNodeCount: 0,
@@ -65,6 +72,47 @@ describe('canvasDiagnostics', () => {
       },
     });
     expect(() => JSON.stringify(snapshot)).not.toThrow();
+  });
+
+  it('saturates diagnostic counters at the largest safe integer', () => {
+    expect(incrementCanvasDiagnosticCount(0)).toBe(1);
+    expect(incrementCanvasDiagnosticCount(Number.MAX_SAFE_INTEGER - 1)).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
+    expect(incrementCanvasDiagnosticCount(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(incrementCanvasDiagnosticCount(Number.POSITIVE_INFINITY)).toBe(1);
+  });
+
+  it('retains runtime recovery cursor and aggregate diagnostics', () => {
+    updateCanvasDiagnosticsState({
+      websocket: {
+        runtimeStreamId: 'runtime-stream-9',
+        runtimeRecoveryPhase: 'http-fallback',
+        runtimeRecoveryTargetVersion: '12',
+        lastRuntimeRecoveryMode: 'http-fallback',
+        lastRuntimeRecoveryDurationMs: 5_000,
+        lastRuntimeAckVersion: '11',
+        runtimeRecoveryCount: 3,
+        runtimeReplayRecoveryCount: 1,
+        runtimeSnapshotRecoveryCount: 1,
+        runtimeHttpFallbackCount: 1,
+        runtimeRecoveryFailureCount: 0,
+      },
+    });
+
+    expect(getCanvasDiagnosticsSnapshot().websocket).toMatchObject({
+      runtimeStreamId: 'runtime-stream-9',
+      runtimeRecoveryPhase: 'http-fallback',
+      runtimeRecoveryTargetVersion: '12',
+      lastRuntimeRecoveryMode: 'http-fallback',
+      lastRuntimeRecoveryDurationMs: 5_000,
+      lastRuntimeAckVersion: '11',
+      runtimeRecoveryCount: 3,
+      runtimeReplayRecoveryCount: 1,
+      runtimeSnapshotRecoveryCount: 1,
+      runtimeHttpFallbackCount: 1,
+      runtimeRecoveryFailureCount: 0,
+    });
   });
 
   it('merges partial state updates without dropping previous fields', () => {

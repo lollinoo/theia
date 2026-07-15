@@ -76,6 +76,50 @@ function spyOnDispatchEvent() {
   return vi.spyOn(window, 'dispatchEvent');
 }
 
+function mockJSONResponse(body: unknown): Response {
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    json: () => Promise.resolve(body),
+    headers: new Headers(),
+  } as unknown as Response;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushAsyncWork(): Promise<void> {
+  for (let index = 0; index < 5; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+async function advanceTimersByTime(milliseconds: number): Promise<void> {
+  await act(async () => {
+    vi.advanceTimersByTime(milliseconds);
+    await flushAsyncWork();
+  });
+}
+
+async function resolveDeferredResponse(
+  deferred: ReturnType<typeof createDeferred<Response>>,
+  response: Response,
+): Promise<void> {
+  await act(async () => {
+    deferred.resolve(response);
+    await deferred.promise;
+    await flushAsyncWork();
+  });
+}
+
 function expectDeviceCpuPercent(
   snapshot: ReturnType<typeof useWebSocket>['snapshot'],
   value: number,
@@ -94,10 +138,12 @@ function publishRuntimeBootstrapSnapshot(
   snapshot: ReturnType<typeof makeRuntimeSnapshot>,
   runtimeVersion: number,
   runtimeIdentity: string,
+  runtimeStreamId?: string,
 ) {
   act(() => {
     publishCanvasRuntimeBootstrap({
       snapshot,
+      runtimeStreamId,
       runtimeVersion,
       runtimeIdentity,
     });
@@ -114,6 +160,7 @@ const BACKEND_RESYNC_REQUIRED_EVENT = 'backend-resync-required';
 const OVERVIEW_RESYNC_SCOPE = 'overview';
 const CLIENT_RESYNC_SCHEDULED_REASON = 'client_resync_scheduled';
 const BASE_VERSION_MISMATCH_REASON = 'base_version_mismatch';
+const RUNTIME_STREAM_ID = 'runtime-stream-1';
 
 class MockWebSocket {
   static CONNECTING = 0;
@@ -148,6 +195,169 @@ let mockInstance: MockWebSocket;
 let mockInstances: MockWebSocket[] = [];
 let mockUrls: string[] = [];
 
+function sendFrames(frames: unknown[], socket = mockInstance): void {
+  act(() => {
+    for (const frame of frames) {
+      socket.simulateMessage(frame);
+    }
+  });
+}
+
+function streamRecoveryMarker(targetVersion: number, streamId = RUNTIME_STREAM_ID) {
+  return {
+    type: 'resync_required',
+    payload: {
+      scope: 'overview',
+      reason: 'state_changes_dropped',
+      strategy: 'stream',
+      target_version: targetVersion,
+      runtime_stream_id: streamId,
+    },
+  };
+}
+
+function readyFrame(version: number, streamId = RUNTIME_STREAM_ID, syncMode = 'current') {
+  return {
+    type: 'ready',
+    payload: {
+      runtime_version: version,
+      runtime_stream_id: streamId,
+      sync_mode: syncMode,
+    },
+  };
+}
+
+function runtimeReplayFrame({
+  fromVersion,
+  version,
+  streamId = RUNTIME_STREAM_ID,
+  delta = { devices: {}, links: {} },
+}: {
+  fromVersion: number | string;
+  version: number;
+  streamId?: string;
+  delta?: unknown;
+}) {
+  return {
+    type: 'runtime_replay',
+    payload: {
+      from_version: fromVersion,
+      version,
+      runtime_stream_id: streamId,
+      delta,
+    },
+  };
+}
+
+function runtimeDeltaFrame({
+  baseVersion,
+  version,
+  streamId = RUNTIME_STREAM_ID,
+  delta = { devices: {}, links: {} },
+}: {
+  baseVersion: number;
+  version: number;
+  streamId?: string | null;
+  delta?: unknown;
+}) {
+  return {
+    type: 'runtime_delta',
+    payload: {
+      base_version: baseVersion,
+      version,
+      ...(streamId === null ? {} : { runtime_stream_id: streamId }),
+      delta,
+    },
+  };
+}
+
+function runtimeSnapshotFrame({
+  version,
+  streamId = RUNTIME_STREAM_ID,
+  cpuPercent,
+  runtimeIdentity,
+}: {
+  version: number;
+  streamId?: string | null;
+  cpuPercent: number;
+  runtimeIdentity?: string;
+}) {
+  return {
+    type: 'snapshot',
+    payload: {
+      version,
+      ...(streamId === null ? {} : { runtime_stream_id: streamId }),
+      runtime_identity: runtimeIdentity,
+      snapshot: makeRuntimeSnapshot(cpuPercent, '2026-01-01T00:05:00Z'),
+    },
+  };
+}
+
+function sentControls(socket = mockInstance): unknown[] {
+  return socket.send.mock.calls.map(([control]) => JSON.parse(control as string));
+}
+
+function openWithRuntimeSnapshot({
+  socket = mockInstance,
+  streamId = RUNTIME_STREAM_ID,
+  version = 10,
+  cpuPercent = 50,
+  runtimeIdentity,
+}: {
+  socket?: MockWebSocket;
+  streamId?: string;
+  version?: number;
+  cpuPercent?: number;
+  runtimeIdentity?: string;
+} = {}): void {
+  act(() => {
+    if (socket.readyState !== MockWebSocket.OPEN) {
+      socket.simulateOpen();
+    }
+    socket.simulateMessage({
+      type: 'snapshot',
+      payload: {
+        version,
+        runtime_stream_id: streamId,
+        runtime_identity: runtimeIdentity,
+        snapshot: makeRuntimeSnapshot(cpuPercent, '2026-01-01T00:00:00Z'),
+      },
+    });
+  });
+}
+
+function sendRuntimeGap({
+  socket = mockInstance,
+  streamId = RUNTIME_STREAM_ID,
+  baseVersion = 12,
+  version = 13,
+}: {
+  socket?: MockWebSocket;
+  streamId?: string;
+  baseVersion?: number;
+  version?: number;
+} = {}): void {
+  sendFrames([runtimeDeltaFrame({ baseVersion, version, streamId })], socket);
+}
+
+function runtimeOverviewResponse({
+  streamId,
+  version,
+  cpuPercent,
+}: {
+  streamId: string;
+  version: number;
+  cpuPercent: number;
+}): Response {
+  return mockJSONResponse({
+    schema_version: 1,
+    runtime_stream_id: streamId,
+    runtime_version: version,
+    runtime_identity: `rt-sha256:${version}`,
+    runtime_snapshot: makeRuntimeSnapshot(cpuPercent, '2026-01-01T00:05:00Z'),
+  });
+}
+
 beforeEach(() => {
   mockInstances = [];
   mockUrls = [];
@@ -172,6 +382,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   resetCanvasRuntimeBootstrap();
+  vi.unstubAllGlobals();
 });
 
 describe('useWebSocket', () => {
@@ -185,6 +396,7 @@ describe('useWebSocket', () => {
     act(() => {
       publishCanvasRuntimeBootstrap({
         snapshot: { devices: {}, links: {} },
+        runtimeStreamId: RUNTIME_STREAM_ID,
         runtimeVersion: 42,
         runtimeIdentity: 'rt-sha256:abc',
       });
@@ -192,6 +404,8 @@ describe('useWebSocket', () => {
 
     expect(mockInstances).toHaveLength(1);
     expect(mockUrls[0]).toContain('canvas_schema_version=1');
+    expect(mockUrls[0]).toContain('runtime_protocol=2');
+    expect(mockUrls[0]).toContain(`runtime_stream_id=${RUNTIME_STREAM_ID}`);
     expect(mockUrls[0]).toContain('runtime_version=42');
     expect(mockUrls[0]).toContain('runtime_identity=rt-sha256%3Aabc');
 
@@ -204,7 +418,9 @@ describe('useWebSocket', () => {
         type: 'hello',
         payload: {
           canvas_schema_version: 1,
+          runtime_protocol: 2,
           topology_version: undefined,
+          runtime_stream_id: RUNTIME_STREAM_ID,
           runtime_version: 42,
           runtime_identity: 'rt-sha256:abc',
           alert_version: undefined,
@@ -219,6 +435,45 @@ describe('useWebSocket', () => {
     );
   });
 
+  it.each([
+    {
+      name: 'blank stream',
+      runtimeStreamId: '   ',
+      runtimeVersion: 42,
+    },
+    {
+      name: 'unsafe version',
+      runtimeStreamId: RUNTIME_STREAM_ID,
+      runtimeVersion: Number.MAX_SAFE_INTEGER + 1,
+    },
+  ])('omits the resumable cursor from hello for an invalid $name', (runtimeCursor) => {
+    act(() => {
+      publishCanvasRuntimeBootstrap({
+        snapshot: { devices: {}, links: {} },
+        runtimeStreamId: runtimeCursor.runtimeStreamId,
+        runtimeVersion: runtimeCursor.runtimeVersion,
+        runtimeIdentity: 'rt-sha256:bootstrap',
+      });
+    });
+
+    renderHook(() =>
+      useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
+    );
+
+    expect(mockUrls[0]).not.toContain('runtime_stream_id=');
+    expect(mockUrls[0]).not.toContain('runtime_version=');
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    const hello = JSON.parse(mockInstance.send.mock.calls[0]?.[0] as string) as {
+      payload: Record<string, unknown>;
+    };
+    expect(hello.payload).not.toHaveProperty('runtime_stream_id');
+    expect(hello.payload).not.toHaveProperty('runtime_version');
+  });
+
   it('sends a fresh hello after HTTP runtime resync on an open socket', () => {
     renderHook(() =>
       useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
@@ -227,6 +482,7 @@ describe('useWebSocket', () => {
     act(() => {
       publishCanvasRuntimeBootstrap({
         snapshot: { devices: {}, links: {} },
+        runtimeStreamId: RUNTIME_STREAM_ID,
         runtimeVersion: 10,
         runtimeIdentity: 'rt-sha256:initial',
       });
@@ -248,6 +504,7 @@ describe('useWebSocket', () => {
       });
       publishCanvasRuntimeBootstrap({
         snapshot: { devices: {}, links: {} },
+        runtimeStreamId: RUNTIME_STREAM_ID,
         runtimeVersion: 12,
         runtimeIdentity: 'rt-sha256:resynced',
       });
@@ -258,7 +515,9 @@ describe('useWebSocket', () => {
         type: 'hello',
         payload: {
           canvas_schema_version: 1,
+          runtime_protocol: 2,
           topology_version: undefined,
+          runtime_stream_id: RUNTIME_STREAM_ID,
           runtime_version: 12,
           runtime_identity: 'rt-sha256:resynced',
           alert_version: undefined,
@@ -295,6 +554,7 @@ describe('useWebSocket', () => {
         type: 'snapshot',
         payload: {
           version: 42,
+          runtime_stream_id: RUNTIME_STREAM_ID,
           runtime_identity: 'rt-sha256:abc',
           snapshot: {
             devices: {},
@@ -326,7 +586,9 @@ describe('useWebSocket', () => {
         type: 'hello',
         payload: {
           canvas_schema_version: 1,
+          runtime_protocol: 2,
           topology_version: undefined,
+          runtime_stream_id: RUNTIME_STREAM_ID,
           runtime_version: 42,
           runtime_identity: 'rt-sha256:abc',
           alert_version: undefined,
@@ -451,6 +713,1101 @@ describe('useWebSocket', () => {
     });
 
     expect(result.current.snapshot?.devices['dev-1'].cpu_percent).toBe(50);
+  });
+
+  it('does not advance a legacy cursor from a mismatched ready without state', () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+    sendFrames([
+      runtimeSnapshotFrame({ version: 10, streamId: null, cpuPercent: 50 }),
+      { type: 'ready', payload: { runtime_version: 20 } },
+    ]);
+
+    expect(getWebSocketDiagnostics().lastAppliedSnapshotVersion).toBe('10');
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: BACKEND_RESYNC_REQUIRED_EVENT,
+        detail: { scope: 'overview', reason: 'client_resync_scheduled' },
+      }),
+    );
+  });
+
+  it('rejects inexact legacy ready barriers without discarding an idle v2 cursor', () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+
+    sendFrames([{ type: 'ready', payload: {} }]);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeStreamId: RUNTIME_STREAM_ID,
+      lastAppliedSnapshotVersion: '10',
+    });
+    expect(
+      dispatchSpy.mock.calls.filter(([event]) => event.type === BACKEND_RESYNC_REQUIRED_EVENT),
+    ).toHaveLength(1);
+
+    sendFrames([
+      { type: 'ready', payload: { runtime_version: -1 } },
+      { type: 'ready', payload: { runtime_version: Number.MAX_SAFE_INTEGER + 1 } },
+      { type: 'ready', payload: { runtime_version: 20 } },
+    ]);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeStreamId: RUNTIME_STREAM_ID,
+      lastAppliedSnapshotVersion: '10',
+    });
+    expect(
+      dispatchSpy.mock.calls.filter(([event]) => event.type === BACKEND_RESYNC_REQUIRED_EVENT),
+    ).toHaveLength(1);
+
+    act(() => {
+      mockInstance.simulateClose();
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(mockUrls[1]).toContain(`runtime_stream_id=${RUNTIME_STREAM_ID}`);
+    expect(mockUrls[1]).toContain('runtime_version=10');
+  });
+
+  it('accepts an exact legacy ready as a reconnect downgrade from idle v2 state', () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+
+    act(() => {
+      mockInstance.simulateClose();
+      vi.advanceTimersByTime(1_000);
+    });
+    const legacySocket = mockInstances[1];
+    if (!legacySocket) {
+      throw new Error('expected legacy reconnect socket instance');
+    }
+    act(() => {
+      legacySocket.simulateOpen();
+    });
+    sendFrames([{ type: 'ready', payload: { runtime_version: 10 } }], legacySocket);
+
+    expect(getWebSocketDiagnostics().runtimeStreamId).toBeUndefined();
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
+    );
+
+    act(() => {
+      legacySocket.simulateClose();
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(mockUrls[2]).not.toContain('runtime_stream_id=');
+    expect(mockUrls[2]).not.toContain('runtime_version=');
+  });
+
+  it('releases a legacy recovery gate after reconnecting through an exact v2 ready', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    sendFrames([
+      {
+        type: 'resync_required',
+        payload: { scope: 'overview', reason: 'state_changes_dropped' },
+      },
+    ]);
+
+    act(() => {
+      mockInstance.simulateClose();
+      vi.advanceTimersByTime(1_000);
+    });
+    const reconnectSocket = mockInstances[1];
+    if (!reconnectSocket) {
+      throw new Error('expected reconnect socket instance');
+    }
+    act(() => {
+      reconnectSocket.simulateOpen();
+    });
+    sendFrames(
+      [
+        readyFrame(10),
+        runtimeDeltaFrame({
+          baseVersion: 10,
+          version: 11,
+          delta: {
+            devices: { 'dev-1': { device_id: 'dev-1', cpu_percent: 70 } },
+            links: {},
+          },
+        }),
+      ],
+      reconnectSocket,
+    );
+
+    expectDeviceCpuPercent(result.current.snapshot, 70);
+    expect(getWebSocketDiagnostics().lastAppliedDeltaVersion).toBe('11');
+  });
+
+  it('applies one runtime replay and acknowledges only after the matching ready barrier', () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendFrames([
+      streamRecoveryMarker(12),
+      runtimeReplayFrame({
+        fromVersion: 10,
+        version: 12,
+        delta: {
+          devices: { 'dev-1': { device_id: 'dev-1', cpu_percent: 72 } },
+          links: {},
+        },
+      }),
+      readyFrame(12, RUNTIME_STREAM_ID, 'replay'),
+    ]);
+
+    expectDeviceCpuPercent(result.current.snapshot, 72);
+    expect(sentControls()).toEqual([
+      {
+        type: 'runtime_ack',
+        payload: {
+          runtime_stream_id: RUNTIME_STREAM_ID,
+          runtime_version: 12,
+        },
+      },
+    ]);
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
+    );
+  });
+
+  it('sends one resume request for repeated client-detected gaps', () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendRuntimeGap({ version: 13 });
+    sendRuntimeGap({ version: 14 });
+
+    expectDeviceCpuPercent(result.current.snapshot, 50);
+    expect(sentControls()).toEqual([
+      {
+        type: 'resume_runtime',
+        payload: {
+          runtime_stream_id: RUNTIME_STREAM_ID,
+          runtime_version: 10,
+        },
+      },
+    ]);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
+    );
+  });
+
+  it('requests recovery for a stream mismatch without discarding the last valid snapshot', () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendFrames([
+      runtimeDeltaFrame({
+        baseVersion: 10,
+        version: 11,
+        streamId: 'runtime-stream-2',
+        delta: {
+          devices: { 'dev-1': { device_id: 'dev-1', cpu_percent: 99 } },
+          links: {},
+        },
+      }),
+    ]);
+
+    expectDeviceCpuPercent(result.current.snapshot, 50);
+    expect(sentControls()).toContainEqual({
+      type: 'resume_runtime',
+      payload: {
+        runtime_stream_id: RUNTIME_STREAM_ID,
+        runtime_version: 10,
+      },
+    });
+    expect(mockInstance.close).not.toHaveBeenCalled();
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
+    );
+  });
+
+  it('keeps recovery active through a rotated snapshot until an exact ready barrier', () => {
+    const rotatedStreamId = 'runtime-stream-2';
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendFrames([
+      streamRecoveryMarker(5, rotatedStreamId),
+      runtimeSnapshotFrame({
+        version: 5,
+        streamId: rotatedStreamId,
+        runtimeIdentity: 'rt-sha256:rotated',
+        cpuPercent: 80,
+      }),
+      {
+        type: 'ready',
+        payload: {
+          runtime_version: 4,
+          runtime_stream_id: rotatedStreamId,
+          runtime_identity: 'rt-sha256:mismatched',
+        },
+      },
+    ]);
+
+    expectDeviceCpuPercent(result.current.snapshot, 80);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'stream',
+      runtimeRecoveryTargetVersion: '5',
+      runtimeStreamId: rotatedStreamId,
+      lastAppliedSnapshotVersion: '5',
+    });
+    expect(getWebSocketDiagnostics().lastRuntimeRecoveryMode).toBeUndefined();
+    expect(getWebSocketDiagnostics().lastAppliedRuntimeIdentity).toBe('rt-sha256:rotated');
+    expect(mockInstance.send).not.toHaveBeenCalled();
+
+    sendFrames([
+      {
+        type: 'ready',
+        payload: {
+          runtime_version: 5,
+          runtime_stream_id: rotatedStreamId,
+          runtime_identity: 'rt-sha256:ready',
+          sync_mode: 'snapshot',
+        },
+      },
+    ]);
+
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      lastRuntimeRecoveryMode: 'snapshot',
+      lastAppliedRuntimeIdentity: 'rt-sha256:ready',
+      lastRuntimeAckVersion: '5',
+    });
+    expect(mockInstance.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'runtime_ack',
+        payload: {
+          runtime_stream_id: rotatedStreamId,
+          runtime_version: 5,
+        },
+      }),
+    );
+  });
+
+  it.each([
+    { name: 'missing stream', streamId: undefined, version: 20 },
+    { name: 'blank stream', streamId: '   ', version: 20 },
+    { name: 'negative version', streamId: RUNTIME_STREAM_ID, version: -1 },
+    {
+      name: 'unsafe version',
+      streamId: RUNTIME_STREAM_ID,
+      version: Number.MAX_SAFE_INTEGER + 1,
+    },
+  ])('does not fabricate a v2 cursor from a snapshot with an invalid $name', (invalidCursor) => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendFrames([
+      streamRecoveryMarker(20),
+      {
+        type: 'snapshot',
+        payload: {
+          version: invalidCursor.version,
+          ...(invalidCursor.streamId === undefined
+            ? {}
+            : { runtime_stream_id: invalidCursor.streamId }),
+          snapshot: makeRuntimeSnapshot(99, '2026-01-01T00:05:00Z'),
+        },
+      },
+    ]);
+
+    expectDeviceCpuPercent(result.current.snapshot, 50);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'stream',
+      lastAppliedSnapshotVersion: '10',
+      runtimeStreamId: RUNTIME_STREAM_ID,
+    });
+    expect(mockInstance.send).not.toHaveBeenCalled();
+  });
+
+  it('recovers from a blank snapshot stream without mutating an idle v2 cursor', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendFrames([runtimeSnapshotFrame({ version: 20, streamId: '   ', cpuPercent: 99 })]);
+
+    expectDeviceCpuPercent(result.current.snapshot, 50);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'stream',
+      lastAppliedSnapshotVersion: '10',
+      runtimeStreamId: RUNTIME_STREAM_ID,
+    });
+    expect(sentControls()).toEqual([
+      {
+        type: 'resume_runtime',
+        payload: {
+          runtime_stream_id: RUNTIME_STREAM_ID,
+          runtime_version: 10,
+        },
+      },
+    ]);
+  });
+
+  it('keeps omitted snapshot lineage as an idle legacy downgrade', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendFrames([runtimeSnapshotFrame({ version: 5, streamId: null, cpuPercent: 80 })]);
+
+    expectDeviceCpuPercent(result.current.snapshot, 80);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      lastAppliedSnapshotVersion: '5',
+      runtimeStreamId: undefined,
+    });
+    expect(sentControls()).toEqual([]);
+  });
+
+  it('does not advance an applied cursor from a newer normal ready message', () => {
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot({ runtimeIdentity: 'rt-sha256:10' });
+    mockInstance.send.mockClear();
+
+    sendFrames([
+      {
+        type: 'ready',
+        payload: {
+          runtime_version: 12,
+          runtime_stream_id: RUNTIME_STREAM_ID,
+          runtime_identity: 'rt-sha256:12',
+        },
+      },
+    ]);
+
+    expect(getWebSocketDiagnostics().lastAppliedSnapshotVersion).toBe('10');
+    expect(getWebSocketDiagnostics().lastAppliedRuntimeIdentity).toBe('rt-sha256:10');
+    expect(mockInstance.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'resume_runtime',
+        payload: {
+          runtime_stream_id: RUNTIME_STREAM_ID,
+          runtime_version: 10,
+        },
+      }),
+    );
+  });
+
+  it('coalesces normal protocol-v2 delta acknowledgements', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendFrames(
+      [
+        [10, 11, 60],
+        [11, 12, 70],
+      ].map(([baseVersion, version, cpuPercent]) =>
+        runtimeDeltaFrame({
+          baseVersion,
+          version,
+          delta: {
+            devices: {
+              'dev-1': { device_id: 'dev-1', cpu_percent: cpuPercent },
+            },
+            links: {},
+          },
+        }),
+      ),
+    );
+
+    expectDeviceCpuPercent(result.current.snapshot, 70);
+    expect(mockInstance.send).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(249);
+    });
+    expect(mockInstance.send).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(mockInstance.send).toHaveBeenCalledTimes(1);
+    expect(mockInstance.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'runtime_ack',
+        payload: {
+          runtime_stream_id: RUNTIME_STREAM_ID,
+          runtime_version: 12,
+        },
+      }),
+    );
+    expect(getWebSocketDiagnostics().lastRuntimeAckVersion).toBe('12');
+  });
+
+  it('falls back once to the runtime-only snapshot and resumes before applying replay', async () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    const deferredResponse = createDeferred<Response>();
+    const fetchMock = vi.fn(() => deferredResponse.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+    sendRuntimeGap();
+    await advanceTimersByTime(5_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/runtime/overview',
+      expect.objectContaining({
+        cache: 'no-store',
+        signal: expect.any(AbortSignal),
+        headers: { Accept: 'application/json' },
+      }),
+    );
+
+    await advanceTimersByTime(9_999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await resolveDeferredResponse(
+      deferredResponse,
+      runtimeOverviewResponse({ streamId: 'runtime-stream-2', version: 5, cpuPercent: 60 }),
+    );
+
+    expectDeviceCpuPercent(result.current.snapshot, 60);
+    expect(sentControls()).toEqual(
+      expect.arrayContaining([
+        {
+          type: 'resume_runtime',
+          payload: {
+            runtime_stream_id: RUNTIME_STREAM_ID,
+            runtime_version: 10,
+          },
+        },
+        {
+          type: 'resume_runtime',
+          payload: {
+            runtime_stream_id: 'runtime-stream-2',
+            runtime_version: 5,
+          },
+        },
+      ]),
+    );
+    const fallbackControls = sentControls() as Array<{
+      type: string;
+      payload: { runtime_stream_id?: string; runtime_version?: number };
+    }>;
+    const fallbackAckIndex = fallbackControls.findIndex(
+      (control) =>
+        control.type === 'runtime_ack' &&
+        control.payload.runtime_stream_id === 'runtime-stream-2' &&
+        control.payload.runtime_version === 5,
+    );
+    const fallbackResumeIndex = fallbackControls.findIndex(
+      (control) =>
+        control.type === 'resume_runtime' &&
+        control.payload.runtime_stream_id === 'runtime-stream-2' &&
+        control.payload.runtime_version === 5,
+    );
+    expect(fallbackAckIndex).toBeGreaterThanOrEqual(0);
+    expect(fallbackResumeIndex).toBeGreaterThan(fallbackAckIndex);
+
+    sendFrames([
+      runtimeReplayFrame({
+        fromVersion: 5,
+        version: 6,
+        streamId: 'runtime-stream-2',
+        delta: {
+          devices: {
+            'dev-1': { device_id: 'dev-1', cpu_percent: 70 },
+          },
+          links: {},
+        },
+      }),
+      readyFrame(6, 'runtime-stream-2', 'replay'),
+    ]);
+
+    expectDeviceCpuPercent(result.current.snapshot, 70);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      lastRuntimeRecoveryMode: 'http-fallback',
+      runtimeHttpFallbackCount: 1,
+      lastRuntimeAckVersion: '6',
+    });
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
+    );
+    expect(fetchMock.mock.calls.every(([path]) => path === '/api/v1/runtime/overview')).toBe(true);
+  });
+
+  it('acknowledges the current barrier after an HTTP fallback pre-resume ACK', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        runtimeOverviewResponse({
+          streamId: 'runtime-stream-2',
+          version: 5,
+          cpuPercent: 60,
+        }),
+      ),
+    );
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+    sendRuntimeGap();
+    await advanceTimersByTime(5_000);
+
+    sendFrames([readyFrame(5, 'runtime-stream-2', 'current')]);
+
+    const controls = sentControls() as Array<{
+      type: string;
+      payload: { runtime_stream_id?: string; runtime_version?: number };
+    }>;
+    const fallbackBarrierControls = controls.filter(
+      (control) =>
+        control.payload.runtime_stream_id === 'runtime-stream-2' &&
+        control.payload.runtime_version === 5,
+    );
+    expect(fallbackBarrierControls.map((control) => control.type)).toEqual([
+      'runtime_ack',
+      'resume_runtime',
+      'runtime_ack',
+    ]);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      lastRuntimeRecoveryMode: 'http-fallback',
+      lastRuntimeAckVersion: '5',
+    });
+
+    await advanceTimersByTime(5_000);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+    expect(getWebSocketDiagnostics().runtimeRecoveryFailureCount).toBe(0);
+  });
+
+  it('fails and reconnects when HTTP recovery resume never reaches its ready barrier', async () => {
+    let fallbackSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_path: RequestInfo | URL, options?: RequestInit) => {
+      fallbackSignal = options?.signal ?? undefined;
+      return Promise.resolve(
+        runtimeOverviewResponse({
+          streamId: 'runtime-stream-2',
+          version: 5,
+          cpuPercent: 60,
+        }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+    sendRuntimeGap();
+
+    await advanceTimersByTime(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentControls()).toEqual(
+      expect.arrayContaining([
+        {
+          type: 'runtime_ack',
+          payload: {
+            runtime_stream_id: 'runtime-stream-2',
+            runtime_version: 5,
+          },
+        },
+        {
+          type: 'resume_runtime',
+          payload: {
+            runtime_stream_id: 'runtime-stream-2',
+            runtime_version: 5,
+          },
+        },
+      ]),
+    );
+    expect(getWebSocketDiagnostics().runtimeRecoveryPhase).toBe('http-fallback');
+    expect(fallbackSignal?.aborted).toBe(false);
+
+    await advanceTimersByTime(4_999);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+
+    await advanceTimersByTime(1);
+    expect(fallbackSignal?.aborted).toBe(true);
+    expect(mockInstance.close).toHaveBeenCalledTimes(1);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'failed',
+      lastRuntimeRecoveryMode: 'http-fallback',
+      lastRuntimeRecoveryDurationMs: 10_000,
+      runtimeRecoveryFailureCount: 1,
+    });
+
+    await advanceTimersByTime(5_000);
+    expect(mockInstance.close).toHaveBeenCalledTimes(1);
+    expect(getWebSocketDiagnostics().runtimeRecoveryFailureCount).toBe(1);
+
+    const failedSocket = mockInstance;
+    act(() => {
+      failedSocket.simulateClose();
+    });
+    await advanceTimersByTime(1_000);
+    expect(mockInstances).toHaveLength(2);
+  });
+
+  it('lets an exact current ready win while the HTTP fallback request is pending', async () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    const deferredResponse = createDeferred<Response>();
+    let fallbackSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_path: RequestInfo | URL, options?: RequestInit) => {
+      fallbackSignal = options?.signal ?? undefined;
+      return deferredResponse.promise;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendRuntimeGap();
+    await advanceTimersByTime(5_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'http-fallback',
+      runtimeRecoveryCount: 1,
+      runtimeHttpFallbackCount: 1,
+    });
+    expect(getWebSocketDiagnostics().lastRuntimeRecoveryMode).toBeUndefined();
+
+    sendFrames([readyFrame(10)]);
+    expect(fallbackSignal?.aborted).toBe(true);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      lastRuntimeRecoveryMode: 'current',
+      lastRuntimeRecoveryDurationMs: 5_000,
+      runtimeRecoveryCount: 1,
+      runtimeHttpFallbackCount: 1,
+      runtimeReplayRecoveryCount: 0,
+      runtimeSnapshotRecoveryCount: 0,
+    });
+    const sendCountAfterReady = mockInstance.send.mock.calls.length;
+
+    await resolveDeferredResponse(
+      deferredResponse,
+      runtimeOverviewResponse({
+        streamId: 'runtime-stream-late',
+        version: 99,
+        cpuPercent: 99,
+      }),
+    );
+
+    expectDeviceCpuPercent(result.current.snapshot, 50);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      lastRuntimeRecoveryMode: 'current',
+      lastAppliedSnapshotVersion: '10',
+      runtimeStreamId: RUNTIME_STREAM_ID,
+      runtimeHttpFallbackCount: 1,
+    });
+    expect(mockInstance.send).toHaveBeenCalledTimes(sendCountAfterReady);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
+    );
+  });
+
+  it.each([
+    {
+      name: 'replay',
+      frames: [
+        runtimeReplayFrame({
+          fromVersion: 10,
+          version: 12,
+          delta: {
+            devices: { 'dev-1': { device_id: 'dev-1', cpu_percent: 72 } },
+            links: {},
+          },
+        }),
+        readyFrame(12, RUNTIME_STREAM_ID, 'replay'),
+      ],
+      expectedCpuPercent: 72,
+      expectedMode: 'replay',
+      expectedDiagnostics: {
+        lastAppliedDeltaVersion: '12',
+        runtimeStreamId: RUNTIME_STREAM_ID,
+        runtimeReplayRecoveryCount: 1,
+        runtimeSnapshotRecoveryCount: 0,
+      },
+    },
+    {
+      name: 'snapshot',
+      frames: [
+        runtimeSnapshotFrame({
+          version: 5,
+          streamId: 'runtime-stream-ws',
+          cpuPercent: 80,
+        }),
+        readyFrame(5, 'runtime-stream-ws', 'snapshot'),
+      ],
+      expectedCpuPercent: 80,
+      expectedMode: 'snapshot',
+      expectedDiagnostics: {
+        lastAppliedSnapshotVersion: '5',
+        runtimeStreamId: 'runtime-stream-ws',
+        runtimeReplayRecoveryCount: 0,
+        runtimeSnapshotRecoveryCount: 1,
+      },
+    },
+  ])('lets a WebSocket $name win while the HTTP fallback request is pending', async (winner) => {
+    const dispatchSpy = spyOnDispatchEvent();
+    const deferredResponse = createDeferred<Response>();
+    const fetchMock = vi.fn(() => deferredResponse.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendRuntimeGap();
+    await advanceTimersByTime(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    sendFrames(winner.frames);
+    expectDeviceCpuPercent(result.current.snapshot, winner.expectedCpuPercent);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      lastRuntimeRecoveryMode: winner.expectedMode,
+      lastRuntimeRecoveryDurationMs: 5_000,
+      runtimeRecoveryCount: 1,
+      runtimeHttpFallbackCount: 1,
+      ...winner.expectedDiagnostics,
+    });
+    const sendCountAfterReady = mockInstance.send.mock.calls.length;
+
+    await act(async () => {
+      deferredResponse.reject(new Error('late runtime fallback failure'));
+      await deferredResponse.promise.catch(() => undefined);
+      await flushAsyncWork();
+    });
+
+    expectDeviceCpuPercent(result.current.snapshot, winner.expectedCpuPercent);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      lastRuntimeRecoveryMode: winner.expectedMode,
+      runtimeHttpFallbackCount: 1,
+      ...winner.expectedDiagnostics,
+    });
+    expect(mockInstance.send).toHaveBeenCalledTimes(sendCountAfterReady);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
+    );
+  });
+
+  it('uses one deadline and no resume for duplicate stream markers with a raised target', async () => {
+    const deferredResponse = createDeferred<Response>();
+    const fetchMock = vi.fn(() => deferredResponse.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const { unmount } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    sendFrames([readyFrame(10)]);
+    mockInstance.send.mockClear();
+
+    sendFrames([streamRecoveryMarker(12), streamRecoveryMarker(14)]);
+    expect(getWebSocketDiagnostics().runtimeRecoveryTargetVersion).toBe('14');
+    expect(sentControls()).toEqual([]);
+
+    await advanceTimersByTime(4_999);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await advanceTimersByTime(10_001);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentControls()).toEqual([]);
+
+    act(() => {
+      unmount();
+    });
+  });
+
+  it('closes the socket when the runtime-only HTTP fallback fails', async () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('runtime unavailable')));
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    sendFrames([
+      streamRecoveryMarker(12),
+      runtimeReplayFrame({ fromVersion: 10, version: 12 }),
+      readyFrame(12, RUNTIME_STREAM_ID, 'replay'),
+    ]);
+    expect(getWebSocketDiagnostics().lastRuntimeRecoveryMode).toBe('replay');
+
+    sendRuntimeGap({ baseVersion: 14, version: 15 });
+    await advanceTimersByTime(5_000);
+
+    expect(mockInstance.close).toHaveBeenCalledTimes(1);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'failed',
+      lastRuntimeRecoveryMode: 'http-fallback',
+      lastRuntimeRecoveryDurationMs: 5_000,
+      runtimeRecoveryCount: 2,
+      runtimeReplayRecoveryCount: 1,
+      runtimeRecoveryFailureCount: 1,
+    });
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
+    );
+
+    const failedSocket = mockInstance;
+    act(() => {
+      failedSocket.simulateClose();
+      vi.advanceTimersByTime(1_000);
+    });
+    const reconnectedSocket = mockInstances[1];
+    if (!reconnectedSocket) {
+      throw new Error('expected reconnect socket instance');
+    }
+    act(() => {
+      reconnectedSocket.simulateOpen();
+    });
+    sendFrames([readyFrame(12)], reconnectedSocket);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      runtimeRecoveryFailureCount: 1,
+    });
+  });
+
+  it('aborts a stalled HTTP fallback at its deadline and reconnects', async () => {
+    let fallbackSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_path: RequestInfo | URL, options?: RequestInit) => {
+      fallbackSignal = options?.signal ?? undefined;
+      return new Promise<Response>(() => undefined);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    sendRuntimeGap();
+
+    await advanceTimersByTime(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fallbackSignal?.aborted).toBe(false);
+
+    await advanceTimersByTime(9_999);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+
+    await advanceTimersByTime(1);
+    expect(fallbackSignal?.aborted).toBe(true);
+    expect(mockInstance.close).toHaveBeenCalledTimes(1);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'failed',
+      lastRuntimeRecoveryMode: 'http-fallback',
+      lastRuntimeRecoveryDurationMs: 15_000,
+      runtimeRecoveryFailureCount: 1,
+    });
+
+    const failedSocket = mockInstance;
+    act(() => {
+      failedSocket.simulateClose();
+    });
+    await advanceTimersByTime(1_000);
+    expect(mockInstances).toHaveLength(2);
+  });
+
+  it('fails recovery instead of regressing a same-stream HTTP fallback cursor', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        runtimeOverviewResponse({
+          streamId: RUNTIME_STREAM_ID,
+          version: 5,
+          cpuPercent: 5,
+        }),
+      ),
+    );
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    sendRuntimeGap();
+    await advanceTimersByTime(5_000);
+
+    expectDeviceCpuPercent(result.current.snapshot, 50);
+    expect(mockInstance.close).toHaveBeenCalledTimes(1);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'failed',
+      lastAppliedSnapshotVersion: '10',
+      runtimeStreamId: RUNTIME_STREAM_ID,
+    });
+  });
+
+  it('cancels recovery and ACK timers and ignores a late HTTP completion after cleanup', async () => {
+    const deferredResponse = createDeferred<Response>();
+    let fallbackSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_path: RequestInfo | URL, options?: RequestInit) => {
+      fallbackSignal = options?.signal ?? undefined;
+      return deferredResponse.promise;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { unmount } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    sendRuntimeGap();
+    await advanceTimersByTime(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sendCountBeforeCleanup = mockInstance.send.mock.calls.length;
+
+    act(() => {
+      unmount();
+    });
+    expect(fallbackSignal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await resolveDeferredResponse(
+      deferredResponse,
+      runtimeOverviewResponse({ streamId: 'runtime-stream-late', version: 99, cpuPercent: 99 }),
+    );
+
+    expect(mockInstance.send).toHaveBeenCalledTimes(sendCountBeforeCleanup);
+    expect(getWebSocketDiagnostics().lastAppliedSnapshotVersion).not.toBe('99');
+  });
+
+  it('starts a new fallback after reconnect without waiting for the stale socket fetch', async () => {
+    const firstResponse = createDeferred<Response>();
+    const secondResponse = createDeferred<Response>();
+    const fallbackSignals: AbortSignal[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce((_path: RequestInfo | URL, options?: RequestInit) => {
+        if (options?.signal) fallbackSignals.push(options.signal);
+        return firstResponse.promise;
+      })
+      .mockImplementationOnce((_path: RequestInfo | URL, options?: RequestInit) => {
+        if (options?.signal) fallbackSignals.push(options.signal);
+        return secondResponse.promise;
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    const { result, unmount } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    openWithRuntimeSnapshot();
+    sendRuntimeGap();
+    await advanceTimersByTime(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const firstSocket = mockInstance;
+    act(() => {
+      firstSocket.simulateClose();
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(fallbackSignals[0]?.aborted).toBe(true);
+    const secondSocket = mockInstances[1];
+    if (!secondSocket) {
+      throw new Error('expected reconnect socket instance');
+    }
+
+    act(() => {
+      secondSocket.simulateOpen();
+    });
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'idle',
+      runtimeHttpFallbackCount: 1,
+    });
+    sendRuntimeGap({ socket: secondSocket });
+    await advanceTimersByTime(5_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fallbackSignals[1]?.aborted).toBe(false);
+
+    await resolveDeferredResponse(
+      firstResponse,
+      runtimeOverviewResponse({
+        streamId: 'runtime-stream-stale',
+        version: 90,
+        cpuPercent: 90,
+      }),
+    );
+    expectDeviceCpuPercent(result.current.snapshot, 50);
+
+    await resolveDeferredResponse(
+      secondResponse,
+      runtimeOverviewResponse({
+        streamId: 'runtime-stream-current',
+        version: 20,
+        cpuPercent: 80,
+      }),
+    );
+    expectDeviceCpuPercent(result.current.snapshot, 80);
+
+    act(() => {
+      unmount();
+    });
+  });
+
+  it('does not reuse the completed recovery mode in the next generation', () => {
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+
+    sendFrames([
+      streamRecoveryMarker(12),
+      runtimeReplayFrame({ fromVersion: 10, version: 12 }),
+      readyFrame(12, RUNTIME_STREAM_ID, 'replay'),
+    ]);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryCount: 1,
+      runtimeReplayRecoveryCount: 1,
+      lastRuntimeRecoveryMode: 'replay',
+    });
+
+    sendFrames([streamRecoveryMarker(12), readyFrame(12)]);
+
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryCount: 2,
+      runtimeReplayRecoveryCount: 1,
+      lastRuntimeRecoveryMode: 'current',
+    });
+  });
+
+  it('routes malformed protocol-v2 runtime frames through one stream recovery', () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    mockInstance.send.mockClear();
+
+    sendFrames([
+      {
+        type: 'runtime_delta',
+        payload: {
+          base_version: 10,
+          version: 11,
+          runtime_stream_id: RUNTIME_STREAM_ID,
+          delta: {
+            devices: {
+              'dev-1': { primary_health: 'not-a-runtime-health' },
+            },
+            links: {},
+          },
+        },
+      },
+      {
+        type: 'runtime_replay',
+        payload: {
+          from_version: 'invalid',
+          version: 11,
+          runtime_stream_id: RUNTIME_STREAM_ID,
+          delta: { devices: {}, links: {} },
+        },
+      },
+    ]);
+
+    expect(mockInstance.send).toHaveBeenCalledTimes(1);
+    expect(mockInstance.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'resume_runtime',
+        payload: {
+          runtime_stream_id: RUNTIME_STREAM_ID,
+          runtime_version: 10,
+        },
+      }),
+    );
+    expect(mockInstance.close).not.toHaveBeenCalled();
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: BACKEND_RESYNC_REQUIRED_EVENT }),
+    );
   });
 
   it('requests resync when ready arrives before any base snapshot exists', () => {
@@ -659,6 +2016,62 @@ describe('useWebSocket', () => {
       scope: 'overview',
       reason: 'hub_buffer_full',
     });
+  });
+
+  it('keeps legacy deltas gated until the HTTP runtime bootstrap is replaced', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() =>
+      useWebSocket('ws://localhost:8080/ws', null, { requireRuntimeBootstrap: true }),
+    );
+    publishRuntimeBootstrapSnapshot(
+      makeRuntimeSnapshot(50, '2026-01-01T00:00:00Z'),
+      10,
+      'rt-sha256:10',
+    );
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    sendFrames([
+      {
+        type: 'resync_required',
+        payload: { scope: 'overview', reason: 'state_changes_dropped' },
+      },
+      runtimeDeltaFrame({
+        baseVersion: 10,
+        version: 11,
+        streamId: null,
+        delta: {
+          devices: { 'dev-1': { device_id: 'dev-1', cpu_percent: 99 } },
+          links: {},
+        },
+      }),
+    ]);
+    expectDeviceCpuPercent(result.current.snapshot, 50);
+
+    publishRuntimeBootstrapSnapshot(
+      makeRuntimeSnapshot(60, '2026-01-01T00:01:00Z'),
+      11,
+      'rt-sha256:11',
+    );
+    sendFrames([
+      runtimeDeltaFrame({
+        baseVersion: 11,
+        version: 12,
+        streamId: null,
+        delta: {
+          devices: { 'dev-1': { device_id: 'dev-1', cpu_percent: 70 } },
+          links: {},
+        },
+      }),
+    ]);
+
+    expectDeviceCpuPercent(result.current.snapshot, 70);
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('dispatches topology-changed with versioned invalidation detail', () => {
@@ -2057,6 +3470,7 @@ describe('useWebSocket', () => {
       makeRuntimeSnapshot(FRESH_RUNTIME_CPU_PERCENT, FRESH_RUNTIME_TIMESTAMP),
       13,
       'rt-sha256:fresh',
+      RUNTIME_STREAM_ID,
     );
 
     expect(mockInstance.send).toHaveBeenCalledWith(
@@ -2064,7 +3478,9 @@ describe('useWebSocket', () => {
         type: 'hello',
         payload: {
           canvas_schema_version: 1,
+          runtime_protocol: 2,
           topology_version: undefined,
+          runtime_stream_id: RUNTIME_STREAM_ID,
           runtime_version: 13,
           runtime_identity: 'rt-sha256:fresh',
           alert_version: undefined,

@@ -13,6 +13,7 @@ export * from './device';
 export { ServerError, ValidationError } from './errors';
 export * from './grafana';
 export * from './instanceBackup';
+export * from './runtime';
 export * from './settings';
 export * from './snmp';
 export { headersWithCsrf } from './transport';

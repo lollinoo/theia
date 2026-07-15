@@ -95,8 +95,9 @@ func TestHubProductionScaleFanoutSlowClientsStayBoundedAndObservable(t *testing.
 		}
 		assertStressMessageType(t, client.overviewSend, MessageTypeResyncRequired)
 		assertStressMessageType(t, client.overviewSend, MessageTypeSnapshot)
-		if client.needsResync {
-			t.Fatal("legacy slow client remained marked for resync after fallback snapshot")
+		assertStressMessageType(t, client.overviewSend, MessageTypeReady)
+		if !client.needsResync {
+			t.Fatal("legacy slow client recovery did not remain pending until acknowledgment")
 		}
 	}
 
@@ -104,24 +105,26 @@ func TestHubProductionScaleFanoutSlowClientsStayBoundedAndObservable(t *testing.
 		if got, want := len(client.send), cap(client.send); got != want {
 			t.Fatalf("HTTP slow send mailbox length = %d, want %d", got, want)
 		}
-		if got := len(client.overviewSend); got != 1 {
-			t.Fatalf("HTTP slow overview mailbox length = %d, want one pending resync marker", got)
+		if got, want := len(client.overviewSend), cap(client.overviewSend); got == 0 || got > want {
+			t.Fatalf("HTTP slow overview mailbox length = %d, want bounded non-empty mailbox at or below %d", got, want)
 		}
 		assertStressMessageType(t, client.overviewSend, MessageTypeResyncRequired)
+		assertStressMessageType(t, client.overviewSend, MessageTypeSnapshot)
+		assertStressMessageType(t, client.overviewSend, MessageTypeReady)
 		if !client.needsResync {
-			t.Fatal("HTTP slow client did not remain marked for HTTP resync")
+			t.Fatal("HTTP slow client recovery did not remain pending until acknowledgment")
 		}
 	}
 
 	metrics := string(registry.MarshalPrometheus())
-	legacyResyncsPerClient := 1 + (rounds-1)/(overviewBufferSize-1)
+	recoveryCyclesPerClient := 1 + (rounds-1)/(overviewBufferSize-2)
 	assertStressMetric(t, metrics, fmt.Sprintf(
 		`theia_ws_backpressure_total{reason="client_buffer_full",scope="client_send"} %d`,
 		(slowLegacyClients+slowHTTPClients)*rounds,
 	))
 	assertStressMetric(t, metrics, fmt.Sprintf(
 		`theia_ws_backpressure_total{reason="client_mailbox_full",scope="overview_send"} %d`,
-		slowLegacyClients*legacyResyncsPerClient+slowHTTPClients*rounds,
+		(slowLegacyClients+slowHTTPClients)*recoveryCyclesPerClient,
 	))
 	assertStressMetric(t, metrics, fmt.Sprintf(
 		`theia_ws_backpressure_total{reason="hub_buffer_full",scope="broadcast"} %d`,
@@ -129,15 +132,11 @@ func TestHubProductionScaleFanoutSlowClientsStayBoundedAndObservable(t *testing.
 	))
 	assertStressMetric(t, metrics, fmt.Sprintf(
 		`theia_ws_client_resync_required_total{bootstrap="legacy",reason="client_resync_scheduled",scope="overview"} %d`,
-		slowLegacyClients*legacyResyncsPerClient,
+		slowLegacyClients*recoveryCyclesPerClient,
 	))
 	assertStressMetric(t, metrics, fmt.Sprintf(
 		`theia_ws_client_resync_required_total{bootstrap="http",reason="client_resync_scheduled",scope="overview"} %d`,
-		slowHTTPClients,
-	))
-	assertStressMetric(t, metrics, fmt.Sprintf(
-		`theia_ws_overview_resync_suppressed_total{reason="client_resync_scheduled"} %d`,
-		slowHTTPClients*(rounds-1),
+		slowHTTPClients*recoveryCyclesPerClient,
 	))
 }
 
@@ -153,21 +152,25 @@ func TestHubBroadcastMarksLegacyClientForResyncWhenMailboxIsFull(t *testing.T) {
 
 	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 5, 6, fallback)
 
-	if got := len(client.overviewSend); got != 2 {
-		t.Fatalf("overview mailbox length = %d, want 2", got)
+	if got := len(client.overviewSend); got != 3 {
+		t.Fatalf("overview mailbox length = %d, want complete three-message recovery", got)
 	}
-	if client.needsResync {
-		t.Fatal("expected client resync flag to clear after fallback snapshot enqueue")
+	if !client.needsResync {
+		t.Fatal("expected client recovery to remain pending until acknowledgment")
 	}
 
 	first := decodeHubStressMessage(t, <-client.overviewSend)
 	second := decodeHubStressMessage(t, <-client.overviewSend)
+	third := decodeHubStressMessage(t, <-client.overviewSend)
 
 	if first.Type != MessageTypeResyncRequired {
 		t.Fatalf("first message type = %q, want %q", first.Type, MessageTypeResyncRequired)
 	}
 	if second.Type != MessageTypeSnapshot {
 		t.Fatalf("second message type = %q, want %q", second.Type, MessageTypeSnapshot)
+	}
+	if third.Type != MessageTypeReady {
+		t.Fatalf("third message type = %q, want %q", third.Type, MessageTypeReady)
 	}
 
 	var resyncPayload ResyncRequiredPayload
@@ -182,7 +185,7 @@ func TestHubBroadcastMarksLegacyClientForResyncWhenMailboxIsFull(t *testing.T) {
 	}
 }
 
-func TestHubBroadcastAvoidsSnapshotForHTTPBootstrapClientWhenMailboxIsFull(t *testing.T) {
+func TestHubBroadcastInstallsCompleteRecoveryForHTTPBootstrapClientWhenMailboxIsFull(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
 	client.usesHTTPRuntimeBootstrap = true
@@ -195,17 +198,16 @@ func TestHubBroadcastAvoidsSnapshotForHTTPBootstrapClientWhenMailboxIsFull(t *te
 
 	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 5, 6, fallback)
 
-	if got := len(client.overviewSend); got != 1 {
-		t.Fatalf("overview mailbox length = %d, want 1", got)
+	if got := len(client.overviewSend); got != 3 {
+		t.Fatalf("overview mailbox length = %d, want complete three-message recovery", got)
 	}
 	if !client.needsResync {
 		t.Fatal("expected client to remain marked for HTTP resync")
 	}
 
-	first := decodeHubStressMessage(t, <-client.overviewSend)
-	if first.Type != MessageTypeResyncRequired {
-		t.Fatalf("message type = %q, want %q", first.Type, MessageTypeResyncRequired)
-	}
+	assertStressMessageType(t, client.overviewSend, MessageTypeResyncRequired)
+	assertStressMessageType(t, client.overviewSend, MessageTypeSnapshot)
+	assertStressMessageType(t, client.overviewSend, MessageTypeReady)
 }
 
 func TestHubRepeatedDetailSubscriptionsConvergeToSingleTarget(t *testing.T) {
@@ -229,6 +231,62 @@ func TestHubRepeatedDetailSubscriptionsConvergeToSingleTarget(t *testing.T) {
 	}
 	if subscribers[0] != client {
 		t.Fatal("expected repeated subscriptions to keep the final client target only")
+	}
+}
+
+func TestHubStressOverviewMailboxRecoveryBlockedClientStaysBoundedAcrossSyntheticBroadcasts(t *testing.T) {
+	assertOverviewMailboxRecoveryBlockedClientStaysBounded(t)
+}
+
+func TestOverviewMailboxRecoveryBlockedClientStaysBoundedAcrossSyntheticBroadcasts(t *testing.T) {
+	assertOverviewMailboxRecoveryBlockedClientStaysBounded(t)
+}
+
+func assertOverviewMailboxRecoveryBlockedClientStaysBounded(t *testing.T) {
+	t.Helper()
+	hub := NewHub()
+	client := registerStressClient(hub)
+	ackVersion := uint64(0)
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-stress",
+			Version:  ackVersion,
+			Known:    true,
+		},
+	})
+
+	recoveries := 0
+	for version := uint64(1); version <= 1_000; version++ {
+		overflowed := hub.BroadcastOverviewStreamDelta(
+			EmptyRuntimeDeltaPayload(),
+			version-1,
+			version,
+			"runtime-stream-stress",
+		)
+		for _, overflowedClient := range overflowed {
+			recoveries++
+			if ok := hub.ReplaceOverviewStream(overflowedClient, OverviewSyncBatch{
+				Reason:          ResyncReasonClientResync,
+				Mode:            OverviewSyncModeSnapshot,
+				RuntimeStreamID: "runtime-stream-stress",
+				TargetVersion:   version,
+				Snapshot:        EmptySnapshot(),
+			}); !ok {
+				t.Fatalf("ReplaceOverviewStream failed at version %d", version)
+			}
+		}
+		if got, limit := len(client.overviewSend), cap(client.overviewSend); got > limit {
+			t.Fatalf("overview mailbox length = %d, want at most fixed capacity %d", got, limit)
+		}
+	}
+
+	if recoveries == 0 {
+		t.Fatal("synthetic broadcasts never exercised mailbox recovery")
+	}
+	if got, want := cap(client.overviewSend), overviewBufferSize; got != want {
+		t.Fatalf("overview mailbox capacity = %d, want fixed %d", got, want)
 	}
 }
 

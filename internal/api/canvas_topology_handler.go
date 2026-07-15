@@ -22,12 +22,12 @@ import (
 // CanvasTopologyHandler serves the canvas read model used for initial loads and
 // structural refreshes. Runtime metrics remain owned by the WebSocket stream.
 type CanvasTopologyHandler struct {
-	deviceService       *service.DeviceService
-	linkRepo            domain.LinkRepository
-	positionRepo        domain.PositionRepository
-	areaRepo            domain.AreaRepository
-	vendorRegistry      *vendor.Registry
-	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64)
+	deviceService    *service.DeviceService
+	linkRepo         domain.LinkRepository
+	positionRepo     domain.PositionRepository
+	areaRepo         domain.AreaRepository
+	vendorRegistry   *vendor.Registry
+	runtimeStateFunc ws.RuntimeOverviewStateFunc
 }
 
 // NewCanvasTopologyHandler constructs canvas topology handler state for the HTTP boundary and route policy.
@@ -37,25 +37,26 @@ func NewCanvasTopologyHandler(
 	positionRepo domain.PositionRepository,
 	areaRepo domain.AreaRepository,
 	vendorRegistry *vendor.Registry,
-	runtimeSnapshotFunc ...func() (*ws.SnapshotPayload, uint64),
+	runtimeStateFunc ...ws.RuntimeOverviewStateFunc,
 ) *CanvasTopologyHandler {
-	var snapshotFunc func() (*ws.SnapshotPayload, uint64)
-	if len(runtimeSnapshotFunc) > 0 {
-		snapshotFunc = runtimeSnapshotFunc[0]
+	var stateFunc ws.RuntimeOverviewStateFunc
+	if len(runtimeStateFunc) > 0 {
+		stateFunc = runtimeStateFunc[0]
 	}
 	return &CanvasTopologyHandler{
-		deviceService:       deviceService,
-		linkRepo:            linkRepo,
-		positionRepo:        positionRepo,
-		areaRepo:            areaRepo,
-		vendorRegistry:      vendorRegistry,
-		runtimeSnapshotFunc: snapshotFunc,
+		deviceService:    deviceService,
+		linkRepo:         linkRepo,
+		positionRepo:     positionRepo,
+		areaRepo:         areaRepo,
+		vendorRegistry:   vendorRegistry,
+		runtimeStateFunc: stateFunc,
 	}
 }
 
 type canvasTopologyResponse struct {
 	SchemaVersion   int                          `json:"schema_version"`
 	TopologyVersion string                       `json:"topology_version"`
+	RuntimeStreamID string                       `json:"runtime_stream_id,omitempty"`
 	RuntimeVersion  *uint64                      `json:"runtime_version,omitempty"`
 	RuntimeIdentity string                       `json:"runtime_identity,omitempty"`
 	RuntimeSnapshot *ws.SnapshotPayload          `json:"runtime_snapshot,omitempty"`
@@ -212,16 +213,22 @@ func (h *CanvasTopologyHandler) HandleGetCanvas(w http.ResponseWriter, r *http.R
 	}
 
 	response := h.buildResponse(devices, links, positions, areas)
-	if h.runtimeSnapshotFunc != nil {
-		runtimeSnapshot, runtimeVersion := h.runtimeSnapshotFunc()
-		response.RuntimeVersion = &runtimeVersion
-		response.RuntimeSnapshot = ws.CloneSnapshot(runtimeSnapshot)
-		response.RuntimeIdentity = ws.RuntimeIdentityForSnapshot(runtimeSnapshot)
+	if h.runtimeStateFunc != nil {
+		applyRuntimeOverviewState(&response, h.runtimeStateFunc())
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
 	logCanvasTopologyResponse("/api/v1/canvas", http.StatusOK, response, startedAt)
 	json.NewEncoder(w).Encode(response)
+}
+
+// applyRuntimeOverviewState copies one atomic runtime lineage tuple into a canvas bootstrap.
+func applyRuntimeOverviewState(response *canvasTopologyResponse, state ws.RuntimeOverviewState) {
+	snapshot := ws.CloneSnapshot(state.Snapshot)
+	response.RuntimeStreamID = state.StreamID
+	response.RuntimeVersion = &state.Version
+	response.RuntimeSnapshot = snapshot
+	response.RuntimeIdentity = ws.RuntimeIdentityForSnapshot(snapshot)
 }
 
 func logCanvasTopologyResponse(endpoint string, status int, response canvasTopologyResponse, startedAt time.Time) {
