@@ -2193,9 +2193,11 @@ func TestPipelineOrchestratorStopClearsRuntimeRecoveryTracking(t *testing.T) {
 
 			time.Sleep(2 * pipeline.runtimeRecoveryTTL)
 			body := string(registry.MarshalPrometheus())
-			if strings.Contains(body, `mode="current",outcome="failed",reason="client_resync_scheduled"`) {
-				t.Fatalf("Stop() emitted a delayed runtime recovery failure\n%s", body)
-			}
+			assertPipelineRecoveryCountersZero(
+				t,
+				body,
+				`mode="current",outcome="failed",reason="client_resync_scheduled"`,
+			)
 		})
 	}
 }
@@ -2258,9 +2260,11 @@ func TestPipelineOrchestratorContextCancellationClearsRuntimeRecoveryTracking(t 
 
 	time.Sleep(2 * pipeline.runtimeRecoveryTTL)
 	body := string(registry.MarshalPrometheus())
-	if strings.Contains(body, `mode="current",outcome="failed",reason="client_resync_scheduled"`) {
-		t.Fatalf("context cancellation emitted a delayed runtime recovery failure\n%s", body)
-	}
+	assertPipelineRecoveryCountersZero(
+		t,
+		body,
+		`mode="current",outcome="failed",reason="client_resync_scheduled"`,
+	)
 	if err := pipeline.Start(context.Background()); err != nil {
 		t.Fatalf("Start() after context cancellation error = %v", err)
 	}
@@ -2322,9 +2326,11 @@ func TestPipelineOrchestratorGetOrBuildAfterShutdownDoesNotRestartRuntimeRecover
 
 			time.Sleep(2 * pipeline.runtimeRecoveryTTL)
 			body := string(registry.MarshalPrometheus())
-			if strings.Contains(body, `outcome="failed",reason="client_resync_scheduled"`) {
-				t.Fatalf("post-shutdown getter emitted a delayed runtime recovery failure\n%s", body)
-			}
+			assertPipelineRecoveryCountersZero(
+				t,
+				body,
+				`outcome="failed",reason="client_resync_scheduled"`,
+			)
 		})
 	}
 }
@@ -4883,12 +4889,11 @@ func TestRuntimeRecoveryMatchingQueryHelloSchedulesOneReplay(t *testing.T) {
 	}
 	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="replay",outcome="scheduled",reason="client_gap"} 1`)
 	assertPipelineMetric(t, body, completedMetric)
-	failedPrefix := `theia_ws_runtime_recovery_total{mode="replay",outcome="failed",reason="client_gap"} `
-	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, failedPrefix) && strings.TrimPrefix(line, failedPrefix) != "0" {
-			t.Fatalf("matching query hello recorded a failed replay recovery: %s", line)
-		}
-	}
+	assertPipelineRecoveryCountersZero(
+		t,
+		body,
+		`mode="replay",outcome="failed",reason="client_gap"`,
+	)
 	pipeline.overviewBuildMu.Lock()
 	attempts := len(pipeline.runtimeRecoveryAttempts)
 	pipeline.overviewBuildMu.Unlock()
@@ -4951,9 +4956,7 @@ func TestRuntimeRecoveryMetricsCompleteReplayOnlyAtValidTargetAck(t *testing.T) 
 	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="replay",outcome="scheduled",reason="client_gap"} 1`)
 	assertPipelineMetric(t, body, `theia_ws_runtime_replay_versions_count 1`)
 	assertPipelineMetric(t, body, `theia_ws_runtime_replay_versions_sum 2`)
-	if strings.Contains(body, `mode="replay",outcome="completed"`) {
-		t.Fatalf("replay completed before target ACK\n%s", body)
-	}
+	assertPipelineRecoveryCountersZero(t, body, `mode="replay",outcome="completed"`)
 
 	now = now.Add(time.Second)
 	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{StreamID: "wrong-stream", Version: 94, Known: true})
@@ -4962,9 +4965,7 @@ func TestRuntimeRecoveryMetricsCompleteReplayOnlyAtValidTargetAck(t *testing.T) 
 	body = string(registry.MarshalPrometheus())
 	assertPipelineMetric(t, body, `theia_ws_runtime_ack_lag_versions_count 1`)
 	assertPipelineMetric(t, body, `theia_ws_runtime_ack_lag_versions_sum 1`)
-	if strings.Contains(body, `mode="replay",outcome="completed"`) {
-		t.Fatalf("replay completed below target ACK\n%s", body)
-	}
+	assertPipelineRecoveryCountersZero(t, body, `mode="replay",outcome="completed"`)
 
 	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 94, Known: true})
 	body = string(registry.MarshalPrometheus())
@@ -5107,9 +5108,7 @@ func TestRuntimeRecoveryMetricsKeepIdenticalPendingSyncIdempotent(t *testing.T) 
 
 	body := string(registry.MarshalPrometheus())
 	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="scheduled",reason="client_resync_scheduled"} 1`)
-	if strings.Contains(body, `mode="current",outcome="failed"`) {
-		t.Fatalf("identical pending sync recorded a failed recovery\n%s", body)
-	}
+	assertPipelineRecoveryCountersZero(t, body, `mode="current",outcome="failed"`)
 	pipeline.overviewBuildMu.Lock()
 	attempts := len(pipeline.runtimeRecoveryAttempts)
 	pipeline.overviewBuildMu.Unlock()
@@ -5190,9 +5189,7 @@ func TestRuntimeRecoveryTrackingPrunesExpiredAttemptBeforeLateAck(t *testing.T) 
 
 	body := string(registry.MarshalPrometheus())
 	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="failed",reason="client_resync_scheduled"} 1`)
-	if strings.Contains(body, `mode="current",outcome="completed"`) {
-		t.Fatalf("expired recovery completed from a late ACK\n%s", body)
-	}
+	assertPipelineRecoveryCountersZero(t, body, `mode="current",outcome="completed"`)
 	if got := len(pipeline.runtimeRecoveryAttempts); got != 0 {
 		t.Fatalf("runtime recovery attempts after TTL pruning = %d, want 0", got)
 	}
@@ -5233,9 +5230,7 @@ func TestRuntimeRecoveryTrackingExpiresWithoutLaterClientActivity(t *testing.T) 
 
 	body := string(registry.MarshalPrometheus())
 	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="failed",reason="client_resync_scheduled"} 1`)
-	if strings.Contains(body, `mode="current",outcome="completed"`) {
-		t.Fatalf("autonomously expired recovery completed\n%s", body)
-	}
+	assertPipelineRecoveryCountersZero(t, body, `mode="current",outcome="completed"`)
 }
 
 func TestRuntimeRecoveryTimerIgnoresStaleGenerationAfterReplacement(t *testing.T) {
@@ -5492,9 +5487,7 @@ func TestRuntimeRecoveryMetricsCompleteLegacyBulkSnapshotWithoutAck(t *testing.T
 	body := string(registry.MarshalPrometheus())
 	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="scheduled",reason="state_changes_dropped"} 1`)
 	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="completed",reason="state_changes_dropped"} 1`)
-	if strings.Contains(body, `mode="snapshot",outcome="failed"`) {
-		t.Fatalf("legacy snapshot recorded a failed recovery without ACK support\n%s", body)
-	}
+	assertPipelineRecoveryCountersZero(t, body, `mode="snapshot",outcome="failed"`)
 	pipeline.overviewBuildMu.Lock()
 	attempts := len(pipeline.runtimeRecoveryAttempts)
 	pipeline.overviewBuildMu.Unlock()
@@ -5521,6 +5514,24 @@ func assertPipelineMetric(t *testing.T, body, needle string) {
 	t.Helper()
 	if !strings.Contains(body, needle) {
 		t.Fatalf("metrics output missing %q\n%s", needle, body)
+	}
+}
+
+func assertPipelineRecoveryCountersZero(t *testing.T, body, labelFragment string) {
+	t.Helper()
+	found := false
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, "theia_ws_runtime_recovery_total{") ||
+			!strings.Contains(line, labelFragment) {
+			continue
+		}
+		found = true
+		if !strings.HasSuffix(line, " 0") {
+			t.Fatalf("runtime recovery counter matching %q is not zero: %q", labelFragment, line)
+		}
+	}
+	if !found {
+		t.Fatalf("metrics output has no runtime recovery counter matching %q\n%s", labelFragment, body)
 	}
 }
 

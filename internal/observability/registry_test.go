@@ -161,6 +161,30 @@ func TestHandlerRendersGoAndProcessMetrics(t *testing.T) {
 	assertContainsMetric(t, body, `theia_scheduler_in_flight_tasks 2`)
 }
 
+func TestRegistryRuntimeRecoveryCountersStartAtZero(t *testing.T) {
+	registry := NewRegistry()
+	body := string(registry.MarshalPrometheus())
+
+	series := 0
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, "theia_ws_runtime_recovery_total{") {
+			continue
+		}
+		series++
+		if !strings.HasSuffix(line, " 0") {
+			t.Fatalf("fresh runtime recovery series is not zero: %q", line)
+		}
+	}
+	want := len(wsRuntimeRecoveryModes) * len(wsRuntimeRecoveryReasons) * len(wsRuntimeRecoveryOutcomes)
+	if series != want {
+		t.Fatalf("runtime recovery zero series = %d, want %d", series, want)
+	}
+
+	registry.IncWSRuntimeRecovery("replay", "client_gap", "failed")
+	body = string(registry.MarshalPrometheus())
+	assertContainsMetric(t, body, `theia_ws_runtime_recovery_total{mode="replay",outcome="failed",reason="client_gap"} 1`)
+}
+
 func TestRegistryRuntimeRecoveryMetricsUseBoundedLabels(t *testing.T) {
 	registry := NewRegistry()
 

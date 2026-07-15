@@ -31,6 +31,22 @@ var (
 	durationBucketsSeconds = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
 	payloadBucketsBytes    = []float64{128, 512, 1024, 4096, 16384, 65536, 262144, 1048576}
 	runtimeVersionBuckets  = []float64{0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024}
+	wsRuntimeRecoveryModes = [...]string{
+		"current", "replay", "snapshot", "http_fallback",
+	}
+	wsRuntimeRecoveryReasons = [...]string{
+		"client_resync_scheduled",
+		"client_missing_runtime_snapshot",
+		"state_changes_dropped",
+		"hub_buffer_full",
+		"connect",
+		"client_gap",
+		"stream_mismatch",
+		"timeout",
+	}
+	wsRuntimeRecoveryOutcomes = [...]string{
+		"scheduled", "completed", "failed",
+	}
 )
 
 type taskResultKey struct {
@@ -284,7 +300,7 @@ func NewRegistry() *Registry {
 		wsOverviewMailboxClear:     make(map[string]uint64),
 		wsOverviewResyncSuppressed: make(map[string]uint64),
 		wsPayloadBytes:             make(map[wsMetricKey]*histogram),
-		wsRuntimeRecoveryTotal:     make(map[wsRuntimeRecoveryKey]uint64),
+		wsRuntimeRecoveryTotal:     newWSRuntimeRecoveryCounters(),
 		wsRuntimeRecoveryDuration:  make(map[wsRuntimeRecoveryDurationKey]*histogram),
 		wsRuntimeAckLag:            newHistogram(runtimeVersionBuckets),
 		wsRuntimeReplayVersions:    newHistogram(runtimeVersionBuckets),
@@ -1179,38 +1195,38 @@ func (r *Registry) ObserveWSRuntimeReplayVersions(versions uint64) {
 	r.wsRuntimeReplayVersions.observe(float64(versions))
 }
 
-func wsRuntimeRecoveryModeAllowed(mode string) bool {
-	switch mode {
-	case "current", "replay", "snapshot", "http_fallback":
-		return true
-	default:
-		return false
+func newWSRuntimeRecoveryCounters() map[wsRuntimeRecoveryKey]uint64 {
+	values := make(map[wsRuntimeRecoveryKey]uint64,
+		len(wsRuntimeRecoveryModes)*len(wsRuntimeRecoveryReasons)*len(wsRuntimeRecoveryOutcomes))
+	for _, mode := range wsRuntimeRecoveryModes {
+		for _, reason := range wsRuntimeRecoveryReasons {
+			for _, outcome := range wsRuntimeRecoveryOutcomes {
+				values[wsRuntimeRecoveryKey{Mode: mode, Reason: reason, Outcome: outcome}] = 0
+			}
+		}
 	}
+	return values
+}
+
+func boundedRuntimeRecoveryLabel(value string, allowed []string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func wsRuntimeRecoveryModeAllowed(mode string) bool {
+	return boundedRuntimeRecoveryLabel(mode, wsRuntimeRecoveryModes[:])
 }
 
 func wsRuntimeRecoveryOutcomeAllowed(outcome string) bool {
-	switch outcome {
-	case "scheduled", "completed", "failed":
-		return true
-	default:
-		return false
-	}
+	return boundedRuntimeRecoveryLabel(outcome, wsRuntimeRecoveryOutcomes[:])
 }
 
 func wsRuntimeRecoveryReasonAllowed(reason string) bool {
-	switch reason {
-	case "client_resync_scheduled",
-		"client_missing_runtime_snapshot",
-		"state_changes_dropped",
-		"hub_buffer_full",
-		"connect",
-		"client_gap",
-		"stream_mismatch",
-		"timeout":
-		return true
-	default:
-		return false
-	}
+	return boundedRuntimeRecoveryLabel(reason, wsRuntimeRecoveryReasons[:])
 }
 
 func (r *Registry) SetWSConnectedClients(count int) {
