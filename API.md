@@ -1124,7 +1124,11 @@ During incident response, compare increases over the same process-uptime window:
 
 ### Prometheus alerts
 
-The shipped rules in [`docker/prometheus/alert_rules.yml`](docker/prometheus/alert_rules.yml) define these exact warning alerts:
+The shipped rules in [`docker/prometheus/alert_rules.yml`](docker/prometheus/alert_rules.yml) include
+the following four WebSocket/recovery warning alerts. This is the recovery-specific subset owned by
+this API reference; the complete 18-rule inventory, including the critical `DeviceDown` rule and
+the non-recovery warning rules, is in the architecture
+[Prometheus Alert Reference](ARCHITECTURE.md#prometheus-alert-reference).
 
 | Alert | Expression | `for` | Incident signal |
 | --- | --- | --- | --- |
@@ -1445,7 +1449,7 @@ Content-Type: application/json
 - When [`pipeline.go`](internal/worker/pipeline.go) or [`overview_journal.go`](internal/worker/overview_journal.go) changes synchronization selection, attempt ownership/expiry, journal capacity, replay compaction, or recovery-reason mapping, update mode/reason accounting and the recovery diagrams before release.
 - When [`useWebSocket.ts`](frontend/src/hooks/useWebSocket.ts), [`runtimeRecovery.ts`](frontend/src/hooks/websocket/runtimeRecovery.ts), or [`runtimeAck.ts`](frontend/src/hooks/websocket/runtimeAck.ts) changes reconnect, HTTP fallback, deadline, generation, ready, or ACK behavior, reconcile the server description against executable frontend lifecycle tests. Do not remove the detail-subscription caveat until a strictly compatible producer/consumer contract is tested.
 - When [`runtime_bootstrap.go`](cmd/theia/runtime_bootstrap.go), [`nginx.conf.template`](frontend/nginx.conf.template), compose networking, or Prometheus scrape configuration changes, re-audit direct-backend versus edge exposure, bearer requirements, and pprof's development-only supported edge boundary.
-- When bounded recovery labels in [`registry.go`](internal/observability/registry.go) change, recalculate the initialized-series total (`modes × reasons × outcomes`), update all metric tables, and validate label cardinality. When [`alert_rules.yml`](docker/prometheus/alert_rules.yml) changes, copy the exact expression, duration, severity, and grouping labels here.
+- When bounded recovery labels in [`registry.go`](internal/observability/registry.go) change, recalculate the initialized-series total (`modes × reasons × outcomes`), update all metric tables, and validate label cardinality. When a WebSocket/recovery rule in [`alert_rules.yml`](docker/prometheus/alert_rules.yml) changes, keep the recovery-specific table here exact; every alert-rule change must also update the complete inventory in [`ARCHITECTURE.md`](ARCHITECTURE.md#prometheus-alert-reference).
 - Re-run focused `internal/api` and `internal/ws` tests whenever route metadata, upgrade handling, wire structs, or operational handlers change; verify synthetic examples contain only documentation hosts, IDs, and placeholder hashes.
 
 ## Authoritative Sources
