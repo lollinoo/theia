@@ -631,9 +631,11 @@ flowchart LR
 Pause and cancel are durable run transitions. Cancellation marks work that has not become active;
 already-active device jobs finish and the processor waits for their terminal states. On restart,
 resumable runs reset interrupted nonterminal items and mark their old jobs failed before acquiring a
-new lease. The device-backup scheduler enforces per-device successful-retention counts in bounded
-100-device batches with a 60-second sweep deadline, and removes failed job records older than seven
-days; artifact deletion still passes path validation.
+new lease. The device-backup scheduler evaluates per-device successful-retention counts in batches
+of 100. Its [`runRetention`](internal/worker/device_backup_scheduler.go) context is checked between
+batches against a 60-second budget; repository reads and deletions inside the current batch do not
+use that context, so one batch and the overall sweep can exceed 60 seconds. Failed job records older
+than seven days are still removed after batch processing; artifact deletion passes path validation.
 
 ### Instance Backup, Staged Restore, and Restart Reconciliation
 
@@ -654,8 +656,10 @@ flowchart LR
     Stage --> Shutdown["Orderly shutdown;<br/>supervisor restart boundary"]
     Shutdown --> Startup["Startup validates marker targets<br/>before normal DB bootstrap"]
     Startup --> Apply["Pre-restore dump, pg_restore,<br/>migrations and credential rewrap"]
-    Apply --> Reconcile["Revoke restored sessions;<br/>atomically replace optional backups<br/>and known_hosts"]
-    Reconcile --> Cleanup["Remove marker/staging;<br/>continue normal startup and reconcile rows"]
+    Apply --> Backups["Revoke restored sessions;<br/>individually replace optional<br/>device-backup directory"]
+    Backups --> KnownHosts["Then individually replace<br/>optional known_hosts file"]
+    KnownHosts --> Cleanup["Remove marker/staging;<br/>continue normal startup and reconcile rows"]
+    KnownHosts -. "failure after backup activation" .-> Retry["Backup directory may already be live;<br/>keep marker/staging and refresh<br/>the staged DB for retry"]
 ```
 
 Restore validation is deliberately broader than filename inspection: it bounds compressed,
@@ -667,11 +671,16 @@ whole-archive authentication or encryption guarantee.
 After staging, the API does not hold open repositories while applying the dump. On restart,
 [`ApplyPendingRestore`](internal/service/restore_coordinator.go) validates marker paths, preserves a
 pre-restore dump, replaces the PostgreSQL public schema, runs migrations/credential rewrap, revokes
-restored sessions, then atomically replaces optional device-backup and `known_hosts` artifacts.
-Retryable failures retain marker/staging state; a missing credential key becomes an
-operator-action-required status. Successful activation removes the pending state before normal
-bootstrap rebuilds caches and volatile telemetry, reconciles stale instance-backup rows, and resumes
-durable bulk runs.
+restored sessions, then
+[`activateOptionalRestoreArtifacts`](internal/service/restore_optional_artifacts.go) activates the
+optional device-backup directory followed by `known_hosts`. Each target uses its own temporary path
+and rename-based replacement with target-local recovery, but the two activations are not one atomic
+operation and have no cross-artifact rollback. If `known_hosts` activation fails, the restored
+device-backup directory may already be live. The coordinator records a retryable failure, retains
+the marker and staging state, and refreshes the staged database from the restored database for the
+next startup attempt; only success for both optional targets removes pending state. A missing
+credential key instead becomes an operator-action-required status. Normal bootstrap then rebuilds
+caches and volatile telemetry, reconciles stale instance-backup rows, and resumes durable bulk runs.
 
 ## Security Architecture
 
