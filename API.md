@@ -291,10 +291,23 @@ The authentication wire shape is defined by [`authResponse`](internal/api/sessio
 | `identifier` | string | Login request | Username or email; must identify an account. |
 | `password` | string | Login request, write-only | Account password; never returned or logged by the response contract. |
 | `current_password` | string | Password-change request, write-only | Nonblank current password. |
-| `new_password` | string | Password-change/reset request, write-only | Nonblank and must satisfy the current password policy: 10–24 characters with uppercase, lowercase, number, and special-character classes. |
-| `token` | string | Password-reset request, write-only | One-time reset credential issued only by the administration reset route. |
+| `new_password` | string | Password-change request, write-only | Nonblank and must satisfy the current password policy: 10–24 characters with uppercase, lowercase, number, and special-character classes. |
 
 Successful login returns this JSON plus `theia_session` and `theia_csrf` cookies. Logout and successful reset return `204`. The password-change response is a refreshed authentication session and retains the current session while the service revokes other sessions.
+
+Password-reset issuance and redemption have separate wire shapes. `POST /api/v1/admin/users/{id}/password-reset` returns the issuance response below with HTTP `200`; [`AdminHandler.handlePasswordReset`](internal/api/admin_handler.go) serializes the raw [`PasswordResetTokenResult`](internal/service/auth_service.go) only at this boundary.
+
+| Field | JSON type | Required | Meaning and constraints |
+| --- | --- | --- | --- |
+| `token` | string | Issuance response, one-time secret | Raw reset credential shown only in this response. Treat it as secret material; persistence stores only its hash, and later reads cannot recover it. |
+| `expires_at` | string (timestamp) | Issuance response | Absolute expiration of the issued token. |
+
+The public `POST /api/v1/auth/password/reset` redemption request is decoded by [`AuthHandler.handlePasswordReset`](internal/api/session_handler.go) into [`PasswordResetCompleteInput`](internal/service/auth_service.go):
+
+| Field | JSON type | Required | Meaning and constraints |
+| --- | --- | --- | --- |
+| `token` | string | Redemption request, write-only | Nonblank one-time reset credential; never returned by the redemption route. |
+| `new_password` | string | Redemption request, write-only | Nonblank policy-compliant replacement password. |
 
 #### User
 
@@ -339,7 +352,7 @@ The same safe-user representation is used by authentication and administration; 
 | `action` | string | Response | Audited operation. |
 | `resource` | string | Response | Audited resource family. |
 | `resource_id` | string | Response | Resource-specific identifier; may be empty when no single resource applies. |
-| `metadata` | object or null | Response | Handler-decoded audit metadata JSON. |
+| `metadata` | any valid JSON value | Response | Arbitrary valid JSON from the stored audit metadata, including object, array, scalar, or `null`; invalid stored JSON falls back to `{}`. |
 | `ip_address` | string | Response | Actor client address captured by the service. |
 | `user_agent` | string | Response | Actor user-agent string. |
 | `created_at` | string (timestamp) | Response | Event creation time. |
@@ -408,7 +421,7 @@ Device list, item, orphan, and topology responses use a JSON:API-like resource c
 | `backup_supported` | boolean | Response | Derived from the resolved vendor backup configuration. |
 | `created_at`, `updated_at` | strings (timestamps) | Response | Persistence timestamps. |
 
-Create additionally accepts the request-only boolean `skip_primary_map_membership`; when `false` or absent, a successful create adds the device to the primary canvas map when that integration is configured. The request-only `snmp` object has `version` (`2c` or `3`), plus write-only `community` for v2c or `username`, `auth_protocol`, `auth_password`, `priv_protocol`, `priv_password`, and `security_level` for v3. Supported v3 authentication protocols are `MD5`, `SHA`, `SHA-224`, `SHA-256`, `SHA-384`, and `SHA-512`; privacy protocols are `DES` and `AES`; security levels are `noAuthNoPriv`, `authNoPriv`, and `authPriv`. None of those secrets is included in a device response.
+Create additionally accepts the request-only boolean `skip_primary_map_membership`; when `false` or absent, a successful create adds the device to the primary canvas map when that integration is configured. Create and update both accept a request-only `snmp` object. Omitting it on update preserves the current credentials; supplying it makes [`parseSNMPCreds`](internal/api/device_handler.go) parse a complete replacement that [`DeviceUpdate`](internal/service/device_service.go) applies to the stored device. An empty `version` selects `2c`, and an empty v2c `community` defaults to `public` on both create and update. For `version="3"`, omitted strings remain empty; valid nonempty authentication protocols are `MD5`, `SHA`, `SHA-224`, `SHA-256`, `SHA-384`, and `SHA-512`, privacy protocols are `DES` and `AES`, and security levels are `noAuthNoPriv`, `authNoPriv`, and `authPriv`. `community`, `auth_password`, and `priv_password` are write-only secrets; no embedded `snmp` field is included in a device response.
 
 Virtual creation requires `device_type="virtual"`, `tags.display_name`, and `tags.virtual_subtype` in `internet`, `cloud`, `server`, or `generic`. Virtual devices may omit an address; the handler ignores supplied SNMP credentials and forces `metrics_source=none`.
 
@@ -509,7 +522,17 @@ Manual-link identity is unordered but includes both device/interface endpoint pa
 - Create returns `201` and update returns the refreshed resource. Duplicate addresses inside one request return `400`; an applicable stored-address or physical/virtual primary-IP conflict returns `409`. Update is patch-like for scalar fields but replaces `addresses` and `area_ids` when supplied; `probe_ports:null`, `notes:null`, and `poll_interval_override:null` explicitly clear those values.
 - Batch create requires a nonempty `devices` array and returns `202` with `batch_id`, `status="processing"`, requested `count`, and per-item `failures[]` (`ip`, `reason`). Items are attempted independently; failures do not roll back successful creates.
 - Probe returns `{"status":"probing"}` and performs reachability work asynchronously. SNMP test returns HTTP `200` with `success`, optional discovered `sys_name`/`sys_descr`, optional `error`, `target_ip`, and `snmp_version`; an unsuccessful connectivity test is represented by `success=false`, not an HTTP error.
-- Topology discovery returns `{"status":"topology_discovery_started"}` and moves bootstrap state through `pending`, optional `followup_scheduled`, and `completed`. Virtual, addressless, or Prometheus-only devices are rejected with `400`.
+- Topology discovery returns `{"status":"topology_discovery_started"}`. Virtual, addressless, or Prometheus-only devices are rejected with `400`. The persisted bootstrap-state transitions are:
+
+| From | To | Trigger |
+| --- | --- | --- |
+| Start | `idle` | Creation or normalization when the resolved discovery mode is not `bootstrap_once`. |
+| Start | `pending` | Creation resolves to `bootstrap_once`. |
+| `idle`, `completed`, or `followup_scheduled` | `pending` | An update explicitly selects `bootstrap_once`; an eligible `idle` or `completed` peer may also reopen a temporary bootstrap window. |
+| `pending` | `followup_scheduled` | Discovery retains incomplete LLDP endpoint data and schedules a delayed follow-up probe. |
+| `pending` or `followup_scheduled` | `completed` | Discovery has no incomplete LLDP links, peer reconciliation observes resolved links, or the follow-up budget is exhausted. |
+
+`completed` makes a configured one-shot `bootstrap_once` mode resolve effectively to `off` until the window is reopened. Failure detail is recorded separately in `last_topology_discovery_result`; the bootstrap state has no failure or cancellation value.
 - Credential assignment and host-key operations are detailed under [Credential assignment](#credential-assignment). Orphan listing returns ordinary device resources for global devices absent from every saved canvas-map membership, as implemented by [`GetOrphans`](internal/repository/postgres/device_repo.go); it is not merely an area-assignment filter.
 
 ### Canvas topology and saved maps
@@ -645,16 +668,30 @@ Unknown keys return `400`. `grafana_dashboard_config` can be read through the se
 
 #### User setting
 
+`PATCH /api/v1/settings/me` accepts only these flat top-level request keys; none is nested under `user` or `preferences`:
+
+| Field | JSON type | Required | Meaning and constraints |
+| --- | --- | --- | --- |
+| `display_name` | string | Patch request | Trimmed current-user display name. |
+| `username` | string | Patch request | Nonblank unique login name. |
+| `email` | string | Patch request | Empty or a unique syntactically valid email address. |
+| `timezone` | string | Patch request | Empty or a valid IANA time-zone name. |
+| `locale` | string | Patch request | Locale identifier, maximum 32 characters. |
+| `bridge_port` | integer | Patch request | Compatibility alias that sets the per-user bridge-port override; range 1–65535. |
+| `bridge_port_override` | integer or null | Patch request | Per-user bridge port 1–65535; explicit `null` clears the override. |
+
+Successful `GET` and `PATCH` responses use the nested shape below:
+
 | Field | JSON type | Required | Meaning and constraints |
 | --- | --- | --- | --- |
 | `user.id` | string (UUID) | Response | Current user. |
-| `user.username`, `user.email`, `user.display_name` | strings | Response; patch | Current account identity fields. |
+| `user.username`, `user.email`, `user.display_name` | strings | Response | Current account identity fields. |
 | `user.last_login_at`, `user.password_changed_at` | strings (timestamps) | Conditional response | Omitted when unavailable. |
-| `preferences.timezone` | string | Response; patch | Empty or valid IANA zone. |
-| `preferences.locale` | string | Response; patch | Locale identifier, maximum 32 characters. |
-| `preferences.bridge_port` | integer | Response | Effective connector port. The patch compatibility alias `bridge_port` sets the override. |
+| `preferences.timezone` | string | Response | Current time-zone preference. |
+| `preferences.locale` | string | Response | Current locale preference. |
+| `preferences.bridge_port` | integer | Response | Effective connector port after applying the per-user override and global default. |
 | `preferences.global_bridge_port` | integer | Response | Current global default. |
-| `preferences.bridge_port_override` | integer or null | Response; patch | Per-user port 1–65535; explicit `null` clears it. |
+| `preferences.bridge_port_override` | integer or null | Response | Current per-user override or `null`. |
 | `bridge.configured` | boolean | Response | Whether an active per-user bridge credential exists. |
 | `bridge.credential` | bridge metadata | Conditional response | Omitted when not configured; never contains the raw secret. |
 
@@ -662,22 +699,29 @@ The patch allowlist is exactly `display_name`, `username`, `email`, `timezone`, 
 
 #### Vendor configuration
 
+`PUT /api/v1/vendors/{name}` receives the raw validated vendor configuration at the JSON document root. Its request fields are:
+
 | Field | JSON type | Required | Meaning and constraints |
 | --- | --- | --- | --- |
-| `name` | string | Response | Registry key selected by the route. |
-| `display_name` | string | Response | Vendor display name derived from the normalized configuration. |
-| `config` | object | Request/response | Raw validated vendor configuration. `PUT` sends this object directly, not wrapped in `data`. |
-| `config.vendor` | object | Request/response | `name` and `display_name`. |
-| `config.detection` | object | Request/response | `sys_object_id_prefixes[]` and `sys_descr_patterns[]`. |
-| `config.device_type_rules` | array | Request/response | Ordered `{match:{sys_descr_contains},type}` classification rules. |
-| `config.model_extraction` | object | Request/response | `sys_descr_regex` and integer `capture_group`. |
-| `config.metrics.prometheus` | object | Request/response | `cpu`, `memory`, `temperature`, and `uptime` query templates. |
-| `config.snmp.static` | object | Request/response | `software_version_oid`. |
-| `config.snmp.operational` | object | Request/response | `sys_uptime_oid` and `if_oper_status_oid`. |
-| `config.snmp.performance` | object | Request/response | CPU, memory, and temperature OIDs plus `temperature_scale`. |
-| `config.backup` | object | Request/response | `supported`, `methods[]`, `default_method`, and `ssh_commands`; optional `binary_backup` contains save/path/cleanup commands. |
+| `vendor` | object | PUT request | `name` and `display_name`. |
+| `detection` | object | PUT request | `sys_object_id_prefixes[]` and `sys_descr_patterns[]`. |
+| `device_type_rules` | array | PUT request | Ordered `{match:{sys_descr_contains},type}` classification rules. |
+| `model_extraction` | object | PUT request | `sys_descr_regex` and integer `capture_group`. |
+| `metrics.prometheus` | object | PUT request | `cpu`, `memory`, `temperature`, and `uptime` query templates. |
+| `snmp.static` | object | PUT request | `software_version_oid`. |
+| `snmp.operational` | object | PUT request | `sys_uptime_oid` and `if_oper_status_oid`. |
+| `snmp.performance` | object | PUT request | CPU, memory, and temperature OIDs plus `temperature_scale`. |
+| `backup` | object | PUT request | `supported`, `methods[]`, `default_method`, and `ssh_commands`; optional `binary_backup` contains save/path/cleanup commands. |
 
-List returns `data[]`; item/update returns `data`. An unknown vendor on `GET` returns `404`; `PUT` maps an unknown vendor or malformed/registry-invalid configuration to `400`. A successful update returns the registry-normalized record. The complete schema is [`internal/vendor/schema.go`](internal/vendor/schema.go).
+The list and item/update response envelopes are separate from that raw request root:
+
+| Field | JSON type | Required | Meaning and constraints |
+| --- | --- | --- | --- |
+| `data[].name` or `data.name` | string | Response | Registry key selected by the route; list uses `data[]` and item/update uses `data`. |
+| `data[].display_name` or `data.display_name` | string | Response | Vendor display name derived from the normalized configuration. |
+| `data[].config` or `data.config` | object | Response | Registry-normalized configuration whose root members are the request fields listed above. |
+
+The `PUT` body is therefore not wrapped in `config` or `data`. An unknown vendor on `GET` returns `404`; `PUT` maps an unknown vendor or malformed/registry-invalid configuration to `400`. A successful update returns the registry-normalized record. The complete schema is [`internal/vendor/schema.go`](internal/vendor/schema.go).
 
 Vendor resolution precedence is also deterministic: matching tries vendor `sys_object_id_prefixes` before `sys_descr_patterns`, then uses the `default` vendor. Vendor-specific Prometheus templates, device-type rules, and nonempty SNMP tier fields override corresponding defaults; missing values fall back field-by-field. Backup uses a vendor-specific configuration only when it declares `supported=true`, otherwise the default backup configuration wins. See [`internal/vendor/registry.go`](internal/vendor/registry.go).
 
@@ -856,13 +900,29 @@ stateDiagram-v2
     pausing --> cancelling: cancel
     paused --> cancelling: cancel
     running --> success: all selected succeed
-    running --> partial: mixed success/skip/failure
-    running --> failed: no success and not cancelled
-    cancelling --> partial: some work completed/skipped/failed
-    cancelling --> cancelled: no completed non-cancel work
+    running --> partial: any skipped, or some but not all succeed
+    running --> failed: success_count=0 and skipped_count=0
+    cancelling --> partial: any success, failure, or skip remains
+    cancelling --> cancelled: only cancelled work remains
 ```
 
-Items normally move `checking -> active -> running -> success|failed`. An already-offline device may start as `skipped`; after work is claimed as `active`, preflight may also set `skipped` for an offline, uncredentialed, unsupported, or unreachable device. Cancellation moves work not yet active to `cancelled` while active/running work completes. Terminal run status is `success` only when every selected item succeeds; `partial` covers mixed results or a cancelled run with completed/skipped/failed work; `cancelled` means cancellation left no such work; otherwise the run is `failed`.
+Bulk-run item transitions are independent for each selected device:
+
+| From | To | Trigger |
+| --- | --- | --- |
+| Start | `checking` | Selected device is not already persisted as down. |
+| Start | `skipped` | Device is already down when the run is created. |
+| `checking` | `active` | The processor atomically claims the item. |
+| `checking` or `queued` | `cancelled` | Run cancellation reaches work that has not become active. |
+| `active` | `skipped` | Preflight finds the device offline, without an assigned credential profile, unsupported for backup, or unreachable. |
+| `active` | `failed` | Device loading or backup-job creation fails. |
+| `active` | `running` | The linked device backup job is observed running. |
+| `active` or `running` | `success` or `failed` | The linked backup job is observed terminal; a fast job may jump directly from `active`. |
+| Any nonterminal state | `checking` | Startup recovery resets a resumable item after marking any interrupted linked job failed. |
+
+`queued` remains an accepted persistence/wire enum, but the current processor claims `checking` directly into `active`. A cancellation request does not rewrite `active` or `running` items to `cancelled`; those jobs are allowed to settle at `success` or `failed`. `skipped`, `success`, `failed`, and `cancelled` are terminal item states.
+
+Without cancellation, terminal run status is `success` only when `total_count > 0` and every selected item succeeds. It is `partial` whenever `skipped_count > 0`—including an all-skipped run—or when at least one but not every item succeeds. `failed` therefore requires both `success_count = 0` and `skipped_count = 0`; it does not include all-skipped runs. With cancellation, any retained success, failure, or skip produces `partial`, while `cancelled` means no such non-cancel outcome remains.
 
 #### Bulk operation status and download
 
@@ -875,7 +935,9 @@ Items normally move `checking -> active -> running -> success|failed`. An alread
 | `bulk_backup_run.can_pause`, `.can_resume`, `.can_cancel` | booleans | Status response | All currently `true`. |
 | `bulk_download.max_devices`, `.max_files`, `.max_bytes` | integers | Status response | Effective selection/archive limits; defaults 100, 500, and 512 MiB. |
 | `bulk_download.max_concurrent_per_actor`, `.max_concurrent_global` | integers | Status response | Effective local limits; defaults 1 and 4. |
-| `bulk_download.distributed*` | boolean/integers | Status response | Distributed limiter availability and effective per-actor/global ceilings. |
+| `bulk_download.distributed` | boolean | Status response | Whether a distributed lease repository is configured for bulk downloads. |
+| `bulk_download.distributed_max_concurrent_per_actor` | integer | Status response | Distributed per-actor ceiling; currently `1`. |
+| `bulk_download.distributed_max_concurrent_global` | integer | Status response | Distributed global ceiling; uses the effective global concurrency limit. |
 
 Bulk download requires a nonempty `device_ids[]` and streams the latest successful files as ZIP. Exceeding device/file/byte quotas returns `413`; unsafe filesystem/ZIP paths return `400`; no eligible files returns `404`. Local or distributed concurrency rejection returns `429` with `Retry-After: 30`; a distributed limiter failure returns `503`. Response headers report selected-device, file, and byte counts. A file that fails after streaming starts is recorded in `_errors.txt`, producing a partial archive rather than replacing the stream with JSON.
 
