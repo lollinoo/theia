@@ -47,6 +47,21 @@ describe('fetchRuntimeOverview', () => {
     });
   });
 
+  it('forwards the recovery abort signal to the transport request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(validRuntimeOverview()));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    await expect(fetchRuntimeOverview(controller.signal)).resolves.toEqual(validRuntimeOverview());
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/runtime/overview', {
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+  });
+
   it('maps backend error payloads with the response status', async () => {
     vi.stubGlobal(
       'fetch',

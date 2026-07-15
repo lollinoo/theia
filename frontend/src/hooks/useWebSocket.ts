@@ -50,6 +50,7 @@ import {
   classifyRuntimeReplay,
   createRuntimeRecoveryState,
   failRuntimeRecovery,
+  RUNTIME_HTTP_FALLBACK_DEADLINE_MS,
   RUNTIME_RECOVERY_DEADLINE_MS,
   type RuntimeCursor,
   type RuntimeRecoveryState,
@@ -315,7 +316,12 @@ export function useWebSocket(
     disposed.current = false;
     let reconnectTimer: number | null = null;
     let runtimeRecoveryDeadlineTimer: number | null = null;
-    let activeRuntimeFallback: { generation: number; socket: WebSocket } | null = null;
+    let activeRuntimeFallback: {
+      generation: number;
+      socket: WebSocket;
+      controller: AbortController;
+      deadlineTimer: number | null;
+    } | null = null;
 
     function clearReconnectTimer() {
       if (reconnectTimer !== null) {
@@ -329,6 +335,32 @@ export function useWebSocket(
         window.clearTimeout(runtimeRecoveryDeadlineTimer);
         runtimeRecoveryDeadlineTimer = null;
       }
+    }
+
+    /** Releases and optionally aborts the active HTTP fallback for one socket. */
+    function releaseRuntimeFallback(
+      token: NonNullable<typeof activeRuntimeFallback>,
+      abort: boolean,
+    ): void {
+      if (token.deadlineTimer !== null) {
+        window.clearTimeout(token.deadlineTimer);
+        token.deadlineTimer = null;
+      }
+      if (activeRuntimeFallback === token) {
+        activeRuntimeFallback = null;
+      }
+      if (abort && !token.controller.signal.aborted) {
+        token.controller.abort();
+      }
+    }
+
+    /** Cancels a pending HTTP fallback owned by the expected socket. */
+    function abortRuntimeFallback(socket?: WebSocket): void {
+      const token = activeRuntimeFallback;
+      if (token === null || (socket !== undefined && token.socket !== socket)) {
+        return;
+      }
+      releaseRuntimeFallback(token, true);
     }
 
     /** Schedules exponential reconnect and clears alert baselines so the next connection can resync them. */
@@ -352,6 +384,7 @@ export function useWebSocket(
 
       clearReconnectTimer();
       clearRuntimeRecoveryDeadline();
+      abortRuntimeFallback();
 
       // Close any existing socket before opening a new one
       if (socketRef.current) {
@@ -392,6 +425,51 @@ export function useWebSocket(
       });
       runtimeAckSchedulerRef.current = runtimeAckScheduler;
 
+      /** Marks the current fallback generation failed and advances through socket reconnect. */
+      function failRuntimeFallbackRequest(generation: number, error: unknown): void {
+        const recoveryState = runtimeRecoveryStateRef.current;
+        if (
+          disposed.current ||
+          socketRef.current !== ws ||
+          (recoveryState.phase !== 'stream' && recoveryState.phase !== 'http-fallback') ||
+          recoveryState.generation !== generation
+        ) {
+          return;
+        }
+
+        const recoveryMetadata = buildRuntimeRecoveryDiagnosticMetadata(recoveryState, Date.now());
+        runtimeRecoveryStateRef.current = failRuntimeRecovery(
+          recoveryState,
+          error instanceof Error ? error.message : 'runtime fallback failed',
+        );
+        runtimeRecoveryFailureCountRef.current = incrementCanvasDiagnosticCount(
+          runtimeRecoveryFailureCountRef.current,
+        );
+        updateCanvasDiagnosticsState({
+          websocket: {
+            runtimeRecoveryPhase: 'failed',
+            lastRuntimeRecoveryMode: 'http-fallback',
+            lastRuntimeRecoveryDurationMs:
+              recoveryMetadata.phase === 'stream' || recoveryMetadata.phase === 'http-fallback'
+                ? recoveryMetadata.durationMs
+                : undefined,
+            runtimeRecoveryFailureCount: runtimeRecoveryFailureCountRef.current,
+          },
+        });
+        recordCanvasDiagnosticEvent({
+          level: 'error',
+          source: 'runtime',
+          event: 'runtime.recovery.failed',
+          message: 'Runtime stream recovery failed; reconnecting the WebSocket',
+          metadata: {
+            generation,
+            reason: error instanceof Error ? error.message : 'runtime fallback failed',
+          },
+        });
+        runtimeAckScheduler.cancel();
+        ws.close();
+      }
+
       /** Applies the compact HTTP snapshot only while its socket and recovery generation are current. */
       async function runRuntimeFallback(generation: number): Promise<void> {
         if (
@@ -400,11 +478,27 @@ export function useWebSocket(
         ) {
           return;
         }
-        const fallbackToken = { generation, socket: ws };
+        abortRuntimeFallback();
+        const fallbackToken = {
+          generation,
+          socket: ws,
+          controller: new AbortController(),
+          deadlineTimer: null as number | null,
+        };
         activeRuntimeFallback = fallbackToken;
+        fallbackToken.deadlineTimer = window.setTimeout(() => {
+          if (activeRuntimeFallback !== fallbackToken) {
+            return;
+          }
+          releaseRuntimeFallback(fallbackToken, true);
+          failRuntimeFallbackRequest(
+            generation,
+            new Error('runtime fallback request deadline exceeded'),
+          );
+        }, RUNTIME_HTTP_FALLBACK_DEADLINE_MS);
 
         try {
-          const response = await fetchRuntimeOverview();
+          const response = await fetchRuntimeOverview(fallbackToken.controller.signal);
           const recoveryState = runtimeRecoveryStateRef.current;
           if (
             disposed.current ||
@@ -475,54 +569,9 @@ export function useWebSocket(
             }),
           );
         } catch (error) {
-          const recoveryState = runtimeRecoveryStateRef.current;
-          if (
-            disposed.current ||
-            socketRef.current !== ws ||
-            (recoveryState.phase !== 'stream' && recoveryState.phase !== 'http-fallback') ||
-            recoveryState.generation !== generation
-          ) {
-            return;
-          }
-
-          const recoveryMetadata = buildRuntimeRecoveryDiagnosticMetadata(
-            recoveryState,
-            Date.now(),
-          );
-          runtimeRecoveryStateRef.current = failRuntimeRecovery(
-            recoveryState,
-            error instanceof Error ? error.message : 'runtime fallback failed',
-          );
-          runtimeRecoveryFailureCountRef.current = incrementCanvasDiagnosticCount(
-            runtimeRecoveryFailureCountRef.current,
-          );
-          updateCanvasDiagnosticsState({
-            websocket: {
-              runtimeRecoveryPhase: 'failed',
-              lastRuntimeRecoveryMode: 'http-fallback',
-              lastRuntimeRecoveryDurationMs:
-                recoveryMetadata.phase === 'stream' || recoveryMetadata.phase === 'http-fallback'
-                  ? recoveryMetadata.durationMs
-                  : undefined,
-              runtimeRecoveryFailureCount: runtimeRecoveryFailureCountRef.current,
-            },
-          });
-          recordCanvasDiagnosticEvent({
-            level: 'error',
-            source: 'runtime',
-            event: 'runtime.recovery.failed',
-            message: 'Runtime stream recovery failed; reconnecting the WebSocket',
-            metadata: {
-              generation,
-              reason: error instanceof Error ? error.message : 'runtime fallback failed',
-            },
-          });
-          runtimeAckScheduler.cancel();
-          ws.close();
+          failRuntimeFallbackRequest(generation, error);
         } finally {
-          if (activeRuntimeFallback === fallbackToken) {
-            activeRuntimeFallback = null;
-          }
+          releaseRuntimeFallback(fallbackToken, false);
         }
       }
 
@@ -615,6 +664,13 @@ export function useWebSocket(
           reason,
           targetVersion,
         });
+        if (
+          previousState.phase === 'idle' &&
+          nextState.phase === 'stream' &&
+          nextState.generation !== previousState.generation
+        ) {
+          abortRuntimeFallback(ws);
+        }
         runtimeRecoveryStateRef.current = nextState;
         scheduleRuntimeRecoveryDeadline(nextState);
         if (previousState.phase === 'idle' && nextState.phase === 'stream') {
@@ -758,6 +814,13 @@ export function useWebSocket(
               }
               const recoveryStateBeforeReady = runtimeRecoveryStateRef.current;
               runtimeRecoveryStateRef.current = readyDecision.state;
+              if (
+                (recoveryStateBeforeReady.phase === 'stream' ||
+                  recoveryStateBeforeReady.phase === 'http-fallback') &&
+                readyDecision.state.phase === 'idle'
+              ) {
+                abortRuntimeFallback(ws);
+              }
               awaitingLegacyRuntimeBootstrapRef.current = false;
               clearRuntimeRecoveryDeadline();
               if (payload.runtime_identity !== undefined) {
@@ -1251,6 +1314,7 @@ export function useWebSocket(
 
       ws.onclose = () => {
         clearRuntimeRecoveryDeadline();
+        abortRuntimeFallback(ws);
         runtimeAckScheduler.cancel();
         if (socketRef.current === ws) {
           socketRef.current = null;
@@ -1287,6 +1351,7 @@ export function useWebSocket(
       disposed.current = true;
       clearReconnectTimer();
       clearRuntimeRecoveryDeadline();
+      abortRuntimeFallback();
       setConnected(false);
       setReconnecting(false);
       hasRuntimeSnapshotRef.current = false;

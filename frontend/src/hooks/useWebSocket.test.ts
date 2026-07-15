@@ -1162,12 +1162,16 @@ describe('useWebSocket', () => {
     await advanceTimersByTime(5_000);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/runtime/overview', {
-      cache: 'no-store',
-      headers: { Accept: 'application/json' },
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/runtime/overview',
+      expect.objectContaining({
+        cache: 'no-store',
+        signal: expect.any(AbortSignal),
+        headers: { Accept: 'application/json' },
+      }),
+    );
 
-    await advanceTimersByTime(10_000);
+    await advanceTimersByTime(9_999);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     await resolveDeferredResponse(
@@ -1284,7 +1288,11 @@ describe('useWebSocket', () => {
   it('lets an exact current ready win while the HTTP fallback request is pending', async () => {
     const dispatchSpy = spyOnDispatchEvent();
     const deferredResponse = createDeferred<Response>();
-    const fetchMock = vi.fn(() => deferredResponse.promise);
+    let fallbackSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_path: RequestInfo | URL, options?: RequestInit) => {
+      fallbackSignal = options?.signal ?? undefined;
+      return deferredResponse.promise;
+    });
     vi.stubGlobal('fetch', fetchMock);
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
     openWithRuntimeSnapshot();
@@ -1302,6 +1310,7 @@ describe('useWebSocket', () => {
     expect(getWebSocketDiagnostics().lastRuntimeRecoveryMode).toBeUndefined();
 
     sendFrames([readyFrame(10)]);
+    expect(fallbackSignal?.aborted).toBe(true);
     expect(getWebSocketDiagnostics()).toMatchObject({
       runtimeRecoveryPhase: 'idle',
       lastRuntimeRecoveryMode: 'current',
@@ -1496,6 +1505,42 @@ describe('useWebSocket', () => {
     });
   });
 
+  it('aborts a stalled HTTP fallback at its deadline and reconnects', async () => {
+    let fallbackSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_path: RequestInfo | URL, options?: RequestInit) => {
+      fallbackSignal = options?.signal ?? undefined;
+      return new Promise<Response>(() => undefined);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+    openWithRuntimeSnapshot();
+    sendRuntimeGap();
+
+    await advanceTimersByTime(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fallbackSignal?.aborted).toBe(false);
+
+    await advanceTimersByTime(9_999);
+    expect(mockInstance.close).not.toHaveBeenCalled();
+
+    await advanceTimersByTime(1);
+    expect(fallbackSignal?.aborted).toBe(true);
+    expect(mockInstance.close).toHaveBeenCalledTimes(1);
+    expect(getWebSocketDiagnostics()).toMatchObject({
+      runtimeRecoveryPhase: 'failed',
+      lastRuntimeRecoveryMode: 'http-fallback',
+      lastRuntimeRecoveryDurationMs: 15_000,
+      runtimeRecoveryFailureCount: 1,
+    });
+
+    const failedSocket = mockInstance;
+    act(() => {
+      failedSocket.simulateClose();
+    });
+    await advanceTimersByTime(1_000);
+    expect(mockInstances).toHaveLength(2);
+  });
+
   it('fails recovery instead of regressing a same-stream HTTP fallback cursor', async () => {
     vi.stubGlobal(
       'fetch',
@@ -1523,7 +1568,11 @@ describe('useWebSocket', () => {
 
   it('cancels recovery and ACK timers and ignores a late HTTP completion after cleanup', async () => {
     const deferredResponse = createDeferred<Response>();
-    const fetchMock = vi.fn(() => deferredResponse.promise);
+    let fallbackSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_path: RequestInfo | URL, options?: RequestInit) => {
+      fallbackSignal = options?.signal ?? undefined;
+      return deferredResponse.promise;
+    });
     vi.stubGlobal('fetch', fetchMock);
     const { unmount } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
     openWithRuntimeSnapshot();
@@ -1535,6 +1584,7 @@ describe('useWebSocket', () => {
     act(() => {
       unmount();
     });
+    expect(fallbackSignal?.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
 
     await resolveDeferredResponse(
@@ -1549,10 +1599,17 @@ describe('useWebSocket', () => {
   it('starts a new fallback after reconnect without waiting for the stale socket fetch', async () => {
     const firstResponse = createDeferred<Response>();
     const secondResponse = createDeferred<Response>();
+    const fallbackSignals: AbortSignal[] = [];
     const fetchMock = vi
       .fn()
-      .mockImplementationOnce(() => firstResponse.promise)
-      .mockImplementationOnce(() => secondResponse.promise);
+      .mockImplementationOnce((_path: RequestInfo | URL, options?: RequestInit) => {
+        if (options?.signal) fallbackSignals.push(options.signal);
+        return firstResponse.promise;
+      })
+      .mockImplementationOnce((_path: RequestInfo | URL, options?: RequestInit) => {
+        if (options?.signal) fallbackSignals.push(options.signal);
+        return secondResponse.promise;
+      });
     vi.stubGlobal('fetch', fetchMock);
     const { result, unmount } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 
@@ -1566,6 +1623,7 @@ describe('useWebSocket', () => {
       firstSocket.simulateClose();
       vi.advanceTimersByTime(1_000);
     });
+    expect(fallbackSignals[0]?.aborted).toBe(true);
     const secondSocket = mockInstances[1];
     if (!secondSocket) {
       throw new Error('expected reconnect socket instance');
@@ -1582,6 +1640,7 @@ describe('useWebSocket', () => {
     await advanceTimersByTime(5_000);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fallbackSignals[1]?.aborted).toBe(false);
 
     await resolveDeferredResponse(
       firstResponse,

@@ -5,6 +5,9 @@
 /** Maximum time allowed for WebSocket recovery before the runtime-only HTTP fallback begins. */
 export const RUNTIME_RECOVERY_DEADLINE_MS = 5_000;
 
+/** Maximum time allowed for the runtime-only HTTP recovery request. */
+export const RUNTIME_HTTP_FALLBACK_DEADLINE_MS = 10_000;
+
 /** Identifies one locally applied position in a server runtime stream. */
 export interface RuntimeCursor {
   streamId: string;

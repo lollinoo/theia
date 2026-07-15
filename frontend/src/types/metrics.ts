@@ -182,7 +182,7 @@ export interface PrometheusStatusPayload {
   error?: string;
 }
 
-/** ResyncRequiredPayload tells the client why it must refresh overview state over HTTP. */
+/** ResyncRequiredPayload tells the client why overview recovery must use the stream or legacy HTTP. */
 export interface ResyncRequiredPayload {
   scope: 'overview';
   reason:
@@ -202,7 +202,7 @@ export interface TopologyChangedPayload {
   recommended_endpoint?: string;
 }
 
-/** ReadyPayload acknowledges that the client's hello already matches server runtime state. */
+/** ReadyPayload confirms the runtime synchronization result and its exact ready barrier. */
 export interface ReadyPayload {
   runtime_version?: number;
   runtime_stream_id?: string;
