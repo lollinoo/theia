@@ -90,6 +90,7 @@ type Client struct {
 	runtimeSync              RuntimeSyncFunc
 	runtimeAck               RuntimeAckFunc
 	pendingOverviewRecovery  *overviewRecoveryState
+	pendingRuntimeHelloEcho  *runtimeHelloEcho
 	detailDeviceID           uuid.UUID
 }
 
@@ -133,6 +134,11 @@ type overviewRecoveryState struct {
 	targetVersion uint64
 	mode          OverviewSyncMode
 	startedAt     time.Time
+}
+
+type runtimeHelloEcho struct {
+	protocol int
+	cursor   RuntimeCursor
 }
 
 type overviewBootstrapSelection struct {
@@ -833,6 +839,7 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	c.mu.Lock()
 	bootstrapping := c.bootstrapping
 	runtimeSync := c.runtimeSync
+	queryHelloEcho := c.consumeRuntimeQueryHelloEchoLocked(cmd)
 	acceptedCursor := cmd.RuntimeCursor
 	if bootstrapping || runtimeSync == nil {
 		c.initializeRuntimeHelloLocked(cmd)
@@ -853,6 +860,9 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	}
 	c.mu.Unlock()
 
+	if queryHelloEcho {
+		return
+	}
 	if !bootstrapping {
 		if runtimeSync != nil {
 			runtimeSync(c, RuntimeSyncRequest{
@@ -876,6 +886,24 @@ func (c *Client) initializeRuntimeHello(cmd clientControlMessage) {
 	c.mu.Lock()
 	c.initializeRuntimeHelloLocked(cmd)
 	c.mu.Unlock()
+}
+
+func (c *Client) initializeRuntimeQueryHello(cmd clientControlMessage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.initializeRuntimeHelloLocked(cmd)
+	if cmd.RuntimeProtocol >= RuntimeStreamProtocolVersion {
+		c.pendingRuntimeHelloEcho = &runtimeHelloEcho{
+			protocol: cmd.RuntimeProtocol,
+			cursor:   cmd.RuntimeCursor,
+		}
+	}
+}
+
+func (c *Client) consumeRuntimeQueryHelloEchoLocked(cmd clientControlMessage) bool {
+	echo := c.pendingRuntimeHelloEcho
+	c.pendingRuntimeHelloEcho = nil
+	return echo != nil && echo.protocol == cmd.RuntimeProtocol && echo.cursor == cmd.RuntimeCursor
 }
 
 func (c *Client) initializeRuntimeHelloLocked(cmd clientControlMessage) {

@@ -4769,6 +4769,146 @@ func TestOverviewMailboxRecoveryCurrentRequestFallsBackWhenLiveClientCursorIsBeh
 	assertRuntimeRecoveryMessageTypes(t, recovery, ws.MessageTypeResyncRequired, ws.MessageTypeSnapshot, ws.MessageTypeReady)
 }
 
+func TestRuntimeRecoveryMatchingQueryHelloSchedulesOneReplay(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+	advanceRuntimeRecoveryState(t, pipeline, 92, 93, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "degraded"}},
+		Links:   map[string]map[string]any{},
+	})
+
+	server := httptest.NewServer(ws.NewHandler(
+		hub,
+		pipeline.GetOverviewSnapshot,
+		func() ws.AlertMessagePayload { return ws.AlertMessagePayload{Alerts: []ws.AlertDTO{}} },
+		nil,
+		ws.WithRuntimeSync(pipeline.SyncOverviewClient),
+		ws.WithRuntimeAck(pipeline.ObserveRuntimeAck),
+	))
+	t.Cleanup(server.Close)
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+
+			"?runtime_protocol=2&runtime_stream_id=runtime-stream-1&runtime_version=92",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial query runtime recovery client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	bootstrap := readRuntimeRecoveryMessages(t, conn, 4)
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		bootstrap,
+		ws.MessageTypeAlert,
+		ws.MessageTypeResyncRequired,
+		ws.MessageTypeRuntimeReplay,
+		ws.MessageTypeReady,
+	)
+	var required ws.ResyncRequiredPayload
+	decodeRuntimeRecoveryPayload(t, bootstrap[1], &required)
+	if required.RuntimeStreamID != "runtime-stream-1" || required.TargetVersion == nil || *required.TargetVersion != 93 {
+		t.Fatalf("bootstrap resync target = %#v, want runtime-stream-1/93", required)
+	}
+	var replay ws.RuntimeReplayMessagePayload
+	decodeRuntimeRecoveryPayload(t, bootstrap[2], &replay)
+	if replay.RuntimeStreamID != "runtime-stream-1" || replay.FromVersion != 92 || replay.Version != 93 {
+		t.Fatalf("bootstrap replay = %#v, want runtime-stream-1 92->93", replay)
+	}
+	var ready ws.ReadyPayload
+	decodeRuntimeRecoveryPayload(t, bootstrap[3], &ready)
+	if ready.RuntimeStreamID != "runtime-stream-1" || ready.RuntimeVersion != 93 || ready.SyncMode != string(ws.OverviewSyncModeReplay) {
+		t.Fatalf("bootstrap ready = %#v, want replay runtime-stream-1/93", ready)
+	}
+
+	advanceRuntimeRecoveryState(t, pipeline, 93, 94, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up_fresh"}},
+		Links:   map[string]map[string]any{},
+	})
+	live := readRuntimeRecoveryMessages(t, conn, 1)
+	assertRuntimeRecoveryMessageTypes(t, live, ws.MessageTypeRuntimeDelta)
+	var liveDelta ws.RuntimeDeltaMessagePayload
+	decodeRuntimeRecoveryPayload(t, live[0], &liveDelta)
+	if liveDelta.RuntimeStreamID != "runtime-stream-1" || liveDelta.BaseVersion != 93 || liveDelta.Version != 94 {
+		t.Fatalf("live delta = %#v, want runtime-stream-1 93->94", liveDelta)
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeHello,
+		"payload": map[string]any{
+			"runtime_protocol":  ws.RuntimeStreamProtocolVersion,
+			"runtime_stream_id": "runtime-stream-1",
+			"runtime_version":   92,
+		},
+	}); err != nil {
+		t.Fatalf("write matching query hello: %v", err)
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeRuntimeAck,
+		"payload": map[string]any{
+			"runtime_stream_id": "runtime-stream-1",
+			"runtime_version":   94,
+		},
+	}); err != nil {
+		t.Fatalf("write runtime ACK: %v", err)
+	}
+	detailDeviceID := uuid.New()
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeSubscribeDetail,
+		"payload": map[string]any{
+			"device_id": detailDeviceID.String(),
+		},
+	}); err != nil {
+		t.Fatalf("write detail subscription after matching hello: %v", err)
+	}
+	detailDeadline := time.Now().Add(time.Second)
+	for len(hub.DetailSubscribers(detailDeviceID)) != 1 && time.Now().Before(detailDeadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if subscribers := hub.DetailSubscribers(detailDeviceID); len(subscribers) != 1 {
+		t.Fatalf("detail subscribers after matching hello = %d, want 1", len(subscribers))
+	}
+
+	completedMetric := `theia_ws_runtime_recovery_total{mode="replay",outcome="completed",reason="client_gap"} 1`
+	metricDeadline := time.Now().Add(time.Second)
+	body := string(registry.MarshalPrometheus())
+	for !strings.Contains(body, completedMetric) && time.Now().Before(metricDeadline) {
+		time.Sleep(time.Millisecond)
+		body = string(registry.MarshalPrometheus())
+	}
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="replay",outcome="scheduled",reason="client_gap"} 1`)
+	assertPipelineMetric(t, body, completedMetric)
+	failedPrefix := `theia_ws_runtime_recovery_total{mode="replay",outcome="failed",reason="client_gap"} `
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, failedPrefix) && strings.TrimPrefix(line, failedPrefix) != "0" {
+			t.Fatalf("matching query hello recorded a failed replay recovery: %s", line)
+		}
+	}
+	pipeline.overviewBuildMu.Lock()
+	attempts := len(pipeline.runtimeRecoveryAttempts)
+	pipeline.overviewBuildMu.Unlock()
+	if attempts != 0 {
+		t.Fatalf("matching query hello left recovery attempts = %d, want 0", attempts)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatalf("set duplicate recovery read deadline: %v", err)
+	}
+	var unexpected runtimeRecoveryWireMessage
+	err = conn.ReadJSON(&unexpected)
+	if err == nil {
+		t.Fatalf("matching query hello produced an unexpected second recovery message: %s", unexpected.Type)
+	}
+	if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+		t.Fatalf("read after matching query hello = %v, want timeout", err)
+	}
+}
+
 func TestRuntimeRecoveryMetricsCompleteReplayOnlyAtValidTargetAck(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	hub := ws.NewHub()

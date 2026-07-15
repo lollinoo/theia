@@ -512,6 +512,82 @@ func TestClientAcceptHelloKeepsRecoveryUntilTargetCursorIsAcknowledged(t *testin
 	}
 }
 
+func TestClientRuntimeQueryHelloEchoMismatchConsumesSuppression(t *testing.T) {
+	query := clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  5,
+			Known:    true,
+		},
+	}
+	tests := []struct {
+		name  string
+		hello clientControlMessage
+	}{
+		{
+			name: "protocol mismatch",
+			hello: clientControlMessage{
+				Type:            MessageTypeHello,
+				RuntimeProtocol: 3,
+				RuntimeCursor:   query.RuntimeCursor,
+			},
+		},
+		{
+			name: "stream mismatch",
+			hello: clientControlMessage{
+				Type:            MessageTypeHello,
+				RuntimeProtocol: RuntimeStreamProtocolVersion,
+				RuntimeCursor: RuntimeCursor{
+					StreamID: "runtime-stream-2",
+					Version:  5,
+					Known:    true,
+				},
+			},
+		},
+		{
+			name: "version mismatch",
+			hello: clientControlMessage{
+				Type:            MessageTypeHello,
+				RuntimeProtocol: RuntimeStreamProtocolVersion,
+				RuntimeCursor: RuntimeCursor{
+					StreamID: "runtime-stream-1",
+					Version:  3,
+					Known:    true,
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := make([]RuntimeSyncRequest, 0, 2)
+			client := &Client{
+				runtimeSync: func(_ *Client, request RuntimeSyncRequest) {
+					requests = append(requests, request)
+				},
+			}
+			client.initializeRuntimeQueryHello(query)
+
+			client.acceptHello(test.hello)
+			if len(requests) != 1 || requests[0].Cursor != test.hello.RuntimeCursor {
+				t.Fatalf("mismatching hello sync requests = %#v, want cursor %#v", requests, test.hello.RuntimeCursor)
+			}
+
+			client.acceptHello(query)
+			if len(requests) != 2 || requests[1].Cursor != query.RuntimeCursor {
+				t.Fatalf("original query after mismatch sync requests = %#v, want second cursor %#v", requests, query.RuntimeCursor)
+			}
+			if test.hello.RuntimeCursor.StreamID == query.RuntimeCursor.StreamID &&
+				test.hello.RuntimeCursor.Version < query.RuntimeCursor.Version &&
+				client.AckedRuntimeCursor() != query.RuntimeCursor {
+				t.Fatalf("lower-version hello regressed acknowledged cursor to %#v, want %#v", client.AckedRuntimeCursor(), query.RuntimeCursor)
+			}
+		})
+	}
+}
+
 func TestHubOverviewSnapshotSendsCompleteBatchToHTTPBootstrapClient(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)

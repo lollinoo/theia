@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
@@ -1410,6 +1411,247 @@ func TestHandlerRuntimeV2QueryCursorInvokesSyncBeforeBroadcastReady(t *testing.T
 	select {
 	case event := <-events:
 		t.Fatalf("protocol-v2 query invoked duplicate sync callback: %#v", event.request)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestHandlerRuntimeV2QueryHelloEchoIsSuppressedOnceAfterBootstrap(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	type syncEvent struct {
+		request RuntimeSyncRequest
+		target  uint64
+	}
+	events := make(chan syncEvent, 3)
+	var targetMu sync.Mutex
+	targetVersion := uint64(93)
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) {
+			targetMu.Lock()
+			defer targetMu.Unlock()
+			return EmptySnapshot(), targetVersion
+		},
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(_ *Client, request RuntimeSyncRequest) {
+			targetMu.Lock()
+			target := targetVersion
+			targetMu.Unlock()
+			events <- syncEvent{request: request, target: target}
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	cursor := RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", cursor.StreamID)
+	params.Set("runtime_version", "92")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case event := <-events:
+		if event.request.Cursor != cursor || event.target != 93 {
+			t.Fatalf("bootstrap sync event = %#v, want cursor %#v target 93", event, cursor)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bootstrap runtime sync")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for !hub.HasOverviewClients() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !hub.HasOverviewClients() {
+		t.Fatal("client did not finish bootstrap")
+	}
+
+	targetMu.Lock()
+	targetVersion = 94
+	targetMu.Unlock()
+	writeHello := func() {
+		t.Helper()
+		if err := conn.WriteJSON(map[string]any{
+			"type": MessageTypeHello,
+			"payload": map[string]any{
+				"runtime_protocol":  RuntimeStreamProtocolVersion,
+				"runtime_stream_id": cursor.StreamID,
+				"runtime_version":   cursor.Version,
+			},
+		}); err != nil {
+			t.Fatalf("write runtime hello: %v", err)
+		}
+	}
+
+	writeHello()
+	detailDeviceID := uuid.New()
+	if err := conn.WriteJSON(map[string]any{
+		"type": MessageTypeSubscribeDetail,
+		"payload": map[string]any{
+			"device_id": detailDeviceID.String(),
+		},
+	}); err != nil {
+		t.Fatalf("write detail subscription after matching hello: %v", err)
+	}
+	detailDeadline := time.Now().Add(time.Second)
+	for len(hub.DetailSubscribers(detailDeviceID)) != 1 && time.Now().Before(detailDeadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if subscribers := hub.DetailSubscribers(detailDeviceID); len(subscribers) != 1 {
+		t.Fatalf("detail subscribers after matching hello = %d, want 1", len(subscribers))
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("matching query hello echo invoked duplicate sync: %#v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	writeHello()
+	select {
+	case event := <-events:
+		if event.request.Cursor != cursor || event.target != 94 {
+			t.Fatalf("second hello sync event = %#v, want cursor %#v target 94", event, cursor)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("one-shot suppression hid the second hello")
+	}
+}
+
+func TestHandlerRuntimeV2QueryHelloEchoIsDiscardedDuringBootstrap(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	cursor := RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}
+	events := make(chan RuntimeSyncRequest, 2)
+	bootstrapEntered := make(chan struct{})
+	bootstrapRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseBootstrap := func() {
+		releaseOnce.Do(func() { close(bootstrapRelease) })
+	}
+	t.Cleanup(releaseBootstrap)
+	var callbackMu sync.Mutex
+	callbackCount := 0
+	server := httptest.NewServer(NewHandler(
+		hub,
+		func() (*SnapshotPayload, uint64) { return EmptySnapshot(), 93 },
+		func() AlertMessagePayload { return AlertMessagePayload{} },
+		nil,
+		WithRuntimeSync(func(_ *Client, request RuntimeSyncRequest) {
+			callbackMu.Lock()
+			callbackCount++
+			first := callbackCount == 1
+			callbackMu.Unlock()
+			events <- request
+			if first {
+				close(bootstrapEntered)
+				<-bootstrapRelease
+			}
+		}),
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", cursor.StreamID)
+	params.Set("runtime_version", "92")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial protocol-v2 client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case <-bootstrapEntered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocked bootstrap sync")
+	}
+	select {
+	case request := <-events:
+		if request.Cursor != cursor {
+			t.Fatalf("bootstrap sync cursor = %#v, want %#v", request.Cursor, cursor)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bootstrap sync request")
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": MessageTypeHello,
+		"payload": map[string]any{
+			"runtime_protocol":  RuntimeStreamProtocolVersion,
+			"runtime_stream_id": cursor.StreamID,
+			"runtime_version":   cursor.Version,
+		},
+	}); err != nil {
+		t.Fatalf("write matching hello during bootstrap: %v", err)
+	}
+	detailDeviceID := uuid.New()
+	if err := conn.WriteJSON(map[string]any{
+		"type": MessageTypeSubscribeDetail,
+		"payload": map[string]any{
+			"device_id": detailDeviceID.String(),
+		},
+	}); err != nil {
+		t.Fatalf("write bootstrap detail probe: %v", err)
+	}
+	detailDeadline := time.Now().Add(time.Second)
+	for len(hub.DetailSubscribers(detailDeviceID)) != 1 && time.Now().Before(detailDeadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if subscribers := hub.DetailSubscribers(detailDeviceID); len(subscribers) != 1 {
+		t.Fatalf("detail subscribers during bootstrap = %d, want 1", len(subscribers))
+	}
+
+	clients := hub.copyClients()
+	if len(clients) != 1 {
+		t.Fatalf("connected clients during bootstrap = %d, want 1", len(clients))
+	}
+	if queued := len(clients[0].hello); queued != 0 {
+		t.Fatalf("matching query hello echo queued during bootstrap = %d, want 0", queued)
+	}
+
+	releaseBootstrap()
+	deadline := time.Now().Add(time.Second)
+	for !hub.HasOverviewClients() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !hub.HasOverviewClients() {
+		t.Fatal("client did not finish bootstrap after callback release")
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": MessageTypeHello,
+		"payload": map[string]any{
+			"runtime_protocol":  RuntimeStreamProtocolVersion,
+			"runtime_stream_id": cursor.StreamID,
+			"runtime_version":   cursor.Version,
+		},
+	}); err != nil {
+		t.Fatalf("write second matching hello: %v", err)
+	}
+	select {
+	case request := <-events:
+		if request.Cursor != cursor {
+			t.Fatalf("second hello sync cursor = %#v, want %#v", request.Cursor, cursor)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second matching hello did not invoke runtime sync")
+	}
+	select {
+	case request := <-events:
+		t.Fatalf("second matching hello invoked runtime sync more than once: %#v", request)
 	case <-time.After(100 * time.Millisecond):
 	}
 }

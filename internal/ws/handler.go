@@ -116,7 +116,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	hello, hasHello := clientHelloFromRequest(r)
 	client.usesHTTPRuntimeBootstrap = hasHello
 	if hasHello {
-		client.initializeRuntimeHello(hello)
+		client.initializeRuntimeQueryHello(hello)
 	}
 	bootstrapSelection := client.beginBootstrapSnapshotSelection()
 	h.hub.addClient(client)
