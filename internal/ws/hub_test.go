@@ -1625,6 +1625,78 @@ func TestOverviewMailboxRecoveryFullReplacementIncludesBootstrappingClient(t *te
 	assertOverviewTestMessageTypes(t, messages, MessageTypeResyncRequired, MessageTypeSnapshot, MessageTypeReady)
 }
 
+func TestReplaceOverviewStreamsSharesPreparedSnapshotBatchAcrossClients(t *testing.T) {
+	hub := NewHub(WithBroadcastRecorder())
+	clients := make([]*Client, 8)
+	for index := range clients {
+		clients[index] = registerTestClient(hub)
+		if index%2 == 0 {
+			clients[index].runtimeProtocol = RuntimeStreamProtocolVersion
+			clients[index].ackedRuntimeCursor = RuntimeCursor{
+				StreamID: "runtime-stream-old",
+				Version:  41,
+				Known:    true,
+			}
+		}
+	}
+
+	snapshot := EmptySnapshot()
+	for range 256 {
+		deviceID := uuid.NewString()
+		snapshot.Devices[deviceID] = DeviceRuntimeDTO{
+			DeviceID:      deviceID,
+			PrimaryHealth: "up_fresh",
+		}
+	}
+	identity := RuntimeIdentityForSnapshot(snapshot)
+	result := hub.ReplaceOverviewStreams(OverviewSyncBatch{
+		Reason:          ResyncReasonStateChangesDrop,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-new",
+		TargetVersion:   42,
+		RuntimeIdentity: identity,
+		Snapshot:        snapshot,
+		AlertVersion:    7,
+	})
+	if len(result.Installed) != len(clients) || len(result.Failed) != 0 {
+		t.Fatalf("bulk replacement result = installed %d failed %d, want %d/0", len(result.Installed), len(result.Failed), len(clients))
+	}
+
+	var sharedPayloads [][]byte
+	for _, client := range clients {
+		payloads := make([][]byte, 0, 3)
+		messages := make([]overviewTestMessage, 0, 3)
+		for range 3 {
+			payload := <-client.overviewSend
+			payloads = append(payloads, payload)
+			messages = append(messages, decodeOverviewTestMessage(t, payload))
+		}
+		assertOverviewTestMessageTypes(t, messages, MessageTypeResyncRequired, MessageTypeSnapshot, MessageTypeReady)
+
+		var snapshotPayload SnapshotMessagePayload
+		decodeOverviewTestPayload(t, messages[1], &snapshotPayload)
+		if snapshotPayload.Version != 42 || snapshotPayload.RuntimeStreamID != "runtime-stream-new" ||
+			snapshotPayload.RuntimeIdentity != identity || len(snapshotPayload.Snapshot.Devices) != len(snapshot.Devices) {
+			t.Fatalf("snapshot payload = version %d stream %q identity %q devices %d", snapshotPayload.Version, snapshotPayload.RuntimeStreamID, snapshotPayload.RuntimeIdentity, len(snapshotPayload.Snapshot.Devices))
+		}
+
+		if sharedPayloads == nil {
+			sharedPayloads = payloads
+			continue
+		}
+		for index := range sharedPayloads {
+			if &payloads[index][0] != &sharedPayloads[index][0] {
+				t.Fatalf("client payload %d was rebuilt instead of sharing the prepared immutable batch", index)
+			}
+		}
+	}
+
+	recorded := <-hub.BroadcastCh()
+	if &recorded[0] != &sharedPayloads[1][0] {
+		t.Fatal("recorded snapshot was rebuilt instead of reusing the prepared state payload")
+	}
+}
+
 func TestOverviewMailboxRecoveryHandlerPreservesFullReplacementBeforeStaleHTTPMarker(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()

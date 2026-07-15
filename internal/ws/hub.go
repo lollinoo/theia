@@ -153,6 +153,14 @@ type overviewClientRuntimeState struct {
 	httpBootstrap bool
 }
 
+// preparedOverviewSyncBatch owns immutable wire payloads that can be shared by
+// every eligible client mailbox in one logical bulk replacement.
+type preparedOverviewSyncBatch struct {
+	payloads     [][]byte
+	stateType    string
+	statePayload []byte
+}
+
 // NewHub creates an empty WebSocket hub.
 func NewHub(options ...HubOption) *Hub {
 	hub := &Hub{
@@ -426,18 +434,26 @@ func (h *Hub) ReplaceOverviewStream(client *Client, batch OverviewSyncBatch) boo
 	if client == nil {
 		return false
 	}
+	if !overviewSyncClientStateMatchesBatch(batch, client.runtimeState()) {
+		return false
+	}
+	prepared, err := prepareOverviewSyncBatch(batch)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal overview sync batch: %v", err)
+		return false
+	}
+	return h.replaceOverviewStreamPrepared(client, batch, prepared)
+}
 
+// replaceOverviewStreamPrepared revalidates client state and installs one
+// already-marshaled immutable batch without rebuilding snapshot payloads.
+func (h *Hub) replaceOverviewStreamPrepared(client *Client, batch OverviewSyncBatch, prepared preparedOverviewSyncBatch) bool {
+	if client == nil || len(prepared.payloads) > cap(client.overviewSend) {
+		return false
+	}
 	for {
 		clientState := client.runtimeState()
 		if !overviewSyncClientStateMatchesBatch(batch, clientState) {
-			return false
-		}
-		payloads, err := marshalOverviewSyncBatch(batch, clientState)
-		if err != nil {
-			log.Printf("WebSocket hub: failed to marshal overview sync batch: %v", err)
-			return false
-		}
-		if len(payloads) > cap(client.overviewSend) {
 			return false
 		}
 
@@ -465,7 +481,7 @@ func (h *Hub) ReplaceOverviewStream(client *Client, batch OverviewSyncBatch) boo
 			startedAt:     time.Now(),
 		}
 		client.needsResync = batch.Mode != OverviewSyncModeCurrent
-		for _, payload := range payloads {
+		for _, payload := range prepared.payloads {
 			client.overviewSend <- payload
 		}
 		client.installRuntimeAckCeilingLocked(batch.RuntimeStreamID, batch.TargetVersion)
@@ -508,15 +524,19 @@ func (h *Hub) ReplaceOverviewStreams(batch OverviewSyncBatch) OverviewSyncReplac
 		return result
 	}
 
-	if stateMessage, ok := overviewSyncStateMessage(batch); ok {
-		if payload, err := json.Marshal(stateMessage); err == nil {
-			observability.Default().ObserveWSMessage("broadcast", stateMessage.Type, len(payload))
-			h.recordBroadcast(payload)
-		}
+	prepared, err := prepareOverviewSyncBatch(batch)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal bulk overview sync batch: %v", err)
+		result.Failed = append(result.Failed, clients...)
+		return result
+	}
+	if prepared.statePayload != nil {
+		observability.Default().ObserveWSMessage("broadcast", prepared.stateType, len(prepared.statePayload))
+		h.recordBroadcast(prepared.statePayload)
 	}
 
 	for _, client := range clients {
-		if h.ReplaceOverviewStream(client, batch) {
+		if h.replaceOverviewStreamPrepared(client, batch, prepared) {
 			result.Installed = append(result.Installed, client)
 		} else {
 			result.Failed = append(result.Failed, client)
@@ -558,7 +578,7 @@ func overviewSyncStateMessage(batch OverviewSyncBatch) (Message, bool) {
 	}
 }
 
-func marshalOverviewSyncBatch(batch OverviewSyncBatch, clientState overviewClientRuntimeState) ([][]byte, error) {
+func prepareOverviewSyncBatch(batch OverviewSyncBatch) (preparedOverviewSyncBatch, error) {
 	ready := NewStreamReadyMessage(
 		batch.TargetVersion,
 		batch.AlertVersion,
@@ -567,31 +587,23 @@ func marshalOverviewSyncBatch(batch OverviewSyncBatch, clientState overviewClien
 		string(batch.Mode),
 	)
 	messages := make([]Message, 0, 3)
+	stateMessageIndex := -1
 
 	switch batch.Mode {
 	case OverviewSyncModeCurrent:
-		if !overviewSyncClientStateMatchesBatch(batch, clientState) {
-			return nil, fmt.Errorf("current runtime cursor no longer matches target")
-		}
 		messages = append(messages, ready)
 	case OverviewSyncModeReplay:
-		if clientState.protocol < RuntimeStreamProtocolVersion {
-			return nil, fmt.Errorf("runtime replay requires protocol %d", RuntimeStreamProtocolVersion)
-		}
 		if !batch.ReplayCursor.Known ||
 			batch.ReplayCursor.StreamID != batch.RuntimeStreamID ||
 			batch.ReplayCursor.Version >= batch.TargetVersion {
-			return nil, fmt.Errorf("runtime replay source cursor does not precede target")
-		}
-		if clientState.cursor != batch.ReplayCursor {
-			return nil, fmt.Errorf("runtime replay source cursor no longer matches client")
+			return preparedOverviewSyncBatch{}, fmt.Errorf("runtime replay source cursor does not precede target")
 		}
 		if batch.Replay == nil {
-			return nil, fmt.Errorf("runtime replay payload is nil")
+			return preparedOverviewSyncBatch{}, fmt.Errorf("runtime replay payload is nil")
 		}
 		stateMessage, ok := overviewSyncStateMessage(batch)
 		if !ok {
-			return nil, fmt.Errorf("runtime replay state is invalid")
+			return preparedOverviewSyncBatch{}, fmt.Errorf("runtime replay state is invalid")
 		}
 		messages = append(
 			messages,
@@ -599,13 +611,14 @@ func marshalOverviewSyncBatch(batch OverviewSyncBatch, clientState overviewClien
 			stateMessage,
 			ready,
 		)
+		stateMessageIndex = 1
 	case OverviewSyncModeSnapshot:
 		if batch.Snapshot == nil {
-			return nil, fmt.Errorf("runtime snapshot payload is nil")
+			return preparedOverviewSyncBatch{}, fmt.Errorf("runtime snapshot payload is nil")
 		}
 		stateMessage, ok := overviewSyncStateMessage(batch)
 		if !ok {
-			return nil, fmt.Errorf("runtime snapshot state is invalid")
+			return preparedOverviewSyncBatch{}, fmt.Errorf("runtime snapshot state is invalid")
 		}
 		messages = append(
 			messages,
@@ -613,19 +626,25 @@ func marshalOverviewSyncBatch(batch OverviewSyncBatch, clientState overviewClien
 			stateMessage,
 			ready,
 		)
+		stateMessageIndex = 1
 	default:
-		return nil, fmt.Errorf("unsupported overview sync mode %q", batch.Mode)
+		return preparedOverviewSyncBatch{}, fmt.Errorf("unsupported overview sync mode %q", batch.Mode)
 	}
 
 	payloads := make([][]byte, 0, len(messages))
-	for _, message := range messages {
+	prepared := preparedOverviewSyncBatch{payloads: payloads}
+	for index, message := range messages {
 		payload, err := json.Marshal(message)
 		if err != nil {
-			return nil, err
+			return preparedOverviewSyncBatch{}, err
 		}
-		payloads = append(payloads, payload)
+		prepared.payloads = append(prepared.payloads, payload)
+		if index == stateMessageIndex {
+			prepared.stateType = message.Type
+			prepared.statePayload = payload
+		}
 	}
-	return payloads, nil
+	return prepared, nil
 }
 
 func newOverviewResyncMessage(batch OverviewSyncBatch) Message {

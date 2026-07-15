@@ -44,13 +44,13 @@ const (
 	MessageTypeAlert = "alert"
 	// MessageTypePrometheusStatus notifies clients of Prometheus availability changes.
 	MessageTypePrometheusStatus = "prometheus_status"
-	// MessageTypeResyncRequired tells overview clients to expect a full snapshot resync.
+	// MessageTypeResyncRequired tells overview clients which recovery strategy and barrier to expect.
 	MessageTypeResyncRequired = "resync_required"
 	// MessageTypeTopologyChanged notifies clients that the topology has changed (new links discovered).
 	MessageTypeTopologyChanged = "topology_changed"
 	// MessageTypeHello lets clients announce the canvas versions they already have.
 	MessageTypeHello = "hello"
-	// MessageTypeReady confirms the server skipped an already-current runtime snapshot.
+	// MessageTypeReady confirms the exact runtime cursor reached by a synchronization result.
 	MessageTypeReady = "ready"
 	// MessageTypeSubscribeDetail registers a device-specific detail subscription for one client.
 	MessageTypeSubscribeDetail = "subscribe_detail"
@@ -160,7 +160,7 @@ type TopologyChangedPayload struct {
 	RecommendedEndpoint string `json:"recommended_endpoint,omitempty"`
 }
 
-// ReadyPayload confirms the server accepted a client's hello and skipped redundant snapshot delivery.
+// ReadyPayload confirms the exact cursor and mode selected by runtime synchronization.
 type ReadyPayload struct {
 	RuntimeVersion  uint64 `json:"runtime_version"`
 	RuntimeStreamID string `json:"runtime_stream_id,omitempty"`

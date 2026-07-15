@@ -4352,10 +4352,13 @@ func TestPipelineOrchestratorBroadcastDirty_DirtyDeviceWithStaleBaseUsesFullSnap
 func TestPipelineOrchestratorGetOrBuildOverviewSnapshotConcurrentRebuildsShareSingleBuildAndVersion(t *testing.T) {
 	pipeline, _, _, _, _ := newNoClientBroadcastTestPipeline(t)
 
+	previousStreamID := "runtime-stream-before-rebuild"
 	pipeline.runtime.mu.Lock()
 	pipeline.runtime.prevHashes = nil
 	pipeline.runtime.overviewVersion = 10
+	pipeline.runtime.overviewStreamID = previousStreamID
 	pipeline.runtime.mu.Unlock()
+	pipeline.runtime.overviewJournal.Append(9, 10, ws.EmptyRuntimeDeltaPayload())
 
 	previousSnapshotAll := snapshotAllPipelineState
 	previousSnapshotFor := snapshotPipelineStateFor
@@ -4427,6 +4430,23 @@ func TestPipelineOrchestratorGetOrBuildOverviewSnapshotConcurrentRebuildsShareSi
 	}
 	if versions[0] != 11 {
 		t.Fatalf("shared version = %d, want 11", versions[0])
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.RLock()
+	rebuiltStreamID := pipeline.runtime.overviewStreamID
+	pipeline.runtime.mu.RUnlock()
+	replay, replayable := pipeline.runtime.overviewJournal.Replay(9, 10)
+	journalEntries := len(pipeline.runtime.overviewJournal.entries)
+	pipeline.overviewBuildMu.Unlock()
+	if rebuiltStreamID == previousStreamID {
+		t.Fatalf("getter rebuild kept stream ID %q", rebuiltStreamID)
+	}
+	if _, err := uuid.Parse(rebuiltStreamID); err != nil {
+		t.Fatalf("getter rebuild stream ID %q is not a UUID: %v", rebuiltStreamID, err)
+	}
+	if replayable || replay != nil || journalEntries != 0 {
+		t.Fatalf("getter rebuild retained journal replay=%#v replayable=%t entries=%d", replay, replayable, journalEntries)
 	}
 }
 
@@ -4501,23 +4521,17 @@ func TestGetOrBuildOverviewStateConcurrentGettersObserveOneTuple(t *testing.T) {
 	const callers = 8
 	results := make(chan ws.RuntimeOverviewState, callers)
 	start := make(chan struct{})
-	var ready sync.WaitGroup
-	ready.Add(callers)
+	reachedGetter := make(chan struct{})
 	for range callers {
 		go func() {
-			ready.Done()
 			<-start
+			reachedGetter <- struct{}{}
 			results <- pipeline.GetOrBuildOverviewState()
 		}()
 	}
-	ready.Wait()
 	close(start)
-
-	select {
-	case state := <-results:
-		pipeline.overviewBuildMu.Unlock()
-		t.Fatalf("getter returned while overview tuple was incomplete: %#v", state)
-	case <-time.After(50 * time.Millisecond):
+	for range callers {
+		<-reachedGetter
 	}
 
 	pipeline.runtime.mu.Lock()
@@ -6160,6 +6174,12 @@ func TestPipelineOrchestratorBroadcastOnceRecordsStartupReloadMetrics(t *testing
 	})
 
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.RLock()
+	preStartupStreamID := pipeline.runtime.overviewStreamID
+	pipeline.runtime.mu.RUnlock()
+	pipeline.runtime.overviewJournal.Append(0, 1, ws.EmptyRuntimeDeltaPayload())
+	pipeline.overviewBuildMu.Unlock()
 	pipeline.broadcaster.broadcastOnce(context.Background())
 
 	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
@@ -6173,6 +6193,21 @@ func TestPipelineOrchestratorBroadcastOnceRecordsStartupReloadMetrics(t *testing
 	}
 	if !strings.Contains(metrics, `theia_refresh_topology_reload_total{reason="startup"} 1`) {
 		t.Fatalf("expected startup reload reason metric, got:\n%s", metrics)
+	}
+
+	startupState := pipeline.GetOrBuildOverviewState()
+	if startupState.StreamID == preStartupStreamID {
+		t.Fatalf("startup snapshot kept initial stream ID %q", startupState.StreamID)
+	}
+	if _, err := uuid.Parse(startupState.StreamID); err != nil {
+		t.Fatalf("startup stream ID %q is not a UUID: %v", startupState.StreamID, err)
+	}
+	pipeline.overviewBuildMu.Lock()
+	replay, replayable := pipeline.runtime.overviewJournal.Replay(0, 1)
+	journalEntries := len(pipeline.runtime.overviewJournal.entries)
+	pipeline.overviewBuildMu.Unlock()
+	if replayable || replay != nil || journalEntries != 0 {
+		t.Fatalf("startup snapshot retained journal replay=%#v replayable=%t entries=%d", replay, replayable, journalEntries)
 	}
 }
 
