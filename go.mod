@@ -15,7 +15,7 @@ require (
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/pkg/sftp v1.13.10
+	github.com/pkg/sftp v1.13.11
 )
 
 require (
