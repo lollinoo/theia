@@ -10,6 +10,7 @@ describe('buildCanvasHelloPayload', () => {
       buildCanvasHelloPayload({
         topologyVersion: 'topology-7',
         hasRuntimeSnapshot: true,
+        runtimeStreamId: 'runtime-stream-1',
         runtimeVersion: 42,
         runtimeIdentity: 'rt-sha256:abc',
         alertVersion: 9,
@@ -17,7 +18,9 @@ describe('buildCanvasHelloPayload', () => {
       }),
     ).toEqual({
       canvas_schema_version: 1,
+      runtime_protocol: 2,
       topology_version: 'topology-7',
+      runtime_stream_id: 'runtime-stream-1',
       runtime_version: 42,
       runtime_identity: 'rt-sha256:abc',
       alert_version: 9,
@@ -34,6 +37,7 @@ describe('buildCanvasHelloPayload', () => {
     const payload = buildCanvasHelloPayload({
       topologyVersion: undefined,
       hasRuntimeSnapshot: false,
+      runtimeStreamId: 'runtime-stream-1',
       runtimeVersion: 42,
       runtimeIdentity: 'rt-sha256:abc',
       alertVersion: null,
@@ -42,7 +46,9 @@ describe('buildCanvasHelloPayload', () => {
 
     expect(payload).toEqual({
       canvas_schema_version: 1,
+      runtime_protocol: 2,
       topology_version: undefined,
+      runtime_stream_id: undefined,
       runtime_version: undefined,
       runtime_identity: undefined,
       alert_version: undefined,

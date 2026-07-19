@@ -13,6 +13,14 @@ export class ValidationError extends Error {
   }
 }
 
+/** Indicates that a confirmed restore may have been accepted before its connection was interrupted. */
+export class RestoreOutcomeUnknownError extends Error {
+  constructor() {
+    super('Restore outcome is being verified');
+    this.name = 'RestoreOutcomeUnknownError';
+  }
+}
+
 /**
  * Thrown by the API client when the backend returns a 500 Internal Server Error.
  * Contains an optional correlation ID for log lookup — displayed to the user as

@@ -215,9 +215,9 @@ export function useCanvasData({
 
   const [topologyRecoveryNotice, setTopologyRecoveryNotice] =
     useState<TopologyRecoveryNotice | null>(null);
-  const structuralRefreshRunnerRef = useRef<(causes: Set<StructuralRefreshCause>) => void>(
-    () => undefined,
-  );
+  const structuralRefreshRunnerRef = useRef<
+    (causes: Set<StructuralRefreshCause>) => void | Promise<void>
+  >(() => undefined);
   const structuralRefreshQueueRef = useRef<StructuralRefreshQueue | null>(null);
   const lastStructuralRefreshCausesRef = useRef<Set<StructuralRefreshCause>>(new Set());
 
@@ -312,16 +312,17 @@ export function useCanvasData({
             includeRuntimeBootstrap: topologyRequestPlan.includeRuntimeBootstrap,
             forceRuntimeBootstrap: topologyRequestPlan.forceRuntimeBootstrap,
           });
+          if (!isCurrentTopologyLoad()) {
+            return 'stale';
+          }
           if (topologySource.status === 'ok' && topologySource.runtimeSnapshot !== undefined) {
             publishCanvasRuntimeBootstrap({
               snapshot: topologySource.runtimeSnapshot,
+              runtimeStreamId: topologySource.runtimeStreamId,
               runtimeVersion: topologySource.runtimeVersion,
               runtimeIdentity: topologySource.runtimeIdentity,
             });
             snapshotRef.current = topologySource.runtimeSnapshot;
-          }
-          if (!isCurrentTopologyLoad()) {
-            return 'stale';
           }
           recordSavedMapManualEdgeMigrationSkip({
             plan: manualEdgeMigrationPlan,
@@ -667,7 +668,7 @@ export function useCanvasData({
 
   useEffect(() => {
     structuralRefreshRunnerRef.current = (causes) => {
-      void runStructuralRefresh(causes);
+      return runStructuralRefresh(causes);
     };
   }, [runStructuralRefresh]);
 
@@ -760,7 +761,16 @@ export function useCanvasData({
     const handleReconnect = () => {
       queueStructuralRefresh('backend-reconnected');
     };
-    const handleResyncRequired = () => {
+    const handleResyncRequired = (event: Event) => {
+      const detail = 'detail' in event ? event.detail : undefined;
+      if (
+        typeof detail === 'object' &&
+        detail !== null &&
+        'strategy' in detail &&
+        detail.strategy === 'stream'
+      ) {
+        return;
+      }
       queueStructuralRefresh('backend-resync-required');
     };
     const handleTopologyChanged = () => {

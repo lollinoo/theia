@@ -421,6 +421,7 @@ func TestBuildCanvasMapTopologyVersionIgnoresRuntimeBootstrapFields(t *testing.T
 
 	base := canvasTopologyResponse{
 		SchemaVersion:   2,
+		RuntimeStreamID: "runtime-stream-old",
 		RuntimeVersion:  &runtimeVersionA,
 		RuntimeIdentity: "rt-sha256:old",
 		RuntimeSnapshot: &ws.SnapshotPayload{
@@ -467,6 +468,7 @@ func TestBuildCanvasMapTopologyVersionIgnoresRuntimeBootstrapFields(t *testing.T
 	}
 
 	withNewRuntime := base
+	withNewRuntime.RuntimeStreamID = "runtime-stream-new"
 	withNewRuntime.RuntimeVersion = &runtimeVersionB
 	withNewRuntime.RuntimeIdentity = "rt-sha256:new"
 	withNewRuntime.RuntimeSnapshot = &ws.SnapshotPayload{
@@ -495,7 +497,7 @@ func TestBuildCanvasMapTopologyVersionIgnoresRuntimeBootstrapFields(t *testing.T
 	}
 }
 
-func TestCanvasTopologyHandlerHandleGetCanvas_ReturnsRuntimeBootstrap(t *testing.T) {
+func TestCanvasTopologyHandlerHandleGetCanvas_ReturnsRuntimeBootstrapAndStream(t *testing.T) {
 	handler, deviceRepo, _, _, _ := newTestCanvasTopologyHandler(t)
 	deviceID := uuid.New()
 	if err := deviceRepo.Create(&domain.Device{
@@ -520,8 +522,12 @@ func TestCanvasTopologyHandlerHandleGetCanvas_ReturnsRuntimeBootstrap(t *testing
 		MetricsStatus:     "unavailable",
 		MetricsReason:     "device_unreachable",
 	}
-	handler.runtimeSnapshotFunc = func() (*ws.SnapshotPayload, uint64) {
-		return runtimeSnapshot, 42
+	handler.runtimeStateFunc = func() ws.RuntimeOverviewState {
+		return ws.RuntimeOverviewState{
+			Snapshot: runtimeSnapshot,
+			Version:  42,
+			StreamID: "runtime-stream-42",
+		}
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/canvas", nil)
@@ -539,6 +545,9 @@ func TestCanvasTopologyHandlerHandleGetCanvas_ReturnsRuntimeBootstrap(t *testing
 	}
 	if resp.RuntimeVersion == nil || *resp.RuntimeVersion != 42 {
 		t.Fatalf("runtime_version = %#v, want 42", resp.RuntimeVersion)
+	}
+	if resp.RuntimeStreamID != "runtime-stream-42" {
+		t.Fatalf("runtime_stream_id = %q, want runtime-stream-42", resp.RuntimeStreamID)
 	}
 	if resp.RuntimeIdentity != ws.RuntimeIdentityForSnapshot(runtimeSnapshot) {
 		t.Fatalf("runtime_identity = %q, want snapshot identity", resp.RuntimeIdentity)
@@ -575,8 +584,12 @@ func TestCanvasTopologyHandlerHandleGetCanvas_DebugLogsCardinality(t *testing.T)
 
 	runtimeSnapshot := ws.EmptySnapshot()
 	runtimeSnapshot.Devices[deviceID.String()] = ws.DeviceRuntimeDTO{DeviceID: deviceID.String()}
-	handler.runtimeSnapshotFunc = func() (*ws.SnapshotPayload, uint64) {
-		return runtimeSnapshot, 42
+	handler.runtimeStateFunc = func() ws.RuntimeOverviewState {
+		return ws.RuntimeOverviewState{
+			Snapshot: runtimeSnapshot,
+			Version:  42,
+			StreamID: "runtime-stream-42",
+		}
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/canvas", nil)

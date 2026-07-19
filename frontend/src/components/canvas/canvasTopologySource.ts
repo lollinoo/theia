@@ -24,6 +24,7 @@ export type CanvasTopologySource =
       positions: Map<string, PositionState>;
       etag?: string;
       topologyVersion?: string;
+      runtimeStreamId?: string;
       runtimeVersion?: number;
       runtimeIdentity?: string;
       runtimeSnapshot?: SnapshotPayload;
@@ -102,6 +103,7 @@ export async function loadCanvasTopologySource({
         positions: topologyPositionsToPositionMap(Object.values(topology.positions)),
         etag: etagFromTopologyVersion(topology.topology_version),
         topologyVersion: topology.topology_version,
+        runtimeStreamId: topology.runtime_stream_id,
         runtimeVersion: topology.runtime_version,
         runtimeIdentity: topology.runtime_identity,
         runtimeSnapshot: topology.runtime_snapshot,
@@ -129,6 +131,7 @@ export async function loadCanvasTopologySource({
       positions: topologyPositionsToPositionMap(Object.values(topology.positions)),
       etag: result.etag,
       topologyVersion: topology.topology_version,
+      runtimeStreamId: topology.runtime_stream_id,
       runtimeVersion: topology.runtime_version,
       runtimeIdentity: topology.runtime_identity,
       runtimeSnapshot: topology.runtime_snapshot,

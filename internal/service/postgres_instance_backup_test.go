@@ -307,7 +307,7 @@ func TestInstanceBackupServiceCreate_PostgresArchive(t *testing.T) {
 		switch name {
 		case "pg_dump":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_dump (PostgreSQL) 18.0\n"), nil
 			}
 			if commandEnvValue(env, "PGPASSWORD") != "strong-password" {
 				t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
@@ -411,7 +411,7 @@ func TestInstanceBackupServiceCreate_PostgresFailureRedactsCommandSecrets(t *tes
 			return nil, fmt.Errorf("unexpected command %s", name)
 		}
 		if commandArgsEqual(args, "--version") {
-			return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+			return []byte("pg_dump (PostgreSQL) 18.0\n"), nil
 		}
 		if commandEnvValue(env, "PGPASSWORD") != sensitive {
 			t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
@@ -462,7 +462,7 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 		switch name {
 		case "pg_restore":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_restore (PostgreSQL) 18.0\n"), nil
 			}
 			if len(args) < 2 || args[0] != "--list" {
 				return nil, fmt.Errorf("unexpected pg_restore args: %v", args)
@@ -470,12 +470,12 @@ func TestInstanceBackupServiceValidateAndStageRestore_Postgres(t *testing.T) {
 			return []byte("archive listing"), nil
 		case "pg_dump":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_dump (PostgreSQL) 18.0\n"), nil
 			}
 			return nil, fmt.Errorf("unexpected pg_dump args: %v", args)
 		case "psql":
 			if commandArgsEqual(args, "--version") {
-				return []byte("psql (PostgreSQL) 17.4\n"), nil
+				return []byte("psql (PostgreSQL) 18.0\n"), nil
 			}
 			return nil, fmt.Errorf("unexpected psql args: %v", args)
 		default:
@@ -694,7 +694,7 @@ func TestInstanceBackupServiceValidateAndStageRestore_PostgresRejectsUnsupported
 		switch name {
 		case "pg_restore":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_restore (PostgreSQL) 18.0\n"), nil
 			}
 			if len(args) >= 2 && args[0] == "--list" {
 				return []byte("archive listing"), nil
@@ -784,7 +784,7 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 		switch name {
 		case "pg_dump":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_dump (PostgreSQL) 18.0\n"), nil
 			}
 			if commandEnvValue(env, "PGPASSWORD") != "strong-password" {
 				t.Fatal("pg_dump PGPASSWORD env does not match DSN password")
@@ -803,7 +803,7 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 			return nil, nil
 		case "pg_restore":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_restore (PostgreSQL) 18.0\n"), nil
 			}
 			if !cleanSchemaExecuted {
 				t.Fatal("pg_restore executed before PostgreSQL schema cleanup")
@@ -827,7 +827,7 @@ func TestRestoreCoordinatorApplyPendingRestore_Postgres(t *testing.T) {
 			return nil, nil
 		case "psql":
 			if commandArgsEqual(args, "--version") {
-				return []byte("psql (PostgreSQL) 17.4\n"), nil
+				return []byte("psql (PostgreSQL) 18.0\n"), nil
 			}
 			if commandEnvValue(env, "PGPASSWORD") != "strong-password" {
 				t.Fatal("psql PGPASSWORD env does not match DSN password")
@@ -946,7 +946,7 @@ func TestRestoreCoordinatorApplyPendingRestore_PostgresRestoreFailureKeepsRetryS
 		switch name {
 		case "pg_dump":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_dump (PostgreSQL) 18.0\n"), nil
 			}
 			dest := commandFlagValue(args, "--file")
 			if dest == "" {
@@ -958,13 +958,13 @@ func TestRestoreCoordinatorApplyPendingRestore_PostgresRestoreFailureKeepsRetryS
 			return nil, nil
 		case "pg_restore":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_restore (PostgreSQL) 18.0\n"), nil
 			}
 			pgRestoreExecuted = true
 			return nil, fmt.Errorf("restore failed")
 		case "psql":
 			if commandArgsEqual(args, "--version") {
-				return []byte("psql (PostgreSQL) 17.4\n"), nil
+				return []byte("psql (PostgreSQL) 18.0\n"), nil
 			}
 			return nil, nil
 		default:
@@ -1156,7 +1156,7 @@ func TestRestoreCoordinatorApplyPendingRestore_OptionalArtifactFailureRefreshesS
 		switch name {
 		case "pg_dump":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_dump (PostgreSQL) 18.0\n"), nil
 			}
 			dest := commandFlagValue(args, "--file")
 			if dest == "" {
@@ -1173,13 +1173,13 @@ func TestRestoreCoordinatorApplyPendingRestore_OptionalArtifactFailureRefreshesS
 			return nil, nil
 		case "pg_restore":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_restore (PostgreSQL) 18.0\n"), nil
 			}
 			restoreExecuted = true
 			return nil, nil
 		case "psql":
 			if commandArgsEqual(args, "--version") {
-				return []byte("psql (PostgreSQL) 17.4\n"), nil
+				return []byte("psql (PostgreSQL) 18.0\n"), nil
 			}
 			return nil, nil
 		default:
@@ -1272,7 +1272,7 @@ func TestRestoreCoordinatorApplyPendingRestore_PostgresChecksPgDumpAndPgRestoreB
 		switch name {
 		case "pg_dump":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_dump (PostgreSQL) 18.0\n"), nil
 			}
 			if commandArgExists(args, "--format=custom") {
 				preRestoreDumpExecuted = true
@@ -1476,7 +1476,7 @@ func stubSuccessfulPendingPostgresRestoreCommands(t *testing.T) {
 		switch name {
 		case "pg_dump":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_dump (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_dump (PostgreSQL) 18.0\n"), nil
 			}
 			dest := commandFlagValue(args, "--file")
 			if dest == "" {
@@ -1488,12 +1488,12 @@ func stubSuccessfulPendingPostgresRestoreCommands(t *testing.T) {
 			return nil, nil
 		case "pg_restore":
 			if commandArgsEqual(args, "--version") {
-				return []byte("pg_restore (PostgreSQL) 17.4\n"), nil
+				return []byte("pg_restore (PostgreSQL) 18.0\n"), nil
 			}
 			return nil, nil
 		case "psql":
 			if commandArgsEqual(args, "--version") {
-				return []byte("psql (PostgreSQL) 17.4\n"), nil
+				return []byte("psql (PostgreSQL) 18.0\n"), nil
 			}
 			return nil, nil
 		default:

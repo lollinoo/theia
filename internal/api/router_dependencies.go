@@ -32,6 +32,6 @@ type routerDependencies struct {
 	instanceBackupService *service.InstanceBackupService
 	restoreRestarter      func()
 	bridgeBinariesDir     string
-	runtimeSnapshotFunc   func() (*ws.SnapshotPayload, uint64)
+	runtimeStateFunc      ws.RuntimeOverviewStateFunc
 	wsHandler             *ws.Handler
 }

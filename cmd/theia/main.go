@@ -68,6 +68,9 @@ func applyPendingPostgresRestore(stateDir, dbDSN, deviceBackupDir, knownHostsPat
 		if err := postgres.RunMigrations(db, keyring); err != nil {
 			return fmt.Errorf("run credential lifecycle migrations after restore: %w", err)
 		}
+		if err := postgres.NewAuthRepo(db).RevokeAllSessions(ctx, time.Now().UTC()); err != nil {
+			return fmt.Errorf("revoke restored login sessions: %w", err)
+		}
 		return nil
 	})
 	applied, err := coordinator.ApplyPendingRestore()

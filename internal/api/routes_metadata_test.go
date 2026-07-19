@@ -63,6 +63,7 @@ func TestPublicAndSpecialMiddlewareRoutesAreDeclaredInRouteMetadata(t *testing.T
 		{name: "bridge connector launch", method: http.MethodPost, path: "/api/v1/bridge/connector/launch", auth: routeAuthPublic, profile: routeMiddlewarePublicJSONSmallBody},
 		{name: "health", method: http.MethodGet, path: "/api/v1/health", auth: routeAuthProtected, profile: routeMiddlewareNormalJSON},
 		{name: "prometheus health", method: http.MethodGet, path: "/api/v1/prometheus/health", auth: routeAuthProtected, profile: routeMiddlewareNormalJSON},
+		{name: "runtime overview", method: http.MethodGet, path: "/api/v1/runtime/overview", auth: routeAuthProtected, profile: routeMiddlewareNormalJSON},
 	}
 
 	for _, tt := range tests {

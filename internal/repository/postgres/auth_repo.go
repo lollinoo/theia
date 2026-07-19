@@ -687,6 +687,17 @@ func (r *AuthRepo) RevokeUserSessions(ctx context.Context, userID uuid.UUID, exc
 	return nil
 }
 
+// RevokeAllSessions invalidates every persisted login session.
+func (r *AuthRepo) RevokeAllSessions(ctx context.Context, when time.Time) error {
+	if _, err := r.execContext(ctx,
+		`UPDATE auth_sessions SET revoked_at = ? WHERE revoked_at IS NULL`,
+		when,
+	); err != nil {
+		return fmt.Errorf("revoking all auth sessions: %w", err)
+	}
+	return nil
+}
+
 // TouchSession updates a session's last seen timestamp.
 func (r *AuthRepo) TouchSession(ctx context.Context, sessionID uuid.UUID, when time.Time) error {
 	res, err := r.execContext(ctx,

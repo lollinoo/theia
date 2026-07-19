@@ -30,16 +30,38 @@ type Handler struct {
 	snapshotFunc   func() (*SnapshotPayload, uint64)
 	alertsFunc     func() AlertMessagePayload
 	promStatusFunc func() PrometheusStatusPayload
+	runtimeSync    RuntimeSyncFunc
+	runtimeAck     RuntimeAckFunc
 	allowedOrigins []string
 }
 
 // HandlerOption customizes WebSocket handler behavior.
 type HandlerOption func(*Handler)
 
+// RuntimeSyncFunc synchronizes one client from its reported runtime cursor.
+type RuntimeSyncFunc func(*Client, RuntimeSyncRequest)
+
+// RuntimeAckFunc observes one validated runtime cursor acknowledgement.
+type RuntimeAckFunc func(*Client, RuntimeCursor)
+
 // WithAllowedOrigins configures exact browser origins allowed to open WebSockets.
 func WithAllowedOrigins(origins []string) HandlerOption {
 	return func(h *Handler) {
 		h.allowedOrigins = security.NormalizedAllowedOrigins(origins)
+	}
+}
+
+// WithRuntimeSync routes runtime handshake and resume requests to sync.
+func WithRuntimeSync(sync RuntimeSyncFunc) HandlerOption {
+	return func(h *Handler) {
+		h.runtimeSync = sync
+	}
+}
+
+// WithRuntimeAck routes validated runtime acknowledgements to ack.
+func WithRuntimeAck(ack RuntimeAckFunc) HandlerOption {
+	return func(h *Handler) {
+		h.runtimeAck = ack
 	}
 }
 
@@ -80,18 +102,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		hub:          h.hub,
-		conn:         conn,
-		send:         make(chan []byte, sendBufferSize),
-		overviewSend: make(chan []byte, overviewBufferSize),
-		hello:        make(chan clientControlMessage, clientHelloBuffer),
-		disconnected: make(chan struct{}),
+		hub:           h.hub,
+		conn:          conn,
+		send:          make(chan []byte, sendBufferSize),
+		overviewSend:  make(chan []byte, overviewBufferSize),
+		hello:         make(chan clientControlMessage, clientHelloBuffer),
+		disconnected:  make(chan struct{}),
 		bootstrapping: true,
+		runtimeSync:   h.runtimeSync,
+		runtimeAck:    h.runtimeAck,
 	}
 
 	hello, hasHello := clientHelloFromRequest(r)
 	client.usesHTTPRuntimeBootstrap = hasHello
+	if hasHello {
+		client.initializeRuntimeQueryHello(hello)
+	}
+	bootstrapSelection := client.beginBootstrapSnapshotSelection()
 	h.hub.addClient(client)
+	writePumpStarted := false
+	defer func() {
+		if !writePumpStarted {
+			h.hub.removeClient(client)
+		}
+	}()
 	go client.readPump()
 
 	snapshot := EmptySnapshot()
@@ -110,7 +144,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	runtimeIdentity := RuntimeIdentityForSnapshot(snapshot)
-	selectedOverviewEpoch := client.markBootstrapSnapshotSelected(version, runtimeIdentity)
+	usesRuntimeSync := hasHello &&
+		hello.RuntimeProtocol >= RuntimeStreamProtocolVersion &&
+		h.runtimeSync != nil
+	if !usesRuntimeSync {
+		bootstrapSelection = client.markBootstrapSnapshotSelected(bootstrapSelection, version, runtimeIdentity)
+	}
 
 	alerts := AlertMessagePayload{Alerts: []AlertDTO{}}
 	if h.alertsFunc != nil {
@@ -135,7 +174,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			},
 		}
 		bootstrapDecision = MessageTypeResyncRequired
-		client.markHTTPRuntimeResyncPending()
 	} else {
 		bootstrapMessage = NewSnapshotMessage(snapshot, version)
 	}
@@ -154,11 +192,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		alerts.Version,
 	)
 
-	if !h.hub.WriteTo(client, bootstrapMessage) {
-		return
-	}
-	if bootstrapDecision == MessageTypeResyncRequired {
-		h.hub.recordOverviewResyncRequired(bootstrapResyncReason, true)
+	if !usesRuntimeSync {
+		bootstrapMessageWritten := true
+		bootstrapWriteOK := false
+		if bootstrapDecision == MessageTypeResyncRequired {
+			bootstrapMessageWritten, bootstrapWriteOK = h.hub.writeHTTPRuntimeResync(
+				client,
+				bootstrapMessage,
+				bootstrapSelection,
+			)
+		} else {
+			bootstrapWriteOK = h.hub.WriteTo(client, bootstrapMessage)
+		}
+		if !bootstrapWriteOK {
+			return
+		}
+		if bootstrapDecision == MessageTypeResyncRequired && bootstrapMessageWritten {
+			h.hub.recordOverviewResyncRequired(bootstrapResyncReason, true)
+		}
 	}
 	if !h.hub.WriteTo(client, NewAlertMessage(alerts.Alerts, alerts.Version)) {
 		return
@@ -170,16 +221,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.promStatusFunc != nil {
 		status := h.promStatusFunc()
 		if status.Enabled {
-			if !h.hub.WriteTo(client, Message{
+			message := Message{
 				Type:    MessageTypePrometheusStatus,
 				Payload: status,
-			}) {
+			}
+			if !h.hub.WriteTo(client, message) {
 				return
 			}
 		}
 	}
 
-	if !h.writeRuntimeCatchUp(client, version, runtimeIdentity, selectedOverviewEpoch, hasHello) {
+	if usesRuntimeSync {
+		h.runtimeSync(client, RuntimeSyncRequest{
+			Cursor: hello.RuntimeCursor,
+			Reason: ResyncReasonClientResync,
+		})
+		client.markBootstrapSnapshotSelected(bootstrapSelection, version, runtimeIdentity)
+	} else if !h.writeRuntimeCatchUp(client, version, runtimeIdentity, bootstrapSelection, hasHello) {
 		return
 	}
 
@@ -189,9 +247,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 	}
 	go client.writePump()
+	writePumpStarted = true
 }
 
-func (h *Handler) writeRuntimeCatchUp(client *Client, selectedVersion uint64, selectedIdentity string, selectedOverviewEpoch uint64, hasHello bool) bool {
+func (h *Handler) writeRuntimeCatchUp(client *Client, selectedVersion uint64, selectedIdentity string, selection overviewBootstrapSelection, hasHello bool) bool {
 	if h.snapshotFunc == nil {
 		return true
 	}
@@ -201,21 +260,27 @@ func (h *Handler) writeRuntimeCatchUp(client *Client, selectedVersion uint64, se
 	if version == selectedVersion && identity == selectedIdentity {
 		return true
 	}
-	if client.overviewEpochChangedSince(selectedOverviewEpoch) {
+	if client.overviewChangedSince(selection) {
 		return true
 	}
 
 	if hasHello {
 		reason := ResyncReasonClientResync
-		client.markHTTPRuntimeResyncPending()
-		h.hub.recordOverviewResyncRequired(reason, true)
-		return h.hub.WriteTo(client, Message{
-			Type: MessageTypeResyncRequired,
-			Payload: ResyncRequiredPayload{
-				Scope:  ResyncScopeOverview,
-				Reason: reason,
+		written, ok := h.hub.writeHTTPRuntimeResync(
+			client,
+			Message{
+				Type: MessageTypeResyncRequired,
+				Payload: ResyncRequiredPayload{
+					Scope:  ResyncScopeOverview,
+					Reason: reason,
+				},
 			},
-		})
+			selection,
+		)
+		if written {
+			h.hub.recordOverviewResyncRequired(reason, true)
+		}
+		return ok
 	}
 	return h.hub.WriteTo(client, NewSnapshotMessage(snapshot, version))
 }
@@ -237,6 +302,8 @@ func debugRuntimeVersion(version *uint64) string {
 func clientHelloFromRequest(r *http.Request) (clientControlMessage, bool) {
 	query := r.URL.Query()
 	if query.Get("canvas_schema_version") == "" &&
+		query.Get("runtime_protocol") == "" &&
+		query.Get("runtime_stream_id") == "" &&
 		query.Get("topology_version") == "" &&
 		query.Get("runtime_version") == "" &&
 		query.Get("runtime_identity") == "" &&
@@ -255,6 +322,11 @@ func clientHelloFromRequest(r *http.Request) (clientControlMessage, bool) {
 			hello.CanvasSchemaVersion = parsed
 		}
 	}
+	if runtimeProtocol := query.Get("runtime_protocol"); runtimeProtocol != "" {
+		if parsed, err := strconv.Atoi(runtimeProtocol); err == nil {
+			hello.RuntimeProtocol = parsed
+		}
+	}
 
 	if runtimeVersion := query.Get("runtime_version"); runtimeVersion != "" {
 		if parsed, err := strconv.ParseUint(runtimeVersion, 10, 64); err == nil {
@@ -267,6 +339,7 @@ func clientHelloFromRequest(r *http.Request) (clientControlMessage, bool) {
 			hello.AlertVersion = &parsed
 		}
 	}
+	hello.RuntimeCursor = runtimeCursor(query.Get("runtime_stream_id"), hello.RuntimeVersion)
 
 	return hello, true
 }

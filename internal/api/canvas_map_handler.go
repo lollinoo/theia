@@ -24,14 +24,14 @@ import (
 
 // CanvasMapHandler represents canvas map handler data used by the HTTP boundary and route policy.
 type CanvasMapHandler struct {
-	mapRepo             domain.CanvasMapRepository
-	mapPositionRepo     domain.CanvasMapPositionRepository
-	legacyPositionRepo  domain.PositionRepository
-	canvasTopology      *CanvasTopologyHandler
-	deviceService       *service.DeviceService
-	linkRepo            domain.LinkRepository
-	areaRepo            domain.AreaRepository
-	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64)
+	mapRepo            domain.CanvasMapRepository
+	mapPositionRepo    domain.CanvasMapPositionRepository
+	legacyPositionRepo domain.PositionRepository
+	canvasTopology     *CanvasTopologyHandler
+	deviceService      *service.DeviceService
+	linkRepo           domain.LinkRepository
+	areaRepo           domain.AreaRepository
+	runtimeStateFunc   ws.RuntimeOverviewStateFunc
 }
 
 // NewCanvasMapHandler wires the HTTP adapter to saved-map repositories and topology collaborators.
@@ -43,17 +43,17 @@ func NewCanvasMapHandler(
 	deviceService *service.DeviceService,
 	linkRepo domain.LinkRepository,
 	areaRepo domain.AreaRepository,
-	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64),
+	runtimeStateFunc ws.RuntimeOverviewStateFunc,
 ) *CanvasMapHandler {
 	return &CanvasMapHandler{
-		mapRepo:             mapRepo,
-		mapPositionRepo:     mapPositionRepo,
-		legacyPositionRepo:  legacyPositionRepo,
-		canvasTopology:      canvasTopology,
-		deviceService:       deviceService,
-		linkRepo:            linkRepo,
-		areaRepo:            areaRepo,
-		runtimeSnapshotFunc: runtimeSnapshotFunc,
+		mapRepo:            mapRepo,
+		mapPositionRepo:    mapPositionRepo,
+		legacyPositionRepo: legacyPositionRepo,
+		canvasTopology:     canvasTopology,
+		deviceService:      deviceService,
+		linkRepo:           linkRepo,
+		areaRepo:           areaRepo,
+		runtimeStateFunc:   runtimeStateFunc,
 	}
 }
 
@@ -740,11 +740,8 @@ func (h *CanvasMapHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if h.runtimeSnapshotFunc != nil {
-		runtimeSnapshot, runtimeVersion := h.runtimeSnapshotFunc()
-		response.RuntimeVersion = &runtimeVersion
-		response.RuntimeSnapshot = ws.CloneSnapshot(runtimeSnapshot)
-		response.RuntimeIdentity = ws.RuntimeIdentityForSnapshot(runtimeSnapshot)
+	if h.runtimeStateFunc != nil {
+		applyRuntimeOverviewState(&response, h.runtimeStateFunc())
 	}
 
 	w.Header().Set("Cache-Control", "no-store")

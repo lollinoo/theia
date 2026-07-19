@@ -29,7 +29,7 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 		deps.positionRepo,
 		deps.areaRepo,
 		deps.vendorRegistry,
-		deps.runtimeSnapshotFunc,
+		deps.runtimeStateFunc,
 	)
 	canvasMapHandler := NewCanvasMapHandler(
 		deps.canvasMapRepo,
@@ -39,8 +39,9 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 		deps.deviceService,
 		deps.linkRepo,
 		deps.areaRepo,
-		deps.runtimeSnapshotFunc,
+		deps.runtimeStateFunc,
 	)
+	runtimeOverviewHandler := NewRuntimeOverviewHandler(deps.runtimeStateFunc)
 	settingsHandler := NewSettingsHandler(deps.settingsRepo)
 	grafanaDashboardHandler := NewGrafanaDashboardHandler(deps.settingsRepo)
 	snmpProfileHandler := NewSNMPProfileHandler(deps.snmpProfileRepo)
@@ -81,6 +82,7 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 			}
 			canvasTopologyHandler.HandleGetCanvas(w, r)
 		}),
+		routeHandlerRuntimeOverview: http.HandlerFunc(runtimeOverviewHandler.Handle),
 		routeHandlerCanvasMapCollection: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.Method {
 			case http.MethodGet:

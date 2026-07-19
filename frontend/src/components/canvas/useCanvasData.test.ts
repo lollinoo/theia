@@ -344,6 +344,143 @@ describe('useCanvasData', () => {
     expect(fetchCanvasBootstrap).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: 'default canvas', mapId: null },
+    { label: 'saved map', mapId: 'map-1' },
+  ])('ignores protocol-v2 stream recovery events on $label without structural fetches or notices', async ({
+    mapId,
+  }) => {
+    const onTopologyAreasChange = vi.fn();
+    const bootstrap = canvasBootstrapResponse({
+      runtime_stream_id: 'runtime-stream-1',
+      runtime_version: 7,
+      runtime_identity: 'rt-sha256:initial',
+      runtime_snapshot: mockSnapshot(),
+    });
+    if (mapId === null) {
+      vi.mocked(fetchCanvasBootstrap).mockResolvedValue(bootstrap);
+    } else {
+      vi.mocked(fetchCanvasMapBootstrap).mockResolvedValue(bootstrap);
+    }
+    const { result } = renderUseCanvasData(null, null, {
+      mapId,
+      mapName: mapId === null ? 'Default' : 'Saved Map',
+      onTopologyAreasChange,
+    });
+
+    await act(async () => {
+      for (let turn = 0; turn < 6; turn += 1) {
+        await Promise.resolve();
+      }
+    });
+
+    vi.mocked(fetchCanvasBootstrap).mockClear();
+    vi.mocked(fetchCanvasMapBootstrap).mockClear();
+    vi.mocked(fetchCanvasTopology).mockClear();
+    vi.mocked(fetchCanvasMapTopology).mockClear();
+    vi.mocked(fetchDevices).mockClear();
+    vi.mocked(fetchLinks).mockClear();
+    vi.mocked(fetchSettings).mockClear();
+    vi.mocked(fetchGrafanaDashboardConfig).mockClear();
+    positionMocks.fetchPositions.mockClear();
+    positionMocks.savePositions.mockClear();
+    onTopologyAreasChange.mockClear();
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent('backend-resync-required', { detail: { strategy: 'stream' } }),
+      );
+      await vi.advanceTimersByTimeAsync(250);
+      for (let turn = 0; turn < 6; turn += 1) {
+        await Promise.resolve();
+      }
+    });
+
+    expect(fetchCanvasBootstrap).not.toHaveBeenCalled();
+    expect(fetchCanvasMapBootstrap).not.toHaveBeenCalled();
+    expect(fetchCanvasTopology).not.toHaveBeenCalled();
+    expect(fetchCanvasMapTopology).not.toHaveBeenCalled();
+    expect(fetchDevices).not.toHaveBeenCalled();
+    expect(fetchLinks).not.toHaveBeenCalled();
+    expect(positionMocks.fetchPositions).not.toHaveBeenCalled();
+    expect(positionMocks.savePositions).not.toHaveBeenCalled();
+    expect(fetchSettings).not.toHaveBeenCalled();
+    expect(fetchGrafanaDashboardConfig).not.toHaveBeenCalled();
+    expect(onTopologyAreasChange).not.toHaveBeenCalled();
+    expect(result.current.topologyRecoveryNotice).toBeNull();
+  });
+
+  it('continues to revalidate structure for topology changes and reconnects', async () => {
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
+    vi.mocked(fetchCanvasTopology)
+      .mockResolvedValueOnce({ status: 'not-modified', etag: '"topo-abc123"' })
+      .mockResolvedValueOnce({ status: 'not-modified', etag: '"topo-abc123"' });
+    renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    vi.mocked(fetchCanvasTopology).mockClear();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('topology-changed'));
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-reconnected'));
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs one merged structural follow-up after the active refresh settles', async () => {
+    const activeRefresh = deferred<CanvasTopologyFetchResult>();
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
+    vi.mocked(fetchCanvasTopology)
+      .mockReturnValueOnce(activeRefresh.promise)
+      .mockResolvedValueOnce({ status: 'not-modified', etag: '"topo-abc123"' });
+    renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-reconnected'));
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('topology-changed'));
+      window.dispatchEvent(new Event('backend-reconnected'));
+      await vi.advanceTimersByTimeAsync(250);
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      activeRefresh.resolve({ status: 'not-modified', etag: '"topo-abc123"' });
+      await activeRefresh.promise;
+      for (let turn = 0; turn < 4; turn += 1) {
+        await Promise.resolve();
+      }
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenCalledTimes(2);
+  });
+
   it('publishes topology areas from the active map load', async () => {
     const onTopologyAreasChange = vi.fn();
     const mapArea = mockArea({ id: 'map-area-1', name: 'Map Local Area' });
@@ -1907,42 +2044,65 @@ describe('useCanvasData', () => {
     expect(getCanvasRuntimeBootstrap()?.snapshot.devices['dev-1'].operational_status).toBe('down');
   });
 
-  it('publishes runtime bootstrap even when the initial topology load becomes stale after map selection', async () => {
+  it('does not let a stale topology load replace the active runtime cursor or snapshot', async () => {
     const initialBootstrap = deferred<ReturnType<typeof canvasBootstrapResponse>>();
+    const activeSnapshot = mockSnapshot({
+      devices: {
+        'dev-1': {
+          ...mockSnapshot().devices['dev-1'],
+          cpu_percent: 84,
+        },
+      },
+    });
     vi.mocked(fetchCanvasBootstrap).mockReturnValueOnce(initialBootstrap.promise);
-    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce(
-      canvasTopologyOkResponse({
-        topology_version: 'topo-primary-map',
-      }),
+    vi.mocked(fetchCanvasMapTopology)
+      .mockResolvedValueOnce(
+        canvasTopologyOkResponse({
+          topology_version: 'topo-primary-map',
+          runtime_stream_id: 'runtime-stream-primary',
+          runtime_version: 7,
+          runtime_identity: 'rt-sha256:primary',
+          runtime_snapshot: activeSnapshot,
+        }),
+      )
+      .mockResolvedValueOnce(
+        canvasTopologyOkResponse({
+          topology_version: 'topo-primary-map',
+        }),
+      );
+
+    const { result, rerender } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      rerender({
+        currentSnapshot: null,
+        currentMapId: 'primary-map',
+        currentMapName: 'Primary Map',
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes[0]?.data.runtime.metrics).toEqual(
+      expect.objectContaining({ cpu_percent: 84 }),
     );
-
-    const { rerender } = renderUseCanvasData(null);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    rerender({
-      currentSnapshot: null,
-      currentMapId: 'primary-map',
-      currentMapName: 'Primary Map',
-    });
-
-    await act(async () => {
-      await Promise.resolve();
-    });
 
     await act(async () => {
       initialBootstrap.resolve(
         canvasBootstrapResponse({
           topology_version: 'topo-stale-default',
+          runtime_stream_id: 'runtime-stream-stale',
           runtime_version: 42,
-          runtime_identity: 'rt-sha256:abc',
+          runtime_identity: 'rt-sha256:stale',
           runtime_snapshot: mockSnapshot({
             devices: {
               'dev-1': {
                 ...mockSnapshot().devices['dev-1'],
-                operational_status: 'down',
+                cpu_percent: 13,
               },
             },
           }),
@@ -1953,11 +2113,20 @@ describe('useCanvasData', () => {
     });
 
     expect(fetchCanvasMapTopology).toHaveBeenCalledWith('primary-map', undefined);
-    expect(getCanvasRuntimeBootstrap()).toMatchObject({
-      runtimeVersion: 42,
-      runtimeIdentity: 'rt-sha256:abc',
+
+    await act(async () => {
+      await result.current.loadTopology(true);
     });
-    expect(getCanvasRuntimeBootstrap()?.snapshot.devices['dev-1'].operational_status).toBe('down');
+
+    expect(fetchCanvasMapTopology).toHaveBeenCalledTimes(2);
+    expect(result.current.nodes[0]?.data.runtime.metrics).toEqual(
+      expect.objectContaining({ cpu_percent: 84 }),
+    );
+    expect(getCanvasRuntimeBootstrap()).toMatchObject({
+      runtimeStreamId: 'runtime-stream-primary',
+      runtimeVersion: 7,
+      runtimeIdentity: 'rt-sha256:primary',
+    });
   });
 
   it('forces runtime bootstrap on backend resync after manual edge migration', async () => {
@@ -2016,7 +2185,9 @@ describe('useCanvasData', () => {
     });
 
     await act(async () => {
-      window.dispatchEvent(new Event('backend-resync-required'));
+      window.dispatchEvent(
+        new CustomEvent('backend-resync-required', { detail: { reason: 'legacy-backend' } }),
+      );
       await vi.advanceTimersByTimeAsync(250);
       await Promise.resolve();
       await Promise.resolve();
@@ -2450,7 +2621,7 @@ describe('useCanvasData', () => {
     expect(result.current.nodes[0].data.pinned).toBe(true);
   });
 
-  it('shows resync-only recovery copy when resync is the sole structural cause', async () => {
+  it('uses structural recovery copy for a legacy backend resync', async () => {
     const { result } = renderUseCanvasData(mockSnapshot());
 
     await act(async () => {
@@ -2467,7 +2638,7 @@ describe('useCanvasData', () => {
 
     expect(result.current.topologyRecoveryNotice).toMatchObject({
       tone: 'success',
-      message: 'Live topology resynced',
+      message: 'Topology refreshed after backend resync',
     });
   });
 

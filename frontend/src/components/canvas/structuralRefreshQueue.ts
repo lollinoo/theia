@@ -12,12 +12,12 @@ export interface StructuralRefreshQueue {
 
 interface StructuralRefreshQueueOptions {
   debounceMs: number;
-  runRefresh: (causes: Set<StructuralRefreshCause>) => void;
+  runRefresh: (causes: Set<StructuralRefreshCause>) => void | Promise<void>;
   setTimeoutFn: (handler: () => void, timeout: number) => number;
   clearTimeoutFn: (timerId: number) => void;
 }
 
-// createStructuralRefreshQueue coalesces backend structural events into one debounced refresh pass.
+// createStructuralRefreshQueue coalesces structural events and serializes asynchronous refreshes.
 export function createStructuralRefreshQueue({
   debounceMs,
   runRefresh,
@@ -26,20 +26,45 @@ export function createStructuralRefreshQueue({
 }: StructuralRefreshQueueOptions): StructuralRefreshQueue {
   const pendingCauses = new Set<StructuralRefreshCause>();
   let timer: number | null = null;
+  let running = false;
+
+  const runPendingRefresh = () => {
+    if (running || pendingCauses.size === 0) {
+      return;
+    }
+
+    const refreshCauses = new Set(pendingCauses);
+    pendingCauses.clear();
+    running = true;
+
+    const settleRefresh = () => {
+      running = false;
+      runPendingRefresh();
+    };
+
+    try {
+      const result = runRefresh(refreshCauses);
+      if (result === undefined) {
+        settleRefresh();
+        return;
+      }
+      void result.then(settleRefresh, settleRefresh);
+    } catch {
+      settleRefresh();
+    }
+  };
 
   return {
     queue(cause: StructuralRefreshCause) {
       pendingCauses.add(cause);
 
-      if (timer !== null) {
+      if (running || timer !== null) {
         return;
       }
 
       timer = setTimeoutFn(() => {
         timer = null;
-        const refreshCauses = new Set(pendingCauses);
-        pendingCauses.clear();
-        runRefresh(refreshCauses);
+        runPendingRefresh();
       }, debounceMs);
     },
 

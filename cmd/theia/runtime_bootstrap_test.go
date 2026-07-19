@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
+	"github.com/lollinoo/theia/internal/ws"
 	"gopkg.in/yaml.v3"
 )
 
@@ -61,6 +63,90 @@ func (stubRuntimeServer) Shutdown(context.Context) error {
 
 type runtimeDebugSettingsRepo struct {
 	values map[string]string
+}
+
+type runtimeWebSocketPipelineStub struct {
+	hub       *ws.Hub
+	syncCalls chan ws.RuntimeSyncRequest
+	ackCalls  chan ws.RuntimeCursor
+}
+
+func (s *runtimeWebSocketPipelineStub) GetOrBuildOverviewSnapshot() (*ws.SnapshotPayload, uint64) {
+	return ws.EmptySnapshot(), 42
+}
+
+func (s *runtimeWebSocketPipelineStub) GetAlerts() ws.AlertMessagePayload {
+	return ws.AlertMessagePayload{}
+}
+
+func (s *runtimeWebSocketPipelineStub) GetPrometheusStatus() ws.PrometheusStatusPayload {
+	return ws.PrometheusStatusPayload{}
+}
+
+func (s *runtimeWebSocketPipelineStub) SyncOverviewClient(client *ws.Client, request ws.RuntimeSyncRequest) {
+	snapshot := ws.EmptySnapshot()
+	s.hub.ReplaceOverviewStream(client, ws.OverviewSyncBatch{
+		Reason:          ws.ResyncReasonClientResync,
+		Mode:            ws.OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   42,
+		RuntimeIdentity: ws.RuntimeIdentityForSnapshot(snapshot),
+		Snapshot:        snapshot,
+	})
+	s.syncCalls <- request
+}
+
+func (s *runtimeWebSocketPipelineStub) ObserveRuntimeAck(_ *ws.Client, cursor ws.RuntimeCursor) {
+	s.ackCalls <- cursor
+}
+
+func TestRuntimeBootstrapWebSocketHandlerWiresRuntimeControls(t *testing.T) {
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := &runtimeWebSocketPipelineStub{
+		hub:       hub,
+		syncCalls: make(chan ws.RuntimeSyncRequest, 1),
+		ackCalls:  make(chan ws.RuntimeCursor, 1),
+	}
+	server := httptest.NewServer(newRuntimeWebSocketHandler(hub, pipeline, nil))
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") +
+		"?runtime_protocol=2&runtime_stream_id=runtime-stream-1&runtime_version=41"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial runtime WebSocket handler: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	wantBootstrapCursor := ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 41, Known: true}
+	select {
+	case request := <-pipeline.syncCalls:
+		if request.Cursor != wantBootstrapCursor {
+			t.Fatalf("bootstrap sync cursor = %#v, want %#v", request.Cursor, wantBootstrapCursor)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for production runtime sync callback")
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeRuntimeAck,
+		"payload": map[string]any{
+			"runtime_stream_id": "runtime-stream-1",
+			"runtime_version":   42,
+		},
+	}); err != nil {
+		t.Fatalf("write production runtime ACK: %v", err)
+	}
+	wantAck := ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 42, Known: true}
+	select {
+	case cursor := <-pipeline.ackCalls:
+		if cursor != wantAck {
+			t.Fatalf("observed runtime ACK = %#v, want %#v", cursor, wantAck)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for production runtime ACK observer")
+	}
 }
 
 func (r runtimeDebugSettingsRepo) Get(key string) (string, error) {
@@ -366,6 +452,135 @@ func TestDockerfileUsesPostgres18ClientTools(t *testing.T) {
 		want := "/usr/lib/postgresql/18/bin/" + tool
 		if !strings.Contains(dockerfile, want) {
 			t.Fatalf("Dockerfile must copy %s from PostgreSQL 18 tools", tool)
+		}
+	}
+}
+
+func TestDeploymentConfigsUsePostgres18(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	imageFiles := []struct {
+		path      string
+		wantCount int
+	}{
+		{path: "docker-compose.yml", wantCount: 1},
+		{path: "docker-compose.prod.yml", wantCount: 1},
+		{path: "docker-compose.staging.yml", wantCount: 1},
+		{path: filepath.Join(".woodpecker", "woodpecker.yml"), wantCount: 1},
+		{path: filepath.Join(".github", "workflows", "ci.yml"), wantCount: 2},
+	}
+
+	for _, file := range imageFiles {
+		t.Run(file.path, func(t *testing.T) {
+			content, err := os.ReadFile(filepath.Join(repoRoot, file.path))
+			if err != nil {
+				t.Fatalf("read %s: %v", file.path, err)
+			}
+			var images []string
+			for _, line := range strings.Split(string(content), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "image: postgres:") {
+					images = append(images, strings.TrimPrefix(line, "image: "))
+				}
+			}
+			if len(images) != file.wantCount {
+				t.Fatalf("%s PostgreSQL image count = %d, want %d", file.path, len(images), file.wantCount)
+			}
+			for _, image := range images {
+				if image != "postgres:18-bookworm" {
+					t.Fatalf("%s PostgreSQL image = %q, want postgres:18-bookworm", file.path, image)
+				}
+			}
+		})
+	}
+
+	volumeFiles := []struct {
+		path            string
+		wantVolume      string
+		forbiddenVolume string
+	}{
+		{
+			path:            "docker-compose.yml",
+			wantVolume:      "theia-postgres18-data:/var/lib/postgresql",
+			forbiddenVolume: "theia-postgres-data:/var/lib/postgresql",
+		},
+		{
+			path:            "docker-compose.prod.yml",
+			wantVolume:      "theia-prod-postgres18-data:/var/lib/postgresql",
+			forbiddenVolume: "theia-prod-postgres-data:/var/lib/postgresql",
+		},
+		{
+			path:            "docker-compose.staging.yml",
+			wantVolume:      "theia-staging-postgres18-data:/var/lib/postgresql",
+			forbiddenVolume: "theia-staging-postgres-data:/var/lib/postgresql",
+		},
+	}
+	for _, file := range volumeFiles {
+		t.Run(file.path+"-volume", func(t *testing.T) {
+			content, err := os.ReadFile(filepath.Join(repoRoot, file.path))
+			if err != nil {
+				t.Fatalf("read %s: %v", file.path, err)
+			}
+			text := string(content)
+			if strings.Contains(text, ":/var/lib/postgresql/data") {
+				t.Fatalf("%s still uses the pre-18 PostgreSQL data mount", file.path)
+			}
+			if !strings.Contains(text, file.wantVolume) {
+				t.Fatalf("%s must contain PostgreSQL volume %q", file.path, file.wantVolume)
+			}
+			if strings.Contains(text, file.forbiddenVolume) {
+				t.Fatalf("%s still reuses legacy PostgreSQL volume %q", file.path, file.forbiddenVolume)
+			}
+		})
+	}
+}
+
+func TestWoodpeckerPipelineUsesWorkflowDirectory(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	legacyPath := filepath.Join(repoRoot, "woodpecker.yml")
+	if _, err := os.Stat(legacyPath); err == nil {
+		t.Fatalf("legacy Woodpecker pipeline %s still exists", legacyPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat legacy Woodpecker pipeline: %v", err)
+	}
+
+	workflowPath := filepath.Join(repoRoot, ".woodpecker", "woodpecker.yml")
+	content, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read Woodpecker workflow pipeline: %v", err)
+	}
+	var workflow map[string]any
+	if err := yaml.Unmarshal(content, &workflow); err != nil {
+		t.Fatalf("parse Woodpecker workflow pipeline: %v", err)
+	}
+	if workflow["steps"] == nil {
+		t.Fatal("Woodpecker workflow pipeline has no steps")
+	}
+}
+
+func TestWoodpeckerImageBuildsPublishPullableManifests(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	workflowPath := filepath.Join(repoRoot, ".woodpecker", "woodpecker.yml")
+	content, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read Woodpecker workflow pipeline: %v", err)
+	}
+
+	var builds []string
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "docker buildx build ") {
+			builds = append(builds, line)
+		}
+	}
+	if len(builds) != 6 {
+		t.Fatalf("Woodpecker image build count = %d, want 6", len(builds))
+	}
+
+	for _, build := range builds {
+		for _, option := range []string{"--push", "--platform linux/amd64", "--provenance=false", "--sbom=false"} {
+			if !strings.Contains(build, option) {
+				t.Fatalf("Woodpecker image build %q missing %s", build, option)
+			}
 		}
 	}
 }

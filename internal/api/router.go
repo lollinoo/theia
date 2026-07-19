@@ -90,7 +90,7 @@ func NewRouter(
 	instanceBackupService *service.InstanceBackupService,
 	restoreRestarter func(),
 	bridgeBinariesDir string,
-	runtimeSnapshotFunc func() (*ws.SnapshotPayload, uint64),
+	runtimeStateFunc ws.RuntimeOverviewStateFunc,
 	wsHandler *ws.Handler,
 	opts ...RouterOption,
 ) http.Handler {
@@ -118,7 +118,7 @@ func NewRouter(
 		instanceBackupService: instanceBackupService,
 		restoreRestarter:      restoreRestarter,
 		bridgeBinariesDir:     bridgeBinariesDir,
-		runtimeSnapshotFunc:   runtimeSnapshotFunc,
+		runtimeStateFunc:      runtimeStateFunc,
 		wsHandler:             wsHandler,
 	}
 

@@ -7,6 +7,7 @@ import type { SnapshotPayload } from '../types/metrics';
 /** Describes the canvas runtime bootstrap contract used by the React hook lifecycle. */
 export interface CanvasRuntimeBootstrap {
   snapshot: SnapshotPayload;
+  runtimeStreamId?: string;
   runtimeVersion?: number;
   runtimeIdentity?: string;
 }

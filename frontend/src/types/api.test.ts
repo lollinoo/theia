@@ -8,7 +8,22 @@ import {
   parseCanvasMapsResponse,
   parseCanvasTopologyResponse,
   parseDevicesResponse,
+  parseRuntimeOverviewResponse,
 } from './api';
+
+function runtimeOverviewPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: 1,
+    runtime_stream_id: 'runtime-stream-42',
+    runtime_version: 42,
+    runtime_identity: 'rt-sha256:exact',
+    runtime_snapshot: {
+      devices: {},
+      links: {},
+    },
+    ...overrides,
+  };
+}
 
 function deviceResource(id: string, deviceType: string) {
   return {
@@ -276,6 +291,7 @@ describe('parseCanvasTopologyResponse', () => {
       schema_version: 1,
       topology_version: 'topo-abc123',
       runtime_version: 456,
+      runtime_stream_id: 'runtime-stream-456',
       runtime_identity: 'rt-sha256:abc',
       runtime_snapshot: {
         devices: {
@@ -363,6 +379,7 @@ describe('parseCanvasTopologyResponse', () => {
     expect(topology.schema_version).toBe(1);
     expect(topology.topology_version).toBe('topo-abc123');
     expect(topology.runtime_version).toBe(456);
+    expect(topology.runtime_stream_id).toBe('runtime-stream-456');
     expect(topology.runtime_identity).toBe('rt-sha256:abc');
     expect(topology.runtime_snapshot?.devices['router-1'].operational_status).toBe('down');
     expect(topology.map?.id).toBe('map-1');
@@ -408,5 +425,67 @@ describe('parseCanvasTopologyResponse', () => {
         }),
       ),
     ).toThrow('invalid canvas map filter');
+  });
+});
+
+describe('parseRuntimeOverviewResponse', () => {
+  it('parses an exact runtime cursor and returns an unaliased snapshot', () => {
+    const payload = runtimeOverviewPayload();
+
+    const result = parseRuntimeOverviewResponse(payload);
+
+    expect(result).toEqual({
+      schema_version: 1,
+      runtime_stream_id: 'runtime-stream-42',
+      runtime_version: 42,
+      runtime_identity: 'rt-sha256:exact',
+      runtime_snapshot: { devices: {}, links: {} },
+    });
+    expect(result.runtime_snapshot).not.toBe(payload.runtime_snapshot);
+    (result.runtime_snapshot.devices as Record<string, unknown>)['device-new'] = {};
+    expect(payload.runtime_snapshot.devices).toEqual({});
+  });
+
+  it.each([
+    ['missing schema', { schema_version: undefined }],
+    ['unsupported schema', { schema_version: 2 }],
+    ['string schema', { schema_version: '1' }],
+    ['missing stream', { runtime_stream_id: undefined }],
+    ['empty stream', { runtime_stream_id: '' }],
+    ['blank stream', { runtime_stream_id: '   ' }],
+    ['missing version', { runtime_version: undefined }],
+    ['negative version', { runtime_version: -1 }],
+    ['fractional version', { runtime_version: 1.5 }],
+    ['unsafe version', { runtime_version: Number.MAX_SAFE_INTEGER + 1 }],
+    ['non-finite version', { runtime_version: Number.POSITIVE_INFINITY }],
+    ['missing identity', { runtime_identity: undefined }],
+    ['empty identity', { runtime_identity: '' }],
+    ['blank identity', { runtime_identity: '  ' }],
+    ['non-string identity', { runtime_identity: 7 }],
+    ['missing snapshot', { runtime_snapshot: undefined }],
+    ['malformed snapshot', { runtime_snapshot: { devices: {} } }],
+  ])('rejects %s', (_name, overrides) => {
+    const payload = runtimeOverviewPayload(overrides);
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) {
+        delete (payload as Record<string, unknown>)[key];
+      }
+    }
+
+    expect(() => parseRuntimeOverviewResponse(payload)).toThrow(
+      'invalid runtime overview response',
+    );
+  });
+
+  it('rejects legacy alias fields in place of the exact runtime contract', () => {
+    expect(() =>
+      parseRuntimeOverviewResponse({
+        schema_version: 1,
+        stream_id: 'runtime-stream-42',
+        version: 42,
+        identity: 'rt-sha256:exact',
+        snapshot: { devices: {}, links: {} },
+      }),
+    ).toThrow('invalid runtime overview response');
   });
 });
