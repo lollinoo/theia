@@ -19,6 +19,8 @@ type pipelineRuntimeState struct {
 	mu                   sync.RWMutex
 	lastSnapshot         *ws.SnapshotPayload
 	overviewVersion      uint64
+	overviewStreamID     string
+	overviewJournal      *overviewJournal
 	topologyVersion      uint64
 	alertVersion         uint64
 	promStatus           ws.PrometheusStatusPayload
@@ -46,6 +48,8 @@ type counterWalkCooldownState struct {
 func newPipelineRuntimeState(initialPromStatus ws.PrometheusStatusPayload) *pipelineRuntimeState {
 	return &pipelineRuntimeState{
 		lastSnapshot:         ws.EmptySnapshot(),
+		overviewStreamID:     uuid.NewString(),
+		overviewJournal:      newOverviewJournal(overviewJournalCapacity, overviewJournalMaxBytes),
 		promStatus:           initialPromStatus,
 		hostnames:            make(map[uuid.UUID]string),
 		hostnameObservedAt:   make(map[uuid.UUID]time.Time),

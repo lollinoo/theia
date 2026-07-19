@@ -25,8 +25,8 @@ networks:
 volumes:
   theia-staging-data:
     name: theia-staging-data
-  theia-staging-postgres-data:
-    name: theia-staging-postgres-data
+  theia-staging-postgres18-data:
+    name: theia-staging-postgres18-data
 
 services:
   # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ services:
       start_period: 10s
 
   postgres:
-    image: postgres:17
+    image: postgres:18-bookworm
     container_name: theia-staging-postgres
     restart: unless-stopped
     networks:
@@ -77,7 +77,7 @@ services:
     ports:
       - "${POSTGRES_BIND_ADDR:-127.0.0.1}:${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
-      - theia-staging-postgres-data:/var/lib/postgresql/data
+      - theia-staging-postgres18-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-theia} -d ${POSTGRES_DB:-theia}"]
       interval: 10s

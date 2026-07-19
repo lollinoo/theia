@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const supportedPostgresCLIToolMajorVersion = 17
+const supportedPostgresCLIToolMajorVersion = 18
 
 var postgresCLIToolVersionPattern = regexp.MustCompile(`(?i)\(PostgreSQL\)[[:space:]]+([0-9]+)(?:\.[0-9]+)?(?:[[:space:]]|$)`)
 

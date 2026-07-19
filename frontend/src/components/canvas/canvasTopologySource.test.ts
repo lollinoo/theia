@@ -97,6 +97,7 @@ describe('canvasTopologySource', () => {
         positions: {
           'dev-1': { device_id: 'dev-1', x: 10, y: 20, pinned: true },
         },
+        runtime_stream_id: 'runtime-stream-default',
         runtime_version: 7,
         runtime_identity: 'rt-sha256:abc',
         runtime_snapshot: runtimeSnapshot,
@@ -123,6 +124,7 @@ describe('canvasTopologySource', () => {
       areas: [],
       etag: '"topo-1"',
       topologyVersion: 'topo-1',
+      runtimeStreamId: 'runtime-stream-default',
       runtimeVersion: 7,
       runtimeIdentity: 'rt-sha256:abc',
       runtimeSnapshot,
@@ -131,6 +133,36 @@ describe('canvasTopologySource', () => {
     expect(result.status === 'ok' ? result.positions : null).toEqual(
       new Map([['dev-1', { x: 10, y: 20, pinned: true }]]),
     );
+  });
+
+  it('loads saved map bootstrap topology with the full runtime cursor', async () => {
+    const runtimeSnapshot = { devices: {}, links: {} } as SnapshotPayload;
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce({
+      topology: canvasTopologyResponse({
+        runtime_stream_id: 'runtime-stream-map-1',
+        runtime_version: 11,
+        runtime_identity: 'rt-sha256:map-1',
+        runtime_snapshot: runtimeSnapshot,
+      }),
+    });
+    const fetchPositions = vi.fn(async () => new Map<string, PositionState>());
+
+    const result = await loadCanvasTopologySource({
+      mapId: 'map-1',
+      fetchPositions,
+      etag: null,
+      includeRuntimeBootstrap: true,
+    });
+
+    expect(fetchCanvasMapBootstrap).toHaveBeenCalledWith('map-1', { force: false });
+    expect(fetchCanvasBootstrap).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: 'ok',
+      runtimeStreamId: 'runtime-stream-map-1',
+      runtimeVersion: 11,
+      runtimeIdentity: 'rt-sha256:map-1',
+      runtimeSnapshot,
+    });
   });
 
   it('returns saved map not-modified responses with the response ETag', async () => {

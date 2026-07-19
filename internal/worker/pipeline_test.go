@@ -3,10 +3,14 @@ package worker
 // This file exercises pipeline behavior so refactors preserve the documented contract.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
+	"math"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -18,9 +22,11 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/gosnmp/gosnmp"
 
+	theiaapi "github.com/lollinoo/theia/internal/api"
 	"github.com/lollinoo/theia/internal/cache"
 	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/polling"
 	"github.com/lollinoo/theia/internal/scheduler"
@@ -2116,6 +2122,386 @@ func TestPipelineOrchestratorStopIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestPipelineOrchestratorStopClearsRuntimeRecoveryTracking(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		name := "never started"
+		if started {
+			name = "started"
+		}
+		t.Run(name, func(t *testing.T) {
+			registry := observability.ResetDefaultForTest()
+			t.Cleanup(func() {
+				observability.ResetDefaultForTest()
+			})
+			pipeline := NewPipelineOrchestrator(
+				newPipelineTestScheduler(),
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+			)
+			if started {
+				if err := pipeline.Start(context.Background()); err != nil {
+					t.Fatalf("Start() error = %v", err)
+				}
+			}
+
+			pipeline.runtimeRecoveryTTL = 50 * time.Millisecond
+			client := &ws.Client{}
+			pipeline.overviewBuildMu.Lock()
+			pipeline.recordRuntimeRecoveryScheduledLocked(
+				client,
+				ws.OverviewSyncBatch{
+					Mode:            ws.OverviewSyncModeCurrent,
+					RuntimeStreamID: "runtime-stream-1",
+					TargetVersion:   42,
+				},
+				ws.ResyncReasonClientResync,
+				pipeline.clockNow(),
+			)
+			pipeline.armRuntimeRecoveryTimerLocked(pipeline.clockNow())
+			generationBeforeStop := pipeline.runtimeRecoveryTimerGen
+			pipeline.overviewBuildMu.Unlock()
+
+			pipeline.Stop()
+			pipeline.Stop()
+
+			pipeline.overviewBuildMu.Lock()
+			remaining := len(pipeline.runtimeRecoveryAttempts)
+			timer := pipeline.runtimeRecoveryTimer
+			generationAfterStop := pipeline.runtimeRecoveryTimerGen
+			pipeline.overviewBuildMu.Unlock()
+			if remaining != 0 || timer != nil {
+				t.Fatalf("Stop() left attempts=%d timer=%v", remaining, timer)
+			}
+			if generationAfterStop <= generationBeforeStop {
+				t.Fatalf(
+					"Stop() timer generation = %d, want newer than %d",
+					generationAfterStop,
+					generationBeforeStop,
+				)
+			}
+
+			time.Sleep(2 * pipeline.runtimeRecoveryTTL)
+			body := string(registry.MarshalPrometheus())
+			assertPipelineRecoveryCountersZero(
+				t,
+				body,
+				`mode="current",outcome="failed",reason="client_resync_scheduled"`,
+			)
+		})
+	}
+}
+
+func TestPipelineOrchestratorContextCancellationClearsRuntimeRecoveryTracking(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	t.Cleanup(func() {
+		observability.ResetDefaultForTest()
+	})
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := pipeline.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	pipeline.lifecycleMu.Lock()
+	runDone := pipeline.done
+	pipeline.lifecycleMu.Unlock()
+
+	pipeline.runtimeRecoveryTTL = 50 * time.Millisecond
+	pipeline.overviewBuildMu.Lock()
+	pipeline.recordRuntimeRecoveryScheduledLocked(
+		&ws.Client{},
+		ws.OverviewSyncBatch{
+			Mode:            ws.OverviewSyncModeCurrent,
+			RuntimeStreamID: "runtime-stream-1",
+			TargetVersion:   42,
+		},
+		ws.ResyncReasonClientResync,
+		pipeline.clockNow(),
+	)
+	pipeline.armRuntimeRecoveryTimerLocked(pipeline.clockNow())
+	generationBeforeCancel := pipeline.runtimeRecoveryTimerGen
+	pipeline.overviewBuildMu.Unlock()
+
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		pipeline.clearRuntimeRecoveryTracking()
+		t.Fatal("pipeline run did not stop after context cancellation")
+	}
+	pipeline.overviewBuildMu.Lock()
+	remaining := len(pipeline.runtimeRecoveryAttempts)
+	timer := pipeline.runtimeRecoveryTimer
+	generationAfterCancel := pipeline.runtimeRecoveryTimerGen
+	pipeline.overviewBuildMu.Unlock()
+	if remaining != 0 || timer != nil {
+		pipeline.clearRuntimeRecoveryTracking()
+		t.Fatalf("context cancellation left attempts=%d timer=%v", remaining, timer)
+	}
+	if generationAfterCancel <= generationBeforeCancel {
+		t.Fatalf(
+			"context cancellation timer generation = %d, want newer than %d",
+			generationAfterCancel,
+			generationBeforeCancel,
+		)
+	}
+
+	time.Sleep(2 * pipeline.runtimeRecoveryTTL)
+	body := string(registry.MarshalPrometheus())
+	assertPipelineRecoveryCountersZero(
+		t,
+		body,
+		`mode="current",outcome="failed",reason="client_resync_scheduled"`,
+	)
+	if err := pipeline.Start(context.Background()); err != nil {
+		t.Fatalf("Start() after context cancellation error = %v", err)
+	}
+	pipeline.Stop()
+}
+
+func TestPipelineOrchestratorGetOrBuildAfterShutdownDoesNotRestartRuntimeRecovery(t *testing.T) {
+	for _, shutdown := range []string{"stop", "context_cancel"} {
+		t.Run(shutdown, func(t *testing.T) {
+			registry := observability.ResetDefaultForTest()
+			t.Cleanup(func() {
+				observability.ResetDefaultForTest()
+			})
+			pipeline, _, _, _, _ := newBroadcastTestPipeline(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			if err := pipeline.Start(ctx); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+
+			switch shutdown {
+			case "stop":
+				pipeline.Stop()
+			case "context_cancel":
+				pipeline.lifecycleMu.Lock()
+				runDone := pipeline.done
+				pipeline.lifecycleMu.Unlock()
+				cancel()
+				select {
+				case <-runDone:
+				case <-time.After(2 * time.Second):
+					pipeline.Stop()
+					t.Fatal("pipeline run did not stop after context cancellation")
+				}
+				t.Cleanup(pipeline.Stop)
+			default:
+				t.Fatalf("unsupported shutdown mode %q", shutdown)
+			}
+
+			pipeline.runtimeRecoveryTTL = 50 * time.Millisecond
+			pipeline.overviewBuildMu.Lock()
+			pipeline.runtime.mu.Lock()
+			pipeline.runtime.prevHashes = nil
+			pipeline.runtime.mu.Unlock()
+			pipeline.overviewBuildMu.Unlock()
+
+			state := pipeline.GetOrBuildOverviewState()
+			if state.Snapshot == nil || state.StreamID == "" {
+				t.Fatalf("GetOrBuildOverviewState() = %#v, want rebuilt state", state)
+			}
+			pipeline.overviewBuildMu.Lock()
+			remaining := len(pipeline.runtimeRecoveryAttempts)
+			timer := pipeline.runtimeRecoveryTimer
+			pipeline.overviewBuildMu.Unlock()
+			if remaining != 0 || timer != nil {
+				pipeline.clearRuntimeRecoveryTracking()
+				t.Fatalf("post-shutdown getter left attempts=%d timer=%v", remaining, timer)
+			}
+
+			time.Sleep(2 * pipeline.runtimeRecoveryTTL)
+			body := string(registry.MarshalPrometheus())
+			assertPipelineRecoveryCountersZero(
+				t,
+				body,
+				`outcome="failed",reason="client_resync_scheduled"`,
+			)
+		})
+	}
+}
+
+func TestPipelineOrchestratorStopPreventsRestartBeforeFinalRecoveryCleanup(t *testing.T) {
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	if err := pipeline.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	stopReturned := make(chan struct{})
+	go func() {
+		pipeline.Stop()
+		close(stopReturned)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !pipeline.stopping.Load() {
+		if time.Now().After(deadline) {
+			pipeline.overviewBuildMu.Unlock()
+			t.Fatal("Stop() did not enter the stopping state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	restartErr := pipeline.Start(context.Background())
+	pipeline.overviewBuildMu.Unlock()
+
+	select {
+	case <-stopReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() did not return after recovery cleanup was released")
+	}
+	if restartErr == nil {
+		pipeline.Stop()
+	}
+	if !errors.Is(restartErr, ErrAlreadyStarted) {
+		t.Fatalf("overlapping Start() error = %v, want ErrAlreadyStarted", restartErr)
+	}
+
+	if err := pipeline.Start(context.Background()); err != nil {
+		t.Fatalf("Start() after Stop() error = %v", err)
+	}
+	if pipeline.Status() != "running" {
+		t.Fatalf("pipeline status after restart = %q, want running", pipeline.Status())
+	}
+	pipeline.Stop()
+}
+
+func TestPipelineOrchestratorStopRejectsRuntimeSyncAfterFinalRecoveryCleanup(t *testing.T) {
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 42)
+	_, client, release := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 42, Known: true},
+		false,
+	)
+	defer release()
+	if err := pipeline.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.recordRuntimeRecoveryScheduledLocked(
+		client,
+		ws.OverviewSyncBatch{
+			Mode:            ws.OverviewSyncModeCurrent,
+			RuntimeStreamID: "runtime-stream-1",
+			TargetVersion:   42,
+		},
+		ws.ResyncReasonClientResync,
+		pipeline.clockNow(),
+	)
+	pipeline.armRuntimeRecoveryTimerLocked(pipeline.clockNow())
+	generationBeforeStop := pipeline.runtimeRecoveryTimerGen
+	pipeline.overviewBuildMu.Unlock()
+
+	pipeline.overviewBuildMu.Lock()
+	stopReturned := make(chan struct{})
+	go func() {
+		pipeline.Stop()
+		close(stopReturned)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !pipeline.stopping.Load() {
+		if time.Now().After(deadline) {
+			pipeline.overviewBuildMu.Unlock()
+			t.Fatal("Stop() did not enter the stopping state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	pipeline.lifecycleMu.Lock()
+	pipeline.overviewBuildMu.Unlock()
+
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		pipeline.overviewBuildMu.Lock()
+		generation := pipeline.runtimeRecoveryTimerGen
+		pipeline.overviewBuildMu.Unlock()
+		if generation >= generationBeforeStop+2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			pipeline.lifecycleMu.Unlock()
+			t.Fatal("pipeline shutdown did not complete its pre-final recovery cleanup passes")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	syncReturned := make(chan struct{})
+	go func() {
+		pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{Reason: ws.ResyncReasonClientResync})
+		close(syncReturned)
+	}()
+	select {
+	case <-syncReturned:
+	case <-time.After(2 * time.Second):
+		pipeline.lifecycleMu.Unlock()
+		t.Fatal("runtime sync did not return while pipeline was stopping")
+	}
+	pipeline.overviewBuildMu.Lock()
+	attemptsDuringStop := len(pipeline.runtimeRecoveryAttempts)
+	timerDuringStop := pipeline.runtimeRecoveryTimer
+	pipeline.overviewBuildMu.Unlock()
+	pipeline.lifecycleMu.Unlock()
+
+	select {
+	case <-stopReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() did not return after lifecycle transition was released")
+	}
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{Reason: ws.ResyncReasonClientResync})
+	pipeline.overviewBuildMu.Lock()
+	attemptsAfterStop := len(pipeline.runtimeRecoveryAttempts)
+	timerAfterStop := pipeline.runtimeRecoveryTimer
+	pipeline.overviewBuildMu.Unlock()
+	if attemptsDuringStop != 0 || timerDuringStop != nil || attemptsAfterStop != 0 || timerAfterStop != nil {
+		pipeline.clearRuntimeRecoveryTracking()
+		t.Fatalf(
+			"runtime sync recreated tracking during Stop(): during=(%d,%v) after=(%d,%v)",
+			attemptsDuringStop,
+			timerDuringStop,
+			attemptsAfterStop,
+			timerAfterStop,
+		)
+	}
+}
+
 func TestPipelineOrchestratorStartRollsBackStoreWhenSchedulerStartFails(t *testing.T) {
 	sched := newPipelineTestScheduler()
 	sched.startErr = errors.New("boom")
@@ -3966,10 +4352,13 @@ func TestPipelineOrchestratorBroadcastDirty_DirtyDeviceWithStaleBaseUsesFullSnap
 func TestPipelineOrchestratorGetOrBuildOverviewSnapshotConcurrentRebuildsShareSingleBuildAndVersion(t *testing.T) {
 	pipeline, _, _, _, _ := newNoClientBroadcastTestPipeline(t)
 
+	previousStreamID := "runtime-stream-before-rebuild"
 	pipeline.runtime.mu.Lock()
 	pipeline.runtime.prevHashes = nil
 	pipeline.runtime.overviewVersion = 10
+	pipeline.runtime.overviewStreamID = previousStreamID
 	pipeline.runtime.mu.Unlock()
+	pipeline.runtime.overviewJournal.Append(9, 10, ws.EmptyRuntimeDeltaPayload())
 
 	previousSnapshotAll := snapshotAllPipelineState
 	previousSnapshotFor := snapshotPipelineStateFor
@@ -4041,6 +4430,1285 @@ func TestPipelineOrchestratorGetOrBuildOverviewSnapshotConcurrentRebuildsShareSi
 	}
 	if versions[0] != 11 {
 		t.Fatalf("shared version = %d, want 11", versions[0])
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.RLock()
+	rebuiltStreamID := pipeline.runtime.overviewStreamID
+	pipeline.runtime.mu.RUnlock()
+	replay, replayable := pipeline.runtime.overviewJournal.Replay(9, 10)
+	journalEntries := len(pipeline.runtime.overviewJournal.entries)
+	pipeline.overviewBuildMu.Unlock()
+	if rebuiltStreamID == previousStreamID {
+		t.Fatalf("getter rebuild kept stream ID %q", rebuiltStreamID)
+	}
+	if _, err := uuid.Parse(rebuiltStreamID); err != nil {
+		t.Fatalf("getter rebuild stream ID %q is not a UUID: %v", rebuiltStreamID, err)
+	}
+	if replayable || replay != nil || journalEntries != 0 {
+		t.Fatalf("getter rebuild retained journal replay=%#v replayable=%t entries=%d", replay, replayable, journalEntries)
+	}
+}
+
+func TestGetOrBuildOverviewStateReturnsClonedAtomicState(t *testing.T) {
+	pipeline, _, _, _, deviceID := newNoClientBroadcastTestPipeline(t)
+
+	first := pipeline.GetOrBuildOverviewState()
+	if first.StreamID == "" {
+		t.Fatal("overview stream ID is empty")
+	}
+	if _, err := uuid.Parse(first.StreamID); err != nil {
+		t.Fatalf("overview stream ID %q is not a UUID: %v", first.StreamID, err)
+	}
+	if first.Snapshot == nil {
+		t.Fatal("overview snapshot is nil")
+	}
+	if _, ok := first.Snapshot.Devices[deviceID.String()]; !ok {
+		t.Fatalf("overview snapshot does not contain device %s", deviceID)
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.RLock()
+	storedSnapshot := pipeline.runtime.lastSnapshot
+	storedVersion := pipeline.runtime.overviewVersion
+	storedStreamID := pipeline.runtime.overviewStreamID
+	pipeline.runtime.mu.RUnlock()
+	pipeline.overviewBuildMu.Unlock()
+	if first.Snapshot == storedSnapshot {
+		t.Fatal("GetOrBuildOverviewState leaked the stored snapshot")
+	}
+	if first.Version != storedVersion || first.StreamID != storedStreamID {
+		t.Fatalf(
+			"overview state tuple = (%d, %q), want (%d, %q)",
+			first.Version,
+			first.StreamID,
+			storedVersion,
+			storedStreamID,
+		)
+	}
+
+	delete(first.Snapshot.Devices, deviceID.String())
+	second := pipeline.GetOrBuildOverviewState()
+	if second.Version != first.Version || second.StreamID != first.StreamID {
+		t.Fatalf(
+			"unchanged overview state tuple = (%d, %q), want (%d, %q)",
+			second.Version,
+			second.StreamID,
+			first.Version,
+			first.StreamID,
+		)
+	}
+	if _, ok := second.Snapshot.Devices[deviceID.String()]; !ok {
+		t.Fatalf("mutating returned state removed stored device %s", deviceID)
+	}
+}
+
+func TestGetOrBuildOverviewStateConcurrentGettersObservePublishedTuple(t *testing.T) {
+	pipeline, _, _, _, _ := newNoClientBroadcastTestPipeline(t)
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = ws.EmptySnapshot()
+	pipeline.runtime.prevHashes = computeSnapshotHashes(pipeline.runtime.lastSnapshot)
+	pipeline.runtime.overviewVersion = 1
+	pipeline.runtime.overviewStreamID = "stream-1"
+	pipeline.runtime.mu.Unlock()
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.overviewVersion = 2
+	pipeline.runtime.mu.Unlock()
+
+	const callers = 8
+	results := make(chan ws.RuntimeOverviewState, callers)
+	releaseGetters := make(chan struct{})
+	var ready sync.WaitGroup
+	var done sync.WaitGroup
+	ready.Add(callers)
+	done.Add(callers)
+	for range callers {
+		go func() {
+			defer done.Done()
+			ready.Done()
+			<-releaseGetters
+			results <- pipeline.GetOrBuildOverviewState()
+		}()
+	}
+	ready.Wait()
+
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.overviewStreamID = "stream-2"
+	pipeline.runtime.mu.Unlock()
+	pipeline.overviewBuildMu.Unlock()
+	close(releaseGetters)
+	done.Wait()
+	close(results)
+
+	for state := range results {
+		if state.Version != 2 || state.StreamID != "stream-2" {
+			t.Fatalf("concurrent overview state tuple = (%d, %q), want (2, %q)", state.Version, state.StreamID, "stream-2")
+		}
+	}
+}
+
+func TestOverviewMailboxRecoverySelectsCurrentReplayAndLegacySnapshot(t *testing.T) {
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		nil,
+		nil,
+		hub,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+
+	v2Conn, v2Client, releaseV2 := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		false,
+	)
+	defer releaseV2()
+	legacyConn, legacyClient, releaseLegacy := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		0,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		false,
+	)
+	defer releaseLegacy()
+
+	if got := v2Client.RuntimeProtocol(); got != ws.RuntimeStreamProtocolVersion {
+		t.Fatalf("protocol-v2 client capability = %d, want %d", got, ws.RuntimeStreamProtocolVersion)
+	}
+	if got := v2Client.AckedRuntimeCursor(); got != (ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}) {
+		t.Fatalf("protocol-v2 ACK cursor = %#v, want runtime-stream-1/92", got)
+	}
+
+	pipeline.SyncOverviewClient(v2Client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	current := readRuntimeRecoveryMessages(t, v2Conn, 1)
+	assertRuntimeRecoveryMessageTypes(t, current, ws.MessageTypeReady)
+	var currentReady ws.ReadyPayload
+	decodeRuntimeRecoveryPayload(t, current[0], &currentReady)
+	if currentReady.SyncMode != string(ws.OverviewSyncModeCurrent) || currentReady.RuntimeVersion != 92 {
+		t.Fatalf("current ready payload = %#v, want current/92", currentReady)
+	}
+
+	advanceRuntimeRecoveryState(t, pipeline, 92, 93, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "degraded"}},
+		Links:   map[string]map[string]any{},
+	})
+	advanceRuntimeRecoveryState(t, pipeline, 93, 94, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up_fresh"}},
+		Links:   map[string]map[string]any{},
+	})
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, v2Conn, 2),
+		ws.MessageTypeRuntimeDelta,
+		ws.MessageTypeRuntimeDelta,
+	)
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, legacyConn, 2),
+		ws.MessageTypeRuntimeDelta,
+		ws.MessageTypeRuntimeDelta,
+	)
+
+	pipeline.SyncOverviewClient(v2Client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	replay := readRuntimeRecoveryMessages(t, v2Conn, 3)
+	assertRuntimeRecoveryMessageTypes(t, replay, ws.MessageTypeResyncRequired, ws.MessageTypeRuntimeReplay, ws.MessageTypeReady)
+	var replayState ws.RuntimeReplayMessagePayload
+	decodeRuntimeRecoveryPayload(t, replay[1], &replayState)
+	if replayState.FromVersion != 92 || replayState.Version != 94 || replayState.RuntimeStreamID != "runtime-stream-1" {
+		t.Fatalf("replay payload = %#v, want runtime-stream-1 92->94", replayState)
+	}
+
+	pipeline.SyncOverviewClient(legacyClient, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	legacy := readRuntimeRecoveryMessages(t, legacyConn, 3)
+	assertRuntimeRecoveryMessageTypes(t, legacy, ws.MessageTypeResyncRequired, ws.MessageTypeSnapshot, ws.MessageTypeReady)
+	for _, message := range legacy {
+		if message.Type == ws.MessageTypeRuntimeReplay {
+			t.Fatal("legacy client received runtime_replay")
+		}
+	}
+
+	pipeline.SyncOverviewClient(v2Client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "obsolete-stream", Version: 94, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	wrongStream := readRuntimeRecoveryMessages(t, v2Conn, 3)
+	assertRuntimeRecoveryMessageTypes(t, wrongStream, ws.MessageTypeResyncRequired, ws.MessageTypeSnapshot, ws.MessageTypeReady)
+}
+
+func TestOverviewMailboxRecoveryFallsBackWhenSameStreamClientCursorDiffersFromRequest(t *testing.T) {
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		nil,
+		nil,
+		hub,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+
+	conn, client, release := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		false,
+	)
+	defer release()
+
+	advanceRuntimeRecoveryState(t, pipeline, 92, 93, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "degraded"}},
+		Links:   map[string]map[string]any{},
+	})
+	advanceRuntimeRecoveryState(t, pipeline, 93, 94, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up_fresh"}},
+		Links:   map[string]map[string]any{},
+	})
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, conn, 2),
+		ws.MessageTypeRuntimeDelta,
+		ws.MessageTypeRuntimeDelta,
+	)
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeHello,
+		"payload": map[string]any{
+			"runtime_protocol":  ws.RuntimeStreamProtocolVersion,
+			"runtime_stream_id": "runtime-stream-1",
+			"runtime_version":   93,
+		},
+	}); err != nil {
+		t.Fatalf("advance runtime recovery client cursor: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for client.AckedRuntimeCursor().Version != 93 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := client.AckedRuntimeCursor(); got.StreamID != "runtime-stream-1" || got.Version != 93 {
+		t.Fatalf("advanced runtime cursor = %#v, want runtime-stream-1/93", got)
+	}
+
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	messages := readRuntimeRecoveryMessages(t, conn, 3)
+	assertRuntimeRecoveryMessageTypes(t, messages, ws.MessageTypeResyncRequired, ws.MessageTypeSnapshot, ws.MessageTypeReady)
+}
+
+func TestOverviewMailboxRecoveryCurrentRequestFallsBackWhenLiveClientCursorIsBehind(t *testing.T) {
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		nil,
+		nil,
+		hub,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 93)
+
+	conn, client, release := attachRuntimeRecoveryClient(
+		t,
+		hub,
+		pipeline.GetOverviewSnapshot,
+		ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 93, Known: true},
+		false,
+	)
+	defer release()
+	advanceRuntimeRecoveryState(t, pipeline, 93, 94, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up_fresh"}},
+		Links:   map[string]map[string]any{},
+	})
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, conn, 1),
+		ws.MessageTypeRuntimeDelta,
+	)
+	if got := client.AckedRuntimeCursor(); got != (ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 93, Known: true}) {
+		t.Fatalf("live client cursor = %#v, want runtime-stream-1/93", got)
+	}
+
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 94, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	first := readRuntimeRecoveryMessages(t, conn, 1)
+	if first[0].Type == ws.MessageTypeReady {
+		t.Fatal("current request emitted ready-only target 94 while live client ACK remained at 93")
+	}
+	recovery := append(first, readRuntimeRecoveryMessages(t, conn, 2)...)
+	assertRuntimeRecoveryMessageTypes(t, recovery, ws.MessageTypeResyncRequired, ws.MessageTypeSnapshot, ws.MessageTypeReady)
+}
+
+func TestRuntimeRecoveryMatchingQueryHelloSchedulesOneReplay(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+	advanceRuntimeRecoveryState(t, pipeline, 92, 93, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "degraded"}},
+		Links:   map[string]map[string]any{},
+	})
+
+	server := httptest.NewServer(ws.NewHandler(
+		hub,
+		pipeline.GetOverviewSnapshot,
+		func() ws.AlertMessagePayload { return ws.AlertMessagePayload{Alerts: []ws.AlertDTO{}} },
+		nil,
+		ws.WithRuntimeSync(pipeline.SyncOverviewClient),
+		ws.WithRuntimeAck(pipeline.ObserveRuntimeAck),
+	))
+	t.Cleanup(server.Close)
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+
+			"?runtime_protocol=2&runtime_stream_id=runtime-stream-1&runtime_version=92",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial query runtime recovery client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	bootstrap := readRuntimeRecoveryMessages(t, conn, 4)
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		bootstrap,
+		ws.MessageTypeAlert,
+		ws.MessageTypeResyncRequired,
+		ws.MessageTypeRuntimeReplay,
+		ws.MessageTypeReady,
+	)
+	var required ws.ResyncRequiredPayload
+	decodeRuntimeRecoveryPayload(t, bootstrap[1], &required)
+	if required.RuntimeStreamID != "runtime-stream-1" || required.TargetVersion == nil || *required.TargetVersion != 93 {
+		t.Fatalf("bootstrap resync target = %#v, want runtime-stream-1/93", required)
+	}
+	var replay ws.RuntimeReplayMessagePayload
+	decodeRuntimeRecoveryPayload(t, bootstrap[2], &replay)
+	if replay.RuntimeStreamID != "runtime-stream-1" || replay.FromVersion != 92 || replay.Version != 93 {
+		t.Fatalf("bootstrap replay = %#v, want runtime-stream-1 92->93", replay)
+	}
+	var ready ws.ReadyPayload
+	decodeRuntimeRecoveryPayload(t, bootstrap[3], &ready)
+	if ready.RuntimeStreamID != "runtime-stream-1" || ready.RuntimeVersion != 93 || ready.SyncMode != string(ws.OverviewSyncModeReplay) {
+		t.Fatalf("bootstrap ready = %#v, want replay runtime-stream-1/93", ready)
+	}
+
+	advanceRuntimeRecoveryState(t, pipeline, 93, 94, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up_fresh"}},
+		Links:   map[string]map[string]any{},
+	})
+	live := readRuntimeRecoveryMessages(t, conn, 1)
+	assertRuntimeRecoveryMessageTypes(t, live, ws.MessageTypeRuntimeDelta)
+	var liveDelta ws.RuntimeDeltaMessagePayload
+	decodeRuntimeRecoveryPayload(t, live[0], &liveDelta)
+	if liveDelta.RuntimeStreamID != "runtime-stream-1" || liveDelta.BaseVersion != 93 || liveDelta.Version != 94 {
+		t.Fatalf("live delta = %#v, want runtime-stream-1 93->94", liveDelta)
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeHello,
+		"payload": map[string]any{
+			"runtime_protocol":  ws.RuntimeStreamProtocolVersion,
+			"runtime_stream_id": "runtime-stream-1",
+			"runtime_version":   92,
+		},
+	}); err != nil {
+		t.Fatalf("write matching query hello: %v", err)
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeRuntimeAck,
+		"payload": map[string]any{
+			"runtime_stream_id": "runtime-stream-1",
+			"runtime_version":   94,
+		},
+	}); err != nil {
+		t.Fatalf("write runtime ACK: %v", err)
+	}
+	detailDeviceID := uuid.New()
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeSubscribeDetail,
+		"payload": map[string]any{
+			"device_id": detailDeviceID.String(),
+		},
+	}); err != nil {
+		t.Fatalf("write detail subscription after matching hello: %v", err)
+	}
+	detailDeadline := time.Now().Add(time.Second)
+	for len(hub.DetailSubscribers(detailDeviceID)) != 1 && time.Now().Before(detailDeadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if subscribers := hub.DetailSubscribers(detailDeviceID); len(subscribers) != 1 {
+		t.Fatalf("detail subscribers after matching hello = %d, want 1", len(subscribers))
+	}
+
+	completedMetric := `theia_ws_runtime_recovery_total{mode="replay",outcome="completed",reason="client_gap"} 1`
+	metricDeadline := time.Now().Add(time.Second)
+	body := string(registry.MarshalPrometheus())
+	for !strings.Contains(body, completedMetric) && time.Now().Before(metricDeadline) {
+		time.Sleep(time.Millisecond)
+		body = string(registry.MarshalPrometheus())
+	}
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="replay",outcome="scheduled",reason="client_gap"} 1`)
+	assertPipelineMetric(t, body, completedMetric)
+	assertPipelineRecoveryCountersZero(
+		t,
+		body,
+		`mode="replay",outcome="failed",reason="client_gap"`,
+	)
+	pipeline.overviewBuildMu.Lock()
+	attempts := len(pipeline.runtimeRecoveryAttempts)
+	pipeline.overviewBuildMu.Unlock()
+	if attempts != 0 {
+		t.Fatalf("matching query hello left recovery attempts = %d, want 0", attempts)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatalf("set duplicate recovery read deadline: %v", err)
+	}
+	var unexpected runtimeRecoveryWireMessage
+	err = conn.ReadJSON(&unexpected)
+	if err == nil {
+		t.Fatalf("matching query hello produced an unexpected second recovery message: %s", unexpected.Type)
+	}
+	if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+		t.Fatalf("read after matching query hello = %v, want timeout", err)
+	}
+}
+
+func TestRuntimeRecoveryMetricsCompleteReplayOnlyAtValidTargetAck(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	now := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
+	pipeline.runtime.now = func() time.Time { return now }
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+
+	conn, client, release := attachRuntimeRecoveryClient(
+		t, hub, pipeline.GetOverviewSnapshot, ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}, false,
+	)
+	defer release()
+	advanceRuntimeRecoveryState(t, pipeline, 92, 93, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "degraded"}},
+		Links:   map[string]map[string]any{},
+	})
+	advanceRuntimeRecoveryState(t, pipeline, 93, 94, &ws.RuntimeDeltaPayload{
+		Devices: map[string]map[string]any{"dev-1": {"primary_health": "up_fresh"}},
+		Links:   map[string]map[string]any{},
+	})
+	readRuntimeRecoveryMessages(t, conn, 2)
+
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, conn, 3),
+		ws.MessageTypeResyncRequired,
+		ws.MessageTypeRuntimeReplay,
+		ws.MessageTypeReady,
+	)
+
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="replay",outcome="scheduled",reason="client_gap"} 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_replay_versions_count 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_replay_versions_sum 2`)
+	assertPipelineRecoveryCountersZero(t, body, `mode="replay",outcome="completed"`)
+
+	now = now.Add(time.Second)
+	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{StreamID: "wrong-stream", Version: 94, Known: true})
+	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 95, Known: true})
+	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 93, Known: true})
+	body = string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_ack_lag_versions_count 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_ack_lag_versions_sum 1`)
+	assertPipelineRecoveryCountersZero(t, body, `mode="replay",outcome="completed"`)
+
+	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 94, Known: true})
+	body = string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_ack_lag_versions_count 2`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_ack_lag_versions_sum 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="replay",outcome="completed",reason="client_gap"} 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_duration_seconds_sum{mode="replay",outcome="completed"} 1`)
+	if got := len(pipeline.runtimeRecoveryAttempts); got != 0 {
+		t.Fatalf("runtime recovery attempts after completion = %d, want 0", got)
+	}
+}
+
+func TestRuntimeAckInvalidCursorDiagnosticsStayBounded(t *testing.T) {
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	previousPrefix := log.Prefix()
+	var output bytes.Buffer
+	log.SetOutput(&output)
+	logging.Configure("debug")
+	t.Cleanup(func() {
+		logging.Configure("info")
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+		log.SetPrefix(previousPrefix)
+	})
+
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-secret", 94)
+	client := &ws.Client{}
+	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{
+		StreamID: "wrong-stream-secret",
+		Version:  94,
+		Known:    true,
+	})
+	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{
+		StreamID: "runtime-stream-secret",
+		Version:  999,
+		Known:    true,
+	})
+
+	logs := output.String()
+	for _, reason := range []string{"stream_mismatch", "beyond_current"} {
+		if !strings.Contains(logs, "runtime ACK ignored reason="+reason) {
+			t.Fatalf("runtime ACK diagnostics missing bounded reason %q\n%s", reason, logs)
+		}
+	}
+	for _, forbidden := range []string{"runtime-stream-secret", "wrong-stream-secret", "999"} {
+		if strings.Contains(logs, forbidden) {
+			t.Fatalf("runtime ACK diagnostics leaked cursor identity %q\n%s", forbidden, logs)
+		}
+	}
+}
+
+func TestRuntimeRecoveryMetricsTrackCurrentAndSnapshotSelections(t *testing.T) {
+	tests := []struct {
+		name       string
+		request    ws.RuntimeSyncRequest
+		wantMode   string
+		wantReason string
+	}{
+		{
+			name: "current",
+			request: ws.RuntimeSyncRequest{
+				Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+				Reason: ws.ResyncReasonClientResync,
+			},
+			wantMode:   "current",
+			wantReason: ws.ResyncReasonClientResync,
+		},
+		{
+			name: "snapshot on connect",
+			request: ws.RuntimeSyncRequest{
+				Reason: ws.ResyncReasonClientResync,
+			},
+			wantMode:   "snapshot",
+			wantReason: "connect",
+		},
+		{
+			name: "snapshot on stream mismatch",
+			request: ws.RuntimeSyncRequest{
+				Cursor: ws.RuntimeCursor{StreamID: "obsolete-stream", Version: 92, Known: true},
+				Reason: ws.ResyncReasonClientResync,
+			},
+			wantMode:   "snapshot",
+			wantReason: "stream_mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := observability.ResetDefaultForTest()
+			hub := ws.NewHub()
+			go hub.Run()
+			pipeline := NewPipelineOrchestrator(
+				newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+			)
+			configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+			_, client, release := attachRuntimeRecoveryClient(
+				t, hub, pipeline.GetOverviewSnapshot, ws.RuntimeStreamProtocolVersion,
+				ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}, false,
+			)
+			defer release()
+
+			pipeline.SyncOverviewClient(client, tt.request)
+
+			body := string(registry.MarshalPrometheus())
+			assertPipelineMetric(
+				t,
+				body,
+				`theia_ws_runtime_recovery_total{mode="`+tt.wantMode+`",outcome="scheduled",reason="`+tt.wantReason+`"} 1`,
+			)
+		})
+	}
+}
+
+func TestRuntimeRecoveryMetricsKeepIdenticalPendingSyncIdempotent(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+	conn, client, release := attachRuntimeRecoveryClient(
+		t, hub, pipeline.GetOverviewSnapshot, ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}, false,
+	)
+	defer release()
+
+	request := ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	}
+	pipeline.SyncOverviewClient(client, request)
+	assertRuntimeRecoveryMessageTypes(t, readRuntimeRecoveryMessages(t, conn, 1), ws.MessageTypeReady)
+	pipeline.SyncOverviewClient(client, request)
+	assertRuntimeRecoveryMessageTypes(t, readRuntimeRecoveryMessages(t, conn, 1), ws.MessageTypeReady)
+
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="scheduled",reason="client_resync_scheduled"} 1`)
+	assertPipelineRecoveryCountersZero(t, body, `mode="current",outcome="failed"`)
+	pipeline.overviewBuildMu.Lock()
+	attempts := len(pipeline.runtimeRecoveryAttempts)
+	pipeline.overviewBuildMu.Unlock()
+	if attempts != 1 {
+		t.Fatalf("identical pending sync left attempts = %d, want 1", attempts)
+	}
+
+	pipeline.ObserveRuntimeAck(client, request.Cursor)
+	body = string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="completed",reason="client_resync_scheduled"} 1`)
+}
+
+func TestRuntimeRecoveryMetricsRecordFailedSnapshotInstallation(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+	_, client, release := attachRuntimeRecoveryClient(
+		t, hub, pipeline.GetOverviewSnapshot, ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}, false,
+	)
+	defer release()
+
+	notJSON := math.NaN()
+	snapshot := ws.EmptySnapshot()
+	snapshot.Devices["dev-1"] = ws.DeviceRuntimeDTO{DeviceID: "dev-1", CPUPercent: &notJSON}
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = snapshot
+	pipeline.runtime.prevHashes = computeSnapshotHashes(snapshot)
+	pipeline.runtime.overviewVersion = 93
+	pipeline.runtime.mu.Unlock()
+	pipeline.overviewBuildMu.Unlock()
+
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "obsolete-stream", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="scheduled",reason="stream_mismatch"} 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="failed",reason="stream_mismatch"} 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_duration_seconds_count{mode="snapshot",outcome="failed"} 1`)
+	if got := len(pipeline.runtimeRecoveryAttempts); got != 0 {
+		t.Fatalf("runtime recovery attempts after install failure = %d, want 0", got)
+	}
+}
+
+func TestRuntimeRecoveryTrackingPrunesExpiredAttemptBeforeLateAck(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	now := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
+	pipeline.runtime.now = func() time.Time { return now }
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+	_, client, release := attachRuntimeRecoveryClient(
+		t, hub, pipeline.GetOverviewSnapshot, ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}, false,
+	)
+	defer release()
+
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	now = now.Add(pipeline.runtimeRecoveryTTL + time.Second)
+	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{
+		StreamID: "runtime-stream-1",
+		Version:  92,
+		Known:    true,
+	})
+
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="failed",reason="client_resync_scheduled"} 1`)
+	assertPipelineRecoveryCountersZero(t, body, `mode="current",outcome="completed"`)
+	if got := len(pipeline.runtimeRecoveryAttempts); got != 0 {
+		t.Fatalf("runtime recovery attempts after TTL pruning = %d, want 0", got)
+	}
+}
+
+func TestRuntimeRecoveryTrackingExpiresWithoutLaterClientActivity(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	pipeline.runtimeRecoveryTTL = 20 * time.Millisecond
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+	_, client, release := attachRuntimeRecoveryClient(
+		t, hub, pipeline.GetOverviewSnapshot, ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}, false,
+	)
+	defer release()
+
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	deadline := time.Now().Add(time.Second)
+	for {
+		pipeline.overviewBuildMu.Lock()
+		remaining := len(pipeline.runtimeRecoveryAttempts)
+		pipeline.overviewBuildMu.Unlock()
+		if remaining == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runtime recovery attempt did not expire without client activity: %d remain", remaining)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="failed",reason="client_resync_scheduled"} 1`)
+	assertPipelineRecoveryCountersZero(t, body, `mode="current",outcome="completed"`)
+}
+
+func TestRuntimeRecoveryTimerIgnoresStaleGenerationAfterReplacement(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 42)
+	client := &ws.Client{}
+	batch := ws.OverviewSyncBatch{
+		Mode:            ws.OverviewSyncModeCurrent,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   42,
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.recordRuntimeRecoveryScheduledLocked(client, batch, ws.ResyncReasonClientResync, pipeline.clockNow())
+	pipeline.armRuntimeRecoveryTimerLocked(pipeline.clockNow())
+	staleGeneration := pipeline.runtimeRecoveryTimerGen
+	pipeline.recordRuntimeRecoveryScheduledLocked(client, batch, ws.ResyncReasonStateChangesDrop, pipeline.clockNow())
+	pipeline.armRuntimeRecoveryTimerLocked(pipeline.clockNow())
+	currentGeneration := pipeline.runtimeRecoveryTimerGen
+	pipeline.overviewBuildMu.Unlock()
+	if staleGeneration == currentGeneration {
+		t.Fatalf("replacement timer generation = %d, want newer than %d", currentGeneration, staleGeneration)
+	}
+
+	pipeline.expireRuntimeRecoveryAttempts(staleGeneration)
+	pipeline.overviewBuildMu.Lock()
+	attempt, ok := pipeline.runtimeRecoveryAttempts[client]
+	pipeline.overviewBuildMu.Unlock()
+	if !ok || attempt.targetVersion != 42 || attempt.reason != ws.ResyncReasonStateChangesDrop {
+		t.Fatalf("stale timer removed replacement attempt: %#v, present=%t", attempt, ok)
+	}
+
+	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{
+		StreamID: "runtime-stream-1",
+		Version:  42,
+		Known:    true,
+	})
+	pipeline.overviewBuildMu.Lock()
+	remaining := len(pipeline.runtimeRecoveryAttempts)
+	timer := pipeline.runtimeRecoveryTimer
+	pipeline.overviewBuildMu.Unlock()
+	if remaining != 0 || timer != nil {
+		t.Fatalf("completed replacement left attempts=%d timer=%v", remaining, timer)
+	}
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="failed",reason="client_resync_scheduled"} 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="completed",reason="state_changes_dropped"} 1`)
+}
+
+func TestRuntimeRecoveryTrackingCapDoesNotEvictOnExistingClientReplacement(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	now := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
+	pipeline.runtime.now = func() time.Time { return now }
+	clients := make([]*ws.Client, runtimeRecoveryAttemptLimit)
+	for index := range clients {
+		clients[index] = &ws.Client{}
+		pipeline.runtimeRecoveryAttempts[clients[index]] = runtimeRecoveryAttempt{
+			mode:          "current",
+			reason:        ws.ResyncReasonClientResync,
+			streamID:      "runtime-stream-1",
+			targetVersion: 41,
+			startedAt:     now.Add(time.Duration(index) * time.Nanosecond),
+		}
+	}
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.recordRuntimeRecoveryScheduledLocked(
+		clients[len(clients)-1],
+		ws.OverviewSyncBatch{
+			Mode:            ws.OverviewSyncModeCurrent,
+			RuntimeStreamID: "runtime-stream-1",
+			TargetVersion:   42,
+		},
+		ws.ResyncReasonClientResync,
+		now.Add(runtimeRecoveryAttemptLimit*time.Nanosecond),
+	)
+	pipeline.overviewBuildMu.Unlock()
+
+	if got := len(pipeline.runtimeRecoveryAttempts); got != runtimeRecoveryAttemptLimit {
+		t.Fatalf("runtime recovery attempts after replacement = %d, want cap %d", got, runtimeRecoveryAttemptLimit)
+	}
+	newClient := &ws.Client{}
+	pipeline.overviewBuildMu.Lock()
+	pipeline.recordRuntimeRecoveryScheduledLocked(
+		newClient,
+		ws.OverviewSyncBatch{
+			Mode:            ws.OverviewSyncModeCurrent,
+			RuntimeStreamID: "runtime-stream-1",
+			TargetVersion:   43,
+		},
+		ws.ResyncReasonClientResync,
+		now.Add(time.Second),
+	)
+	pipeline.overviewBuildMu.Unlock()
+	if got := len(pipeline.runtimeRecoveryAttempts); got != runtimeRecoveryAttemptLimit {
+		t.Fatalf("runtime recovery attempts after capped insert = %d, want %d", got, runtimeRecoveryAttemptLimit)
+	}
+	if _, ok := pipeline.runtimeRecoveryAttempts[clients[0]]; ok {
+		t.Fatal("oldest runtime recovery attempt survived capped insert")
+	}
+	if _, ok := pipeline.runtimeRecoveryAttempts[newClient]; !ok {
+		t.Fatal("new runtime recovery attempt missing after capped insert")
+	}
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="failed",reason="client_resync_scheduled"} 2`)
+}
+
+func TestRuntimeRecoveryHTTPFallbackMetricsTrackGETHEADAndFailure(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	handler := theiaapi.NewRuntimeOverviewHandler(func() ws.RuntimeOverviewState {
+		return ws.RuntimeOverviewState{
+			Snapshot: ws.EmptySnapshot(),
+			StreamID: "runtime-stream-1",
+			Version:  42,
+		}
+	})
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		request := httptest.NewRequest(method, "/api/v1/runtime/overview", nil)
+		response := httptest.NewRecorder()
+		handler.Handle(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", method, response.Code)
+		}
+	}
+
+	unavailable := theiaapi.NewRuntimeOverviewHandler(nil)
+	unavailableResponse := httptest.NewRecorder()
+	unavailable.Handle(
+		unavailableResponse,
+		httptest.NewRequest(http.MethodGet, "/api/v1/runtime/overview", nil),
+	)
+	if unavailableResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unavailable GET status = %d, want 503", unavailableResponse.Code)
+	}
+
+	unsupportedResponse := httptest.NewRecorder()
+	handler.Handle(
+		unsupportedResponse,
+		httptest.NewRequest(http.MethodPost, "/api/v1/runtime/overview", nil),
+	)
+	if unsupportedResponse.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status = %d, want 405", unsupportedResponse.Code)
+	}
+	encodingFailure := &runtimeRecoveryFailingResponseWriter{header: make(http.Header)}
+	handler.Handle(
+		encodingFailure,
+		httptest.NewRequest(http.MethodGet, "/api/v1/runtime/overview", nil),
+	)
+
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="http_fallback",outcome="scheduled",reason="timeout"} 4`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="http_fallback",outcome="completed",reason="timeout"} 2`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="http_fallback",outcome="failed",reason="timeout"} 2`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_duration_seconds_count{mode="http_fallback",outcome="completed"} 2`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_duration_seconds_count{mode="http_fallback",outcome="failed"} 2`)
+}
+
+func TestRuntimeRecoveryMetricsTrackBulkSnapshotInstallAndFailure(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+	conn, client, release := attachRuntimeRecoveryClient(
+		t, hub, pipeline.GetOverviewSnapshot, ws.RuntimeStreamProtocolVersion,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}, false,
+	)
+	defer release()
+
+	state := pipeline.GetOrBuildOverviewState()
+	pipeline.overviewBuildMu.Lock()
+	pipeline.replaceOverviewClientsWithSnapshotLocked(state, ws.ResyncReasonStateChangesDrop)
+	pipeline.overviewBuildMu.Unlock()
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, conn, 3),
+		ws.MessageTypeResyncRequired,
+		ws.MessageTypeSnapshot,
+		ws.MessageTypeReady,
+	)
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="scheduled",reason="state_changes_dropped"} 1`)
+	pipeline.ObserveRuntimeAck(client, ws.RuntimeCursor{
+		StreamID: "runtime-stream-1",
+		Version:  92,
+		Known:    true,
+	})
+	body = string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="completed",reason="state_changes_dropped"} 1`)
+	pipeline.SyncOverviewClient(client, ws.RuntimeSyncRequest{
+		Cursor: ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Reason: ws.ResyncReasonClientResync,
+	})
+	assertRuntimeRecoveryMessageTypes(t, readRuntimeRecoveryMessages(t, conn, 1), ws.MessageTypeReady)
+
+	notJSON := math.NaN()
+	failedSnapshot := ws.EmptySnapshot()
+	failedSnapshot.Devices["dev-1"] = ws.DeviceRuntimeDTO{DeviceID: "dev-1", CPUPercent: &notJSON}
+	pipeline.overviewBuildMu.Lock()
+	pipeline.replaceOverviewClientsWithSnapshotLocked(ws.RuntimeOverviewState{
+		Snapshot: failedSnapshot,
+		StreamID: "runtime-stream-1",
+		Version:  93,
+	}, ws.ResyncReasonHubBufferFull)
+	pipeline.overviewBuildMu.Unlock()
+
+	body = string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="scheduled",reason="hub_buffer_full"} 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="failed",reason="hub_buffer_full"} 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="current",outcome="failed",reason="client_resync_scheduled"} 1`)
+	pipeline.overviewBuildMu.Lock()
+	remainingAttempts := len(pipeline.runtimeRecoveryAttempts)
+	pipeline.overviewBuildMu.Unlock()
+	if got := remainingAttempts; got != 0 {
+		t.Fatalf("runtime recovery attempts after failed bulk install = %d, want 0", got)
+	}
+}
+
+func TestRuntimeRecoveryMetricsCompleteLegacyBulkSnapshotWithoutAck(t *testing.T) {
+	registry := observability.ResetDefaultForTest()
+	hub := ws.NewHub()
+	go hub.Run()
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(), nil, nil, hub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	configureRuntimeRecoveryState(t, pipeline, "runtime-stream-1", 92)
+	conn, _, release := attachRuntimeRecoveryClient(
+		t, hub, pipeline.GetOverviewSnapshot, 0,
+		ws.RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true}, false,
+	)
+	defer release()
+
+	state := pipeline.GetOrBuildOverviewState()
+	pipeline.overviewBuildMu.Lock()
+	pipeline.replaceOverviewClientsWithSnapshotLocked(state, ws.ResyncReasonStateChangesDrop)
+	pipeline.overviewBuildMu.Unlock()
+	assertRuntimeRecoveryMessageTypes(
+		t,
+		readRuntimeRecoveryMessages(t, conn, 3),
+		ws.MessageTypeResyncRequired,
+		ws.MessageTypeSnapshot,
+		ws.MessageTypeReady,
+	)
+
+	body := string(registry.MarshalPrometheus())
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="scheduled",reason="state_changes_dropped"} 1`)
+	assertPipelineMetric(t, body, `theia_ws_runtime_recovery_total{mode="snapshot",outcome="completed",reason="state_changes_dropped"} 1`)
+	assertPipelineRecoveryCountersZero(t, body, `mode="snapshot",outcome="failed"`)
+	pipeline.overviewBuildMu.Lock()
+	attempts := len(pipeline.runtimeRecoveryAttempts)
+	pipeline.overviewBuildMu.Unlock()
+	if attempts != 0 {
+		t.Fatalf("legacy snapshot left ACK-tracked attempts = %d, want 0", attempts)
+	}
+}
+
+type runtimeRecoveryFailingResponseWriter struct {
+	header http.Header
+}
+
+func (w *runtimeRecoveryFailingResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (*runtimeRecoveryFailingResponseWriter) Write([]byte) (int, error) {
+	return 0, errors.New("response write failed")
+}
+
+func (*runtimeRecoveryFailingResponseWriter) WriteHeader(int) {}
+
+func assertPipelineMetric(t *testing.T, body, needle string) {
+	t.Helper()
+	if !strings.Contains(body, needle) {
+		t.Fatalf("metrics output missing %q\n%s", needle, body)
+	}
+}
+
+func assertPipelineRecoveryCountersZero(t *testing.T, body, labelFragment string) {
+	t.Helper()
+	found := false
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, "theia_ws_runtime_recovery_total{") ||
+			!strings.Contains(line, labelFragment) {
+			continue
+		}
+		found = true
+		if !strings.HasSuffix(line, " 0") {
+			t.Fatalf("runtime recovery counter matching %q is not zero: %q", labelFragment, line)
+		}
+	}
+	if !found {
+		t.Fatalf("metrics output has no runtime recovery counter matching %q\n%s", labelFragment, body)
+	}
+}
+
+type runtimeRecoveryWireMessage struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+func configureRuntimeRecoveryState(t *testing.T, pipeline *PipelineOrchestrator, streamID string, version uint64) {
+	t.Helper()
+	snapshot := ws.EmptySnapshot()
+	snapshot.Devices["dev-1"] = ws.DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.Lock()
+	pipeline.runtime.lastSnapshot = snapshot
+	pipeline.runtime.prevHashes = computeSnapshotHashes(snapshot)
+	pipeline.runtime.overviewVersion = version
+	pipeline.runtime.overviewStreamID = streamID
+	pipeline.runtime.mu.Unlock()
+	pipeline.runtime.overviewJournal.Reset()
+	pipeline.overviewBuildMu.Unlock()
+}
+
+func advanceRuntimeRecoveryState(t *testing.T, pipeline *PipelineOrchestrator, baseVersion, version uint64, delta *ws.RuntimeDeltaPayload) {
+	t.Helper()
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.Lock()
+	actualVersion := pipeline.runtime.overviewVersion
+	if actualVersion != baseVersion {
+		pipeline.runtime.mu.Unlock()
+		pipeline.overviewBuildMu.Unlock()
+		t.Fatalf("runtime recovery base = %d, want %d", actualVersion, baseVersion)
+	}
+	streamID := pipeline.runtime.overviewStreamID
+	pipeline.runtime.overviewVersion = version
+	pipeline.runtime.mu.Unlock()
+	pipeline.runtime.overviewJournal.Append(baseVersion, version, delta)
+	overflowed := pipeline.hub.BroadcastOverviewStreamDelta(delta, baseVersion, version, streamID)
+	pipeline.overviewBuildMu.Unlock()
+	if len(overflowed) != 0 {
+		t.Fatalf("runtime recovery delta %d->%d overflowed %d clients", baseVersion, version, len(overflowed))
+	}
+}
+
+func attachRuntimeRecoveryClient(
+	t *testing.T,
+	hub *ws.Hub,
+	snapshotFunc func() (*ws.SnapshotPayload, uint64),
+	runtimeProtocol int,
+	cursor ws.RuntimeCursor,
+	holdWritePump bool,
+) (*websocket.Conn, *ws.Client, func()) {
+	t.Helper()
+
+	probeDeviceID := uuid.New()
+	gate := make(chan struct{})
+	gateEntered := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(gate)
+		})
+	}
+	if !holdWritePump {
+		release()
+	}
+
+	handler := ws.NewHandler(
+		hub,
+		snapshotFunc,
+		func() ws.AlertMessagePayload { return ws.AlertMessagePayload{Alerts: []ws.AlertDTO{}} },
+		func() ws.PrometheusStatusPayload {
+			close(gateEntered)
+			<-gate
+			return ws.PrometheusStatusPayload{}
+		},
+	)
+	server := httptest.NewServer(handler)
+	t.Cleanup(func() {
+		release()
+		server.Close()
+	})
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial runtime recovery client: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeHello,
+		"payload": map[string]any{
+			"runtime_protocol":  runtimeProtocol,
+			"runtime_stream_id": cursor.StreamID,
+			"runtime_version":   cursor.Version,
+		},
+	}); err != nil {
+		t.Fatalf("send runtime recovery hello: %v", err)
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"type": ws.MessageTypeSubscribeDetail,
+		"payload": map[string]any{
+			"device_id": probeDeviceID.String(),
+		},
+	}); err != nil {
+		t.Fatalf("send runtime recovery probe subscription: %v", err)
+	}
+
+	bootstrap := readRuntimeRecoveryMessages(t, conn, 2)
+	assertRuntimeRecoveryMessageTypes(t, bootstrap, ws.MessageTypeReady, ws.MessageTypeAlert)
+	select {
+	case <-gateEntered:
+	case <-time.After(time.Second):
+		t.Fatal("runtime recovery handler did not reach write-pump gate")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		clients := hub.DetailSubscribers(probeDeviceID)
+		if len(clients) == 1 {
+			return conn, clients[0], release
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("runtime recovery client was not registered")
+	return nil, nil, release
+}
+
+func readRuntimeRecoveryMessages(t *testing.T, conn *websocket.Conn, count int) []runtimeRecoveryWireMessage {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set runtime recovery read deadline: %v", err)
+	}
+	defer conn.SetReadDeadline(time.Time{})
+
+	messages := make([]runtimeRecoveryWireMessage, 0, count)
+	for index := 0; index < count; index++ {
+		var message runtimeRecoveryWireMessage
+		if err := conn.ReadJSON(&message); err != nil {
+			t.Fatalf("read runtime recovery message %d/%d: %v", index+1, count, err)
+		}
+		messages = append(messages, message)
+	}
+	return messages
+}
+
+func decodeRuntimeRecoveryPayload(t *testing.T, message runtimeRecoveryWireMessage, target any) {
+	t.Helper()
+	if err := json.Unmarshal(message.Payload, target); err != nil {
+		t.Fatalf("decode %s payload: %v", message.Type, err)
+	}
+}
+
+func assertRuntimeRecoveryMessageTypes(t *testing.T, messages []runtimeRecoveryWireMessage, want ...string) {
+	t.Helper()
+	if len(messages) != len(want) {
+		t.Fatalf("runtime recovery message count = %d, want %d", len(messages), len(want))
+	}
+	for index := range want {
+		if messages[index].Type != want[index] {
+			t.Fatalf("runtime recovery message %d type = %q, want %q", index, messages[index].Type, want[index])
+		}
 	}
 }
 
@@ -4505,6 +6173,12 @@ func TestPipelineOrchestratorBroadcastOnceRecordsStartupReloadMetrics(t *testing
 	})
 
 	pipeline, hub, _, _, _ := newBroadcastTestPipeline(t)
+	pipeline.overviewBuildMu.Lock()
+	pipeline.runtime.mu.RLock()
+	preStartupStreamID := pipeline.runtime.overviewStreamID
+	pipeline.runtime.mu.RUnlock()
+	pipeline.runtime.overviewJournal.Append(0, 1, ws.EmptyRuntimeDeltaPayload())
+	pipeline.overviewBuildMu.Unlock()
 	pipeline.broadcaster.broadcastOnce(context.Background())
 
 	types := broadcastMessageTypes(t, drainBroadcastCh(hub))
@@ -4518,6 +6192,21 @@ func TestPipelineOrchestratorBroadcastOnceRecordsStartupReloadMetrics(t *testing
 	}
 	if !strings.Contains(metrics, `theia_refresh_topology_reload_total{reason="startup"} 1`) {
 		t.Fatalf("expected startup reload reason metric, got:\n%s", metrics)
+	}
+
+	startupState := pipeline.GetOrBuildOverviewState()
+	if startupState.StreamID == preStartupStreamID {
+		t.Fatalf("startup snapshot kept initial stream ID %q", startupState.StreamID)
+	}
+	if _, err := uuid.Parse(startupState.StreamID); err != nil {
+		t.Fatalf("startup stream ID %q is not a UUID: %v", startupState.StreamID, err)
+	}
+	pipeline.overviewBuildMu.Lock()
+	replay, replayable := pipeline.runtime.overviewJournal.Replay(0, 1)
+	journalEntries := len(pipeline.runtime.overviewJournal.entries)
+	pipeline.overviewBuildMu.Unlock()
+	if replayable || replay != nil || journalEntries != 0 {
+		t.Fatalf("startup snapshot retained journal replay=%#v replayable=%t entries=%d", replay, replayable, journalEntries)
 	}
 }
 

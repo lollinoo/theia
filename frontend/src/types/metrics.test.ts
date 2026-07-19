@@ -90,6 +90,188 @@ describe('parseWSMessage', () => {
     });
   });
 
+  it('parses optional recovery metadata on ready handshake payloads', () => {
+    const message = parseWSMessage({
+      type: 'ready',
+      payload: {
+        runtime_version: 42,
+        runtime_stream_id: 'runtime-stream-1',
+        runtime_identity: 'rt-sha256:abc',
+        alert_version: 7,
+        sync_mode: 'replay',
+      },
+    });
+
+    expect(message).toEqual({
+      type: 'ready',
+      payload: {
+        runtime_version: 42,
+        runtime_stream_id: 'runtime-stream-1',
+        runtime_identity: 'rt-sha256:abc',
+        alert_version: 7,
+        sync_mode: 'replay',
+      },
+    });
+  });
+
+  it('parses optional runtime stream IDs on snapshot and runtime delta payloads', () => {
+    const snapshot = parseWSMessage({
+      type: 'snapshot',
+      payload: {
+        version: 7,
+        runtime_stream_id: 'runtime-stream-1',
+        snapshot: { devices: {}, links: {} },
+      },
+    });
+    const delta = parseWSMessage({
+      type: 'runtime_delta',
+      payload: {
+        base_version: 7,
+        version: 8,
+        runtime_stream_id: 'runtime-stream-1',
+        delta: { devices: {}, links: {} },
+      },
+    });
+
+    expect(
+      (snapshot as { payload: { runtime_stream_id?: string } }).payload.runtime_stream_id,
+    ).toBe('runtime-stream-1');
+    expect((delta as { payload: { runtime_stream_id?: string } }).payload.runtime_stream_id).toBe(
+      'runtime-stream-1',
+    );
+  });
+
+  it('strictly parses runtime replay payloads', () => {
+    const message = parseWSMessage({
+      type: 'runtime_replay',
+      payload: {
+        from_version: 7,
+        version: 9,
+        runtime_stream_id: 'runtime-stream-1',
+        delta: {
+          devices: {
+            'dev-1': {
+              device_id: 'dev-1',
+              cpu_percent: 42.5,
+            },
+          },
+          links: {},
+        },
+      },
+    });
+
+    expect(message).toEqual({
+      type: 'runtime_replay',
+      payload: {
+        from_version: 7,
+        version: 9,
+        runtime_stream_id: 'runtime-stream-1',
+        delta: {
+          devices: {
+            'dev-1': {
+              device_id: 'dev-1',
+              cpu_percent: 42.5,
+            },
+          },
+          links: {},
+        },
+      },
+    });
+  });
+
+  it.each([
+    ['missing from version', 'from_version', undefined],
+    ['negative from version', 'from_version', -1],
+    ['fractional from version', 'from_version', 1.5],
+    ['non-finite from version', 'from_version', Number.POSITIVE_INFINITY],
+    ['unsafe from version', 'from_version', Number.MAX_SAFE_INTEGER + 1],
+    ['missing target version', 'version', undefined],
+    ['negative target version', 'version', -1],
+    ['fractional target version', 'version', 2.5],
+    ['non-finite target version', 'version', Number.NaN],
+    ['unsafe target version', 'version', Number.MAX_SAFE_INTEGER + 1],
+  ])('rejects runtime replay with %s', (_name, field, invalidValue) => {
+    const payload: Record<string, unknown> = {
+      from_version: 7,
+      version: 9,
+      runtime_stream_id: 'runtime-stream-1',
+      delta: { devices: {}, links: {} },
+    };
+    if (invalidValue === undefined) {
+      delete payload[field];
+    } else {
+      payload[field] = invalidValue;
+    }
+
+    expect(() => parseWSMessage({ type: 'runtime_replay', payload })).toThrow();
+  });
+
+  it('rejects runtime replay with a reversed version range', () => {
+    expect(() =>
+      parseWSMessage({
+        type: 'runtime_replay',
+        payload: {
+          from_version: 10,
+          version: 9,
+          runtime_stream_id: 'runtime-stream-1',
+          delta: { devices: {}, links: {} },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it.each([
+    ['missing stream ID', { from_version: 7, version: 9, delta: { devices: {}, links: {} } }],
+    [
+      'empty stream ID',
+      {
+        from_version: 7,
+        version: 9,
+        runtime_stream_id: '',
+        delta: { devices: {}, links: {} },
+      },
+    ],
+    ['missing delta', { from_version: 7, version: 9, runtime_stream_id: 'runtime-stream-1' }],
+  ])('rejects runtime replay with %s', (_name, payload) => {
+    expect(() => parseWSMessage({ type: 'runtime_replay', payload })).toThrow();
+  });
+
+  it('parses optional stream recovery metadata on resync markers', () => {
+    const message = parseWSMessage({
+      type: 'resync_required',
+      payload: {
+        scope: 'overview',
+        reason: 'client_resync_scheduled',
+        strategy: 'stream',
+        target_version: 9,
+        runtime_stream_id: 'runtime-stream-1',
+      },
+    });
+
+    expect(message).toEqual({
+      type: 'resync_required',
+      payload: {
+        scope: 'overview',
+        reason: 'client_resync_scheduled',
+        strategy: 'stream',
+        target_version: 9,
+        runtime_stream_id: 'runtime-stream-1',
+      },
+    });
+  });
+
+  it('preserves legacy server payloads without recovery metadata', () => {
+    expect(
+      parseWSMessage({
+        type: 'resync_required',
+        payload: { scope: 'overview', reason: 'client_resync_scheduled' },
+      }),
+    ).toEqual({
+      type: 'resync_required',
+      payload: { scope: 'overview', reason: 'client_resync_scheduled' },
+    });
+  });
+
   it('preserves polling health queue details and warnings', () => {
     const message = parseWSMessage({
       type: 'polling_health_changed',

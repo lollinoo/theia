@@ -211,6 +211,41 @@ export function CanvasDiagnosticsPanel({
             label="rejected delta"
             value={snapshot.websocket.lastRejectedDeltaReason}
           />
+          <DiagnosticsRow label="runtime stream" value={snapshot.websocket.runtimeStreamId} />
+          <DiagnosticsRow label="recovery phase" value={snapshot.websocket.runtimeRecoveryPhase} />
+          <DiagnosticsRow
+            label="recovery target"
+            value={snapshot.websocket.runtimeRecoveryTargetVersion}
+          />
+          <DiagnosticsRow
+            label="last recovery mode"
+            value={snapshot.websocket.lastRuntimeRecoveryMode}
+          />
+          <DiagnosticsRow
+            label="recovery duration"
+            value={snapshot.websocket.lastRuntimeRecoveryDurationMs}
+          />
+          <DiagnosticsRow
+            label="last ACK version"
+            value={snapshot.websocket.lastRuntimeAckVersion}
+          />
+          <DiagnosticsRow label="recoveries" value={snapshot.websocket.runtimeRecoveryCount} />
+          <DiagnosticsRow
+            label="replay recoveries"
+            value={snapshot.websocket.runtimeReplayRecoveryCount}
+          />
+          <DiagnosticsRow
+            label="snapshot recoveries"
+            value={snapshot.websocket.runtimeSnapshotRecoveryCount}
+          />
+          <DiagnosticsRow
+            label="HTTP fallbacks"
+            value={snapshot.websocket.runtimeHttpFallbackCount}
+          />
+          <DiagnosticsRow
+            label="recovery failures"
+            value={snapshot.websocket.runtimeRecoveryFailureCount}
+          />
         </DiagnosticsSection>
 
         <DiagnosticsSection title="Graph">

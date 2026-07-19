@@ -7,12 +7,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/polling"
 )
+
+// RuntimeStreamProtocolVersion is the resumable runtime stream capability version.
+const RuntimeStreamProtocolVersion = 2
 
 const (
 	// Default overview broadcasts should stay limited to runtime overview,
@@ -26,6 +30,8 @@ const (
 	MessageTypeSnapshotDelta = "snapshot_delta"
 	// MessageTypeRuntimeDelta pushes runtime-only changes using the modernized envelope.
 	MessageTypeRuntimeDelta = "runtime_delta"
+	// MessageTypeRuntimeReplay replays a compacted range of runtime changes.
+	MessageTypeRuntimeReplay = "runtime_replay"
 	// MessageTypeTopologyDelta pushes topology-only changes.
 	MessageTypeTopologyDelta = "topology_delta"
 	// MessageTypePollingHealthChanged notifies clients when polling health changes.
@@ -38,18 +44,22 @@ const (
 	MessageTypeAlert = "alert"
 	// MessageTypePrometheusStatus notifies clients of Prometheus availability changes.
 	MessageTypePrometheusStatus = "prometheus_status"
-	// MessageTypeResyncRequired tells overview clients to expect a full snapshot resync.
+	// MessageTypeResyncRequired tells overview clients which recovery strategy and barrier to expect.
 	MessageTypeResyncRequired = "resync_required"
 	// MessageTypeTopologyChanged notifies clients that the topology has changed (new links discovered).
 	MessageTypeTopologyChanged = "topology_changed"
 	// MessageTypeHello lets clients announce the canvas versions they already have.
 	MessageTypeHello = "hello"
-	// MessageTypeReady confirms the server skipped an already-current runtime snapshot.
+	// MessageTypeReady confirms the exact runtime cursor reached by a synchronization result.
 	MessageTypeReady = "ready"
 	// MessageTypeSubscribeDetail registers a device-specific detail subscription for one client.
 	MessageTypeSubscribeDetail = "subscribe_detail"
 	// MessageTypeUnsubscribeDetail clears the active device-specific detail subscription for one client.
 	MessageTypeUnsubscribeDetail = "unsubscribe_detail"
+	// MessageTypeResumeRuntime asks the server to resume from a runtime cursor.
+	MessageTypeResumeRuntime = "resume_runtime"
+	// MessageTypeRuntimeAck acknowledges the newest runtime cursor applied by a client.
+	MessageTypeRuntimeAck = "runtime_ack"
 )
 
 const (
@@ -71,15 +81,44 @@ type PrometheusStatusPayload struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// ResyncRequiredPayload tells clients why the overview stream is degraded.
+// ResyncRequiredPayload selects stream recovery with an exact target barrier or legacy HTTP when Strategy is empty.
 type ResyncRequiredPayload struct {
-	Scope  string `json:"scope"`
-	Reason string `json:"reason"`
+	Scope           string              `json:"scope"`
+	Reason          string              `json:"reason"`
+	Strategy        RuntimeSyncStrategy `json:"strategy,omitempty"`
+	TargetVersion   *uint64             `json:"target_version,omitempty"`
+	RuntimeStreamID string              `json:"runtime_stream_id,omitempty"`
 }
+
+// RuntimeSyncStrategy identifies how a client should recover its runtime state.
+type RuntimeSyncStrategy string
+
+const (
+	// RuntimeSyncStrategyStream recovers runtime state over the WebSocket stream.
+	RuntimeSyncStrategyStream RuntimeSyncStrategy = "stream"
+)
+
+// RuntimeCursor identifies one known position in a runtime stream.
+type RuntimeCursor struct {
+	StreamID string
+	Version  uint64
+	Known    bool
+}
+
+// RuntimeOverviewState is one atomic, cloned view of the runtime overview lineage.
+type RuntimeOverviewState struct {
+	Snapshot *SnapshotPayload
+	Version  uint64
+	StreamID string
+}
+
+// RuntimeOverviewStateFunc retrieves one atomic runtime overview state.
+type RuntimeOverviewStateFunc func() RuntimeOverviewState
 
 // SnapshotMessagePayload is the versioned full overview payload sent to clients.
 type SnapshotMessagePayload struct {
 	Version         uint64           `json:"version"`
+	RuntimeStreamID string           `json:"runtime_stream_id,omitempty"`
 	RuntimeIdentity string           `json:"runtime_identity,omitempty"`
 	Snapshot        *SnapshotPayload `json:"snapshot"`
 }
@@ -94,9 +133,18 @@ type SnapshotDeltaMessagePayload struct {
 // RuntimeDeltaMessagePayload carries sparse runtime changes with a required base version.
 // Clients must ignore deltas whose base version does not match their current snapshot version.
 type RuntimeDeltaMessagePayload struct {
-	BaseVersion uint64               `json:"base_version"`
-	Version     uint64               `json:"version"`
-	Delta       *RuntimeDeltaPayload `json:"delta"`
+	BaseVersion     uint64               `json:"base_version"`
+	Version         uint64               `json:"version"`
+	RuntimeStreamID string               `json:"runtime_stream_id,omitempty"`
+	Delta           *RuntimeDeltaPayload `json:"delta"`
+}
+
+// RuntimeReplayMessagePayload carries a compacted sparse runtime change range.
+type RuntimeReplayMessagePayload struct {
+	FromVersion     uint64               `json:"from_version"`
+	Version         uint64               `json:"version"`
+	RuntimeStreamID string               `json:"runtime_stream_id"`
+	Delta           *RuntimeDeltaPayload `json:"delta"`
 }
 
 // RuntimeDeltaPayload keeps per-device and per-link fields sparse to avoid rebroadcasting topology data.
@@ -112,11 +160,13 @@ type TopologyChangedPayload struct {
 	RecommendedEndpoint string `json:"recommended_endpoint,omitempty"`
 }
 
-// ReadyPayload confirms the server accepted a client's hello and skipped redundant snapshot delivery.
+// ReadyPayload confirms the exact cursor and mode selected by runtime synchronization.
 type ReadyPayload struct {
 	RuntimeVersion  uint64 `json:"runtime_version"`
+	RuntimeStreamID string `json:"runtime_stream_id,omitempty"`
 	RuntimeIdentity string `json:"runtime_identity,omitempty"`
 	AlertVersion    uint64 `json:"alert_version"`
+	SyncMode        string `json:"sync_mode,omitempty"`
 }
 
 // PollingHealthChangedPayload mirrors the polling subsystem health snapshot for overview diagnostics.
@@ -136,10 +186,16 @@ type Message struct {
 
 // NewSnapshotMessage clones a full runtime snapshot before broadcasting it to clients.
 func NewSnapshotMessage(snapshot *SnapshotPayload, version uint64) Message {
+	return NewStreamSnapshotMessage(snapshot, version, "")
+}
+
+// NewStreamSnapshotMessage clones a full runtime snapshot and associates it with a stream.
+func NewStreamSnapshotMessage(snapshot *SnapshotPayload, version uint64, streamID string) Message {
 	return Message{
 		Type: MessageTypeSnapshot,
 		Payload: SnapshotMessagePayload{
 			Version:         version,
+			RuntimeStreamID: streamID,
 			RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
 			Snapshot:        CloneSnapshot(snapshot),
 		},
@@ -160,12 +216,31 @@ func NewSnapshotDeltaMessage(delta *SnapshotPayload, baseVersion, version uint64
 
 // NewRuntimeDeltaMessage builds the modern sparse runtime delta envelope.
 func NewRuntimeDeltaMessage(delta *RuntimeDeltaPayload, baseVersion, version uint64) Message {
+	return NewStreamRuntimeDeltaMessage(delta, baseVersion, version, "")
+}
+
+// NewStreamRuntimeDeltaMessage builds a sparse runtime delta for one stream.
+func NewStreamRuntimeDeltaMessage(delta *RuntimeDeltaPayload, baseVersion, version uint64, streamID string) Message {
 	return Message{
 		Type: MessageTypeRuntimeDelta,
 		Payload: RuntimeDeltaMessagePayload{
-			BaseVersion: baseVersion,
-			Version:     version,
-			Delta:       CloneRuntimeDeltaPayload(delta),
+			BaseVersion:     baseVersion,
+			Version:         version,
+			RuntimeStreamID: streamID,
+			Delta:           CloneRuntimeDeltaPayload(delta),
+		},
+	}
+}
+
+// NewRuntimeReplayMessage builds a cloned sparse replay range for one runtime stream.
+func NewRuntimeReplayMessage(delta *RuntimeDeltaPayload, fromVersion, version uint64, streamID string) Message {
+	return Message{
+		Type: MessageTypeRuntimeReplay,
+		Payload: RuntimeReplayMessagePayload{
+			FromVersion:     fromVersion,
+			Version:         version,
+			RuntimeStreamID: streamID,
+			Delta:           CloneRuntimeDeltaPayload(delta),
 		},
 	}
 }
@@ -184,12 +259,19 @@ func NewTopologyChangedMessage(topologyVersion uint64, reason string) Message {
 
 // NewReadyMessage acknowledges a client hello whose cached runtime state is already current.
 func NewReadyMessage(runtimeVersion uint64, alertVersion uint64, runtimeIdentity string) Message {
+	return NewStreamReadyMessage(runtimeVersion, alertVersion, runtimeIdentity, "", "")
+}
+
+// NewStreamReadyMessage acknowledges a runtime stream synchronization result.
+func NewStreamReadyMessage(runtimeVersion, alertVersion uint64, runtimeIdentity, streamID, syncMode string) Message {
 	return Message{
 		Type: MessageTypeReady,
 		Payload: ReadyPayload{
 			RuntimeVersion:  runtimeVersion,
+			RuntimeStreamID: streamID,
 			RuntimeIdentity: runtimeIdentity,
 			AlertVersion:    alertVersion,
+			SyncMode:        syncMode,
 		},
 	}
 }
@@ -224,15 +306,17 @@ func NewAlertMessage(alerts []AlertDTO, version uint64) Message {
 	}
 }
 
-// clientControlMessage is the normalized form of client hello/detail subscription messages.
+// clientControlMessage normalizes hello, runtime resume/ACK, and detail subscription controls.
 type clientControlMessage struct {
 	Type                string
 	DeviceID            uuid.UUID
 	CanvasSchemaVersion int
+	RuntimeProtocol     int
 	TopologyVersion     string
 	RuntimeIdentity     string
 	RuntimeVersion      *uint64
 	AlertVersion        *uint64
+	RuntimeCursor       RuntimeCursor
 }
 
 // clientControlEnvelope is the wire format accepted from browser clients.
@@ -245,6 +329,8 @@ type clientControlEnvelope struct {
 type clientControlPayload struct {
 	DeviceID            string  `json:"device_id"`
 	CanvasSchemaVersion int     `json:"canvas_schema_version"`
+	RuntimeProtocol     int     `json:"runtime_protocol"`
+	RuntimeStreamID     string  `json:"runtime_stream_id"`
 	TopologyVersion     string  `json:"topology_version"`
 	RuntimeIdentity     string  `json:"runtime_identity"`
 	RuntimeVersion      *uint64 `json:"runtime_version"`
@@ -397,13 +483,17 @@ func CloneSnapshot(snapshot *SnapshotPayload) *SnapshotPayload {
 	}
 
 	for key, value := range snapshot.Links {
-		cloned.Links[key] = value
+		cloned.Links[key] = cloneLinkRuntimeDTO(value)
 	}
 	for key, value := range snapshot.DeviceMetrics {
 		cloned.DeviceMetrics[key] = cloneDeviceRuntimeDTO(value)
 	}
 	for key, value := range snapshot.LinkMetrics {
-		cloned.LinkMetrics[key] = append([]LinkRuntimeDTO(nil), value...)
+		clonedMetrics := append([]LinkRuntimeDTO(nil), value...)
+		for index := range clonedMetrics {
+			clonedMetrics[index] = cloneLinkRuntimeDTO(clonedMetrics[index])
+		}
+		cloned.LinkMetrics[key] = clonedMetrics
 	}
 	for key, value := range snapshot.DeviceStatuses {
 		cloned.DeviceStatuses[key] = value
@@ -421,7 +511,31 @@ func cloneDeviceRuntimeDTO(value DeviceRuntimeDTO) DeviceRuntimeDTO {
 		}
 		value.FieldStates = cloned
 	}
+	value.LastCollectedAt = clonePointer(value.LastCollectedAt)
+	value.LastPolledAt = clonePointer(value.LastPolledAt)
+	value.ExpectedPollIntervalSeconds = clonePointer(value.ExpectedPollIntervalSeconds)
+	value.CPUPercent = clonePointer(value.CPUPercent)
+	value.MemPercent = clonePointer(value.MemPercent)
+	value.TempCelsius = clonePointer(value.TempCelsius)
+	value.UptimeSecs = clonePointer(value.UptimeSecs)
+	value.Stale = clonePointer(value.Stale)
 	return value
+}
+
+func cloneLinkRuntimeDTO(value LinkRuntimeDTO) LinkRuntimeDTO {
+	value.LastCollectedAt = clonePointer(value.LastCollectedAt)
+	value.TxBps = clonePointer(value.TxBps)
+	value.RxBps = clonePointer(value.RxBps)
+	value.Utilization = clonePointer(value.Utilization)
+	return value
+}
+
+func clonePointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func parseClientControlMessage(raw []byte) (clientControlMessage, error) {
@@ -435,11 +549,19 @@ func parseClientControlMessage(raw []byte) (clientControlMessage, error) {
 		return clientControlMessage{
 			Type:                envelope.Type,
 			CanvasSchemaVersion: envelope.Payload.CanvasSchemaVersion,
+			RuntimeProtocol:     envelope.Payload.RuntimeProtocol,
 			TopologyVersion:     envelope.Payload.TopologyVersion,
 			RuntimeIdentity:     envelope.Payload.RuntimeIdentity,
 			RuntimeVersion:      envelope.Payload.RuntimeVersion,
 			AlertVersion:        envelope.Payload.AlertVersion,
+			RuntimeCursor:       runtimeCursor(envelope.Payload.RuntimeStreamID, envelope.Payload.RuntimeVersion),
 		}, nil
+	case MessageTypeResumeRuntime, MessageTypeRuntimeAck:
+		cursor := runtimeCursor(envelope.Payload.RuntimeStreamID, envelope.Payload.RuntimeVersion)
+		if !cursor.Known {
+			return clientControlMessage{}, fmt.Errorf("payload runtime cursor for %s requires a non-empty stream ID and non-negative version", envelope.Type)
+		}
+		return clientControlMessage{Type: envelope.Type, RuntimeCursor: cursor}, nil
 	case MessageTypeSubscribeDetail, MessageTypeUnsubscribeDetail:
 	default:
 		return clientControlMessage{}, fmt.Errorf("unsupported client control type %q", envelope.Type)
@@ -465,6 +587,13 @@ func parseClientControlMessage(raw []byte) (clientControlMessage, error) {
 		Type:     envelope.Type,
 		DeviceID: deviceID,
 	}, nil
+}
+
+func runtimeCursor(streamID string, version *uint64) RuntimeCursor {
+	if strings.TrimSpace(streamID) == "" || version == nil {
+		return RuntimeCursor{}
+	}
+	return RuntimeCursor{StreamID: streamID, Version: *version, Known: true}
 }
 
 // AlertsToDTOs converts domain alerts into frontend DTOs.

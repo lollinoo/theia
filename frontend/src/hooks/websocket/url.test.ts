@@ -25,7 +25,9 @@ describe('appendHelloQueryParams', () => {
   it('adds only defined hello handshake fields to the URL query', () => {
     const url = appendHelloQueryParams('ws://example.test/ws?existing=1', {
       canvas_schema_version: 1,
+      runtime_protocol: 2,
       topology_version: 'topology-7',
+      runtime_stream_id: 'runtime-stream-1',
       runtime_version: 42,
       runtime_identity: 'rt-sha256:abc',
       alert_version: undefined,
@@ -40,9 +42,29 @@ describe('appendHelloQueryParams', () => {
     const parsed = new URL(url);
     expect(parsed.searchParams.get('existing')).toBe('1');
     expect(parsed.searchParams.get('canvas_schema_version')).toBe('1');
+    expect(parsed.searchParams.get('runtime_protocol')).toBe('2');
     expect(parsed.searchParams.get('topology_version')).toBe('topology-7');
+    expect(parsed.searchParams.get('runtime_stream_id')).toBe('runtime-stream-1');
     expect(parsed.searchParams.get('runtime_version')).toBe('42');
     expect(parsed.searchParams.get('runtime_identity')).toBe('rt-sha256:abc');
     expect(parsed.searchParams.has('alert_version')).toBe(false);
+  });
+
+  it('omits an undefined runtime stream ID while advertising protocol v2', () => {
+    const url = appendHelloQueryParams('ws://example.test/ws', {
+      canvas_schema_version: 1,
+      runtime_protocol: 2,
+      runtime_stream_id: undefined,
+      subscriptions: {
+        runtime: true,
+        topology: true,
+        alerts: true,
+        details_device_id: null,
+      },
+    });
+
+    const parsed = new URL(url);
+    expect(parsed.searchParams.get('runtime_protocol')).toBe('2');
+    expect(parsed.searchParams.has('runtime_stream_id')).toBe(false);
   });
 });

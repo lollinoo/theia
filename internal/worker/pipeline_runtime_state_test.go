@@ -14,6 +14,26 @@ import (
 	"github.com/lollinoo/theia/internal/ws"
 )
 
+func TestPipelineRuntimeStreamInitializesUUIDAndJournal(t *testing.T) {
+	runtime := newPipelineRuntimeState(ws.PrometheusStatusPayload{})
+
+	if runtime.overviewStreamID == "" {
+		t.Fatal("overview stream ID is empty")
+	}
+	if _, err := uuid.Parse(runtime.overviewStreamID); err != nil {
+		t.Fatalf("overview stream ID %q is not a UUID: %v", runtime.overviewStreamID, err)
+	}
+	if runtime.overviewJournal == nil {
+		t.Fatal("overview journal is nil")
+	}
+	if runtime.overviewJournal.capacity != overviewJournalCapacity {
+		t.Fatalf("overview journal capacity = %d, want %d", runtime.overviewJournal.capacity, overviewJournalCapacity)
+	}
+	if runtime.overviewJournal.maxBytes != overviewJournalMaxBytes {
+		t.Fatalf("overview journal max bytes = %d, want %d", runtime.overviewJournal.maxBytes, overviewJournalMaxBytes)
+	}
+}
+
 func TestPipelineRuntimeStateSetAlertsIncrementsVersionOnlyOnChange(t *testing.T) {
 	deviceID := uuid.New()
 	runtime := newPipelineRuntimeState(ws.PrometheusStatusPayload{})

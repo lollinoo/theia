@@ -10,6 +10,10 @@ export type CanvasTopologyLoadStatus = 'idle' | 'loading' | 'success' | 'error';
 export type CanvasPositionSaveStatus = 'idle' | 'pending' | 'success' | 'error';
 /** Describes the canvas manual edge migration status contract used by the topology canvas. */
 export type CanvasManualEdgeMigrationStatus = 'idle' | 'pending' | 'retried' | 'applied' | 'failed';
+/** Describes the active runtime stream recovery phase. */
+export type CanvasRuntimeRecoveryPhase = 'idle' | 'stream' | 'http-fallback' | 'failed';
+/** Describes the most recent runtime recovery data source. */
+export type CanvasRuntimeRecoveryMode = 'current' | 'replay' | 'snapshot' | 'http-fallback';
 /** Describes the canvas diagnostic level contract used by the topology canvas. */
 export type CanvasDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 /** Describes the canvas diagnostic source contract used by the topology canvas. */
@@ -47,6 +51,17 @@ export interface CanvasDiagnosticsSnapshot {
     lastAppliedDeltaVersion?: string;
     lastAppliedRuntimeIdentity?: string;
     lastRejectedDeltaReason?: string;
+    runtimeStreamId?: string;
+    runtimeRecoveryPhase: CanvasRuntimeRecoveryPhase;
+    runtimeRecoveryTargetVersion?: string;
+    lastRuntimeRecoveryMode?: CanvasRuntimeRecoveryMode;
+    lastRuntimeRecoveryDurationMs?: number;
+    lastRuntimeAckVersion?: string;
+    runtimeRecoveryCount: number;
+    runtimeReplayRecoveryCount: number;
+    runtimeSnapshotRecoveryCount: number;
+    runtimeHttpFallbackCount: number;
+    runtimeRecoveryFailureCount: number;
   };
   graph: {
     canonicalNodeCount: number;
@@ -123,6 +138,14 @@ type CanvasDiagnosticEventInput = Omit<CanvasDiagnosticEvent, 'id' | 'timestamp'
 
 const maxCanvasDiagnosticEvents = 200;
 
+/** Increments a non-negative diagnostic count without exceeding JSON's safe integer range. */
+export function incrementCanvasDiagnosticCount(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    return 1;
+  }
+  return Math.min(value + 1, Number.MAX_SAFE_INTEGER);
+}
+
 // createInitialState builds the diagnostics baseline used after reset and module load.
 function createInitialState(): CanvasDiagnosticsState {
   return {
@@ -134,6 +157,12 @@ function createInitialState(): CanvasDiagnosticsState {
       reconnectCount: 0,
       resyncRequiredCount: 0,
       topologyChangedCount: 0,
+      runtimeRecoveryPhase: 'idle',
+      runtimeRecoveryCount: 0,
+      runtimeReplayRecoveryCount: 0,
+      runtimeSnapshotRecoveryCount: 0,
+      runtimeHttpFallbackCount: 0,
+      runtimeRecoveryFailureCount: 0,
     },
     graph: {
       canonicalNodeCount: 0,
