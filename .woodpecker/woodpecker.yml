@@ -1,6 +1,8 @@
 # Woodpecker repository settings required by this workflow:
 # - Pipeline path: leave empty for default discovery, or set it to .woodpecker/
 # - Trusted Volumes: enabled for the Docker socket mount.
+# - GitHub webhook: subscribe to the release event. Woodpecker 3.16.0
+#   repository activation and repair do not add it automatically.
 when:
   - evaluate: 'CI_PIPELINE_EVENT == "push" || (CI_PIPELINE_EVENT == "pull_request" && CI_COMMIT_BRANCH == "master") || CI_PIPELINE_EVENT == "release" || CI_PIPELINE_EVENT == "manual"'
 
@@ -225,14 +227,13 @@ steps:
         test -n "$branch_tag"
         tag_length=$(printf '%s' "$branch_tag" | wc -c)
         test "$tag_length" -le 128
-        short_sha=$(printf '%s' "$CI_COMMIT_SHA" | cut -c1-7)
 
         printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
         docker buildx inspect theia >/dev/null 2>&1 || docker buildx create --name theia --driver docker-container --use
         docker buildx use theia
 
-        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile --target production --tag "ghcr.io/lollinoo/theia-backend:$branch_tag" --tag "ghcr.io/lollinoo/theia-backend:sha-$short_sha" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
-        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$branch_tag" --tag "ghcr.io/lollinoo/theia-frontend:sha-$short_sha" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
+        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile --target production --tag "ghcr.io/lollinoo/theia-backend:$branch_tag" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
+        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$branch_tag" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
 
   - name: publish-release-images
     image: docker:28-cli
@@ -249,10 +250,7 @@ steps:
     commands:
       - |
         set -eu
-        release_tag="$CI_COMMIT_TAG"
-        if [ -z "$release_tag" ]; then
-          release_tag=$(printf '%s' "$CI_COMMIT_REF" | sed 's#^refs/tags/##')
-        fi
+        release_tag=$(printf '%s' "$CI_COMMIT_REF" | sed 's#^refs/tags/##')
         release_tag=$(printf '%s' "$release_tag" | tr '[:upper:]' '[:lower:]' | sed -E 's|[^a-z0-9_.-]+|-|g; s|^-+||; s|-+$||')
         test -n "$release_tag"
         tag_length=$(printf '%s' "$release_tag" | wc -c)
