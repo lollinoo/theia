@@ -3,12 +3,17 @@ package ws
 // This file exercises hub behavior so refactors preserve the documented contract.
 
 import (
+	"encoding/json"
 	"math"
+	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/lollinoo/theia/internal/observability"
 )
 
@@ -34,12 +39,13 @@ func TestHubHasOverviewClientsIgnoresBootstrappingClients(t *testing.T) {
 	hub := NewHub()
 	client := newObservedTestClient(hub)
 	client.bootstrapping = true
+	selection := client.beginBootstrapSnapshotSelection()
 	hub.addClient(client)
 	if hub.HasOverviewClients() {
 		t.Fatal("bootstrapping client made HasOverviewClients() = true, want false")
 	}
 
-	_ = client.markBootstrapSnapshotSelected(1, "rt-sha256:test")
+	_ = client.markBootstrapSnapshotSelected(selection, 1, "rt-sha256:test")
 	if !hub.HasOverviewClients() {
 		t.Fatal("bootstrap-complete client made HasOverviewClients() = false, want true")
 	}
@@ -270,6 +276,7 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshotForLegacyClient(t
 
 	first := <-client.overviewSend
 	second := <-client.overviewSend
+	third := <-client.overviewSend
 
 	if !strings.Contains(string(first), MessageTypeResyncRequired) {
 		t.Fatalf("expected first overview message to be resync_required, got %s", string(first))
@@ -277,8 +284,11 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncAndSnapshotForLegacyClient(t
 	if !strings.Contains(string(second), MessageTypeSnapshot) {
 		t.Fatalf("expected second overview message to be snapshot, got %s", string(second))
 	}
-	if client.needsResync {
-		t.Fatal("expected client resync flag to clear after fallback snapshot")
+	if !strings.Contains(string(third), MessageTypeReady) {
+		t.Fatalf("expected third overview message to be ready, got %s", string(third))
+	}
+	if !client.needsResync {
+		t.Fatal("expected complete recovery to remain pending until acknowledged")
 	}
 }
 
@@ -313,7 +323,7 @@ func TestHubOverviewDelta_RecordsLegacyFallbackSnapshotPayloadMetrics(t *testing
 	}
 }
 
-func TestHubOverviewDelta_FullMailboxSchedulesResyncOnlyForHTTPBootstrapClient(t *testing.T) {
+func TestHubOverviewDelta_FullMailboxSchedulesCompleteRecoveryForHTTPBootstrapClient(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
 	client.usesHTTPRuntimeBootstrap = true
@@ -325,27 +335,30 @@ func TestHubOverviewDelta_FullMailboxSchedulesResyncOnlyForHTTPBootstrapClient(t
 	fallback.DeviceStatuses["dev-1"] = "up"
 	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, fallback)
 
-	if got := len(client.overviewSend); got != 1 {
-		t.Fatalf("overview mailbox length = %d, want 1", got)
+	if got := len(client.overviewSend); got != 3 {
+		t.Fatalf("overview mailbox length = %d, want complete three-message recovery", got)
 	}
-	payload := <-client.overviewSend
-	if !strings.Contains(string(payload), MessageTypeResyncRequired) {
-		t.Fatalf("expected overview message to be resync_required, got %s", string(payload))
-	}
-	if strings.Contains(string(payload), MessageTypeSnapshot) {
-		t.Fatalf("expected HTTP bootstrap client not to receive snapshot, got %s", string(payload))
-	}
+	assertOverviewTestMessageTypes(
+		t,
+		drainOverviewTestMessages(t, client),
+		MessageTypeResyncRequired,
+		MessageTypeSnapshot,
+		MessageTypeReady,
+	)
 	if !client.needsResync {
-		t.Fatal("expected client to remain marked for HTTP resync")
+		t.Fatal("expected recovery to remain pending until acknowledged")
 	}
 
-	version := uint64(2)
 	client.acceptHello(clientControlMessage{
-		Type:           MessageTypeHello,
-		RuntimeVersion: &version,
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			Version: 2,
+			Known:   false,
+		},
 	})
-	if client.needsResync {
-		t.Fatal("expected client hello to clear HTTP resync marker")
+	if !client.needsResync {
+		t.Fatal("unvalidated client hello cleared pending recovery")
 	}
 }
 
@@ -366,15 +379,11 @@ func TestHubOverviewDelta_SkipsFallbackSerializationWhenAllClientsUseHTTPBootstr
 
 	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, fallback)
 
-	if got := len(client.overviewSend); got != 1 {
-		t.Fatalf("overview mailbox length = %d, want 1", got)
+	if got := len(client.overviewSend); got != 0 {
+		t.Fatalf("overview mailbox length = %d, want no partial recovery after marshal failure", got)
 	}
-	payload := <-client.overviewSend
-	if !strings.Contains(string(payload), MessageTypeResyncRequired) {
-		t.Fatalf("expected overview message to be resync_required, got %s", string(payload))
-	}
-	if strings.Contains(string(payload), MessageTypeSnapshot) {
-		t.Fatalf("expected HTTP bootstrap client not to receive snapshot, got %s", string(payload))
+	if !client.needsResync {
+		t.Fatal("marshal failure cleared recovery-pending state")
 	}
 }
 
@@ -403,76 +412,7 @@ func TestHubOverviewDelta_SkipsFallbackSerializationForReadyLegacyClient(t *test
 	}
 }
 
-func TestHubOverviewDelta_SkipsLegacyFallbackWhenClientBecomesHTTPBootstrap(t *testing.T) {
-	hub := NewHub()
-	client := registerTestClient(hub)
-	for i := 0; i < cap(client.overviewSend); i++ {
-		client.overviewSend <- []byte("occupied")
-	}
-
-	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
-	if err != nil {
-		t.Fatalf("marshal resync payload: %v", err)
-	}
-	_, needsFallback, observedOverviewEpoch := hub.enqueueOverviewDelta(client, []byte(`{"type":"runtime_delta"}`), resyncPayload)
-	if !needsFallback {
-		t.Fatal("expected legacy overflow to request fallback")
-	}
-
-	version := uint64(2)
-	client.acceptHello(clientControlMessage{
-		Type:           MessageTypeHello,
-		RuntimeVersion: &version,
-	})
-
-	if ok := hub.enqueueOverviewLegacyFallback(client, []byte(`{"type":"runtime_delta"}`), resyncPayload, []byte(`{"type":"snapshot"}`), observedOverviewEpoch); ok {
-		t.Fatal("expected fallback enqueue to be skipped after HTTP bootstrap")
-	}
-	if got := len(client.overviewSend); got != 0 {
-		t.Fatalf("overview mailbox length = %d, want 0", got)
-	}
-	if client.needsResync {
-		t.Fatal("expected client to remain out of legacy fallback resync state")
-	}
-}
-
-func TestHubOverviewDelta_SkipsStaleLegacyFallbackAfterNewerSnapshot(t *testing.T) {
-	hub := NewHub()
-	client := registerTestClient(hub)
-	for i := 0; i < cap(client.overviewSend); i++ {
-		client.overviewSend <- []byte("occupied")
-	}
-
-	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
-	if err != nil {
-		t.Fatalf("marshal resync payload: %v", err)
-	}
-	_, needsFallback, observedOverviewEpoch := hub.enqueueOverviewDelta(client, []byte(`{"type":"old-runtime-delta"}`), resyncPayload)
-	if !needsFallback {
-		t.Fatal("expected legacy overflow to request fallback")
-	}
-
-	hub.enqueueOverviewSnapshot(client, []byte(`{"type":"new-snapshot"}`))
-
-	if ok := hub.enqueueOverviewLegacyFallback(client, []byte(`{"type":"old-runtime-delta"}`), resyncPayload, []byte(`{"type":"old-snapshot"}`), observedOverviewEpoch); ok {
-		t.Fatal("expected stale fallback enqueue to be skipped after newer snapshot")
-	}
-	if got := len(client.overviewSend); got != 1 {
-		t.Fatalf("overview mailbox length = %d, want 1", got)
-	}
-	payload := <-client.overviewSend
-	if !strings.Contains(string(payload), "new-snapshot") {
-		t.Fatalf("expected newer snapshot to remain queued, got %s", string(payload))
-	}
-	if strings.Contains(string(payload), "old-runtime-delta") || strings.Contains(string(payload), "old-snapshot") {
-		t.Fatalf("expected stale fallback payloads not to be queued, got %s", string(payload))
-	}
-	if client.needsResync {
-		t.Fatal("expected newer snapshot state not to be marked for legacy resync")
-	}
-}
-
-func TestHubOverviewDelta_RecordsHTTPResyncMetricsOnceWhilePending(t *testing.T) {
+func TestHubOverviewDelta_RecordsHTTPRecoveryMetricsWhileKeepingMailboxBounded(t *testing.T) {
 	registry := observability.ResetDefaultForTest()
 	t.Cleanup(func() {
 		observability.ResetDefaultForTest()
@@ -488,8 +428,8 @@ func TestHubOverviewDelta_RecordsHTTPResyncMetricsOnceWhilePending(t *testing.T)
 	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 1, 2, EmptySnapshot())
 	hub.BroadcastOverviewDelta(EmptyRuntimeDeltaPayload(), 2, 3, EmptySnapshot())
 
-	if got := len(client.overviewSend); got != 1 {
-		t.Fatalf("overview mailbox length = %d, want 1", got)
+	if got, limit := len(client.overviewSend), cap(client.overviewSend); got > limit {
+		t.Fatalf("overview mailbox length = %d, want at most %d", got, limit)
 	}
 
 	metrics := string(registry.MarshalPrometheus())
@@ -498,9 +438,6 @@ func TestHubOverviewDelta_RecordsHTTPResyncMetricsOnceWhilePending(t *testing.T)
 	}
 	if !strings.Contains(metrics, `theia_ws_overview_mailbox_clear_total{reason="client_mailbox_full"} 32`) {
 		t.Fatalf("expected cleared mailbox metric for the first overflow, got:\n%s", metrics)
-	}
-	if !strings.Contains(metrics, `theia_ws_overview_resync_suppressed_total{reason="client_resync_scheduled"} 1`) {
-		t.Fatalf("expected duplicate resync suppression metric, got:\n%s", metrics)
 	}
 }
 
@@ -528,29 +465,130 @@ func TestHubAddRemoveClientUpdatesConnectedClientMetric(t *testing.T) {
 	}
 }
 
-func TestClientAcceptHelloClearsQueuedOverviewMessages(t *testing.T) {
+func TestClientAcceptHelloKeepsRecoveryUntilTargetCursorIsAcknowledged(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
 	client.usesHTTPRuntimeBootstrap = true
 	client.needsResync = true
+	client.pendingOverviewRecovery = &overviewRecoveryState{
+		streamID:      "runtime-stream-1",
+		targetVersion: 12,
+		mode:          OverviewSyncModeReplay,
+	}
 	client.overviewSend <- []byte("stale-runtime-delta")
 	client.overviewSend <- []byte("stale-resync-marker")
 
-	version := uint64(12)
 	client.acceptHello(clientControlMessage{
-		Type:           MessageTypeHello,
-		RuntimeVersion: &version,
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  11,
+			Known:    true,
+		},
 	})
 
-	if client.needsResync {
-		t.Fatal("expected client hello to clear HTTP resync marker")
+	if !client.needsResync || client.pendingOverviewRecovery == nil {
+		t.Fatal("intermediate cursor cleared pending recovery")
 	}
-	if got := len(client.overviewSend); got != 0 {
-		t.Fatalf("overview mailbox length = %d, want 0", got)
+	if got := len(client.overviewSend); got != 2 {
+		t.Fatalf("overview mailbox length = %d, want recovery queue preserved", got)
+	}
+
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  12,
+			Known:    true,
+		},
+	})
+	if client.needsResync || client.pendingOverviewRecovery != nil {
+		t.Fatal("target cursor did not acknowledge pending recovery")
+	}
+	if got := len(client.overviewSend); got != 2 {
+		t.Fatalf("acknowledging recovery cleared %d queued messages, want queue preserved", 2-got)
 	}
 }
 
-func TestHubOverviewSnapshotSendsResyncOnlyForHTTPBootstrapClient(t *testing.T) {
+func TestClientRuntimeQueryHelloEchoMismatchConsumesSuppression(t *testing.T) {
+	query := clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  5,
+			Known:    true,
+		},
+	}
+	tests := []struct {
+		name  string
+		hello clientControlMessage
+	}{
+		{
+			name: "protocol mismatch",
+			hello: clientControlMessage{
+				Type:            MessageTypeHello,
+				RuntimeProtocol: 3,
+				RuntimeCursor:   query.RuntimeCursor,
+			},
+		},
+		{
+			name: "stream mismatch",
+			hello: clientControlMessage{
+				Type:            MessageTypeHello,
+				RuntimeProtocol: RuntimeStreamProtocolVersion,
+				RuntimeCursor: RuntimeCursor{
+					StreamID: "runtime-stream-2",
+					Version:  5,
+					Known:    true,
+				},
+			},
+		},
+		{
+			name: "version mismatch",
+			hello: clientControlMessage{
+				Type:            MessageTypeHello,
+				RuntimeProtocol: RuntimeStreamProtocolVersion,
+				RuntimeCursor: RuntimeCursor{
+					StreamID: "runtime-stream-1",
+					Version:  3,
+					Known:    true,
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := make([]RuntimeSyncRequest, 0, 2)
+			client := &Client{
+				runtimeSync: func(_ *Client, request RuntimeSyncRequest) {
+					requests = append(requests, request)
+				},
+			}
+			client.initializeRuntimeQueryHello(query)
+
+			client.acceptHello(test.hello)
+			if len(requests) != 1 || requests[0].Cursor != test.hello.RuntimeCursor {
+				t.Fatalf("mismatching hello sync requests = %#v, want cursor %#v", requests, test.hello.RuntimeCursor)
+			}
+
+			client.acceptHello(query)
+			if len(requests) != 2 || requests[1].Cursor != query.RuntimeCursor {
+				t.Fatalf("original query after mismatch sync requests = %#v, want second cursor %#v", requests, query.RuntimeCursor)
+			}
+			if test.hello.RuntimeCursor.StreamID == query.RuntimeCursor.StreamID &&
+				test.hello.RuntimeCursor.Version < query.RuntimeCursor.Version &&
+				client.AckedRuntimeCursor() != query.RuntimeCursor {
+				t.Fatalf("lower-version hello regressed acknowledged cursor to %#v, want %#v", client.AckedRuntimeCursor(), query.RuntimeCursor)
+			}
+		})
+	}
+}
+
+func TestHubOverviewSnapshotSendsCompleteBatchToHTTPBootstrapClient(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
 	client.usesHTTPRuntimeBootstrap = true
@@ -559,19 +597,19 @@ func TestHubOverviewSnapshotSendsResyncOnlyForHTTPBootstrapClient(t *testing.T) 
 	snapshot.DeviceStatuses["dev-1"] = "up"
 	hub.BroadcastOverviewSnapshot(snapshot, 4)
 
-	if got := len(client.overviewSend); got != 1 {
-		t.Fatalf("overview mailbox length = %d, want 1", got)
+	if got := len(client.overviewSend); got != 3 {
+		t.Fatalf("overview mailbox length = %d, want complete three-message recovery", got)
 	}
-	payload := <-client.overviewSend
-	if !strings.Contains(string(payload), MessageTypeResyncRequired) {
-		t.Fatalf("expected overview message to be resync_required, got %s", string(payload))
-	}
-	if strings.Contains(string(payload), MessageTypeSnapshot) {
-		t.Fatalf("expected HTTP bootstrap client not to receive snapshot, got %s", string(payload))
-	}
+	assertOverviewTestMessageTypes(
+		t,
+		drainOverviewTestMessages(t, client),
+		MessageTypeResyncRequired,
+		MessageTypeSnapshot,
+		MessageTypeReady,
+	)
 }
 
-func TestHubOverviewResyncSendsMarkerOnlyForHTTPBootstrapClient(t *testing.T) {
+func TestHubOverviewResyncSendsCompleteBatchToHTTPBootstrapClient(t *testing.T) {
 	hub := NewHub()
 	client := registerTestClient(hub)
 	client.usesHTTPRuntimeBootstrap = true
@@ -580,18 +618,18 @@ func TestHubOverviewResyncSendsMarkerOnlyForHTTPBootstrapClient(t *testing.T) {
 	snapshot.DeviceStatuses["dev-1"] = "up"
 	hub.BroadcastOverviewResync(ResyncReasonStateChangesDrop, snapshot, 7)
 
-	if got := len(client.overviewSend); got != 1 {
-		t.Fatalf("overview mailbox length = %d, want 1", got)
+	if got := len(client.overviewSend); got != 3 {
+		t.Fatalf("overview mailbox length = %d, want complete three-message recovery", got)
 	}
-	payload := <-client.overviewSend
-	if !strings.Contains(string(payload), MessageTypeResyncRequired) {
-		t.Fatalf("expected overview message to be resync_required, got %s", string(payload))
-	}
-	if strings.Contains(string(payload), MessageTypeSnapshot) {
-		t.Fatalf("expected HTTP bootstrap client not to receive snapshot, got %s", string(payload))
-	}
+	assertOverviewTestMessageTypes(
+		t,
+		drainOverviewTestMessages(t, client),
+		MessageTypeResyncRequired,
+		MessageTypeSnapshot,
+		MessageTypeReady,
+	)
 	if !client.needsResync {
-		t.Fatal("expected client to remain marked for HTTP resync")
+		t.Fatal("expected client recovery to remain pending until acknowledged")
 	}
 }
 
@@ -653,6 +691,1339 @@ func TestHubEnqueue_RecordsClientBufferBackpressure(t *testing.T) {
 	metrics := string(registry.MarshalPrometheus())
 	if !strings.Contains(metrics, `theia_ws_backpressure_total{reason="client_buffer_full",scope="client_send"} 1`) {
 		t.Fatalf("expected client buffer backpressure metric, got:\n%s", metrics)
+	}
+}
+
+func TestReplaceOverviewStreamReplacesFullMailboxWithCompleteSnapshotBatch(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	ackVersion := uint64(92)
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  ackVersion,
+			Known:    true,
+		},
+	})
+	for len(client.overviewSend) < cap(client.overviewSend) {
+		client.overviewSend <- []byte(`{"type":"stale_runtime_delta"}`)
+	}
+
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+	batch := OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   94,
+		RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+		Snapshot:        snapshot,
+		AlertVersion:    7,
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, batch); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+
+	messages := drainOverviewTestMessages(t, client)
+	assertOverviewTestMessageTypes(t, messages, MessageTypeResyncRequired, MessageTypeSnapshot, MessageTypeReady)
+
+	var marker ResyncRequiredPayload
+	decodeOverviewTestPayload(t, messages[0], &marker)
+	if marker.Strategy != RuntimeSyncStrategyStream || marker.TargetVersion == nil || *marker.TargetVersion != 94 || marker.RuntimeStreamID != "runtime-stream-1" {
+		t.Fatalf("resync marker = %#v, want stream recovery target runtime-stream-1/94", marker)
+	}
+
+	var state SnapshotMessagePayload
+	decodeOverviewTestPayload(t, messages[1], &state)
+	if state.Version != 94 || state.RuntimeStreamID != "runtime-stream-1" || state.RuntimeIdentity != batch.RuntimeIdentity {
+		t.Fatalf("snapshot state = %#v, want runtime-stream-1/94 identity %q", state, batch.RuntimeIdentity)
+	}
+
+	var ready ReadyPayload
+	decodeOverviewTestPayload(t, messages[2], &ready)
+	if ready.RuntimeVersion != 94 || ready.RuntimeStreamID != "runtime-stream-1" || ready.SyncMode != string(OverviewSyncModeSnapshot) {
+		t.Fatalf("ready payload = %#v, want snapshot barrier runtime-stream-1/94", ready)
+	}
+}
+
+func TestReplaceOverviewStreamLegacyClientReceivesSnapshotAndNeverReplay(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	ackVersion := uint64(92)
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: 0,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  ackVersion,
+			Known:    true,
+		},
+	})
+
+	snapshot := EmptySnapshot()
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   94,
+		RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+		Snapshot:        snapshot,
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+
+	messages := drainOverviewTestMessages(t, client)
+	assertOverviewTestMessageTypes(t, messages, MessageTypeResyncRequired, MessageTypeSnapshot, MessageTypeReady)
+	for _, message := range messages {
+		if message.Type == MessageTypeRuntimeReplay {
+			t.Fatal("legacy client received runtime_replay")
+		}
+	}
+}
+
+func TestReplaceOverviewStreamProtocolV2ClientReceivesReplayWhenAvailable(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	ackVersion := uint64(92)
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  ackVersion,
+			Known:    true,
+		},
+	})
+
+	replay := EmptyRuntimeDeltaPayload()
+	replay.Devices["dev-1"] = map[string]any{"primary_health": "up_fresh"}
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeReplay,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   94,
+		RuntimeIdentity: "rt-sha256:replayed",
+		ReplayCursor:    RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Replay:          replay,
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+
+	messages := drainOverviewTestMessages(t, client)
+	assertOverviewTestMessageTypes(t, messages, MessageTypeResyncRequired, MessageTypeRuntimeReplay, MessageTypeReady)
+	var state RuntimeReplayMessagePayload
+	decodeOverviewTestPayload(t, messages[1], &state)
+	if state.FromVersion != 92 || state.Version != 94 || state.RuntimeStreamID != "runtime-stream-1" {
+		t.Fatalf("replay state = %#v, want runtime-stream-1 92->94", state)
+	}
+}
+
+func TestReplaceOverviewStreamClosedAndMarshalFailuresDoNotPartiallyQueue(t *testing.T) {
+	t.Run("closed client", func(t *testing.T) {
+		hub := NewHub()
+		client := registerTestClient(hub)
+		client.overviewSend <- []byte("stale")
+		client.closed = true
+
+		if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+			Mode:            OverviewSyncModeSnapshot,
+			RuntimeStreamID: "runtime-stream-1",
+			TargetVersion:   94,
+			Snapshot:        EmptySnapshot(),
+		}); ok {
+			t.Fatal("ReplaceOverviewStream returned true for closed client")
+		}
+		if got := <-client.overviewSend; string(got) != "stale" {
+			t.Fatalf("closed client mailbox = %q, want unchanged stale payload", string(got))
+		}
+	})
+
+	t.Run("marshal failure", func(t *testing.T) {
+		hub := NewHub()
+		client := registerTestClient(hub)
+		client.overviewSend <- []byte("stale")
+		unsupported := math.NaN()
+		snapshot := EmptySnapshot()
+		snapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", CPUPercent: &unsupported}
+
+		if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+			Mode:            OverviewSyncModeSnapshot,
+			RuntimeStreamID: "runtime-stream-1",
+			TargetVersion:   94,
+			Snapshot:        snapshot,
+		}); ok {
+			t.Fatal("ReplaceOverviewStream returned true for unmarshalable snapshot")
+		}
+		if got := <-client.overviewSend; string(got) != "stale" {
+			t.Fatalf("marshal-failed mailbox = %q, want unchanged stale payload", string(got))
+		}
+	})
+}
+
+func TestReplaceOverviewStreamDoesNotInvokeMarshalCallbackWhileHoldingClientLock(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  92,
+			Known:    true,
+		},
+	})
+	replay := EmptyRuntimeDeltaPayload()
+	replay.Devices["dev-1"] = map[string]any{
+		"probe": overviewClientLockMarshalProbe{client: client},
+	}
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+			Reason:          ResyncReasonClientResync,
+			Mode:            OverviewSyncModeReplay,
+			RuntimeStreamID: "runtime-stream-1",
+			TargetVersion:   94,
+			ReplayCursor:    RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+			Replay:          replay,
+		})
+	}()
+
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("ReplaceOverviewStream returned false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReplaceOverviewStream deadlocked while invoking MarshalJSON")
+	}
+}
+
+type overviewClientLockMarshalProbe struct {
+	client *Client
+}
+
+func (p overviewClientLockMarshalProbe) MarshalJSON() ([]byte, error) {
+	p.client.mu.Lock()
+	p.client.mu.Unlock()
+	return []byte(`"marshaled"`), nil
+}
+
+func TestReplaceOverviewStreamRejectsReplayWhenSameStreamCursorAdvancesDuringMarshal(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  92,
+			Known:    true,
+		},
+	})
+	client.overviewSend <- []byte("stale")
+	replay := EmptyRuntimeDeltaPayload()
+	replay.Devices["dev-1"] = map[string]any{
+		"selected_from": overviewClientCursorAdvanceMarshalProbe{
+			client: client,
+			cursor: RuntimeCursor{StreamID: "runtime-stream-1", Version: 93, Known: true},
+		},
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeReplay,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   94,
+		ReplayCursor:    RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Replay:          replay,
+	}); ok {
+		messages := drainOverviewTestMessages(t, client)
+		var emitted RuntimeReplayMessagePayload
+		decodeOverviewTestPayload(t, messages[1], &emitted)
+		t.Fatalf(
+			"ReplaceOverviewStream relabeled replay selected from 92 as %d->%d",
+			emitted.FromVersion,
+			emitted.Version,
+		)
+	}
+	if got := <-client.overviewSend; string(got) != "stale" {
+		t.Fatalf("rejected replay mailbox = %q, want unchanged stale payload", string(got))
+	}
+}
+
+type overviewClientCursorAdvanceMarshalProbe struct {
+	client *Client
+	cursor RuntimeCursor
+}
+
+func (p overviewClientCursorAdvanceMarshalProbe) MarshalJSON() ([]byte, error) {
+	p.client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor:   p.cursor,
+	})
+	return []byte(`"selected-from-92"`), nil
+}
+
+func TestReplaceOverviewStreamPendingRecoveryKeepsNewestCompleteBatch(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	ackVersion := uint64(92)
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  ackVersion,
+			Known:    true,
+		},
+	})
+
+	oldSnapshot := EmptySnapshot()
+	oldSnapshot.Devices["old"] = DeviceRuntimeDTO{DeviceID: "old"}
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          "old-recovery",
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   94,
+		Snapshot:        oldSnapshot,
+	}); !ok {
+		t.Fatal("old ReplaceOverviewStream returned false")
+	}
+
+	newReplay := EmptyRuntimeDeltaPayload()
+	newReplay.Devices["new"] = map[string]any{"primary_health": "up_fresh"}
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          "new-recovery",
+		Mode:            OverviewSyncModeReplay,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   95,
+		ReplayCursor:    RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Replay:          newReplay,
+	}); !ok {
+		t.Fatal("new ReplaceOverviewStream returned false")
+	}
+
+	messages := drainOverviewTestMessages(t, client)
+	assertOverviewTestMessageTypes(t, messages, MessageTypeResyncRequired, MessageTypeRuntimeReplay, MessageTypeReady)
+	serialized, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatalf("marshal queued messages: %v", err)
+	}
+	if strings.Contains(string(serialized), "old-recovery") || strings.Contains(string(serialized), "\"old\"") {
+		t.Fatalf("new recovery retained stale batch: %s", serialized)
+	}
+	if !strings.Contains(string(serialized), "new-recovery") || !strings.Contains(string(serialized), "\"new\"") {
+		t.Fatalf("new recovery batch missing newest state: %s", serialized)
+	}
+}
+
+func TestReplaceOverviewStreamRejectsOlderBatchAfterNewerRecovery(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  92,
+			Known:    true,
+		},
+	})
+
+	newReplay := EmptyRuntimeDeltaPayload()
+	newReplay.Devices["new"] = map[string]any{"primary_health": "up_fresh"}
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          "new-recovery",
+		Mode:            OverviewSyncModeReplay,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   95,
+		ReplayCursor:    RuntimeCursor{StreamID: "runtime-stream-1", Version: 92, Known: true},
+		Replay:          newReplay,
+	}); !ok {
+		t.Fatal("new ReplaceOverviewStream returned false")
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          "stale-recovery",
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   94,
+		Snapshot:        EmptySnapshot(),
+	}); ok {
+		t.Fatal("older ReplaceOverviewStream replaced newer pending recovery")
+	}
+
+	messages := drainOverviewTestMessages(t, client)
+	assertOverviewTestMessageTypes(t, messages, MessageTypeResyncRequired, MessageTypeRuntimeReplay, MessageTypeReady)
+	var replay RuntimeReplayMessagePayload
+	decodeOverviewTestPayload(t, messages[1], &replay)
+	if replay.Version != 95 {
+		t.Fatalf("retained replay target = %d, want newest target 95", replay.Version)
+	}
+}
+
+func TestReplaceOverviewStreamReplayFromAckRemainsOrderedAfterIntermediateDelta(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	ackVersion := uint64(92)
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  ackVersion,
+			Known:    true,
+		},
+	})
+
+	if overflowed := hub.BroadcastOverviewStreamDelta(EmptyRuntimeDeltaPayload(), 92, 93, "runtime-stream-1"); len(overflowed) != 0 {
+		t.Fatalf("92->93 overflowed %d clients", len(overflowed))
+	}
+	intermediate := decodeOverviewTestMessage(t, <-client.overviewSend)
+	if intermediate.Type != MessageTypeRuntimeDelta {
+		t.Fatalf("intermediate message type = %q, want runtime_delta", intermediate.Type)
+	}
+	var intermediateDelta RuntimeDeltaMessagePayload
+	decodeOverviewTestPayload(t, intermediate, &intermediateDelta)
+	browserVersion := ackVersion
+	if intermediateDelta.BaseVersion != browserVersion {
+		t.Fatalf("intermediate delta base = %d, want browser version %d", intermediateDelta.BaseVersion, browserVersion)
+	}
+	browserVersion = intermediateDelta.Version
+	if browserVersion != 93 {
+		t.Fatalf("browser version after intermediate delta = %d, want 93", browserVersion)
+	}
+	// The browser is now at version 93 while its last acknowledged cursor
+	// intentionally remains at version 92.
+	if got := client.AckedRuntimeCursor(); got.Version != ackVersion {
+		t.Fatalf("acknowledged cursor = %d, want stale version %d", got.Version, ackVersion)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeReplay,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   94,
+		ReplayCursor:    RuntimeCursor{StreamID: "runtime-stream-1", Version: ackVersion, Known: true},
+		Replay:          EmptyRuntimeDeltaPayload(),
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	if overflowed := hub.BroadcastOverviewStreamDelta(EmptyRuntimeDeltaPayload(), 94, 95, "runtime-stream-1"); len(overflowed) != 0 {
+		t.Fatalf("94->95 overflowed %d clients after recovery replacement", len(overflowed))
+	}
+
+	messages := drainOverviewTestMessages(t, client)
+	assertOverviewTestMessageTypes(t, messages, MessageTypeResyncRequired, MessageTypeRuntimeReplay, MessageTypeReady, MessageTypeRuntimeDelta)
+	var replay RuntimeReplayMessagePayload
+	decodeOverviewTestPayload(t, messages[1], &replay)
+	if replay.FromVersion != ackVersion || replay.FromVersion >= browserVersion || replay.Version != 94 {
+		t.Fatalf(
+			"replay range = %d->%d with browser at %d, want overlapping 92->94",
+			replay.FromVersion,
+			replay.Version,
+			browserVersion,
+		)
+	}
+	resyncCount := 0
+	for _, message := range messages {
+		if message.Type == MessageTypeResyncRequired {
+			resyncCount++
+		}
+	}
+	if resyncCount != 1 {
+		t.Fatalf("resync_required count = %d, want one complete recovery cycle", resyncCount)
+	}
+}
+
+func TestReplaceOverviewStreamCurrentQueuesReadyOnly(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-1",
+			Version:  94,
+			Known:    true,
+		},
+	})
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Mode:            OverviewSyncModeCurrent,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   94,
+		RuntimeIdentity: "rt-sha256:current",
+		AlertVersion:    8,
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+
+	messages := drainOverviewTestMessages(t, client)
+	assertOverviewTestMessageTypes(t, messages, MessageTypeReady)
+	var ready ReadyPayload
+	decodeOverviewTestPayload(t, messages[0], &ready)
+	if ready.SyncMode != string(OverviewSyncModeCurrent) || ready.RuntimeVersion != 94 || ready.AlertVersion != 8 {
+		t.Fatalf("ready payload = %#v, want current runtime 94 alert 8", ready)
+	}
+}
+
+func TestRuntimeAckCeilingRejectsBeyondInstalledSnapshot(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	client.ackedRuntimeCursor = RuntimeCursor{StreamID: "runtime-stream-1", Version: 5, Known: true}
+	observed := make([]RuntimeCursor, 0, 1)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true})
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor != (RuntimeCursor{StreamID: "runtime-stream-1", Version: 5, Known: true}) ||
+		pending == nil || pending.streamID != "runtime-stream-1" || pending.targetVersion != 10 || !needsResync {
+		t.Fatalf("future ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("future ACK observer calls = %#v, want none", observed)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	client.acceptRuntimeAck(want)
+	client.mu.Lock()
+	cursor = client.ackedRuntimeCursor
+	pending = client.pendingOverviewRecovery
+	needsResync = client.needsResync
+	client.mu.Unlock()
+	if cursor != want || pending != nil || needsResync {
+		t.Fatalf("target ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("target ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+}
+
+func TestReplaceOverviewStreamSanitizesFutureSameStreamHelloCursor(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	future := RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true}
+	client.ackedRuntimeCursor = future
+	observed := make([]RuntimeCursor, 0, 1)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+		Snapshot:        nil,
+	}); ok {
+		t.Fatal("ReplaceOverviewStream returned true for nil snapshot")
+	}
+	if got := client.AckedRuntimeCursor(); got != future {
+		t.Fatalf("failed replacement cursor = %#v, want %#v", got, future)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	if got := client.AckedRuntimeCursor(); got.Known {
+		t.Fatalf("installed replacement cursor = %#v, want unknown", got)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	client.acceptRuntimeAck(want)
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor != want || pending != nil || needsResync {
+		t.Fatalf("sanitized target ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("sanitized target ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+}
+
+func TestRuntimeAckCeilingSanitizesFutureHelloAfterReplacement(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.bootstrapping = true
+	observed := make([]RuntimeCursor, 0, 1)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor:   RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true},
+	})
+
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor.Known || pending == nil || pending.streamID != "runtime-stream-1" ||
+		pending.targetVersion != 10 || !needsResync {
+		t.Fatalf("future hello state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	client.acceptRuntimeAck(want)
+	client.mu.Lock()
+	cursor = client.ackedRuntimeCursor
+	pending = client.pendingOverviewRecovery
+	needsResync = client.needsResync
+	client.mu.Unlock()
+	if cursor != want || pending != nil || needsResync {
+		t.Fatalf("target ACK after future hello = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("target ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+
+	legacyClient := registerTestClient(NewHub())
+	legacyClient.bootstrapping = true
+	legacyCursor := RuntimeCursor{StreamID: "legacy-stream", Version: 99, Known: true}
+	legacyClient.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor:   legacyCursor,
+	})
+	if got := legacyClient.AckedRuntimeCursor(); got != legacyCursor {
+		t.Fatalf("ceiling-unknown hello cursor = %#v, want preserved %#v", got, legacyCursor)
+	}
+
+	rotatedClient := registerTestClient(hub)
+	rotatedClient.bootstrapping = true
+	if ok := hub.ReplaceOverviewStream(rotatedClient, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-A",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("rotated ReplaceOverviewStream returned false")
+	}
+	rotatedCursor := RuntimeCursor{StreamID: "runtime-stream-B", Version: 99, Known: true}
+	rotatedClient.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor:   rotatedCursor,
+	})
+	rotatedClient.mu.Lock()
+	gotRotatedCursor := rotatedClient.ackedRuntimeCursor
+	rotatedPending := rotatedClient.pendingOverviewRecovery
+	rotatedNeedsResync := rotatedClient.needsResync
+	rotatedClient.mu.Unlock()
+	if gotRotatedCursor != rotatedCursor || rotatedPending == nil ||
+		rotatedPending.streamID != "runtime-stream-A" || !rotatedNeedsResync {
+		t.Fatalf(
+			"different-stream hello state = cursor %#v pending %#v needs_resync %t",
+			gotRotatedCursor,
+			rotatedPending,
+			rotatedNeedsResync,
+		)
+	}
+}
+
+func TestStreamlessReplacementClearsRuntimeAckCeiling(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	initial := RuntimeCursor{StreamID: "runtime-stream-1", Version: 5, Known: true}
+	client.ackedRuntimeCursor = initial
+	observed := make([]RuntimeCursor, 0, 1)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("stream-aware ReplaceOverviewStream returned false")
+	}
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:        ResyncReasonClientResync,
+		Mode:          OverviewSyncModeSnapshot,
+		TargetVersion: 11,
+		Snapshot:      EmptySnapshot(),
+	}); !ok {
+		t.Fatal("streamless ReplaceOverviewStream returned false")
+	}
+	if got := client.AckedRuntimeCursor(); got != initial {
+		t.Fatalf("streamless replacement cursor = %#v, want preserved %#v", got, initial)
+	}
+
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 6, Known: true})
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor != initial || pending == nil || pending.streamID != "" || pending.targetVersion != 11 || !needsResync {
+		t.Fatalf("obsolete ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("obsolete ACK observer calls = %#v, want none", observed)
+	}
+}
+
+func TestRuntimeAckCeilingAdvancesWithQueuedDelta(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	client.ackedRuntimeCursor = RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	observed := make([]RuntimeCursor, 0, 2)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeCurrent,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true})
+	observed = observed[:0]
+
+	if overflowed := hub.BroadcastOverviewStreamDelta(
+		EmptyRuntimeDeltaPayload(),
+		10,
+		11,
+		"runtime-stream-1",
+	); len(overflowed) != 0 {
+		t.Fatalf("queued delta overflowed %d clients", len(overflowed))
+	}
+
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 12, Known: true})
+	if got := client.AckedRuntimeCursor(); got != (RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}) {
+		t.Fatalf("future delta ACK cursor = %#v, want runtime-stream-1/10", got)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("future delta ACK observer calls = %#v, want none", observed)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true}
+	client.acceptRuntimeAck(want)
+	if got := client.AckedRuntimeCursor(); got != want {
+		t.Fatalf("queued delta ACK cursor = %#v, want %#v", got, want)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("queued delta ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+}
+
+func TestRuntimeAckCeilingRejectsOldAndFutureCursorsAfterStreamRotation(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	oldCursor := RuntimeCursor{StreamID: "runtime-stream-1", Version: 5, Known: true}
+	client.ackedRuntimeCursor = oldCursor
+	observed := make([]RuntimeCursor, 0, 1)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-2",
+		TargetVersion:   10,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	if got := client.AckedRuntimeCursor(); got != oldCursor {
+		t.Fatalf("rotated replacement cursor = %#v, want preserved %#v", got, oldCursor)
+	}
+
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 6, Known: true})
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-2", Version: 11, Known: true})
+	if got := client.AckedRuntimeCursor(); got != oldCursor {
+		t.Fatalf("invalid rotated ACK cursor = %#v, want preserved %#v", got, oldCursor)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("invalid rotated ACK observer calls = %#v, want none", observed)
+	}
+
+	want := RuntimeCursor{StreamID: "runtime-stream-2", Version: 10, Known: true}
+	client.acceptRuntimeAck(want)
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor != want || pending != nil || needsResync {
+		t.Fatalf("rotated target ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("rotated target ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+}
+
+func TestRuntimeAckCeilingDoesNotAdvanceForOverflowPending(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	client.runtimeProtocol = RuntimeStreamProtocolVersion
+	client.ackedRuntimeCursor = RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}
+	observed := make([]RuntimeCursor, 0, 2)
+	client.runtimeAck = func(_ *Client, cursor RuntimeCursor) {
+		observed = append(observed, cursor)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeCurrent,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   10,
+	}); !ok {
+		t.Fatal("ReplaceOverviewStream returned false")
+	}
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true})
+	observed = observed[:0]
+
+	client.mu.Lock()
+	for len(client.overviewSend) < cap(client.overviewSend) {
+		client.overviewSend <- []byte(`{"type":"placeholder"}`)
+	}
+	client.mu.Unlock()
+	if overflowed := hub.BroadcastOverviewStreamDelta(
+		EmptyRuntimeDeltaPayload(),
+		10,
+		11,
+		"runtime-stream-1",
+	); len(overflowed) != 1 || overflowed[0] != client {
+		t.Fatalf("overflowed clients = %#v, want only target client", overflowed)
+	}
+
+	client.acceptRuntimeAck(RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true})
+	client.mu.Lock()
+	cursor := client.ackedRuntimeCursor
+	pending := client.pendingOverviewRecovery
+	needsResync := client.needsResync
+	client.mu.Unlock()
+	if cursor != (RuntimeCursor{StreamID: "runtime-stream-1", Version: 10, Known: true}) ||
+		pending == nil || pending.streamID != "runtime-stream-1" || pending.targetVersion != 11 || !needsResync {
+		t.Fatalf("pending-only ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 0 {
+		t.Fatalf("pending-only ACK observer calls = %#v, want none", observed)
+	}
+
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonHubBufferFull,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-1",
+		TargetVersion:   11,
+		Snapshot:        EmptySnapshot(),
+	}); !ok {
+		t.Fatal("replacement after overflow returned false")
+	}
+	want := RuntimeCursor{StreamID: "runtime-stream-1", Version: 11, Known: true}
+	client.acceptRuntimeAck(want)
+	client.mu.Lock()
+	cursor = client.ackedRuntimeCursor
+	pending = client.pendingOverviewRecovery
+	needsResync = client.needsResync
+	client.mu.Unlock()
+	if cursor != want || pending != nil || needsResync {
+		t.Fatalf("replacement target ACK state = cursor %#v pending %#v needs_resync %t", cursor, pending, needsResync)
+	}
+	if len(observed) != 1 || observed[0] != want {
+		t.Fatalf("replacement target ACK observer calls = %#v, want [%#v]", observed, want)
+	}
+}
+
+func TestOverviewMailboxRecoveryFullReplacementIncludesBootstrappingClient(t *testing.T) {
+	hub := NewHub()
+	client := newObservedTestClient(hub)
+	client.bootstrapping = true
+	selection := client.beginBootstrapSnapshotSelection()
+	hub.addClient(client)
+
+	snapshot := EmptySnapshot()
+	hub.ReplaceOverviewStreams(OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-2",
+		TargetVersion:   94,
+		RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+		Snapshot:        snapshot,
+	})
+	client.acceptHello(clientControlMessage{
+		Type:            MessageTypeHello,
+		RuntimeProtocol: RuntimeStreamProtocolVersion,
+		RuntimeCursor: RuntimeCursor{
+			StreamID: "runtime-stream-2",
+			Version:  94,
+			Known:    true,
+		},
+	})
+	client.mu.Lock()
+	pending := client.pendingOverviewRecovery
+	client.mu.Unlock()
+	if pending != nil {
+		t.Fatalf("target ACK retained pending recovery: %#v", pending)
+	}
+
+	selection = client.markBootstrapSnapshotSelected(selection, 93, "rt-sha256:stale")
+	if !selection.completeRecoveryQueued {
+		t.Fatal("bootstrap selection lost ACK-cleared complete recovery generation")
+	}
+	if !client.overviewChangedSince(selection) {
+		t.Fatal("bootstrap selection did not preserve the already-queued full-snapshot catch-up")
+	}
+	messages := drainOverviewTestMessages(t, client)
+	assertOverviewTestMessageTypes(t, messages, MessageTypeResyncRequired, MessageTypeSnapshot, MessageTypeReady)
+}
+
+func TestReplaceOverviewStreamsSharesPreparedSnapshotBatchAcrossClients(t *testing.T) {
+	hub := NewHub(WithBroadcastRecorder())
+	clients := make([]*Client, 8)
+	for index := range clients {
+		clients[index] = registerTestClient(hub)
+		if index%2 == 0 {
+			clients[index].runtimeProtocol = RuntimeStreamProtocolVersion
+			clients[index].ackedRuntimeCursor = RuntimeCursor{
+				StreamID: "runtime-stream-old",
+				Version:  41,
+				Known:    true,
+			}
+		}
+	}
+
+	snapshot := EmptySnapshot()
+	for range 256 {
+		deviceID := uuid.NewString()
+		snapshot.Devices[deviceID] = DeviceRuntimeDTO{
+			DeviceID:      deviceID,
+			PrimaryHealth: "up_fresh",
+		}
+	}
+	identity := RuntimeIdentityForSnapshot(snapshot)
+	result := hub.ReplaceOverviewStreams(OverviewSyncBatch{
+		Reason:          ResyncReasonStateChangesDrop,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-new",
+		TargetVersion:   42,
+		RuntimeIdentity: identity,
+		Snapshot:        snapshot,
+		AlertVersion:    7,
+	})
+	if len(result.Installed) != len(clients) || len(result.Failed) != 0 {
+		t.Fatalf("bulk replacement result = installed %d failed %d, want %d/0", len(result.Installed), len(result.Failed), len(clients))
+	}
+
+	var sharedPayloads [][]byte
+	for _, client := range clients {
+		payloads := make([][]byte, 0, 3)
+		messages := make([]overviewTestMessage, 0, 3)
+		for range 3 {
+			payload := <-client.overviewSend
+			payloads = append(payloads, payload)
+			messages = append(messages, decodeOverviewTestMessage(t, payload))
+		}
+		assertOverviewTestMessageTypes(t, messages, MessageTypeResyncRequired, MessageTypeSnapshot, MessageTypeReady)
+
+		var snapshotPayload SnapshotMessagePayload
+		decodeOverviewTestPayload(t, messages[1], &snapshotPayload)
+		if snapshotPayload.Version != 42 || snapshotPayload.RuntimeStreamID != "runtime-stream-new" ||
+			snapshotPayload.RuntimeIdentity != identity || len(snapshotPayload.Snapshot.Devices) != len(snapshot.Devices) {
+			t.Fatalf("snapshot payload = version %d stream %q identity %q devices %d", snapshotPayload.Version, snapshotPayload.RuntimeStreamID, snapshotPayload.RuntimeIdentity, len(snapshotPayload.Snapshot.Devices))
+		}
+
+		if sharedPayloads == nil {
+			sharedPayloads = payloads
+			continue
+		}
+		for index := range sharedPayloads {
+			if &payloads[index][0] != &sharedPayloads[index][0] {
+				t.Fatalf("client payload %d was rebuilt instead of sharing the prepared immutable batch", index)
+			}
+		}
+	}
+
+	recorded := <-hub.BroadcastCh()
+	if &recorded[0] != &sharedPayloads[1][0] {
+		t.Fatal("recorded snapshot was rebuilt instead of reusing the prepared state payload")
+	}
+}
+
+func TestOverviewMailboxRecoveryHandlerPreservesFullReplacementBeforeStaleHTTPMarker(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	oldSnapshot := EmptySnapshot()
+	oldSnapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "degraded"}
+	newSnapshot := EmptySnapshot()
+	newSnapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "up_fresh"}
+	var snapshotMu sync.Mutex
+	currentSnapshot := oldSnapshot
+	currentVersion := uint64(92)
+	snapshotFunc := func() (*SnapshotPayload, uint64) {
+		snapshotMu.Lock()
+		defer snapshotMu.Unlock()
+		return currentSnapshot, currentVersion
+	}
+
+	bootstrapSelected := make(chan struct{})
+	releaseBootstrap := make(chan struct{})
+	var selectedOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseBootstrap) })
+	}
+	t.Cleanup(release)
+
+	server := httptest.NewServer(NewHandler(
+		hub,
+		snapshotFunc,
+		func() AlertMessagePayload {
+			selectedOnce.Do(func() { close(bootstrapSelected) })
+			<-releaseBootstrap
+			return AlertMessagePayload{Alerts: []AlertDTO{}}
+		},
+		nil,
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "91")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial gated bootstrap client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case <-bootstrapSelected:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not reach post-selection bootstrap gate")
+	}
+
+	snapshotMu.Lock()
+	currentSnapshot = newSnapshot
+	currentVersion = 93
+	snapshotMu.Unlock()
+	hub.ReplaceOverviewStreams(OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-2",
+		TargetVersion:   93,
+		RuntimeIdentity: RuntimeIdentityForSnapshot(newSnapshot),
+		Snapshot:        newSnapshot,
+	})
+	clients := hub.copyOverviewClients()
+	if len(clients) != 1 {
+		t.Fatalf("overview client count = %d, want 1", len(clients))
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"type": MessageTypeHello,
+		"payload": map[string]any{
+			"runtime_protocol":  RuntimeStreamProtocolVersion,
+			"runtime_stream_id": "runtime-stream-2",
+			"runtime_version":   93,
+		},
+	}); err != nil {
+		t.Fatalf("acknowledge queued bootstrap replacement: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for clients[0].AckedRuntimeCursor().Version != 93 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	clients[0].mu.Lock()
+	pending := clients[0].pendingOverviewRecovery
+	queued := len(clients[0].overviewSend)
+	clients[0].mu.Unlock()
+	if pending != nil || queued != 3 {
+		t.Fatalf("acknowledged replacement pending=%#v queued=%d, want nil pending and complete queued batch", pending, queued)
+	}
+	release()
+
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set bootstrap recovery read deadline: %v", err)
+	}
+	defer conn.SetReadDeadline(time.Time{})
+	runtimeMessages := make([]overviewTestMessage, 0, 3)
+	for len(runtimeMessages) < 4 {
+		var message overviewTestMessage
+		if err := conn.ReadJSON(&message); err != nil {
+			t.Fatalf("read bootstrap recovery message: %v", err)
+		}
+		if message.Type == MessageTypeAlert {
+			continue
+		}
+		runtimeMessages = append(runtimeMessages, message)
+		if message.Type == MessageTypeReady {
+			break
+		}
+	}
+	assertOverviewTestMessageTypes(
+		t,
+		runtimeMessages,
+		MessageTypeResyncRequired,
+		MessageTypeSnapshot,
+		MessageTypeReady,
+	)
+	var snapshot SnapshotMessagePayload
+	decodeOverviewTestPayload(t, runtimeMessages[1], &snapshot)
+	if snapshot.Version != 93 || snapshot.RuntimeStreamID != "runtime-stream-2" {
+		t.Fatalf("bootstrap recovery snapshot = %#v, want runtime-stream-2/93", snapshot)
+	}
+}
+
+func TestOverviewMailboxRecoveryHandlerMarkerClearsSparseDeltaWithoutCompleteReplacement(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	snapshot := EmptySnapshot()
+	snapshot.Devices["dev-1"] = DeviceRuntimeDTO{DeviceID: "dev-1", PrimaryHealth: "degraded"}
+	var snapshotMu sync.Mutex
+	currentVersion := uint64(92)
+	snapshotFunc := func() (*SnapshotPayload, uint64) {
+		snapshotMu.Lock()
+		defer snapshotMu.Unlock()
+		return snapshot, currentVersion
+	}
+
+	bootstrapSelected := make(chan struct{})
+	releaseBootstrap := make(chan struct{})
+	var selectedOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseBootstrap) })
+	}
+	t.Cleanup(release)
+	server := httptest.NewServer(NewHandler(
+		hub,
+		snapshotFunc,
+		func() AlertMessagePayload {
+			selectedOnce.Do(func() { close(bootstrapSelected) })
+			<-releaseBootstrap
+			return AlertMessagePayload{Alerts: []AlertDTO{}}
+		},
+		nil,
+	))
+	t.Cleanup(server.Close)
+
+	params := url.Values{}
+	params.Set("runtime_protocol", "2")
+	params.Set("runtime_stream_id", "runtime-stream-1")
+	params.Set("runtime_version", "91")
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("dial sparse-delta bootstrap client: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	select {
+	case <-bootstrapSelected:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not reach sparse-delta bootstrap gate")
+	}
+	snapshotMu.Lock()
+	currentVersion = 93
+	snapshotMu.Unlock()
+	if overflowed := hub.BroadcastOverviewStreamDelta(
+		EmptyRuntimeDeltaPayload(),
+		92,
+		93,
+		"runtime-stream-1",
+	); len(overflowed) != 0 {
+		t.Fatalf("sparse bootstrap delta overflowed %d clients", len(overflowed))
+	}
+	release()
+
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set sparse bootstrap read deadline: %v", err)
+	}
+	defer conn.SetReadDeadline(time.Time{})
+	for {
+		var message overviewTestMessage
+		if err := conn.ReadJSON(&message); err != nil {
+			t.Fatalf("read sparse bootstrap message: %v", err)
+		}
+		if message.Type == MessageTypeAlert {
+			continue
+		}
+		if message.Type != MessageTypeResyncRequired {
+			t.Fatalf("sparse bootstrap message type = %q, want resync_required", message.Type)
+		}
+		break
+	}
+}
+
+func TestOverviewMailboxRecoveryHTTPMarkerDecisionPreservesConcurrentReplacement(t *testing.T) {
+	hub := NewHub()
+	client := registerTestClient(hub)
+	marshalEntered := make(chan struct{})
+	releaseMarshal := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseMarshal) })
+	}
+	t.Cleanup(release)
+	probe := &overviewHTTPMarkerMarshalGate{
+		entered: marshalEntered,
+		release: releaseMarshal,
+	}
+	type markerResult struct {
+		written bool
+		ok      bool
+	}
+	result := make(chan markerResult, 1)
+	selection := client.beginBootstrapSnapshotSelection()
+	selection = client.markBootstrapSnapshotSelected(selection, 0, "")
+	go func() {
+		written, ok := hub.writeHTTPRuntimeResync(client, Message{
+			Type:    MessageTypeResyncRequired,
+			Payload: probe,
+		}, selection)
+		result <- markerResult{written: written, ok: ok}
+	}()
+
+	select {
+	case <-marshalEntered:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP marker did not reach marshal gate")
+	}
+	snapshot := EmptySnapshot()
+	if ok := hub.ReplaceOverviewStream(client, OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		RuntimeStreamID: "runtime-stream-2",
+		TargetVersion:   93,
+		RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+		Snapshot:        snapshot,
+	}); !ok {
+		t.Fatal("concurrent complete replacement returned false")
+	}
+	release()
+
+	select {
+	case got := <-result:
+		if got.written || !got.ok {
+			t.Fatalf("HTTP marker result = %#v, want skipped successful write", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HTTP marker decision did not finish")
+	}
+	assertOverviewTestMessageTypes(
+		t,
+		drainOverviewTestMessages(t, client),
+		MessageTypeResyncRequired,
+		MessageTypeSnapshot,
+		MessageTypeReady,
+	)
+}
+
+type overviewHTTPMarkerMarshalGate struct {
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p *overviewHTTPMarkerMarshalGate) MarshalJSON() ([]byte, error) {
+	p.once.Do(func() { close(p.entered) })
+	<-p.release
+	return []byte(`{"scope":"overview","reason":"gated"}`), nil
+}
+
+type overviewTestMessage struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+func drainOverviewTestMessages(t *testing.T, client *Client) []overviewTestMessage {
+	t.Helper()
+	messages := make([]overviewTestMessage, 0, len(client.overviewSend))
+	for len(client.overviewSend) > 0 {
+		messages = append(messages, decodeOverviewTestMessage(t, <-client.overviewSend))
+	}
+	return messages
+}
+
+func decodeOverviewTestMessage(t *testing.T, raw []byte) overviewTestMessage {
+	t.Helper()
+	var message overviewTestMessage
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("decode overview message: %v", err)
+	}
+	return message
+}
+
+func decodeOverviewTestPayload(t *testing.T, message overviewTestMessage, target any) {
+	t.Helper()
+	if err := json.Unmarshal(message.Payload, target); err != nil {
+		t.Fatalf("decode %s payload: %v", message.Type, err)
+	}
+}
+
+func assertOverviewTestMessageTypes(t *testing.T, messages []overviewTestMessage, want ...string) {
+	t.Helper()
+	if len(messages) != len(want) {
+		t.Fatalf("overview message count = %d, want %d", len(messages), len(want))
+	}
+	for index := range want {
+		if messages[index].Type != want[index] {
+			t.Fatalf("overview message %d type = %q, want %q", index, messages[index].Type, want[index])
+		}
 	}
 }
 

@@ -3,7 +3,7 @@
  * Keeps request construction and backend response handling out of UI components.
  */
 import { type InstanceBackup, type RestoreReport, type RestoreStatus } from '../types/api';
-import { ServerError, ValidationError } from './errors';
+import { RestoreOutcomeUnknownError, ServerError, ValidationError } from './errors';
 import {
   parseInstanceBackup,
   parseRestoreReport,
@@ -62,12 +62,24 @@ export async function restoreInstanceBackup(file: File, dryRun: boolean): Promis
     ? '/api/v1/instance-backups/restore?dry_run=true'
     : '/api/v1/instance-backups/restore';
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: headersWithCsrf({}),
-    body: formData,
-    // Do NOT set Content-Type - browser sets multipart boundary automatically
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: headersWithCsrf({}),
+      body: formData,
+      // Do NOT set Content-Type - browser sets multipart boundary automatically
+    });
+  } catch (error) {
+    if (!dryRun && error instanceof TypeError) {
+      throw new RestoreOutcomeUnknownError();
+    }
+    throw error;
+  }
+
+  if (!dryRun && [502, 503, 504].includes(response.status)) {
+    throw new RestoreOutcomeUnknownError();
+  }
 
   if (!response.ok) {
     const payload = await response.json().catch(() => null);

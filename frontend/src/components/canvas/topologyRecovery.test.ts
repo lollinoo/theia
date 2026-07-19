@@ -23,14 +23,14 @@ describe('topologyRecovery', () => {
     expect(measurementTriggerForCauses(new Set(['topology-changed']))).toBe('topology_changed');
   });
 
-  it('builds success notices for structural recovery causes', () => {
+  it('builds success notices with structural wording for retained recovery causes', () => {
     expect(buildTopologyRecoveryNotice(new Set(['backend-reconnected']))).toEqual({
       tone: 'success',
       message: 'Topology refreshed after reconnect',
     });
     expect(buildTopologyRecoveryNotice(new Set(['backend-resync-required']))).toEqual({
       tone: 'success',
-      message: 'Live topology resynced',
+      message: 'Topology refreshed after backend resync',
     });
     expect(
       buildTopologyRecoveryNotice(
@@ -40,6 +40,16 @@ describe('topologyRecovery', () => {
       tone: 'success',
       message: 'Topology refreshed',
     });
+  });
+
+  it('never describes structural refresh success as live topology resync', () => {
+    const notices = [
+      buildTopologyRecoveryNotice(new Set(['backend-reconnected'])),
+      buildTopologyRecoveryNotice(new Set(['backend-resync-required'])),
+      buildTopologyRecoveryNotice(new Set(['backend-reconnected', 'topology-changed'])),
+    ];
+
+    expect(notices.every((notice) => notice?.message !== 'Live topology resynced')).toBe(true);
   });
 
   it('does not show a recovery notice for topology-only refreshes', () => {

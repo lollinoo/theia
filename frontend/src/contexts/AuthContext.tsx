@@ -9,6 +9,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import {
@@ -21,6 +22,7 @@ import {
   loginUser,
   logoutUser,
 } from '../api/client';
+import { BACKEND_SESSION_CHECK_REQUIRED_EVENT } from '../events/backend';
 
 type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 
@@ -46,6 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('checking');
   const [user, setUser] = useState<AuthUser | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const disconnectSessionCheckRef = useRef(0);
 
   const applySession = useCallback((session: AuthSession): AuthSession => {
     if (session.authenticated && session.user) {
@@ -91,6 +94,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
+    };
+  }, [applySession]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkSessionAfterDisconnect = () => {
+      const requestToken = ++disconnectSessionCheckRef.current;
+      void fetchCurrentUser()
+        .then((session) => {
+          if (!cancelled && requestToken === disconnectSessionCheckRef.current) {
+            applySession(session);
+          }
+        })
+        .catch(() => {
+          // A restart or transient outage must not log out a still-valid session.
+        });
+    };
+
+    window.addEventListener(BACKEND_SESSION_CHECK_REQUIRED_EVENT, checkSessionAfterDisconnect);
+    return () => {
+      cancelled = true;
+      disconnectSessionCheckRef.current += 1;
+      window.removeEventListener(BACKEND_SESSION_CHECK_REQUIRED_EVENT, checkSessionAfterDisconnect);
     };
   }, [applySession]);
 

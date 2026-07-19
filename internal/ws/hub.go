@@ -4,6 +4,7 @@ package ws
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -42,12 +43,10 @@ const (
 	wsResyncBootstrapHTTP   = "http"
 	wsResyncBootstrapLegacy = "legacy"
 
-	wsOverviewMailboxClearReasonSnapshot           = "snapshot"
-	wsOverviewMailboxClearReasonClientMailboxFull  = wsBackpressureReasonClientMailboxFull
-	wsOverviewMailboxClearReasonExplicitResync     = "resync"
-	wsOverviewMailboxClearReasonClientHello        = "client_hello"
-	wsOverviewMailboxClearReasonHTTPResyncPending  = "http_resync_pending"
-	wsOverviewMailboxClearReasonHTTPResyncRequired = "http_resync_required"
+	wsOverviewMailboxClearReasonSnapshot          = "snapshot"
+	wsOverviewMailboxClearReasonClientMailboxFull = wsBackpressureReasonClientMailboxFull
+	wsOverviewMailboxClearReasonExplicitResync    = "resync"
+	wsOverviewMailboxClearReasonHTTPResyncPending = "http_resync_pending"
 )
 
 // Hub manages all active WebSocket clients and server-side broadcasts.
@@ -81,13 +80,85 @@ type Client struct {
 	hello                    chan clientControlMessage
 	needsResync              bool
 	overviewEpoch            uint64
+	overviewRecoveryGen      uint64
+	bootstrapRecoveryGen     uint64
 	usesHTTPRuntimeBootstrap bool
 	bootstrapping            bool
-	bootstrapRuntimeKnown    bool
-	bootstrapRuntimeVersion  uint64
-	bootstrapRuntimeIdentity string
-	bootstrapHelloPreserved  bool
+	runtimeProtocol          int
+	ackedRuntimeCursor       RuntimeCursor
+	runtimeAckCeiling        RuntimeCursor
+	runtimeSync              RuntimeSyncFunc
+	runtimeAck               RuntimeAckFunc
+	pendingOverviewRecovery  *overviewRecoveryState
+	pendingRuntimeHelloEcho  *runtimeHelloEcho
 	detailDeviceID           uuid.UUID
+}
+
+// RuntimeSyncRequest asks the pipeline to synchronize one client from a runtime cursor.
+type RuntimeSyncRequest struct {
+	Cursor RuntimeCursor
+	Reason string
+}
+
+// OverviewSyncMode identifies the state carried by one atomic overview replacement.
+type OverviewSyncMode string
+
+const (
+	OverviewSyncModeCurrent  OverviewSyncMode = "current"
+	OverviewSyncModeReplay   OverviewSyncMode = "replay"
+	OverviewSyncModeSnapshot OverviewSyncMode = "snapshot"
+)
+
+// OverviewSyncBatch describes one complete runtime recovery replacement.
+type OverviewSyncBatch struct {
+	Reason          string
+	Mode            OverviewSyncMode
+	RuntimeStreamID string
+	TargetVersion   uint64
+	RuntimeIdentity string
+	ReplayCursor    RuntimeCursor
+	Replay          *RuntimeDeltaPayload
+	Snapshot        *SnapshotPayload
+	AlertVersion    uint64
+}
+
+// OverviewSyncReplacementResult reports clients whose replacement batch was
+// installed atomically and clients for which installation failed.
+type OverviewSyncReplacementResult struct {
+	Installed []*Client
+	Failed    []*Client
+}
+
+type overviewRecoveryState struct {
+	streamID      string
+	targetVersion uint64
+	mode          OverviewSyncMode
+	startedAt     time.Time
+}
+
+type runtimeHelloEcho struct {
+	protocol int
+	cursor   RuntimeCursor
+}
+
+type overviewBootstrapSelection struct {
+	mailboxEpoch           uint64
+	recoveryGeneration     uint64
+	completeRecoveryQueued bool
+}
+
+type overviewClientRuntimeState struct {
+	protocol      int
+	cursor        RuntimeCursor
+	httpBootstrap bool
+}
+
+// preparedOverviewSyncBatch owns immutable wire payloads that can be shared by
+// every eligible client mailbox in one logical bulk replacement.
+type preparedOverviewSyncBatch struct {
+	payloads     [][]byte
+	stateType    string
+	statePayload []byte
 }
 
 // NewHub creates an empty WebSocket hub.
@@ -174,6 +245,41 @@ func (h *Hub) WriteTo(client *Client, msg Message) bool {
 	return client.writePayload(payload, true)
 }
 
+// writeHTTPRuntimeResync writes the legacy bootstrap marker only when no
+// complete overview replacement has already won the client mailbox.
+func (h *Hub) writeHTTPRuntimeResync(client *Client, msg Message, selection overviewBootstrapSelection) (bool, bool) {
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal direct runtime resync: %v", err)
+		return false, false
+	}
+
+	client.mu.Lock()
+	if client.closed {
+		client.mu.Unlock()
+		return false, false
+	}
+	client.usesHTTPRuntimeBootstrap = true
+	if selection.completeRecoveryQueued || client.overviewRecoveryGen != selection.recoveryGeneration {
+		client.mu.Unlock()
+		return false, true
+	}
+	if pending := client.pendingOverviewRecovery; pending != nil && pending.mode != "" {
+		client.mu.Unlock()
+		return false, true
+	}
+	client.needsResync = true
+	cleared := clearQueuedMessages(client.overviewSend)
+	client.overviewEpoch++
+	ok := client.writePayload(payload, true)
+	client.mu.Unlock()
+
+	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonHTTPResyncPending, cleared)
+	observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
+	logging.Debugf("websocket message write-direct type=%s bytes=%d", msg.Type, len(payload))
+	return true, ok
+}
+
 // BroadcastOverviewSnapshot broadcasts a versioned full overview snapshot.
 func (h *Hub) BroadcastOverviewSnapshot(snapshot *SnapshotPayload, version uint64) {
 	clients := h.copyOverviewClients()
@@ -187,44 +293,62 @@ func (h *Hub) BroadcastOverviewSnapshot(snapshot *SnapshotPayload, version uint6
 		log.Printf("WebSocket hub: failed to marshal overview snapshot: %v", err)
 		return
 	}
-	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
-	if err != nil {
-		log.Printf("WebSocket hub: failed to marshal overview resync marker: %v", err)
-		return
-	}
 	observability.Default().ObserveWSMessage("broadcast", msg.Type, len(payload))
 	h.recordBroadcast(payload)
 	logging.Debugf("websocket message queued scope=overview_broadcast type=%s version=%d bytes=%d clients=%d", msg.Type, version, len(payload), len(clients))
+	batch := OverviewSyncBatch{
+		Reason:          ResyncReasonClientResync,
+		Mode:            OverviewSyncModeSnapshot,
+		TargetVersion:   version,
+		RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+		Snapshot:        snapshot,
+	}
 	for _, client := range clients {
 		if client.usesHTTPBootstrap() {
-			h.enqueueOverviewHTTPResync(client, resyncPayload, ResyncReasonClientResync)
+			h.ReplaceOverviewStream(client, batch)
 			continue
 		}
 		h.enqueueOverviewSnapshot(client, payload)
 	}
 }
 
-// BroadcastOverviewDelta broadcasts a versioned sparse overview delta.
-// If a client cannot keep up, it receives resync_required plus the supplied
-// fallback full snapshot instead of blocking the producer.
-func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, version uint64, fallbackSnapshot *SnapshotPayload) {
+// BroadcastOverviewDelta preserves legacy callers by installing a complete
+// snapshot recovery whenever the stream-aware broadcast reports overflow.
+func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, version uint64, fallbackSnapshot *SnapshotPayload) []*Client {
+	overflowed := h.BroadcastOverviewStreamDelta(delta, baseVersion, version, "")
+	var fallbackBytes int
+	if len(overflowed) > 0 {
+		if payload, err := json.Marshal(NewSnapshotMessage(fallbackSnapshot, version)); err == nil {
+			fallbackBytes = len(payload)
+		}
+	}
+	for _, client := range overflowed {
+		if h.ReplaceOverviewStream(client, OverviewSyncBatch{
+			Reason:          ResyncReasonClientResync,
+			Mode:            OverviewSyncModeSnapshot,
+			TargetVersion:   version,
+			RuntimeIdentity: RuntimeIdentityForSnapshot(fallbackSnapshot),
+			Snapshot:        fallbackSnapshot,
+		}) && fallbackBytes > 0 {
+			observability.Default().ObserveWSMessage(wsMessageScopeOverviewFallback, MessageTypeSnapshot, fallbackBytes)
+		}
+	}
+	return overflowed
+}
+
+// BroadcastOverviewStreamDelta queues one stream-aware delta and returns clients
+// whose bounded mailbox must be replaced by the lock-owning pipeline.
+func (h *Hub) BroadcastOverviewStreamDelta(delta *RuntimeDeltaPayload, baseVersion, version uint64, streamID string) []*Client {
 	clients := h.copyOverviewClients()
 	if len(clients) == 0 {
-		return
+		return nil
 	}
 
-	deltaMessage := NewRuntimeDeltaMessage(delta, baseVersion, version)
+	deltaMessage := NewStreamRuntimeDeltaMessage(delta, baseVersion, version, streamID)
 	deltaPayload, err := json.Marshal(deltaMessage)
 	if err != nil {
 		log.Printf("WebSocket hub: failed to marshal overview delta: %v", err)
-		return
-	}
-	var fallbackPayload []byte
-	fallbackPayloadReady := false
-	resyncPayload, err := marshalOverviewResyncPayload(ResyncReasonClientResync)
-	if err != nil {
-		log.Printf("WebSocket hub: failed to marshal overview resync marker: %v", err)
-		return
+		return nil
 	}
 	observability.Default().ObserveWSMessage("broadcast", deltaMessage.Type, len(deltaPayload))
 	h.recordBroadcast(deltaPayload)
@@ -237,27 +361,16 @@ func (h *Hub) BroadcastOverviewDelta(delta *RuntimeDeltaPayload, baseVersion, ve
 		devicePatchCount,
 		linkPatchCount,
 		len(deltaPayload),
-		len(fallbackPayload),
+		0,
 		len(clients),
 	)
+	overflowed := make([]*Client, 0)
 	for _, client := range clients {
-		_, needsFallbackSnapshot, observedOverviewEpoch := h.enqueueOverviewDelta(client, deltaPayload, resyncPayload)
-		if !needsFallbackSnapshot {
-			continue
-		}
-		if !fallbackPayloadReady {
-			fallbackMessage := NewSnapshotMessage(fallbackSnapshot, version)
-			fallbackPayload, err = json.Marshal(fallbackMessage)
-			if err != nil {
-				log.Printf("WebSocket hub: failed to marshal overview fallback snapshot: %v", err)
-				return
-			}
-			fallbackPayloadReady = true
-		}
-		if h.enqueueOverviewLegacyFallback(client, deltaPayload, resyncPayload, fallbackPayload, observedOverviewEpoch) {
-			observability.Default().ObserveWSMessage(wsMessageScopeOverviewFallback, MessageTypeSnapshot, len(fallbackPayload))
+		if h.enqueueOverviewStreamDelta(client, deltaPayload, streamID, baseVersion, version) {
+			overflowed = append(overflowed, client)
 		}
 	}
+	return overflowed
 }
 
 func runtimeDeltaPatchCounts(delta *RuntimeDeltaPayload) (int, int) {
@@ -288,20 +401,13 @@ func (h *Hub) BroadcastOverviewResync(reason string, snapshot *SnapshotPayload, 
 		return
 	}
 
-	resyncPayload, err := marshalOverviewResyncPayload(reason)
-	if err != nil {
-		log.Printf("WebSocket hub: failed to marshal overview resync marker: %v", err)
-		return
-	}
 	snapshotMessage := NewSnapshotMessage(snapshot, version)
 	snapshotPayload, err := json.Marshal(snapshotMessage)
 	if err != nil {
 		log.Printf("WebSocket hub: failed to marshal overview resync snapshot: %v", err)
 		return
 	}
-	observability.Default().ObserveWSMessage("broadcast", MessageTypeResyncRequired, len(resyncPayload))
 	observability.Default().ObserveWSMessage("broadcast", snapshotMessage.Type, len(snapshotPayload))
-	h.recordBroadcast(resyncPayload)
 	h.recordBroadcast(snapshotPayload)
 	logging.Debugf(
 		"websocket message queued scope=overview_broadcast type=%s reason=%s snapshot_version=%d snapshot_bytes=%d clients=%d",
@@ -311,23 +417,248 @@ func (h *Hub) BroadcastOverviewResync(reason string, snapshot *SnapshotPayload, 
 		len(snapshotPayload),
 		len(clients),
 	)
+	batch := OverviewSyncBatch{
+		Reason:          reason,
+		Mode:            OverviewSyncModeSnapshot,
+		TargetVersion:   version,
+		RuntimeIdentity: RuntimeIdentityForSnapshot(snapshot),
+		Snapshot:        snapshot,
+	}
 	for _, client := range clients {
-		if client.usesHTTPBootstrap() {
-			h.enqueueOverviewHTTPResync(client, resyncPayload, reason)
-			continue
-		}
-		h.enqueueOverviewResync(client, resyncPayload, snapshotPayload, reason)
+		h.ReplaceOverviewStream(client, batch)
 	}
 }
 
-func marshalOverviewResyncPayload(reason string) ([]byte, error) {
-	return json.Marshal(Message{
+// ReplaceOverviewStream atomically replaces one client's bounded overview mailbox.
+func (h *Hub) ReplaceOverviewStream(client *Client, batch OverviewSyncBatch) bool {
+	if client == nil {
+		return false
+	}
+	if !overviewSyncClientStateMatchesBatch(batch, client.runtimeState()) {
+		return false
+	}
+	prepared, err := prepareOverviewSyncBatch(batch)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal overview sync batch: %v", err)
+		return false
+	}
+	return h.replaceOverviewStreamPrepared(client, batch, prepared)
+}
+
+// replaceOverviewStreamPrepared revalidates client state and installs one
+// already-marshaled immutable batch without rebuilding snapshot payloads.
+func (h *Hub) replaceOverviewStreamPrepared(client *Client, batch OverviewSyncBatch, prepared preparedOverviewSyncBatch) bool {
+	if client == nil || len(prepared.payloads) > cap(client.overviewSend) {
+		return false
+	}
+	for {
+		clientState := client.runtimeState()
+		if !overviewSyncClientStateMatchesBatch(batch, clientState) {
+			return false
+		}
+
+		client.mu.Lock()
+		if client.closed {
+			client.mu.Unlock()
+			return false
+		}
+		if client.runtimeProtocol != clientState.protocol || client.ackedRuntimeCursor != clientState.cursor {
+			client.mu.Unlock()
+			continue
+		}
+		if pending := client.pendingOverviewRecovery; pending != nil && batch.TargetVersion < pending.targetVersion {
+			client.mu.Unlock()
+			return false
+		}
+
+		cleared := clearQueuedMessages(client.overviewSend)
+		client.overviewEpoch++
+		client.overviewRecoveryGen++
+		client.pendingOverviewRecovery = &overviewRecoveryState{
+			streamID:      batch.RuntimeStreamID,
+			targetVersion: batch.TargetVersion,
+			mode:          batch.Mode,
+			startedAt:     time.Now(),
+		}
+		client.needsResync = batch.Mode != OverviewSyncModeCurrent
+		for _, payload := range prepared.payloads {
+			client.overviewSend <- payload
+		}
+		client.installRuntimeAckCeilingLocked(batch.RuntimeStreamID, batch.TargetVersion)
+		client.mu.Unlock()
+
+		h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonExplicitResync, cleared)
+		if batch.Mode != OverviewSyncModeCurrent {
+			h.recordOverviewResyncRequired(batch.Reason, clientState.httpBootstrap)
+		}
+		return true
+	}
+}
+
+func overviewSyncClientStateMatchesBatch(batch OverviewSyncBatch, clientState overviewClientRuntimeState) bool {
+	switch batch.Mode {
+	case OverviewSyncModeCurrent:
+		return clientState.cursor == (RuntimeCursor{
+			StreamID: batch.RuntimeStreamID,
+			Version:  batch.TargetVersion,
+			Known:    true,
+		})
+	case OverviewSyncModeReplay:
+		return clientState.protocol >= RuntimeStreamProtocolVersion &&
+			batch.ReplayCursor.Known &&
+			clientState.cursor == batch.ReplayCursor
+	default:
+		return true
+	}
+}
+
+// ReplaceOverviewStreams records one logical state broadcast and atomically
+// installs the complete replacement for every eligible overview client.
+func (h *Hub) ReplaceOverviewStreams(batch OverviewSyncBatch) OverviewSyncReplacementResult {
+	clients := h.copyClients()
+	result := OverviewSyncReplacementResult{
+		Installed: make([]*Client, 0, len(clients)),
+		Failed:    make([]*Client, 0),
+	}
+	if len(clients) == 0 {
+		return result
+	}
+
+	prepared, err := prepareOverviewSyncBatch(batch)
+	if err != nil {
+		log.Printf("WebSocket hub: failed to marshal bulk overview sync batch: %v", err)
+		result.Failed = append(result.Failed, clients...)
+		return result
+	}
+	if prepared.statePayload != nil {
+		observability.Default().ObserveWSMessage("broadcast", prepared.stateType, len(prepared.statePayload))
+		h.recordBroadcast(prepared.statePayload)
+	}
+
+	for _, client := range clients {
+		if h.replaceOverviewStreamPrepared(client, batch, prepared) {
+			result.Installed = append(result.Installed, client)
+		} else {
+			result.Failed = append(result.Failed, client)
+		}
+	}
+	return result
+}
+
+func overviewSyncStateMessage(batch OverviewSyncBatch) (Message, bool) {
+	switch batch.Mode {
+	case OverviewSyncModeReplay:
+		if batch.Replay == nil ||
+			!batch.ReplayCursor.Known ||
+			batch.ReplayCursor.StreamID != batch.RuntimeStreamID ||
+			batch.ReplayCursor.Version >= batch.TargetVersion {
+			return Message{}, false
+		}
+		return NewRuntimeReplayMessage(
+			batch.Replay,
+			batch.ReplayCursor.Version,
+			batch.TargetVersion,
+			batch.RuntimeStreamID,
+		), true
+	case OverviewSyncModeSnapshot:
+		if batch.Snapshot == nil {
+			return Message{}, false
+		}
+		return Message{
+			Type: MessageTypeSnapshot,
+			Payload: SnapshotMessagePayload{
+				Version:         batch.TargetVersion,
+				RuntimeStreamID: batch.RuntimeStreamID,
+				RuntimeIdentity: batch.RuntimeIdentity,
+				Snapshot:        CloneSnapshot(batch.Snapshot),
+			},
+		}, true
+	default:
+		return Message{}, false
+	}
+}
+
+func prepareOverviewSyncBatch(batch OverviewSyncBatch) (preparedOverviewSyncBatch, error) {
+	ready := NewStreamReadyMessage(
+		batch.TargetVersion,
+		batch.AlertVersion,
+		batch.RuntimeIdentity,
+		batch.RuntimeStreamID,
+		string(batch.Mode),
+	)
+	messages := make([]Message, 0, 3)
+	stateMessageIndex := -1
+
+	switch batch.Mode {
+	case OverviewSyncModeCurrent:
+		messages = append(messages, ready)
+	case OverviewSyncModeReplay:
+		if !batch.ReplayCursor.Known ||
+			batch.ReplayCursor.StreamID != batch.RuntimeStreamID ||
+			batch.ReplayCursor.Version >= batch.TargetVersion {
+			return preparedOverviewSyncBatch{}, fmt.Errorf("runtime replay source cursor does not precede target")
+		}
+		if batch.Replay == nil {
+			return preparedOverviewSyncBatch{}, fmt.Errorf("runtime replay payload is nil")
+		}
+		stateMessage, ok := overviewSyncStateMessage(batch)
+		if !ok {
+			return preparedOverviewSyncBatch{}, fmt.Errorf("runtime replay state is invalid")
+		}
+		messages = append(
+			messages,
+			newOverviewResyncMessage(batch),
+			stateMessage,
+			ready,
+		)
+		stateMessageIndex = 1
+	case OverviewSyncModeSnapshot:
+		if batch.Snapshot == nil {
+			return preparedOverviewSyncBatch{}, fmt.Errorf("runtime snapshot payload is nil")
+		}
+		stateMessage, ok := overviewSyncStateMessage(batch)
+		if !ok {
+			return preparedOverviewSyncBatch{}, fmt.Errorf("runtime snapshot state is invalid")
+		}
+		messages = append(
+			messages,
+			newOverviewResyncMessage(batch),
+			stateMessage,
+			ready,
+		)
+		stateMessageIndex = 1
+	default:
+		return preparedOverviewSyncBatch{}, fmt.Errorf("unsupported overview sync mode %q", batch.Mode)
+	}
+
+	payloads := make([][]byte, 0, len(messages))
+	prepared := preparedOverviewSyncBatch{payloads: payloads}
+	for index, message := range messages {
+		payload, err := json.Marshal(message)
+		if err != nil {
+			return preparedOverviewSyncBatch{}, err
+		}
+		prepared.payloads = append(prepared.payloads, payload)
+		if index == stateMessageIndex {
+			prepared.stateType = message.Type
+			prepared.statePayload = payload
+		}
+	}
+	return prepared, nil
+}
+
+func newOverviewResyncMessage(batch OverviewSyncBatch) Message {
+	targetVersion := batch.TargetVersion
+	return Message{
 		Type: MessageTypeResyncRequired,
 		Payload: ResyncRequiredPayload{
-			Scope:  ResyncScopeOverview,
-			Reason: reason,
+			Scope:           ResyncScopeOverview,
+			Reason:          batch.Reason,
+			Strategy:        RuntimeSyncStrategyStream,
+			TargetVersion:   &targetVersion,
+			RuntimeStreamID: batch.RuntimeStreamID,
 		},
-	})
+	}
 }
 
 func (h *Hub) SetDetailSubscription(client *Client, deviceID uuid.UUID) {
@@ -384,6 +715,7 @@ func (h *Hub) enqueueOverviewSnapshot(client *Client, payload []byte) bool {
 	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonSnapshot, clearQueuedMessages(client.overviewSend))
 	client.overviewEpoch++
 	client.needsResync = false
+	client.pendingOverviewRecovery = nil
 	select {
 	case client.overviewSend <- payload:
 		return true
@@ -393,116 +725,49 @@ func (h *Hub) enqueueOverviewSnapshot(client *Client, payload []byte) bool {
 	}
 }
 
-func (h *Hub) enqueueOverviewDelta(client *Client, deltaPayload, resyncPayload []byte) (bool, bool, uint64) {
+func (h *Hub) enqueueOverviewStreamDelta(client *Client, payload []byte, streamID string, baseVersion, version uint64) bool {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.closed {
-		return false, false, 0
+		return false
 	}
-	if !client.needsResync {
-		select {
-		case client.overviewSend <- deltaPayload:
-			client.overviewEpoch++
-			return true, false, client.overviewEpoch
-		default:
-		}
-	}
-	if client.usesHTTPRuntimeBootstrap {
-		observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
-		if client.needsResync {
-			h.recordOverviewResyncSuppressed(ResyncReasonClientResync)
-			return true, false, client.overviewEpoch
-		}
-		client.needsResync = true
-		h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientMailboxFull, clearQueuedMessages(client.overviewSend))
-		client.overviewEpoch++
-		select {
-		case client.overviewSend <- resyncPayload:
-			h.recordOverviewResyncRequired(ResyncReasonClientResync, true)
-			return true, false, client.overviewEpoch
-		default:
-			observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
-			return false, false, client.overviewEpoch
-		}
-	}
-	return true, true, client.overviewEpoch
-}
 
-func (h *Hub) enqueueOverviewLegacyFallback(client *Client, deltaPayload, resyncPayload, fallbackPayload []byte, observedOverviewEpoch uint64) bool {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if client.closed || client.usesHTTPRuntimeBootstrap {
-		return false
-	}
-	if client.overviewEpoch != observedOverviewEpoch {
-		return false
-	}
-	if !client.needsResync {
-		select {
-		case client.overviewSend <- deltaPayload:
-			client.overviewEpoch++
+	pending := client.pendingOverviewRecovery
+	if pending != nil {
+		if pending.mode == "" {
 			return true
-		default:
+		}
+		if pending.streamID != "" && streamID != "" && pending.streamID != streamID {
+			return h.markOverviewRecoveryPendingLocked(client, streamID, version)
+		}
+		if baseVersion < pending.targetVersion {
+			return false
 		}
 	}
+	if client.needsResync && pending == nil {
+		return h.markOverviewRecoveryPendingLocked(client, streamID, version)
+	}
+
+	select {
+	case client.overviewSend <- payload:
+		client.overviewEpoch++
+		client.advanceRuntimeAckCeilingLocked(streamID, version)
+		return false
+	default:
+		return h.markOverviewRecoveryPendingLocked(client, streamID, version)
+	}
+}
+
+func (h *Hub) markOverviewRecoveryPendingLocked(client *Client, streamID string, targetVersion uint64) bool {
 	observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
-	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientMailboxFull, clearQueuedMessages(client.overviewSend))
+	cleared := clearQueuedMessages(client.overviewSend)
+	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientMailboxFull, cleared)
 	client.overviewEpoch++
 	client.needsResync = true
-	select {
-	case client.overviewSend <- resyncPayload:
-		h.recordOverviewResyncRequired(ResyncReasonClientResync, false)
-	default:
-	}
-	select {
-	case client.overviewSend <- fallbackPayload:
-		client.needsResync = false
-	default:
-	}
-	return true
-}
-
-func (h *Hub) enqueueOverviewHTTPResync(client *Client, resyncPayload []byte, reason string) bool {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if client.closed {
-		return false
-	}
-	if client.needsResync {
-		h.recordOverviewResyncSuppressed(reason)
-		return true
-	}
-	client.needsResync = true
-	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonHTTPResyncRequired, clearQueuedMessages(client.overviewSend))
-	client.overviewEpoch++
-	select {
-	case client.overviewSend <- resyncPayload:
-		h.recordOverviewResyncRequired(reason, true)
-		return true
-	default:
-		observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
-		return false
-	}
-}
-
-func (h *Hub) enqueueOverviewResync(client *Client, resyncPayload, snapshotPayload []byte, reason string) bool {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if client.closed {
-		return false
-	}
-	h.recordOverviewMailboxClear(wsOverviewMailboxClearReasonExplicitResync, clearQueuedMessages(client.overviewSend))
-	client.overviewEpoch++
-	client.needsResync = false
-	select {
-	case client.overviewSend <- resyncPayload:
-		h.recordOverviewResyncRequired(reason, false)
-	default:
-	}
-	select {
-	case client.overviewSend <- snapshotPayload:
-	default:
-		observability.Default().IncWSBackpressure(wsBackpressureScopeOverviewSend, wsBackpressureReasonClientMailboxFull)
+	client.pendingOverviewRecovery = &overviewRecoveryState{
+		streamID:      streamID,
+		targetVersion: targetVersion,
+		startedAt:     time.Now(),
 	}
 	return true
 }
@@ -568,6 +833,10 @@ func (c *Client) readPump() {
 		switch cmd.Type {
 		case MessageTypeHello:
 			c.acceptHello(cmd)
+		case MessageTypeResumeRuntime:
+			c.acceptRuntimeResume(cmd.RuntimeCursor)
+		case MessageTypeRuntimeAck:
+			c.acceptRuntimeAck(cmd.RuntimeCursor)
 		case MessageTypeSubscribeDetail:
 			c.hub.SetDetailSubscription(c, cmd.DeviceID)
 		case MessageTypeUnsubscribeDetail:
@@ -587,20 +856,41 @@ func (c *Client) markDisconnected() {
 
 func (c *Client) acceptHello(cmd clientControlMessage) {
 	c.mu.Lock()
-	c.usesHTTPRuntimeBootstrap = true
-	preserveInitialHello := !c.bootstrapHelloPreserved &&
-		c.bootstrapRuntimeKnown &&
-		((cmd.RuntimeVersion != nil && *cmd.RuntimeVersion == c.bootstrapRuntimeVersion) ||
-			(cmd.RuntimeIdentity != "" && cmd.RuntimeIdentity == c.bootstrapRuntimeIdentity))
-	if preserveInitialHello {
-		c.bootstrapHelloPreserved = true
+	bootstrapping := c.bootstrapping
+	runtimeSync := c.runtimeSync
+	queryHelloEcho := c.consumeRuntimeQueryHelloEchoLocked(cmd)
+	acceptedCursor := cmd.RuntimeCursor
+	if bootstrapping || runtimeSync == nil {
+		c.initializeRuntimeHelloLocked(cmd)
+		if cmd.RuntimeCursor.Known {
+			acceptedCursor = c.ackedRuntimeCursor
+		}
 	} else {
-		c.needsResync = false
-		c.hub.recordOverviewMailboxClear(wsOverviewMailboxClearReasonClientHello, clearQueuedMessages(c.overviewSend))
-		c.overviewEpoch++
+		c.usesHTTPRuntimeBootstrap = true
+		c.runtimeProtocol = cmd.RuntimeProtocol
+	}
+	if runtimeSync == nil && acceptedCursor.Known {
+		if pending := c.pendingOverviewRecovery; pending != nil &&
+			pending.streamID == acceptedCursor.StreamID &&
+			acceptedCursor.Version >= pending.targetVersion {
+			c.pendingOverviewRecovery = nil
+			c.needsResync = false
+		}
 	}
 	c.mu.Unlock()
 
+	if queryHelloEcho {
+		return
+	}
+	if !bootstrapping {
+		if runtimeSync != nil {
+			runtimeSync(c, RuntimeSyncRequest{
+				Cursor: cmd.RuntimeCursor,
+				Reason: ResyncReasonClientResync,
+			})
+		}
+		return
+	}
 	if c.hello == nil {
 		return
 	}
@@ -611,29 +901,188 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	}
 }
 
-func (c *Client) markBootstrapSnapshotSelected(version uint64, runtimeIdentity string) uint64 {
+func (c *Client) initializeRuntimeHello(cmd clientControlMessage) {
+	c.mu.Lock()
+	c.initializeRuntimeHelloLocked(cmd)
+	c.mu.Unlock()
+}
+
+func (c *Client) initializeRuntimeQueryHello(cmd clientControlMessage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.initializeRuntimeHelloLocked(cmd)
+	if cmd.RuntimeProtocol >= RuntimeStreamProtocolVersion {
+		c.pendingRuntimeHelloEcho = &runtimeHelloEcho{
+			protocol: cmd.RuntimeProtocol,
+			cursor:   cmd.RuntimeCursor,
+		}
+	}
+}
+
+func (c *Client) consumeRuntimeQueryHelloEchoLocked(cmd clientControlMessage) bool {
+	echo := c.pendingRuntimeHelloEcho
+	c.pendingRuntimeHelloEcho = nil
+	return echo != nil && echo.protocol == cmd.RuntimeProtocol && echo.cursor == cmd.RuntimeCursor
+}
+
+func (c *Client) initializeRuntimeHelloLocked(cmd clientControlMessage) {
+	c.usesHTTPRuntimeBootstrap = true
+	c.runtimeProtocol = cmd.RuntimeProtocol
+	if cmd.RuntimeCursor.Known {
+		c.ackedRuntimeCursor = c.sanitizeRuntimeCursorForCeilingLocked(cmd.RuntimeCursor)
+	}
+}
+
+func (c *Client) acceptRuntimeResume(cursor RuntimeCursor) {
+	c.mu.Lock()
+	bootstrapping := c.bootstrapping
+	runtimeSync := c.runtimeSync
+	c.mu.Unlock()
+	if bootstrapping || runtimeSync == nil {
+		return
+	}
+	runtimeSync(c, RuntimeSyncRequest{
+		Cursor: cursor,
+		Reason: ResyncReasonClientResync,
+	})
+}
+
+func (c *Client) acceptRuntimeAck(cursor RuntimeCursor) {
+	if !cursor.Known {
+		return
+	}
+
+	c.mu.Lock()
+	if !c.runtimeAckWithinCeilingLocked(cursor) {
+		c.mu.Unlock()
+		return
+	}
+	current := c.ackedRuntimeCursor
+	pending := c.pendingOverviewRecovery
+	sameStreamAdvance := current.Known &&
+		cursor.StreamID == current.StreamID &&
+		cursor.Version > current.Version
+	// A matching recovery may complete at the current same-stream cursor, but
+	// an ACK without pending recovery must still advance monotonically.
+	pendingRecoveryCompletion := pending != nil &&
+		pending.streamID == cursor.StreamID &&
+		cursor.Version >= pending.targetVersion &&
+		(!current.Known || cursor.StreamID != current.StreamID || cursor.Version >= current.Version)
+	if !sameStreamAdvance && !pendingRecoveryCompletion {
+		c.mu.Unlock()
+		return
+	}
+	c.ackedRuntimeCursor = cursor
+	if pending != nil &&
+		pending.streamID == cursor.StreamID &&
+		cursor.Version >= pending.targetVersion {
+		c.pendingOverviewRecovery = nil
+		c.needsResync = false
+	}
+	runtimeAck := c.runtimeAck
+	c.mu.Unlock()
+
+	if runtimeAck != nil {
+		runtimeAck(c, cursor)
+	}
+}
+
+// installRuntimeAckCeilingLocked publishes the exact cursor offered by a
+// complete replacement and discards an impossible future same-stream claim.
+func (c *Client) installRuntimeAckCeilingLocked(streamID string, version uint64) {
+	c.runtimeAckCeiling = RuntimeCursor{}
+	if streamID == "" {
+		return
+	}
+	c.runtimeAckCeiling = RuntimeCursor{StreamID: streamID, Version: version, Known: true}
+	if current := c.ackedRuntimeCursor; current.Known && current.StreamID == streamID && current.Version > version {
+		c.ackedRuntimeCursor = RuntimeCursor{}
+	}
+}
+
+// advanceRuntimeAckCeilingLocked records a successfully queued live delta.
+func (c *Client) advanceRuntimeAckCeilingLocked(streamID string, version uint64) {
+	if streamID == "" {
+		return
+	}
+	current := c.runtimeAckCeiling
+	if current.Known && current.StreamID == streamID && current.Version >= version {
+		return
+	}
+	c.runtimeAckCeiling = RuntimeCursor{StreamID: streamID, Version: version, Known: true}
+}
+
+func (c *Client) sanitizeRuntimeCursorForCeilingLocked(cursor RuntimeCursor) RuntimeCursor {
+	ceiling := c.runtimeAckCeiling
+	if ceiling.Known && cursor.StreamID == ceiling.StreamID && cursor.Version > ceiling.Version {
+		return RuntimeCursor{}
+	}
+	return cursor
+}
+
+func (c *Client) runtimeAckWithinCeilingLocked(cursor RuntimeCursor) bool {
+	ceiling := c.runtimeAckCeiling
+	return ceiling.Known && cursor.StreamID == ceiling.StreamID && cursor.Version <= ceiling.Version
+}
+
+// RuntimeProtocol reports the negotiated runtime stream protocol capability.
+func (c *Client) RuntimeProtocol() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.runtimeProtocol
+}
+
+// AckedRuntimeCursor returns the last runtime cursor acknowledged by the client.
+func (c *Client) AckedRuntimeCursor() RuntimeCursor {
+	if c == nil {
+		return RuntimeCursor{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ackedRuntimeCursor
+}
+
+func (c *Client) runtimeState() overviewClientRuntimeState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return overviewClientRuntimeState{
+		protocol:      c.runtimeProtocol,
+		cursor:        c.ackedRuntimeCursor,
+		httpBootstrap: c.usesHTTPRuntimeBootstrap,
+	}
+}
+
+func (c *Client) beginBootstrapSnapshotSelection() overviewBootstrapSelection {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.bootstrapRecoveryGen = c.overviewRecoveryGen
+	return overviewBootstrapSelection{
+		mailboxEpoch:       c.overviewEpoch,
+		recoveryGeneration: c.overviewRecoveryGen,
+	}
+}
+
+func (c *Client) markBootstrapSnapshotSelected(selection overviewBootstrapSelection, _ uint64, _ string) overviewBootstrapSelection {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.bootstrapping = false
-	c.bootstrapRuntimeKnown = true
-	c.bootstrapRuntimeVersion = version
-	c.bootstrapRuntimeIdentity = runtimeIdentity
-	return c.overviewEpoch
+	if c.overviewRecoveryGen != selection.recoveryGeneration {
+		selection.completeRecoveryQueued = true
+	} else if pending := c.pendingOverviewRecovery; pending != nil && pending.mode != "" {
+		selection.completeRecoveryQueued = true
+	}
+	return selection
 }
 
-func (c *Client) overviewEpochChangedSince(observed uint64) bool {
+func (c *Client) overviewChangedSince(selection overviewBootstrapSelection) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.overviewEpoch != observed
-}
-
-func (c *Client) markHTTPRuntimeResyncPending() {
-	c.mu.Lock()
-	c.usesHTTPRuntimeBootstrap = true
-	c.needsResync = true
-	c.hub.recordOverviewMailboxClear(wsOverviewMailboxClearReasonHTTPResyncPending, clearQueuedMessages(c.overviewSend))
-	c.overviewEpoch++
-	c.mu.Unlock()
+	return selection.completeRecoveryQueued ||
+		c.overviewRecoveryGen != selection.recoveryGeneration ||
+		c.overviewEpoch != selection.mailboxEpoch
 }
 
 func (c *Client) usesHTTPBootstrap() bool {
@@ -645,7 +1094,10 @@ func (c *Client) usesHTTPBootstrap() bool {
 func (c *Client) canReceiveOverviewBroadcast() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return !c.closed && !c.bootstrapping
+	// A complete recovery batch makes later deltas safe because they queue
+	// behind its ready barrier even if an early ACK cleared pending metadata.
+	completeRecoveryInstalled := c.overviewRecoveryGen != c.bootstrapRecoveryGen
+	return !c.closed && (!c.bootstrapping || completeRecoveryInstalled)
 }
 
 func (c *Client) writePump() {
@@ -728,10 +1180,6 @@ func (h *Hub) recordOverviewResyncRequired(reason string, httpBootstrap bool) {
 		bootstrap = wsResyncBootstrapHTTP
 	}
 	observability.Default().IncWSClientResyncRequired(ResyncScopeOverview, reason, bootstrap)
-}
-
-func (h *Hub) recordOverviewResyncSuppressed(reason string) {
-	observability.Default().IncWSOverviewResyncSuppressed(reason)
 }
 
 func (h *Hub) recordOverviewMailboxClear(reason string, cleared int) {

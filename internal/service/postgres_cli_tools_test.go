@@ -12,11 +12,11 @@ import (
 	"testing"
 )
 
-func TestPostgresCLITools_AcceptsSupportedPostgreSQL17Tools(t *testing.T) {
+func TestPostgresCLITools_AcceptsSupportedPostgreSQL18Tools(t *testing.T) {
 	versions := map[string]string{
-		"pg_dump":    "pg_dump (PostgreSQL) 17.4\n",
-		"pg_restore": "pg_restore (PostgreSQL) 17.4 (Debian 17.4-1.pgdg120+2)\n",
-		"psql":       "psql (PostgreSQL) 17.4\n",
+		"pg_dump":    "pg_dump (PostgreSQL) 18.0\n",
+		"pg_restore": "pg_restore (PostgreSQL) 18.0 (Debian 18.0-1.pgdg120+2)\n",
+		"psql":       "psql (PostgreSQL) 18.0\n",
 	}
 	seen := make(map[string]bool)
 	stubPostgresCLIToolCommands(t,
@@ -184,7 +184,7 @@ func stubPostgresCLIToolCommands(
 func assertPostgresCLIActionableError(t *testing.T, message, tool string) {
 	t.Helper()
 
-	for _, want := range []string{tool, "PostgreSQL 17", "client tools"} {
+	for _, want := range []string{tool, "PostgreSQL 18", "client tools"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("error %q missing %q", message, want)
 		}

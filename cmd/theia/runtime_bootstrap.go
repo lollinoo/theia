@@ -56,7 +56,27 @@ type runtimeServer interface {
 	Shutdown(ctx context.Context) error
 }
 
+type runtimeWebSocketPipeline interface {
+	GetOrBuildOverviewSnapshot() (*ws.SnapshotPayload, uint64)
+	GetAlerts() ws.AlertMessagePayload
+	GetPrometheusStatus() ws.PrometheusStatusPayload
+	SyncOverviewClient(*ws.Client, ws.RuntimeSyncRequest)
+	ObserveRuntimeAck(*ws.Client, ws.RuntimeCursor)
+}
+
 type runtimeBootstrap struct{}
+
+func newRuntimeWebSocketHandler(hub *ws.Hub, pipeline runtimeWebSocketPipeline, allowedOrigins []string) *ws.Handler {
+	return ws.NewHandler(
+		hub,
+		pipeline.GetOrBuildOverviewSnapshot,
+		pipeline.GetAlerts,
+		pipeline.GetPrometheusStatus,
+		ws.WithAllowedOrigins(allowedOrigins),
+		ws.WithRuntimeSync(pipeline.SyncOverviewClient),
+		ws.WithRuntimeAck(pipeline.ObserveRuntimeAck),
+	)
+}
 
 var runtimeChildStopTimeout = 10 * time.Second
 
@@ -546,13 +566,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	apiSecurity := api.SecurityConfig{
 		AllowedOrigins: cfg.AllowedOrigins,
 	}
-	wsHandler := ws.NewHandler(
-		hub,
-		pipeline.GetOrBuildOverviewSnapshot,
-		pipeline.GetAlerts,
-		pipeline.GetPrometheusStatus,
-		ws.WithAllowedOrigins(cfg.AllowedOrigins),
-	)
+	wsHandler := newRuntimeWebSocketHandler(hub, pipeline, cfg.AllowedOrigins)
 	children := runtimeChildren{
 		{name: "device-service", stopper: deviceService},
 		{name: "pipeline", stopper: pipeline},
@@ -580,7 +594,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		})
 	}
 
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewSnapshot, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService), api.WithAuditLogRepository(authRepo), api.WithRuntimeEnvironment(cfg.DeploymentEnv))
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewState, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService), api.WithAuditLogRepository(authRepo), api.WithRuntimeEnvironment(cfg.DeploymentEnv))
 	metricsHandler := observability.Handler()
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{

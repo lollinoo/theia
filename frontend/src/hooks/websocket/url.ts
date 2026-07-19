@@ -27,8 +27,12 @@ export function buildWebSocketURL(url: string): string {
 export function appendHelloQueryParams(url: string, payload: CanvasHelloPayload): string {
   const parsed = new URL(url);
   parsed.searchParams.set('canvas_schema_version', String(payload.canvas_schema_version));
+  parsed.searchParams.set('runtime_protocol', String(payload.runtime_protocol));
   if (payload.topology_version !== undefined) {
     parsed.searchParams.set('topology_version', payload.topology_version);
+  }
+  if (payload.runtime_stream_id !== undefined) {
+    parsed.searchParams.set('runtime_stream_id', payload.runtime_stream_id);
   }
   if (payload.runtime_version !== undefined) {
     parsed.searchParams.set('runtime_version', String(payload.runtime_version));

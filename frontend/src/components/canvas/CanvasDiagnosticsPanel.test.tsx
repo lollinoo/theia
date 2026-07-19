@@ -53,6 +53,17 @@ describe('CanvasDiagnosticsPanel', () => {
         lastAppliedSnapshotVersion: '42',
         lastAppliedDeltaVersion: '43',
         lastAppliedRuntimeIdentity: 'rt-sha256:abc',
+        runtimeStreamId: 'runtime-stream-43',
+        runtimeRecoveryPhase: 'idle',
+        runtimeRecoveryTargetVersion: '43',
+        lastRuntimeRecoveryMode: 'replay',
+        lastRuntimeRecoveryDurationMs: 125,
+        lastRuntimeAckVersion: '43',
+        runtimeRecoveryCount: 4,
+        runtimeReplayRecoveryCount: 2,
+        runtimeSnapshotRecoveryCount: 1,
+        runtimeHttpFallbackCount: 1,
+        runtimeRecoveryFailureCount: 0,
       },
       graph: {
         canonicalNodeCount: 10,
@@ -117,6 +128,11 @@ describe('CanvasDiagnosticsPanel', () => {
     expect(within(snapshotVersionRow as HTMLElement).getByText('42')).toBeInTheDocument();
     expect(within(deltaVersionRow as HTMLElement).getByText('43')).toBeInTheDocument();
     expect(screen.getByText('rt-sha256:abc')).toBeInTheDocument();
+    expect(screen.getByText('runtime-stream-43')).toBeInTheDocument();
+    expect(screen.getByText('recovery phase')).toBeInTheDocument();
+    expect(screen.getByText('last recovery mode')).toBeInTheDocument();
+    expect(screen.getByText('replay')).toBeInTheDocument();
+    expect(screen.getByText('last ACK version')).toBeInTheDocument();
     expect(screen.getByText('10')).toBeInTheDocument();
     expect(screen.getByText('area-1')).toBeInTheDocument();
     expect(screen.getAllByText('success').length).toBeGreaterThan(0);

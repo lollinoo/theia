@@ -3,7 +3,7 @@
  */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ServerError, ValidationError } from '../api/errors';
+import { RestoreOutcomeUnknownError, ServerError, ValidationError } from '../api/errors';
 import type { InstanceBackup, RestoreStatus } from '../types/api';
 import { InstanceBackupManager } from './InstanceBackupManager';
 
@@ -64,6 +64,11 @@ const completedRestoreStatus: RestoreStatus = {
   missing_key_id: '',
   created_at: '2026-07-12T00:00:00Z',
   updated_at: '2026-07-12T00:01:00Z',
+};
+
+const previousRestoreStatus: RestoreStatus = {
+  ...completedRestoreStatus,
+  operation_id: 'restore-previous',
 };
 
 describe('InstanceBackupManager — independent initial loads', () => {
@@ -662,6 +667,285 @@ describe('InstanceBackupManager — SC-5: restore UI', () => {
     });
     expect(screen.getByText('Confirm Restore')).toBeInTheDocument();
     expect(screen.queryByText(/Restore initiated/)).not.toBeInTheDocument();
+  });
+
+  it('fetches the restore operation baseline before submitting a confirmed restore', async () => {
+    const { fetchRestoreStatus, restoreInstanceBackup } = await import('../api/client');
+    vi.mocked(fetchRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus);
+    vi.mocked(restoreInstanceBackup)
+      .mockResolvedValueOnce(mockRestoreReport)
+      .mockResolvedValueOnce(mockRestoreReport);
+
+    await renderAndWait();
+    selectRestoreFile(new File(['dummy'], 'backup.tar.gz', { type: 'application/gzip' }));
+    await waitFor(() => expect(screen.getByText('Confirm Restore')).toBeInTheDocument());
+
+    act(() => {
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Restore Now' }));
+    });
+
+    await waitFor(() => expect(vi.mocked(restoreInstanceBackup)).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(fetchRestoreStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(fetchRestoreStatus).mock.invocationCallOrder[1]).toBeLessThan(
+      vi.mocked(restoreInstanceBackup).mock.invocationCallOrder[1],
+    );
+  });
+
+  it('reconciles an interrupted restore with a new operation after backend reconnect', async () => {
+    const { fetchRestoreStatus, restoreInstanceBackup } = await import('../api/client');
+    vi.mocked(fetchRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockRejectedValueOnce(new Error('backend restarting'))
+      .mockResolvedValueOnce({
+        ...completedRestoreStatus,
+        operation_id: 'restore-new',
+        phase: 'applying_postgres',
+      });
+    vi.mocked(restoreInstanceBackup)
+      .mockResolvedValueOnce(mockRestoreReport)
+      .mockRejectedValueOnce(new RestoreOutcomeUnknownError());
+
+    await renderAndWait();
+    selectRestoreFile(new File(['dummy'], 'backup.tar.gz', { type: 'application/gzip' }));
+    await waitFor(() => expect(screen.getByText('Confirm Restore')).toBeInTheDocument());
+
+    act(() => {
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Restore Now' }));
+    });
+
+    const verificationMessage = await screen.findByText(
+      'Connection interrupted during restart. Verifying restore status...',
+    );
+    expect(screen.queryByText('Confirm Restore')).not.toBeInTheDocument();
+    expect(verificationMessage.parentElement).toHaveClass('border-outline-subtle');
+    expect(verificationMessage.parentElement).not.toHaveClass('border-status-down/20');
+    expect(screen.queryByText('Restore completed.')).not.toBeInTheDocument();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-reconnected'));
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText('Restore applying on startup.')).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByText('Connection interrupted during restart. Verifying restore status...'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('does not accept the baseline operation as confirmation after reconnect', async () => {
+    const { fetchRestoreStatus, restoreInstanceBackup } = await import('../api/client');
+    vi.mocked(fetchRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockRejectedValueOnce(new Error('backend restarting'))
+      .mockResolvedValueOnce(previousRestoreStatus);
+    vi.mocked(restoreInstanceBackup)
+      .mockResolvedValueOnce(mockRestoreReport)
+      .mockRejectedValueOnce(new RestoreOutcomeUnknownError());
+
+    await renderAndWait();
+    selectRestoreFile(new File(['dummy'], 'backup.tar.gz', { type: 'application/gzip' }));
+    await waitFor(() => expect(screen.getByText('Confirm Restore')).toBeInTheDocument());
+
+    act(() => {
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Restore Now' }));
+    });
+    await screen.findByText('Connection interrupted during restart. Verifying restore status...');
+
+    await act(async () => {
+      window.dispatchEvent(new Event('backend-reconnected'));
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByText(
+        'Restore could not be confirmed. Check backend logs before retrying.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Restore Backup' })).not.toBeDisabled();
+  });
+
+  it('ignores a generic reconnect status response started before verification', async () => {
+    const { fetchRestoreStatus, restoreInstanceBackup } = await import('../api/client');
+    const restoreRequest = deferred<Awaited<ReturnType<typeof restoreInstanceBackup>>>();
+    const olderReconnectStatus = deferred<RestoreStatus | null>();
+    vi.mocked(fetchRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockReturnValueOnce(olderReconnectStatus.promise)
+      .mockRejectedValueOnce(new Error('backend restarting'))
+      .mockResolvedValueOnce({
+        ...completedRestoreStatus,
+        operation_id: 'restore-new',
+        phase: 'applying_postgres',
+      });
+    vi.mocked(restoreInstanceBackup)
+      .mockResolvedValueOnce(mockRestoreReport)
+      .mockReturnValueOnce(restoreRequest.promise);
+
+    await renderAndWait();
+    selectRestoreFile(new File(['dummy'], 'backup.tar.gz', { type: 'application/gzip' }));
+    await waitFor(() => expect(screen.getByText('Confirm Restore')).toBeInTheDocument());
+    act(() => {
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Restore Now' }));
+    });
+    await waitFor(() => expect(vi.mocked(restoreInstanceBackup)).toHaveBeenCalledTimes(2));
+
+    act(() => window.dispatchEvent(new Event('backend-reconnected')));
+    await waitFor(() => expect(vi.mocked(fetchRestoreStatus)).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      restoreRequest.reject(new RestoreOutcomeUnknownError());
+      await Promise.resolve();
+    });
+    await screen.findByText('Connection interrupted during restart. Verifying restore status...');
+
+    act(() => window.dispatchEvent(new Event('backend-reconnected')));
+    await waitFor(() =>
+      expect(screen.getByText('Restore applying on startup.')).toBeInTheDocument(),
+    );
+
+    await act(async () => {
+      olderReconnectStatus.resolve(previousRestoreStatus);
+      await olderReconnectStatus.promise;
+    });
+
+    expect(screen.getByText('Restore applying on startup.')).toBeInTheDocument();
+    expect(screen.queryByText('Restore completed.')).not.toBeInTheDocument();
+  });
+
+  it('ignores an older reconciliation response that arrives after reconnect confirmation', async () => {
+    const { fetchRestoreStatus, restoreInstanceBackup } = await import('../api/client');
+    const immediateStatus = deferred<RestoreStatus | null>();
+    const reconnectStatus = deferred<RestoreStatus | null>();
+    vi.mocked(fetchRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockReturnValueOnce(immediateStatus.promise)
+      .mockReturnValueOnce(reconnectStatus.promise);
+    vi.mocked(restoreInstanceBackup)
+      .mockResolvedValueOnce(mockRestoreReport)
+      .mockRejectedValueOnce(new RestoreOutcomeUnknownError());
+
+    await renderAndWait();
+    selectRestoreFile(new File(['dummy'], 'backup.tar.gz', { type: 'application/gzip' }));
+    await waitFor(() => expect(screen.getByText('Confirm Restore')).toBeInTheDocument());
+    act(() => {
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Restore Now' }));
+    });
+    await screen.findByText('Connection interrupted during restart. Verifying restore status...');
+
+    act(() => window.dispatchEvent(new Event('backend-reconnected')));
+    await act(async () => {
+      reconnectStatus.resolve({
+        ...completedRestoreStatus,
+        operation_id: 'restore-new',
+        phase: 'applying_postgres',
+      });
+      await reconnectStatus.promise;
+    });
+    expect(screen.getByText('Restore applying on startup.')).toBeInTheDocument();
+
+    await act(async () => {
+      immediateStatus.resolve(previousRestoreStatus);
+      await immediateStatus.promise;
+    });
+
+    expect(screen.getByText('Restore applying on startup.')).toBeInTheDocument();
+    expect(screen.queryByText('Restore completed.')).not.toBeInTheDocument();
+  });
+
+  it('reconciles when backend reconnects before the verification effect is reinstalled', async () => {
+    const { fetchRestoreStatus, restoreInstanceBackup } = await import('../api/client');
+    const restoreRequest = deferred<Awaited<ReturnType<typeof restoreInstanceBackup>>>();
+    vi.mocked(fetchRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockRejectedValueOnce(new Error('backend restarting'))
+      .mockResolvedValueOnce({
+        ...completedRestoreStatus,
+        operation_id: 'restore-new',
+        phase: 'applying_postgres',
+      });
+    vi.mocked(restoreInstanceBackup)
+      .mockResolvedValueOnce(mockRestoreReport)
+      .mockReturnValueOnce(restoreRequest.promise);
+
+    await renderAndWait();
+    selectRestoreFile(new File(['dummy'], 'backup.tar.gz', { type: 'application/gzip' }));
+    await waitFor(() => expect(screen.getByText('Confirm Restore')).toBeInTheDocument());
+    act(() => {
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Restore Now' }));
+    });
+    await waitFor(() => expect(vi.mocked(restoreInstanceBackup)).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      restoreRequest.reject(new RestoreOutcomeUnknownError());
+      await Promise.resolve();
+      window.dispatchEvent(new Event('backend-reconnected'));
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText('Restore applying on startup.')).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByText('Connection interrupted during restart. Verifying restore status...'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('disables another restore while an ambiguous outcome is being verified', async () => {
+    const { fetchRestoreStatus, restoreInstanceBackup } = await import('../api/client');
+    vi.mocked(fetchRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockRejectedValueOnce(new Error('backend restarting'));
+    vi.mocked(restoreInstanceBackup)
+      .mockResolvedValueOnce(mockRestoreReport)
+      .mockRejectedValueOnce(new RestoreOutcomeUnknownError());
+
+    await renderAndWait();
+    selectRestoreFile(new File(['dummy'], 'backup.tar.gz', { type: 'application/gzip' }));
+    await waitFor(() => expect(screen.getByText('Confirm Restore')).toBeInTheDocument());
+    act(() => {
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Restore Now' }));
+    });
+    await screen.findByText('Connection interrupted during restart. Verifying restore status...');
+
+    expect(screen.getByRole('button', { name: 'Restore Backup' })).toBeDisabled();
+  });
+
+  it('does not submit a restore when its operation baseline is unavailable', async () => {
+    const { fetchRestoreStatus, restoreInstanceBackup } = await import('../api/client');
+    vi.mocked(fetchRestoreStatus)
+      .mockResolvedValueOnce(previousRestoreStatus)
+      .mockRejectedValueOnce(new Error('status unavailable'));
+    vi.mocked(restoreInstanceBackup).mockResolvedValueOnce(mockRestoreReport);
+
+    await renderAndWait();
+    selectRestoreFile(new File(['dummy'], 'backup.tar.gz', { type: 'application/gzip' }));
+    await waitFor(() => expect(screen.getByText('Confirm Restore')).toBeInTheDocument());
+
+    act(() => {
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Restore Now' }));
+    });
+
+    expect(
+      await screen.findByText('Could not verify current restore status. Restore was not started.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Confirm Restore')).toBeInTheDocument();
+    expect(vi.mocked(restoreInstanceBackup)).toHaveBeenCalledTimes(1);
   });
 
   it('Cancel closes the confirmation modal', async () => {
