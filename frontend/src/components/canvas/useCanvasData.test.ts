@@ -2,7 +2,7 @@
  * Exercises use canvas data topology canvas behavior so refactors preserve the documented contract.
  */
 import { act, renderHook } from '@testing-library/react';
-import type { ReactFlowInstance } from '@xyflow/react';
+import type { ReactFlowInstance, SnapGrid } from '@xyflow/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -176,6 +176,7 @@ function renderUseCanvasData(
     onDevicesChange?: (devices: Device[]) => void;
     onTopologyAreasChange?: (areas: Area[]) => void;
     getCanvasClientRect?: () => ScreenRect | null;
+    snapGrid?: SnapGrid | null;
   } = {},
 ) {
   const canvasRect = { x: 100, y: 60, width: 1000, height: 700 };
@@ -198,8 +199,20 @@ function renderUseCanvasData(
   const openDeviceMenu = vi.fn();
   const openEdgeMenu = vi.fn();
 
+  interface RenderProps {
+    currentSnapshot: SnapshotPayload | null;
+    currentMapId?: string | null;
+    currentMapName?: string;
+    currentSnapGrid?: SnapGrid | null;
+  }
+
   const rendered = renderHook(
-    ({ currentSnapshot, currentMapId = null, currentMapName = 'Default' }) => {
+    ({
+      currentSnapshot,
+      currentMapId = null,
+      currentMapName = 'Default',
+      currentSnapGrid = options.snapGrid ?? null,
+    }: RenderProps) => {
       const [nodes, setNodes] = useState<DeviceNode[]>([]);
       nodesForGeometry = nodes;
       const [edges, setEdges] = useState<LinkEdgeType[]>([]);
@@ -218,6 +231,7 @@ function renderUseCanvasData(
         nodes,
         setNodes,
         setEdges,
+        snapGrid: currentSnapGrid,
         onDevicesChange: options.onDevicesChange,
         onTopologyAreasChange: options.onTopologyAreasChange,
       });
@@ -234,7 +248,8 @@ function renderUseCanvasData(
         currentSnapshot: snapshot,
         currentMapId: options.mapId ?? null,
         currentMapName: options.mapName ?? 'Default',
-      },
+        currentSnapGrid: options.snapGrid ?? null,
+      } as RenderProps,
     },
   );
 
@@ -1051,6 +1066,58 @@ describe('useCanvasData', () => {
     expect(positionMocks.savePositions).not.toHaveBeenCalled();
   });
 
+  it('normalizes loaded nodes and persists once when snapping becomes enabled', async () => {
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [mockDevice()],
+        positions: {
+          'dev-1': {
+            device_id: 'dev-1',
+            x: 44,
+            y: 46,
+            pinned: true,
+          },
+        },
+      }),
+    );
+
+    const { result, rerender } = renderUseCanvasData(null, null, { snapGrid: null });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes[0]?.position).toEqual({ x: 44, y: 46 });
+    positionMocks.savePositions.mockClear();
+
+    rerender({
+      currentSnapshot: null,
+      currentSnapGrid: [30, 30],
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes[0]?.position).toEqual({ x: 30, y: 60 });
+    expect(positionMocks.savePositions).toHaveBeenCalledOnce();
+    expect(positionMocks.savePositions).toHaveBeenCalledWith([
+      { device_id: 'dev-1', x: 30, y: 60, pinned: true },
+    ]);
+
+    rerender({
+      currentSnapshot: null,
+      currentSnapGrid: [30, 30],
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(positionMocks.savePositions).toHaveBeenCalledOnce();
+  });
+
   it('fits the view after switching maps even when the target map already has saved positions', async () => {
     vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
       canvasBootstrapResponse({
@@ -1399,6 +1466,7 @@ describe('useCanvasData', () => {
         nodes,
         setNodes,
         setEdges,
+        snapGrid: null,
       });
     });
 
@@ -1514,6 +1582,7 @@ describe('useCanvasData', () => {
         nodes,
         setNodes,
         setEdges,
+        snapGrid: null,
       });
     });
 

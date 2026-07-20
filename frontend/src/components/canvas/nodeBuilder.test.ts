@@ -1,6 +1,7 @@
 /**
  * Exercises node builder topology canvas behavior so refactors preserve the documented contract.
  */
+import type { SnapGrid } from '@xyflow/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Device, Link } from '../../types/api';
@@ -337,6 +338,68 @@ describe('buildTopologyNodes', () => {
     expect(nodes[0].position).toEqual({ x: 25, y: 35 });
     expect(nodes[0].data.pinned).toBe(true);
     expect(nodes[1].position).toEqual({ x: 50, y: 60 });
+  });
+
+  it('snaps saved, current, computed, and explicit resolved positions when a grid is enabled', () => {
+    const devices = [
+      mockDevice({ id: 'saved' }),
+      mockDevice({ id: 'current' }),
+      mockDevice({ id: 'computed' }),
+      mockDevice({ id: 'explicit' }),
+    ];
+    const buildNodes = (snapGrid: SnapGrid | null) =>
+      buildTopologyNodes(
+        devices,
+        new Map([['saved', { x: 44, y: 46, pinned: true }]]),
+        new Map([['computed', { x: 104, y: 106 }]]),
+        new Map([['explicit', { x: 136, y: 164 }]]),
+        false,
+        vi.fn(),
+        null,
+        [],
+        [],
+        undefined,
+        new Map([['current', { x: 74, y: -16, pinned: true }]]),
+        new Set(['computed']),
+        snapGrid,
+      );
+
+    const nodesById = new Map(buildNodes([30, 30]).map((node) => [node.id, node]));
+
+    expect(nodesById.get('saved')?.position).toEqual({ x: 30, y: 60 });
+    expect(nodesById.get('current')?.position).toEqual({ x: 60, y: -30 });
+    expect(nodesById.get('computed')?.position).toEqual({ x: 90, y: 120 });
+    expect(nodesById.get('explicit')?.position).toEqual({ x: 150, y: 150 });
+  });
+
+  it('preserves exact resolved positions when the grid is disabled', () => {
+    const devices = [
+      mockDevice({ id: 'saved' }),
+      mockDevice({ id: 'current' }),
+      mockDevice({ id: 'computed' }),
+      mockDevice({ id: 'explicit' }),
+    ];
+    const nodes = buildTopologyNodes(
+      devices,
+      new Map([['saved', { x: 44, y: 46, pinned: true }]]),
+      new Map([['computed', { x: 104, y: 106 }]]),
+      new Map([['explicit', { x: 136, y: 164 }]]),
+      false,
+      vi.fn(),
+      null,
+      [],
+      [],
+      undefined,
+      new Map([['current', { x: 74, y: -16, pinned: true }]]),
+      new Set(['computed']),
+      null,
+    );
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+
+    expect(nodesById.get('saved')?.position).toEqual({ x: 44, y: 46 });
+    expect(nodesById.get('current')?.position).toEqual({ x: 74, y: -16 });
+    expect(nodesById.get('computed')?.position).toEqual({ x: 104, y: 106 });
+    expect(nodesById.get('explicit')?.position).toEqual({ x: 136, y: 164 });
   });
 
   it('applies only the keyed explicit override ahead of current positions', () => {

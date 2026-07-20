@@ -2,7 +2,7 @@
  * Renders toolbar UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { MaterialIcon } from './MaterialIcon';
 
 interface ToolbarProps {
@@ -11,8 +11,19 @@ interface ToolbarProps {
   onCreateLink: () => void;
   onAlerts: () => void;
   onToggleEditMode: () => void;
+  onToggleSnapToGrid: () => void;
   editMode: boolean;
+  snapToGrid: boolean;
   alertCount?: number;
+}
+
+interface ToolbarAction {
+  label: string;
+  onClick: () => void;
+  icon: ReactNode;
+  active?: boolean;
+  pressed?: boolean;
+  ariaLabel?: string;
 }
 
 /** Renders the Toolbar component within the UI component boundary. */
@@ -22,7 +33,9 @@ export function Toolbar({
   onCreateLink,
   onAlerts,
   onToggleEditMode,
+  onToggleSnapToGrid,
   editMode,
+  snapToGrid,
   alertCount = 0,
 }: ToolbarProps) {
   const [isMac, setIsMac] = useState(false);
@@ -34,12 +47,21 @@ export function Toolbar({
 
   const modifier = isMac ? '⌘' : 'Ctrl';
 
-  const buttons = [
+  const snapLabel = `Snap to grid: ${snapToGrid ? 'On' : 'Off'}`;
+  const buttons: ToolbarAction[] = [
     {
       label: 'Edit Mode (E)',
       onClick: onToggleEditMode,
       active: editMode,
       icon: <MaterialIcon name="edit" />,
+    },
+    {
+      label: snapLabel,
+      ariaLabel: snapLabel,
+      onClick: onToggleSnapToGrid,
+      active: snapToGrid,
+      pressed: snapToGrid,
+      icon: <MaterialIcon name="grid_4x4" />,
     },
     {
       label: `Search (${modifier}+K)`,
@@ -97,6 +119,8 @@ export function Toolbar({
           className={`relative ${expanded ? 'flex' : 'hidden sm:flex'} h-11 w-11 items-center justify-center rounded-xl border border-transparent transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${'active' in btn && btn.active ? 'border-primary/35 bg-primary/12 text-primary' : 'text-on-bg-secondary hover:text-on-bg'}`}
           onClick={btn.onClick}
           title={btn.label}
+          aria-label={btn.ariaLabel}
+          aria-pressed={btn.pressed}
         >
           {btn.icon}
         </button>

@@ -2,6 +2,8 @@
  * Defines topology composition cache behavior for the topology canvas.
  * Documents how canonical topology data is projected into the interactive view layer.
  */
+import type { SnapGrid } from '@xyflow/react';
+
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import {
@@ -38,6 +40,7 @@ export interface BuildCanvasTopologyCompositionCacheKeyInput {
   currentPositions: PositionMap;
   explicitPositions: Map<string, { x: number; y: number }>;
   editMode: boolean;
+  snapGrid: SnapGrid | null;
   placementDeviceIds: Set<string>;
   runtimeIdentity?: string;
   runtimeVersion?: number;
@@ -340,6 +343,7 @@ export function buildCanvasTopologyCompositionCacheKey(
       currentPositions: positionMapSignature(input.currentPositions),
       explicitPositions: positionMapSignature(input.explicitPositions),
       editMode: input.editMode,
+      snapGrid: input.snapGrid ?? null,
       placementDeviceIds: placementSignature(input.placementDeviceIds),
       runtime: runtimeSignature(input),
       alerts: alertSignature(input.alerts),

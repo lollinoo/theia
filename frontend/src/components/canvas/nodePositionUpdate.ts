@@ -2,11 +2,14 @@
  * Defines node position update behavior for the topology canvas.
  * Documents how canonical topology data is projected into the interactive view layer.
  */
+import type { SnapGrid } from '@xyflow/react';
+
 import type { PositionState } from '../../hooks/usePositions';
 import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { type LinkEdgeData } from '../linkSemantics';
+import { snapNodesToGrid } from './canvasGrid';
 import { buildPositionPayload, isGhostDeviceNode } from './canvasHelpers';
 import { buildTopologyEdges } from './edgeBuilder';
 import { nodePositionsToPositionMap } from './topologyPositionState';
@@ -18,6 +21,7 @@ interface ManualNodePositionUpdateInput {
   devices: Device[];
   links: Link[];
   openEdgeMenu: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void;
+  snapGrid: SnapGrid | null;
 }
 
 interface ManualNodePositionUpdatePlan {
@@ -35,8 +39,9 @@ export function buildManualNodePositionUpdate({
   devices,
   links,
   openEdgeMenu,
+  snapGrid,
 }: ManualNodePositionUpdateInput): ManualNodePositionUpdatePlan | null {
-  const nextNodes = nodes.map((node) =>
+  const positionedNodes = nodes.map((node) =>
     node.id === deviceId && !isGhostDeviceNode(node)
       ? {
           ...node,
@@ -48,10 +53,11 @@ export function buildManualNodePositionUpdate({
         }
       : node,
   );
-  const changed = nextNodes.some((node, index) => node !== nodes[index]);
-  if (!changed) {
+  const moved = positionedNodes.some((node, index) => node !== nodes[index]);
+  if (!moved) {
     return null;
   }
+  const nextNodes = snapGrid ? snapNodesToGrid(positionedNodes, snapGrid) : positionedNodes;
 
   const devicesById = new Map(devices.map((device) => [device.id, device]));
 

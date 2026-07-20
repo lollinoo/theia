@@ -1,6 +1,7 @@
 /**
  * Exercises topology composer topology canvas behavior so refactors preserve the documented contract.
  */
+import type { SnapGrid } from '@xyflow/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Device, Link } from '../../types/api';
@@ -132,7 +133,11 @@ function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
  * Composes the topology under test with representative devices, links,
  * positions, and optional runtime inputs.
  */
-function buildSubject(options: { snapshot?: SnapshotPayload | null; alerts?: AlertDTO[] }) {
+function buildSubject(options: {
+  snapshot?: SnapshotPayload | null;
+  alerts?: AlertDTO[];
+  snapGrid?: SnapGrid | null;
+}) {
   const devices = [
     mockDevice(),
     mockDevice({
@@ -167,10 +172,20 @@ function buildSubject(options: { snapshot?: SnapshotPayload | null; alerts?: Ale
     openEdgeMenu: vi.fn(),
     placementDeviceIds: new Set(['dev-1', 'dev-2']),
     alerts: options.alerts ?? [],
+    snapGrid: options.snapGrid ?? null,
   });
 }
 
 describe('composeCanvasTopology', () => {
+  it('threads the enabled grid through topology node composition', () => {
+    const { nodes } = buildSubject({ snapGrid: [30, 30] });
+
+    expect(nodes.map((node) => node.position)).toEqual([
+      { x: 90, y: 120 },
+      { x: 330, y: 120 },
+    ]);
+  });
+
   it('hydrates node runtime status from runtime models without mutating static device status', () => {
     const { nodes } = buildSubject({
       snapshot: mockSnapshot({

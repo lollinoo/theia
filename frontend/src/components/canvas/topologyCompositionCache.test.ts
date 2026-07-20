@@ -72,6 +72,7 @@ function baseInput(
     currentPositions: new Map(),
     explicitPositions: new Map(),
     editMode: false,
+    snapGrid: null,
     placementDeviceIds: new Set(),
     runtimeIdentity: 'rt-sha256:abc',
     runtimeVersion: 7,
@@ -109,6 +110,13 @@ function expectCacheInvalidates(
 }
 
 describe('buildCanvasTopologyCompositionCacheKey', () => {
+  it('uses different signatures for disabled and enabled grid modes', () => {
+    const disabled = buildKey({ snapGrid: null });
+    const enabled = buildKey({ snapGrid: [30, 30] });
+
+    expect(enabled.signature).not.toBe(disabled.signature);
+  });
+
   it('uses server topology identity without traversing device or link presentation fields', () => {
     const explodingDevice = Object.defineProperties(
       {},

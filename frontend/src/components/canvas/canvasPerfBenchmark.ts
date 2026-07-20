@@ -397,6 +397,7 @@ function benchmarkOperations(
     openEdgeMenu: noopEdgeMenu,
     placementDeviceIds,
     alerts: scenario.alerts,
+    snapGrid: null,
   };
 
   measureLocalMetric(samples, scenarioName, 'composeCanvasTopology', () =>
@@ -418,6 +419,7 @@ function benchmarkOperations(
     currentPositions: compositionInput.currentPositions,
     explicitPositions: compositionInput.explicitPositions,
     editMode: compositionInput.editMode,
+    snapGrid: compositionInput.snapGrid,
     placementDeviceIds,
     runtimeIdentity: `benchmark:${scenarioName}`,
     runtimeVersion: 1,

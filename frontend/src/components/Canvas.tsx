@@ -36,6 +36,7 @@ import {
   recordCanvasDiagnosticEvent,
   updateCanvasDiagnosticsState,
 } from './canvas/canvasDiagnostics';
+import { canvasSnapGrid } from './canvas/canvasGrid';
 import { isGhostDeviceNode, topologyFitViewPadding } from './canvas/canvasHelpers';
 import {
   clearSelectedGraphItems,
@@ -61,6 +62,7 @@ import { useCanvasGraphState } from './canvas/useCanvasGraphState';
 import { useCanvasInteractionState } from './canvas/useCanvasInteractionState';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { useCanvasSelection } from './canvas/useCanvasSelection';
+import { useCanvasSnapPreference } from './canvas/useCanvasSnapPreference';
 import DeviceCard, { type DeviceNode, resolveDeviceNodeReadabilityScale } from './DeviceCard';
 import { minimapColorForDevice } from './deviceVisualState';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
@@ -187,6 +189,7 @@ export default function Canvas({
   chromeHidden,
   onChromeHiddenChange,
 }: CanvasProps) {
+  const { snapToGrid, toggleSnapToGrid } = useCanvasSnapPreference();
   const {
     nodes,
     edges,
@@ -196,7 +199,7 @@ export default function Canvas({
     onEdgesChange,
     nodeIndexByIdRef,
     edgeIndexByIdRef,
-  } = useCanvasGraphState();
+  } = useCanvasGraphState({ snapToGrid, snapGrid: canvasSnapGrid });
   const { diagnosticsVisible, closeDiagnostics } = useCanvasDiagnosticsToggle();
   const { canvasInteractionActive, beginCanvasInteraction, endCanvasInteraction } =
     useCanvasInteractionState({ onInteractionActiveChange });
@@ -464,6 +467,7 @@ export default function Canvas({
     nodes,
     setNodes,
     setEdges,
+    snapGrid: snapToGrid ? canvasSnapGrid : null,
     nodeIndexByIdRef,
     edgeIndexByIdRef,
     onDevicesChange,
@@ -843,7 +847,9 @@ export default function Canvas({
           onCreateLink={() => setPanelContent({ type: 'create-link' })}
           onAlerts={() => setPanelContent({ type: 'alerts' })}
           onToggleEditMode={() => setEditMode((m) => !m)}
+          onToggleSnapToGrid={toggleSnapToGrid}
           editMode={editMode}
+          snapToGrid={snapToGrid}
           alertCount={runtimeSummary.alertCount}
         />
       )}
@@ -1019,6 +1025,8 @@ export default function Canvas({
         fitViewOptions={{ padding: currentTopologyFitViewPadding }}
         onlyRenderVisibleElements
         nodesDraggable={editMode}
+        snapToGrid={snapToGrid}
+        snapGrid={canvasSnapGrid}
         panOnDrag
         zoomOnScroll
         zoomOnDoubleClick={false}
@@ -1026,7 +1034,7 @@ export default function Canvas({
         proOptions={{ hideAttribution: true }}
         className="bg-transparent"
       >
-        <Background color="var(--color-edge-muted)" gap={30} size={1.1} />
+        <Background color="var(--color-edge-muted)" gap={canvasSnapGrid[0]} size={1.1} />
         <LinkLabelLayer />
         {!effectiveChromeHidden && <TopologyMiniMap />}
       </ReactFlow>

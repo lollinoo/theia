@@ -1,4 +1,4 @@
-import type { ReactFlowInstance } from '@xyflow/react';
+import type { ReactFlowInstance, SnapGrid } from '@xyflow/react';
 
 import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
@@ -18,6 +18,7 @@ export interface BuildExplicitNodePlacementsInput {
   devices: Device[];
   links: Link[];
   deviceIds: ReadonlySet<string>;
+  snapGrid?: SnapGrid | null;
 }
 
 /** Flow-coordinate positions successfully resolved for exact pending device IDs. */
@@ -134,6 +135,7 @@ export function buildExplicitNodePlacements({
   devices,
   links,
   deviceIds,
+  snapGrid = null,
 }: BuildExplicitNodePlacementsInput): BuildExplicitNodePlacementsResult {
   const zoom = reactFlow.getViewport().zoom;
   if (!isFinitePositive(zoom) || !isValidScreenRect(canvasRect)) return emptyResult();
@@ -206,15 +208,17 @@ export function buildExplicitNodePlacements({
     });
     if (!placement) continue;
 
-    const flowPosition = reactFlow.screenToFlowPosition(placement.topLeft, {
-      snapToGrid: false,
-    });
+    const flowPosition = reactFlow.screenToFlowPosition(
+      placement.topLeft,
+      snapGrid ? { snapToGrid: true, snapGrid } : { snapToGrid: false },
+    );
     if (!Number.isFinite(flowPosition.x) || !Number.isFinite(flowPosition.y)) continue;
 
     positions.set(target.id, flowPosition);
     placedDeviceIds.add(target.id);
+    const selectedScreenTopLeft = reactFlow.flowToScreenPosition(flowPosition);
     const selectedScreenRect = {
-      ...placement.topLeft,
+      ...selectedScreenTopLeft,
       ...target.screenSize,
     };
     obstacles.push(selectedScreenRect);

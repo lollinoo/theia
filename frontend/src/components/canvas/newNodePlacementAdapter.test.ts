@@ -11,7 +11,10 @@ interface ReactFlowStubOptions {
   canvasRect: ScreenRect;
   viewport?: { x: number; y: number; zoom: number };
   nodes?: DeviceNode[];
-  screenToFlowPosition?: (point: { x: number; y: number }) => { x: number; y: number };
+  screenToFlowPosition?: (
+    point: { x: number; y: number },
+    options?: { snapToGrid?: boolean; snapGrid?: [number, number] },
+  ) => { x: number; y: number };
 }
 
 function device(overrides: Partial<Device> & Pick<Device, 'id'>): Device {
@@ -176,6 +179,31 @@ describe('buildExplicitNodePlacements', () => {
     expect(screenToFlowPosition).toHaveBeenCalledWith(screenTopLeft, { snapToGrid: false });
   });
 
+  it('delegates enabled snapping to React Flow and projects the snapped point for obstacles', () => {
+    const canvasRect = { x: 0, y: 0, width: 1000, height: 700 };
+    const snappedFlowPosition = { x: 330, y: 270 };
+    const { reactFlow, flowToScreenPosition, screenToFlowPosition } = reactFlowStub({
+      canvasRect,
+      screenToFlowPosition: () => snappedFlowPosition,
+    });
+
+    const result = buildExplicitNodePlacements({
+      reactFlow,
+      canvasRect,
+      devices: [device({ id: 'target' })],
+      links: [],
+      deviceIds: new Set(['target']),
+      snapGrid: [30, 30],
+    });
+
+    expect(screenToFlowPosition).toHaveBeenCalledWith(
+      { x: 315, y: 280 },
+      { snapToGrid: true, snapGrid: [30, 30] },
+    );
+    expect(result.positions.get('target')).toEqual(snappedFlowPosition);
+    expect(flowToScreenPosition).toHaveBeenCalledWith(snappedFlowPosition);
+  });
+
   it('uses measured node dimensions before the rendered-card fallback', () => {
     const canvasRect = { x: 0, y: 0, width: 1000, height: 700 };
     const target = device({ id: 'target' });
@@ -316,7 +344,8 @@ describe('buildExplicitNodePlacements', () => {
     });
 
     expect(result.positions.get(target.id)).toEqual({ x: 315, y: 280 });
-    expect(flowToScreenPosition).not.toHaveBeenCalled();
+    expect(flowToScreenPosition).toHaveBeenCalledOnce();
+    expect(flowToScreenPosition).toHaveBeenCalledWith({ x: 315, y: 280 });
   });
 
   it('excludes hidden existing nodes from placement obstacles', () => {
@@ -346,7 +375,8 @@ describe('buildExplicitNodePlacements', () => {
     });
 
     expect(result.positions.get(target.id)).toEqual({ x: 315, y: 280 });
-    expect(flowToScreenPosition).not.toHaveBeenCalled();
+    expect(flowToScreenPosition).toHaveBeenCalledOnce();
+    expect(flowToScreenPosition).toHaveBeenCalledWith({ x: 315, y: 280 });
   });
 
   it('keeps a measured ghost node as an obstacle without a fetched device match', () => {

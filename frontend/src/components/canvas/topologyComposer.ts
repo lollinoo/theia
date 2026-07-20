@@ -2,6 +2,8 @@
  * Defines topology composer behavior for the topology canvas.
  * Documents how canonical topology data is projected into the interactive view layer.
  */
+import type { SnapGrid } from '@xyflow/react';
+
 import type { Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
@@ -25,6 +27,7 @@ interface ComposeCanvasTopologyInput {
   openSelfLinkDetails?: (link: Link) => void;
   placementDeviceIds: Set<string>;
   alerts: AlertDTO[];
+  snapGrid: SnapGrid | null;
 }
 
 interface ComposeCanvasTopologyResult {
@@ -85,6 +88,7 @@ export function composeCanvasTopology({
   openSelfLinkDetails,
   placementDeviceIds,
   alerts,
+  snapGrid,
 }: ComposeCanvasTopologyInput): ComposeCanvasTopologyResult {
   const nodes = buildTopologyNodes(
     devices,
@@ -99,6 +103,7 @@ export function composeCanvasTopology({
     openSelfLinkDetails,
     currentPositions,
     placementDeviceIds,
+    snapGrid,
   ).map((node) => {
     const runtimeDevice = runtimeState.devicesById.get(node.id);
     if (!runtimeDevice) {

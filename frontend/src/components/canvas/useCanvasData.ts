@@ -2,7 +2,7 @@
  * Coordinates canvas data state for the topology canvas.
  * Keeps canvas lifecycle, projected graph state, and cleanup behavior explicit for callers.
  */
-import type { ReactFlowInstance } from '@xyflow/react';
+import type { ReactFlowInstance, SnapGrid } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createLink, fetchGrafanaDashboardConfig, fetchSettings } from '../../api/client';
@@ -17,9 +17,11 @@ import {
 } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
+import { type LinkEdgeData } from '../linkSemantics';
 import { applyAlertStatusPatch } from './alertStatusPatch';
 import { updateCanvasDiagnosticsState } from './canvasDiagnostics';
-import { topologyFitViewPadding, viewportSize } from './canvasHelpers';
+import { snapNodesToGrid } from './canvasGrid';
+import { buildPositionPayload, topologyFitViewPadding, viewportSize } from './canvasHelpers';
 import {
   type CanvasMeasurementTrigger,
   measureCanvasAsyncWork,
@@ -33,6 +35,7 @@ import {
   recordCanvasTopologyLoadSucceeded,
 } from './canvasTopologyDiagnostics';
 import { canvasMapKey, loadCanvasTopologySource } from './canvasTopologySource';
+import { buildTopologyEdges } from './edgeBuilder';
 import {
   buildIncrementalLayoutInputs,
   computeIncrementalLayoutPositions,
@@ -95,6 +98,7 @@ interface UseCanvasDataParams {
   nodes: DeviceNode[];
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
   setEdges: React.Dispatch<React.SetStateAction<LinkEdgeType[]>>;
+  snapGrid: SnapGrid | null;
   nodeIndexByIdRef?: React.MutableRefObject<Map<string, number>>;
   edgeIndexByIdRef?: React.MutableRefObject<Map<string, number>>;
   onDevicesChange?: (devices: Device[]) => void;
@@ -162,6 +166,7 @@ export function useCanvasData({
   nodes,
   setNodes,
   setEdges,
+  snapGrid,
   nodeIndexByIdRef,
   edgeIndexByIdRef,
   onDevicesChange,
@@ -184,6 +189,8 @@ export function useCanvasData({
   const devicesRef = useRef<Device[]>([]);
   const topologyLinksRef = useRef<Link[]>([]);
   const nodesRef = useRef<DeviceNode[]>(nodes);
+  const snapGridRef = useRef<SnapGrid | null>(snapGrid);
+  const previousSnapGridRef = useRef<SnapGrid | null>(snapGrid);
   const activeMapKeyRef = useRef<string>(mapKey);
   const mountedMapKeyRef = useRef<string | null>(null);
   const topologyLoadSequenceRef = useRef(0);
@@ -233,6 +240,7 @@ export function useCanvasData({
   devicesRef.current = devices;
   topologyLinksRef.current = topologyLinks;
   nodesRef.current = nodes;
+  snapGridRef.current = snapGrid;
   activeMapKeyRef.current = mapKey;
   currentNodePositionsByMapRef.current.set(
     nodesOwnerMapKeyRef.current,
@@ -258,6 +266,46 @@ export function useCanvasData({
   useEffect(() => {
     onTopologyAreasChange?.(topologyAreas);
   }, [topologyAreas, onTopologyAreasChange]);
+
+  useEffect(() => {
+    const wasEnabled = previousSnapGridRef.current !== null;
+    previousSnapGridRef.current = snapGrid;
+    if (snapGrid === null || wasEnabled) {
+      return;
+    }
+
+    const ownerMapKey = nodesOwnerMapKeyRef.current;
+    if (ownerMapKey !== activeMapKeyRef.current) {
+      return;
+    }
+
+    const currentNodes = nodesRef.current;
+    const normalizedNodes = snapNodesToGrid(currentNodes, snapGrid);
+    if (normalizedNodes === currentNodes) {
+      return;
+    }
+
+    const devicesById = new Map(devicesRef.current.map((device) => [device.id, device]));
+    setNodes(normalizedNodes);
+    currentNodePositionsByMapRef.current.set(
+      ownerMapKey,
+      nodePositionsToPositionMap(normalizedNodes),
+    );
+    setEdges((currentEdges) => {
+      const existingEdgeData = new Map<string, LinkEdgeData>(
+        currentEdges.map((edge) => [edge.id, edge.data ?? {}]),
+      );
+      return buildTopologyEdges(
+        topologyLinksRef.current,
+        devicesById,
+        normalizedNodes,
+        existingEdgeData,
+        openEdgeMenu,
+        alertsRef.current,
+      );
+    });
+    void savePositions(buildPositionPayload(normalizedNodes));
+  }, [openEdgeMenu, savePositions, setEdges, setNodes, snapGrid]);
 
   const loadTopology = useCallback(
     async (
@@ -433,6 +481,7 @@ export function useCanvasData({
                   devices: fetchedDevices,
                   links: fetchedLinks,
                   deviceIds: pendingDeviceIds,
+                  snapGrid: snapGridRef.current,
                 })
               : {
                   positions: new Map<string, { x: number; y: number }>(),
@@ -473,6 +522,7 @@ export function useCanvasData({
               openSelfLinkDetails,
               placementDeviceIds,
               alerts: alertsRef.current,
+              snapGrid: snapGridRef.current,
             };
             return topologyCompositionCacheRef.current.compose(
               compositionInput,
@@ -489,6 +539,7 @@ export function useCanvasData({
                 currentPositions: currentPositionsForComposition,
                 explicitPositions: explicitPlacement.positions,
                 editMode,
+                snapGrid: snapGridRef.current,
                 placementDeviceIds,
                 runtimeIdentity: topologySource.runtimeIdentity,
                 runtimeVersion: topologySource.runtimeVersion,
@@ -750,6 +801,7 @@ export function useCanvasData({
         devices: devicesRef.current,
         links: topologyLinksRef.current,
         openEdgeMenu,
+        snapGrid: snapGridRef.current,
       });
       if (updatePlan === null) {
         return;
