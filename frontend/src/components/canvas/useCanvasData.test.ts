@@ -51,6 +51,25 @@ vi.mock('../../api/client', () => ({
   createLink: vi.fn(),
 }));
 
+const manualEdgeMigrationOrchestratorControl = vi.hoisted(() => ({
+  runOverride: null as null | (() => Promise<{ status: 'not-run'; appliedCount: 0 }>),
+}));
+
+vi.mock('./manualEdgeMigrationOrchestrator', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./manualEdgeMigrationOrchestrator')>();
+  return {
+    ...actual,
+    runDefaultMapManualEdgeMigrationForTopologyLoad: (
+      options: Parameters<typeof actual.runDefaultMapManualEdgeMigrationForTopologyLoad>[0],
+    ) => {
+      const override = manualEdgeMigrationOrchestratorControl.runOverride;
+      return override
+        ? override()
+        : actual.runDefaultMapManualEdgeMigrationForTopologyLoad(options);
+    },
+  };
+});
+
 const positionMocks = vi.hoisted(() => {
   const fetchPositions = vi.fn();
   const savePositions = vi.fn();
@@ -299,6 +318,7 @@ function deferred<T>() {
 describe('useCanvasData', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    manualEdgeMigrationOrchestratorControl.runOverride = null;
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-13T12:00:00Z'));
     positionMocks.usePositions.mockImplementation((_mapId: string | null) => ({
@@ -331,6 +351,7 @@ describe('useCanvasData', () => {
   });
 
   afterEach(() => {
+    manualEdgeMigrationOrchestratorControl.runOverride = null;
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -2980,6 +3001,98 @@ describe('useCanvasData', () => {
     expect(result.current.nodes.find((node) => node.id === newDevice.id)?.position).toEqual(
       winningPosition,
     );
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an older placement load that becomes stale while awaiting edge migration', async () => {
+    const staleBaseDevice = mockDevice({
+      hostname: 'stale-router',
+      sys_name: 'stale-router',
+    });
+    const winningBaseDevice = mockDevice({
+      hostname: 'winning-router',
+      sys_name: 'winning-router',
+    });
+    const staleTargetDevice = mockDevice({
+      id: 'dev-post-migration-race',
+      hostname: 'stale-target',
+      ip: '10.0.0.58',
+      sys_name: 'stale-target',
+    });
+    const winningTargetDevice = {
+      ...staleTargetDevice,
+      hostname: 'winning-target',
+      sys_name: 'winning-target',
+    };
+    const migrationEntered = deferred<void>();
+    const migrationRelease = deferred<{ status: 'not-run'; appliedCount: 0 }>();
+    const staleResponse = canvasTopologyOkResponse({
+      devices: [staleBaseDevice, staleTargetDevice],
+      topology_version: 'topo-post-migration-stale',
+    });
+    const winningResponse = canvasTopologyOkResponse({
+      devices: [winningBaseDevice, winningTargetDevice],
+      topology_version: 'topo-post-migration-winner',
+    });
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    positionMocks.savePositions.mockClear();
+    vi.mocked(reactFlow.screenToFlowPosition).mockClear();
+    vi.mocked(fetchCanvasTopology)
+      .mockResolvedValueOnce(staleResponse)
+      .mockResolvedValueOnce(winningResponse);
+    manualEdgeMigrationOrchestratorControl.runOverride = () => {
+      manualEdgeMigrationOrchestratorControl.runOverride = null;
+      migrationEntered.resolve();
+      return migrationRelease.promise;
+    };
+
+    let staleRequest!: Promise<void>;
+    await act(async () => {
+      staleRequest = result.current.requestNewNodePlacement(staleTargetDevice.id);
+      await migrationEntered.promise;
+    });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+    const winningPosition = result.current.nodes.find(
+      (node) => node.id === winningTargetDevice.id,
+    )?.position;
+    expect(winningPosition).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+    expect(positionMocks.savePositions).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      migrationRelease.resolve({ status: 'not-run', appliedCount: 0 });
+      await staleRequest;
+      await Promise.resolve();
+    });
+
+    expect(result.current.devices.find((device) => device.id === 'dev-1')?.hostname).toBe(
+      'winning-router',
+    );
+    expect(
+      result.current.nodes.find((node) => node.id === winningTargetDevice.id)?.data.device.hostname,
+    ).toBe('winning-target');
+    expect(
+      result.current.nodes.find((node) => node.id === winningTargetDevice.id)?.position,
+    ).toEqual(winningPosition);
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+    expect(positionMocks.savePositions).toHaveBeenCalledTimes(1);
+
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(winningResponse);
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(
+      result.current.nodes.find((node) => node.id === winningTargetDevice.id)?.position,
+    ).toEqual(winningPosition);
     expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
   });
 

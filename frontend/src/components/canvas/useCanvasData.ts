@@ -385,6 +385,9 @@ export function useCanvasData({
             createLink,
             isCurrentTopologyLoad,
           });
+          if (!isCurrentTopologyLoad()) {
+            return 'stale';
+          }
           if (manualEdgeMigrationResult.status === 'stale') {
             return 'stale';
           }
