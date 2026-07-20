@@ -25,6 +25,22 @@ export type PlacementMode = 'preferred-gap' | 'no-gap' | 'least-overlap' | 'over
 export interface NewNodePlacementDiagnostics {
   /** Increments for each uncached exact collision-score evaluation. */
   exactCandidateScores: number;
+  /** Increments for each heuristic candidate tested for any collision. */
+  collisionProbeCandidates?: number;
+  /** Increments for each heuristic candidate probed against the exact sweep's area bound. */
+  leastOverlapAreaProbes?: number;
+  /** Increments for each obstacle rectangle tested by a collision probe or exact score. */
+  obstacleIntersectionTests?: number;
+  /** Increments for each full constraint visit performed by a collision-free x sweep. */
+  collisionSweepConstraintVisits?: number;
+  /** Increments for each incremental constraint start or end event applied by an x sweep. */
+  collisionSweepEventUpdates?: number;
+  /** Increments for each obstacle horizontal-overlap weight evaluated by the exact sweep. */
+  horizontalWeightEvaluations?: number;
+  /** Increments for each horizontal-weight buffer allocated by the exact sweep. */
+  horizontalWeightBufferAllocations?: number;
+  /** Increments for each vertical derivative event visited by the exact sweep. */
+  verticalSweepEventVisits?: number;
 }
 
 /** Inputs for deterministic node placement within a client-space viewport. */
@@ -83,6 +99,8 @@ interface SpatialHash {
   cellSize: number;
   cells: Map<string, number[]>;
   obstacles: ScreenRect[];
+  visitedObstacleGenerations: Uint32Array;
+  nextVisitGeneration: number;
 }
 
 interface CollisionScore {
@@ -92,6 +110,17 @@ interface CollisionScore {
 
 interface ScoredCandidate extends CollisionScore {
   topLeft: ScreenPoint;
+}
+
+function incrementDiagnostic(
+  diagnostics: NewNodePlacementDiagnostics | undefined,
+  counter: keyof NewNodePlacementDiagnostics,
+  amount = 1,
+): void {
+  const currentValue = diagnostics?.[counter];
+  if (diagnostics && currentValue !== undefined) {
+    diagnostics[counter] = currentValue + amount;
+  }
 }
 
 function expandScreenRect(rect: ScreenRect, gap: number): ScreenRect {
@@ -132,7 +161,13 @@ function buildSpatialHash(obstacles: ScreenRect[], cellSize: number): SpatialHas
       }
     });
   });
-  return { cellSize, cells, obstacles };
+  return {
+    cellSize,
+    cells,
+    obstacles,
+    visitedObstacleGenerations: new Uint32Array(obstacles.length),
+    nextVisitGeneration: 1,
+  };
 }
 
 function queryObstacleIds(spatialHash: SpatialHash, rect: ScreenRect): Set<number> {
@@ -152,12 +187,13 @@ function scoreCandidate(
   gap: number,
   diagnostics?: NewNodePlacementDiagnostics,
 ): CollisionScore {
-  if (diagnostics) diagnostics.exactCandidateScores += 1;
+  incrementDiagnostic(diagnostics, 'exactCandidateScores');
   const candidateRect = { ...topLeft, ...nodeSize };
   const queriedObstacleIds = queryObstacleIds(spatialHash, expandScreenRect(candidateRect, gap));
   const overlapAreas: number[] = [];
 
   for (const obstacleId of queriedObstacleIds) {
+    incrementDiagnostic(diagnostics, 'obstacleIntersectionTests');
     const obstacle = spatialHash.obstacles[obstacleId];
     const overlapArea = intersectionArea(
       candidateRect,
@@ -175,21 +211,92 @@ function scoreCandidate(
   };
 }
 
-function scoreCandidateWithCache(
+function beginSpatialHashVisit(spatialHash: SpatialHash): number {
+  const visitGeneration = spatialHash.nextVisitGeneration;
+  spatialHash.nextVisitGeneration += 1;
+  if (spatialHash.nextVisitGeneration > 0xffff_ffff) {
+    spatialHash.visitedObstacleGenerations.fill(0);
+    spatialHash.nextVisitGeneration = 1;
+  }
+  return visitGeneration;
+}
+
+function candidateCollides(
   topLeft: ScreenPoint,
   nodeSize: ScreenSize,
   spatialHash: SpatialHash,
   gap: number,
   diagnostics?: NewNodePlacementDiagnostics,
-  cache?: Map<string, CollisionScore>,
-): CollisionScore {
-  const cacheKey = `${topLeft.x},${topLeft.y}`;
-  const cached = cache?.get(cacheKey);
-  if (cached) return cached;
+): boolean {
+  const candidateRect = { ...topLeft, ...nodeSize };
+  const queryRect = expandScreenRect(candidateRect, gap);
+  const minCellX = Math.floor(queryRect.x / spatialHash.cellSize);
+  const maxCellX = Math.floor((queryRect.x + queryRect.width) / spatialHash.cellSize);
+  const minCellY = Math.floor(queryRect.y / spatialHash.cellSize);
+  const maxCellY = Math.floor((queryRect.y + queryRect.height) / spatialHash.cellSize);
+  const visitGeneration = beginSpatialHashVisit(spatialHash);
 
-  const score = scoreCandidate(topLeft, nodeSize, spatialHash, gap, diagnostics);
-  cache?.set(cacheKey, score);
-  return score;
+  for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
+    for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+      for (const obstacleId of spatialHash.cells.get(`${cellX},${cellY}`) ?? []) {
+        if (spatialHash.visitedObstacleGenerations[obstacleId] === visitGeneration) continue;
+        spatialHash.visitedObstacleGenerations[obstacleId] = visitGeneration;
+        incrementDiagnostic(diagnostics, 'obstacleIntersectionTests');
+        const obstacle = spatialHash.obstacles[obstacleId];
+        if (
+          intersectionArea(candidateRect, gap === 0 ? obstacle : expandScreenRect(obstacle, gap)) >
+          0
+        ) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function scoreCandidateWithinArea(
+  topLeft: ScreenPoint,
+  nodeSize: ScreenSize,
+  spatialHash: SpatialHash,
+  maximumArea: number,
+  overlapAreas: number[],
+  diagnostics?: NewNodePlacementDiagnostics,
+): CollisionScore | null {
+  incrementDiagnostic(diagnostics, 'leastOverlapAreaProbes');
+  const candidateRect = { ...topLeft, ...nodeSize };
+  const minCellX = Math.floor(candidateRect.x / spatialHash.cellSize);
+  const maxCellX = Math.floor((candidateRect.x + candidateRect.width) / spatialHash.cellSize);
+  const minCellY = Math.floor(candidateRect.y / spatialHash.cellSize);
+  const maxCellY = Math.floor((candidateRect.y + candidateRect.height) / spatialHash.cellSize);
+  const visitGeneration = beginSpatialHashVisit(spatialHash);
+  overlapAreas.length = 0;
+  let runningArea = 0;
+
+  for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
+    for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+      for (const obstacleId of spatialHash.cells.get(`${cellX},${cellY}`) ?? []) {
+        if (spatialHash.visitedObstacleGenerations[obstacleId] === visitGeneration) continue;
+        spatialHash.visitedObstacleGenerations[obstacleId] = visitGeneration;
+        incrementDiagnostic(diagnostics, 'obstacleIntersectionTests');
+        const overlapArea = intersectionArea(candidateRect, spatialHash.obstacles[obstacleId]);
+        if (overlapArea <= 0) continue;
+
+        overlapAreas.push(overlapArea);
+        runningArea += overlapArea;
+        // All terms are non-negative. The extra tolerance absorbs accumulation-order
+        // rounding before rejecting a candidate that cannot match the sweep minimum.
+        if (runningArea > maximumArea + overlapAreaTolerance(runningArea, maximumArea)) return null;
+      }
+    }
+  }
+
+  incrementDiagnostic(diagnostics, 'exactCandidateScores');
+  overlapAreas.sort((left, right) => left - right);
+  return {
+    overlapArea: overlapAreas.reduce((total, area) => total + area, 0),
+    overlapCount: overlapAreas.length,
+  };
 }
 
 function squaredDistance(left: ScreenPoint, right: ScreenPoint): number {
@@ -261,13 +368,6 @@ interface CollisionConstraint {
   yEnd: number;
 }
 
-interface BoundedForbiddenInterval {
-  start: number;
-  end: number;
-  startIncluded: boolean;
-  endIncluded: boolean;
-}
-
 function collisionConstraints(
   obstacles: ScreenRect[],
   nodeSize: ScreenSize,
@@ -291,73 +391,139 @@ function collisionConstraints(
   return constraints.sort((left, right) => left.yStart - right.yStart);
 }
 
-function mergeForbiddenIntervals(
-  intervals: BoundedForbiddenInterval[],
-): BoundedForbiddenInterval[] {
-  const merged: BoundedForbiddenInterval[] = [];
-  for (const interval of intervals) {
-    const previous = merged[merged.length - 1];
-    const overlaps =
-      previous &&
-      (interval.start < previous.end ||
-        (interval.start === previous.end && (previous.endIncluded || interval.startIncluded)));
-    if (!previous || !overlaps) {
-      merged.push({ ...interval });
-      continue;
-    }
-
-    if (interval.end > previous.end) {
-      previous.end = interval.end;
-      previous.endIncluded = interval.endIncluded;
-    } else if (interval.end === previous.end) {
-      previous.endIncluded = previous.endIncluded || interval.endIncluded;
+function lowerBound(sortedValues: number[], target: number): number {
+  let lower = 0;
+  let upper = sortedValues.length;
+  while (lower < upper) {
+    const middle = lower + Math.floor((upper - lower) / 2);
+    if (sortedValues[middle] < target) {
+      lower = middle + 1;
+    } else {
+      upper = middle;
     }
   }
-  return merged;
+  return lower;
 }
 
-function intervalContains(interval: BoundedForbiddenInterval, value: number): boolean {
-  if (value > interval.start && value < interval.end) return true;
-  if (value === interval.start) return interval.startIncluded;
-  if (value === interval.end) return interval.endIncluded;
-  return false;
+function upperBound(sortedValues: number[], target: number): number {
+  let lower = 0;
+  let upper = sortedValues.length;
+  while (lower < upper) {
+    const middle = lower + Math.floor((upper - lower) / 2);
+    if (sortedValues[middle] <= target) {
+      lower = middle + 1;
+    } else {
+      upper = middle;
+    }
+  }
+  return lower;
 }
 
-function nearestFreeAxisValues(
-  minimum: number,
-  maximum: number,
-  preferred: number,
-  intervals: BoundedForbiddenInterval[],
-): number[] {
-  if (minimum === maximum) {
-    return intervals.some((interval) => intervalContains(interval, minimum)) ? [] : [minimum];
+class CoordinateCoverage {
+  private readonly minimumCoverage: Int32Array;
+  private readonly lazyCoverage: Int32Array;
+
+  constructor(private readonly coordinates: number[]) {
+    const treeSize = Math.max(1, coordinates.length * 4);
+    this.minimumCoverage = new Int32Array(treeSize);
+    this.lazyCoverage = new Int32Array(treeSize);
   }
 
-  const merged = mergeForbiddenIntervals(intervals);
-  const candidates = new Set<number>();
-  for (const value of [minimum, maximum, Math.min(maximum, Math.max(minimum, preferred))]) {
-    if (!merged.some((interval) => intervalContains(interval, value))) {
-      candidates.add(value);
+  addOpenInterval(start: number, end: number, delta: 1 | -1): void {
+    const firstCoveredIndex = upperBound(this.coordinates, start);
+    const lastCoveredIndex = lowerBound(this.coordinates, end) - 1;
+    if (firstCoveredIndex <= lastCoveredIndex) {
+      this.addRange(1, 0, this.coordinates.length - 1, firstCoveredIndex, lastCoveredIndex, delta);
     }
-  }
-  for (const interval of merged) {
-    if (!interval.startIncluded) candidates.add(interval.start);
-    if (!interval.endIncluded) candidates.add(interval.end);
   }
 
-  let nearestDistance = Number.POSITIVE_INFINITY;
-  const nearest: number[] = [];
-  for (const candidate of candidates) {
-    const distance = Math.abs(candidate - preferred);
-    if (distance < nearestDistance) {
-      nearestDistance = distance;
-      nearest.length = 0;
-      nearest.push(candidate);
-    } else if (distance === nearestDistance) {
-      nearest.push(candidate);
-    }
+  nearestUncovered(preferred: number): number[] {
+    if (this.minimumCoverage[1] > 0) return [];
+
+    const preferredIndex = lowerBound(this.coordinates, preferred);
+    const leftIndex = this.findLastUncovered(1, 0, this.coordinates.length - 1, preferredIndex);
+    const rightIndex = this.findFirstUncovered(1, 0, this.coordinates.length - 1, preferredIndex);
+    if (leftIndex < 0) return rightIndex < 0 ? [] : [this.coordinates[rightIndex]];
+    if (rightIndex < 0 || leftIndex === rightIndex) return [this.coordinates[leftIndex]];
+
+    const leftDistance = preferred - this.coordinates[leftIndex];
+    const rightDistance = this.coordinates[rightIndex] - preferred;
+    if (leftDistance < rightDistance) return [this.coordinates[leftIndex]];
+    if (rightDistance < leftDistance) return [this.coordinates[rightIndex]];
+    return [this.coordinates[leftIndex], this.coordinates[rightIndex]];
   }
-  return nearest.sort((left, right) => left - right);
+
+  private addRange(
+    node: number,
+    left: number,
+    right: number,
+    updateLeft: number,
+    updateRight: number,
+    delta: 1 | -1,
+  ): void {
+    if (updateLeft <= left && right <= updateRight) {
+      this.minimumCoverage[node] += delta;
+      this.lazyCoverage[node] += delta;
+      return;
+    }
+
+    this.push(node);
+    const middle = left + Math.floor((right - left) / 2);
+    if (updateLeft <= middle) {
+      this.addRange(node * 2, left, middle, updateLeft, updateRight, delta);
+    }
+    if (updateRight > middle) {
+      this.addRange(node * 2 + 1, middle + 1, right, updateLeft, updateRight, delta);
+    }
+    this.minimumCoverage[node] = Math.min(
+      this.minimumCoverage[node * 2],
+      this.minimumCoverage[node * 2 + 1],
+    );
+  }
+
+  private findLastUncovered(
+    node: number,
+    left: number,
+    right: number,
+    maximumIndex: number,
+  ): number {
+    if (left > maximumIndex || this.minimumCoverage[node] > 0) return -1;
+    if (left === right) return this.minimumCoverage[node] === 0 ? left : -1;
+
+    this.push(node);
+    const middle = left + Math.floor((right - left) / 2);
+    const rightResult = this.findLastUncovered(node * 2 + 1, middle + 1, right, maximumIndex);
+    return rightResult >= 0
+      ? rightResult
+      : this.findLastUncovered(node * 2, left, middle, maximumIndex);
+  }
+
+  private findFirstUncovered(
+    node: number,
+    left: number,
+    right: number,
+    minimumIndex: number,
+  ): number {
+    if (right < minimumIndex || this.minimumCoverage[node] > 0) return -1;
+    if (left === right) return this.minimumCoverage[node] === 0 ? left : -1;
+
+    this.push(node);
+    const middle = left + Math.floor((right - left) / 2);
+    const leftResult = this.findFirstUncovered(node * 2, left, middle, minimumIndex);
+    return leftResult >= 0
+      ? leftResult
+      : this.findFirstUncovered(node * 2 + 1, middle + 1, right, minimumIndex);
+  }
+
+  private push(node: number): void {
+    const delta = this.lazyCoverage[node];
+    if (delta === 0) return;
+    for (const child of [node * 2, node * 2 + 1]) {
+      this.minimumCoverage[child] += delta;
+      this.lazyCoverage[child] += delta;
+    }
+    this.lazyCoverage[node] = 0;
+  }
 }
 
 function findBestCollisionFreeSweepCandidate(
@@ -367,6 +533,7 @@ function findBestCollisionFreeSweepCandidate(
   gap: number,
   viewportCenter: ScreenPoint,
   visibleNeighborCenters: ScreenPoint[],
+  diagnostics?: NewNodePlacementDiagnostics,
 ): ScreenPoint | null {
   const minimumX = usableViewport.x;
   const maximumX = usableViewport.x + usableViewport.width - nodeSize.width;
@@ -392,25 +559,56 @@ function findBestCollisionFreeSweepCandidate(
       xCandidates.add(constraint.xEnd);
     }
   }
+  const sortedYCoordinates = [
+    ...new Set([
+      minimumY,
+      maximumY,
+      preferredY,
+      ...constraints.flatMap((constraint) => [
+        Math.min(maximumY, Math.max(minimumY, constraint.yStart)),
+        Math.min(maximumY, Math.max(minimumY, constraint.yEnd)),
+      ]),
+    ]),
+  ].sort((left, right) => left - right);
+  const yCoverage = new CoordinateCoverage(sortedYCoordinates);
+  const startEvents = constraints
+    .map((constraint, constraintIndex) => ({
+      position: constraint.xStart,
+      constraintIndex,
+    }))
+    .sort(
+      (left, right) =>
+        left.position - right.position || left.constraintIndex - right.constraintIndex,
+    );
+  const endEvents = constraints
+    .map((constraint, constraintIndex) => ({
+      position: constraint.xEnd,
+      constraintIndex,
+    }))
+    .sort(
+      (left, right) =>
+        left.position - right.position || left.constraintIndex - right.constraintIndex,
+    );
 
   let best: { topLeft: ScreenPoint; rank: number[] } | null = null;
   const sortedX = [...xCandidates].sort((left, right) => left - right);
+  let startEventIndex = 0;
+  let endEventIndex = 0;
   for (const x of sortedX) {
-    const activeYIntervals: BoundedForbiddenInterval[] = [];
-    for (const constraint of constraints) {
-      if (x <= constraint.xStart || x >= constraint.xEnd) continue;
-      const start = Math.max(minimumY, constraint.yStart);
-      const end = Math.min(maximumY, constraint.yEnd);
-      if (start > end) continue;
-      activeYIntervals.push({
-        start,
-        end,
-        startIncluded: constraint.yStart < minimumY,
-        endIncluded: constraint.yEnd > maximumY,
-      });
+    while (startEventIndex < startEvents.length && startEvents[startEventIndex].position < x) {
+      const constraint = constraints[startEvents[startEventIndex].constraintIndex];
+      yCoverage.addOpenInterval(constraint.yStart, constraint.yEnd, 1);
+      incrementDiagnostic(diagnostics, 'collisionSweepEventUpdates');
+      startEventIndex += 1;
+    }
+    while (endEventIndex < endEvents.length && endEvents[endEventIndex].position <= x) {
+      const constraint = constraints[endEvents[endEventIndex].constraintIndex];
+      yCoverage.addOpenInterval(constraint.yStart, constraint.yEnd, -1);
+      incrementDiagnostic(diagnostics, 'collisionSweepEventUpdates');
+      endEventIndex += 1;
     }
 
-    for (const y of nearestFreeAxisValues(minimumY, maximumY, preferredY, activeYIntervals)) {
+    for (const y of yCoverage.nearestUncovered(preferredY)) {
       const topLeft = { x, y };
       const rank = collisionFreeRank(topLeft, nodeSize, viewportCenter, visibleNeighborCenters);
       if (!best || compareRank(rank, best.rank) < 0) {
@@ -495,16 +693,11 @@ function findBestCollisionFreeCandidate(
   viewportCenter: ScreenPoint,
   visibleNeighborCenters: ScreenPoint[],
   diagnostics?: NewNodePlacementDiagnostics,
-  scoreCache?: Map<string, CollisionScore>,
 ): ScreenPoint | null {
   let best: { topLeft: ScreenPoint; rank: number[] } | null = null;
   for (const candidate of candidates) {
-    if (
-      scoreCandidateWithCache(candidate, nodeSize, spatialHash, gap, diagnostics, scoreCache)
-        .overlapCount > 0
-    ) {
-      continue;
-    }
+    incrementDiagnostic(diagnostics, 'collisionProbeCandidates');
+    if (candidateCollides(candidate, nodeSize, spatialHash, gap, diagnostics)) continue;
     const rank = collisionFreeRank(candidate, nodeSize, viewportCenter, visibleNeighborCenters);
     if (!best || compareRank(rank, best.rank) < 0) {
       best = { topLeft: candidate, rank };
@@ -542,18 +735,6 @@ function axisIntersectionLength(
     0,
     Math.min(position + extent, obstacleStart + obstacleExtent) - Math.max(position, obstacleStart),
   );
-}
-
-function compensatedSum(values: number[]): number {
-  let total = 0;
-  let correction = 0;
-  for (const value of values) {
-    const correctedValue = value - correction;
-    const nextTotal = total + correctedValue;
-    correction = nextTotal - total - correctedValue;
-    total = nextTotal;
-  }
-  return total;
 }
 
 function overlapAreaTolerance(left: number, right: number): number {
@@ -596,33 +777,47 @@ function verticalOverlapProfiles(
 function findVerticalMinimum(
   profiles: VerticalOverlapProfile[],
   events: VerticalDerivativeEvent[],
-  horizontalWeights: number[],
+  horizontalWeights: Float64Array,
   nodeHeight: number,
   minimumY: number,
   maximumY: number,
   preferredY: number,
+  diagnostics?: NewNodePlacementDiagnostics,
 ): VerticalMinimum {
-  const initialAreaTerms: number[] = [];
-  const initialSlopeTerms: number[] = [];
+  let initialArea = 0;
+  let initialAreaCorrection = 0;
+  let initialSlope = 0;
+  let initialSlopeCorrection = 0;
   for (let obstacleIndex = 0; obstacleIndex < profiles.length; obstacleIndex += 1) {
     const weight = horizontalWeights[obstacleIndex];
     if (weight <= 0) continue;
 
     const profile = profiles[obstacleIndex];
-    initialAreaTerms.push(
+    const areaTerm =
       weight *
-        axisIntersectionLength(minimumY, nodeHeight, profile.obstacle.y, profile.obstacle.height),
-    );
+      axisIntersectionLength(minimumY, nodeHeight, profile.obstacle.y, profile.obstacle.height);
+    const correctedAreaTerm = areaTerm - initialAreaCorrection;
+    const nextInitialArea = initialArea + correctedAreaTerm;
+    initialAreaCorrection = nextInitialArea - initialArea - correctedAreaTerm;
+    initialArea = nextInitialArea;
+
+    let slopeTerm = 0;
     if (minimumY >= profile.riseStart && minimumY < profile.plateauStart) {
-      initialSlopeTerms.push(weight);
+      slopeTerm = weight;
     } else if (minimumY >= profile.plateauEnd && minimumY < profile.fallEnd) {
-      initialSlopeTerms.push(-weight);
+      slopeTerm = -weight;
+    }
+    if (slopeTerm !== 0) {
+      const correctedSlopeTerm = slopeTerm - initialSlopeCorrection;
+      const nextInitialSlope = initialSlope + correctedSlopeTerm;
+      initialSlopeCorrection = nextInitialSlope - initialSlope - correctedSlopeTerm;
+      initialSlope = nextInitialSlope;
     }
   }
 
   let currentY = minimumY;
-  let currentArea = compensatedSum(initialAreaTerms);
-  let currentSlope = compensatedSum(initialSlopeTerms);
+  let currentArea = initialArea;
+  let currentSlope = initialSlope;
   let minimumArea = Number.POSITIVE_INFINITY;
   const yCandidates = new Set<number>();
   const consider = (y: number, overlapArea: number): void => {
@@ -651,6 +846,7 @@ function findVerticalMinimum(
   consider(currentY, currentArea);
   let eventIndex = 0;
   while (eventIndex < events.length && events[eventIndex].position <= minimumY) {
+    incrementDiagnostic(diagnostics, 'verticalSweepEventVisits');
     eventIndex += 1;
   }
   while (eventIndex < events.length) {
@@ -658,13 +854,19 @@ function findVerticalMinimum(
     if (eventPosition > maximumY) break;
     considerSegment(eventPosition);
 
-    const slopeChanges: number[] = [];
+    let slopeChange = 0;
+    let slopeChangeCorrection = 0;
     while (eventIndex < events.length && events[eventIndex].position === eventPosition) {
+      incrementDiagnostic(diagnostics, 'verticalSweepEventVisits');
       const event = events[eventIndex];
-      slopeChanges.push(horizontalWeights[event.obstacleIndex] * event.slopeMultiplier);
+      const slopeTerm = horizontalWeights[event.obstacleIndex] * event.slopeMultiplier;
+      const correctedSlopeTerm = slopeTerm - slopeChangeCorrection;
+      const nextSlopeChange = slopeChange + correctedSlopeTerm;
+      slopeChangeCorrection = nextSlopeChange - slopeChange - correctedSlopeTerm;
+      slopeChange = nextSlopeChange;
       eventIndex += 1;
     }
-    currentSlope += compensatedSum(slopeChanges);
+    currentSlope += slopeChange;
   }
   if (currentY < maximumY) considerSegment(maximumY);
 
@@ -696,11 +898,11 @@ function findLeastOverlapSweepCandidate(
   usableViewport: ScreenRect,
   nodeSize: ScreenSize,
   obstacles: ScreenRect[],
+  heuristicCandidates: ScreenPoint[],
   spatialHash: SpatialHash,
   viewportCenter: ScreenPoint,
   visibleNeighborCenters: ScreenPoint[],
   diagnostics?: NewNodePlacementDiagnostics,
-  scoreCache?: Map<string, CollisionScore>,
 ): ScoredCandidate | null {
   const minimumX = usableViewport.x;
   const maximumX = usableViewport.x + usableViewport.width - nodeSize.width;
@@ -739,15 +941,24 @@ function findLeastOverlapSweepCandidate(
   }
 
   const { profiles, events } = verticalOverlapProfiles(relevantObstacles, nodeSize.height);
+  const horizontalWeights = new Float64Array(relevantObstacles.length);
+  incrementDiagnostic(diagnostics, 'horizontalWeightBufferAllocations');
   let estimatedMinimumArea = Number.POSITIVE_INFINITY;
   let finalists: ScreenPoint[] = [];
 
   // Between adjacent x breakpoints every overlap term is bilinear, whose minimum
   // is on a cell boundary. Sweeping y at each x breakpoint avoids an X-by-Y product.
   for (const x of [...xCandidates].sort((left, right) => left - right)) {
-    const horizontalWeights = relevantObstacles.map((obstacle) =>
-      axisIntersectionLength(x, nodeSize.width, obstacle.x, obstacle.width),
-    );
+    for (let obstacleIndex = 0; obstacleIndex < relevantObstacles.length; obstacleIndex += 1) {
+      incrementDiagnostic(diagnostics, 'horizontalWeightEvaluations');
+      const obstacle = relevantObstacles[obstacleIndex];
+      horizontalWeights[obstacleIndex] = axisIntersectionLength(
+        x,
+        nodeSize.width,
+        obstacle.x,
+        obstacle.width,
+      );
+    }
     const verticalMinimum = findVerticalMinimum(
       profiles,
       events,
@@ -756,6 +967,7 @@ function findLeastOverlapSweepCandidate(
       minimumY,
       maximumY,
       preferredY,
+      diagnostics,
     );
     if (!Number.isFinite(estimatedMinimumArea)) {
       estimatedMinimumArea = verticalMinimum.overlapArea;
@@ -774,18 +986,21 @@ function findLeastOverlapSweepCandidate(
 
   let best: { candidate: ScoredCandidate; rank: number[] } | null = null;
   const seen = new Set<string>();
-  for (const topLeft of finalists) {
-    const key = `${topLeft.x},${topLeft.y}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const collisionScore = scoreCandidateWithCache(
+  const boundedScoreAreas: number[] = [];
+  const maximumFinalistArea =
+    estimatedMinimumArea + overlapAreaTolerance(estimatedMinimumArea, estimatedMinimumArea);
+  for (const topLeft of heuristicCandidates) {
+    const collisionScore = scoreCandidateWithinArea(
       topLeft,
       nodeSize,
       spatialHash,
-      0,
+      maximumFinalistArea,
+      boundedScoreAreas,
       diagnostics,
-      scoreCache,
     );
+    if (!collisionScore) continue;
+
+    seen.add(`${topLeft.x},${topLeft.y}`);
     const rank = leastOverlapRank(
       topLeft,
       nodeSize,
@@ -800,28 +1015,11 @@ function findLeastOverlapSweepCandidate(
       };
     }
   }
-  return best?.candidate ?? null;
-}
-
-function findLeastOverlapCandidate(
-  candidates: ScreenPoint[],
-  nodeSize: ScreenSize,
-  spatialHash: SpatialHash,
-  viewportCenter: ScreenPoint,
-  visibleNeighborCenters: ScreenPoint[],
-  diagnostics?: NewNodePlacementDiagnostics,
-  scoreCache?: Map<string, CollisionScore>,
-): ScoredCandidate | null {
-  let best: { candidate: ScoredCandidate; rank: number[] } | null = null;
-  for (const topLeft of candidates) {
-    const collisionScore = scoreCandidateWithCache(
-      topLeft,
-      nodeSize,
-      spatialHash,
-      0,
-      diagnostics,
-      scoreCache,
-    );
+  for (const topLeft of finalists) {
+    const key = `${topLeft.x},${topLeft.y}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const collisionScore = scoreCandidate(topLeft, nodeSize, spatialHash, 0, diagnostics);
     const rank = leastOverlapRank(
       topLeft,
       nodeSize,
@@ -936,6 +1134,7 @@ export function findNewNodePlacement(input: NewNodePlacementInput): NewNodePlace
     preferredGapPx,
     viewportCenter,
     visibleNeighborCenters,
+    input.diagnostics,
   );
   if (preferredSweepCandidate) {
     return {
@@ -946,7 +1145,6 @@ export function findNewNodePlacement(input: NewNodePlacementInput): NewNodePlace
     };
   }
 
-  const actualScoreCache = new Map<string, CollisionScore>();
   const noGapCandidate = findBestCollisionFreeCandidate(
     candidates,
     input.nodeSize,
@@ -955,7 +1153,6 @@ export function findNewNodePlacement(input: NewNodePlacementInput): NewNodePlace
     viewportCenter,
     visibleNeighborCenters,
     input.diagnostics,
-    actualScoreCache,
   );
   if (noGapCandidate) {
     return {
@@ -973,6 +1170,7 @@ export function findNewNodePlacement(input: NewNodePlacementInput): NewNodePlace
     0,
     viewportCenter,
     visibleNeighborCenters,
+    input.diagnostics,
   );
   if (noGapSweepCandidate) {
     return {
@@ -983,43 +1181,16 @@ export function findNewNodePlacement(input: NewNodePlacementInput): NewNodePlace
     };
   }
 
-  const leastOverlapCandidate = findLeastOverlapCandidate(
-    candidates,
-    input.nodeSize,
-    spatialHash,
-    viewportCenter,
-    visibleNeighborCenters,
-    input.diagnostics,
-    actualScoreCache,
-  );
-  const leastOverlapSweepCandidate = findLeastOverlapSweepCandidate(
+  const selectedCandidate = findLeastOverlapSweepCandidate(
     usableViewport,
     input.nodeSize,
     input.obstacles,
+    candidates,
     spatialHash,
     viewportCenter,
     visibleNeighborCenters,
     input.diagnostics,
-    actualScoreCache,
   );
-  const saturatedCandidates = [leastOverlapCandidate, leastOverlapSweepCandidate].filter(
-    (candidate): candidate is ScoredCandidate => candidate !== null,
-  );
-  let selectedCandidate: ScoredCandidate | null = null;
-  let selectedRank: number[] | null = null;
-  for (const candidate of saturatedCandidates) {
-    const rank = leastOverlapRank(
-      candidate.topLeft,
-      input.nodeSize,
-      candidate,
-      viewportCenter,
-      visibleNeighborCenters,
-    );
-    if (!selectedRank || compareRank(rank, selectedRank) < 0) {
-      selectedCandidate = candidate;
-      selectedRank = rank;
-    }
-  }
   if (!selectedCandidate) return null;
   return {
     topLeft: selectedCandidate.topLeft,

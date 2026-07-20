@@ -536,13 +536,62 @@ describe('findNewNodePlacement', () => {
     expectContained(result, input.viewport, input.nodeSize);
   });
 
-  it('bounds exact scoring effort for a dense deterministic placement search', () => {
+  it('preserves secondary ranking candidates along a flat exact-overlap minimum', () => {
+    const input = {
+      viewport: {
+        x: -6.355029419064522,
+        y: 9.320330461487174,
+        width: 195.3349528312683,
+        height: 66.95976541843265,
+      },
+      nodeSize: {
+        width: 158.42322935838013,
+        height: 24.44093485154612,
+      },
+      obstacles: [
+        {
+          x: 135.33327535931,
+          y: -7.41893988704679,
+          width: 46.2550193653442,
+          height: 91.66594740469009,
+        },
+        {
+          x: -86.98435049752527,
+          y: 29.430537507538304,
+          width: 90.24474427523091,
+          height: 32.579944527707994,
+        },
+      ],
+    } satisfies NewNodePlacementInput;
+
+    expect(findNewNodePlacement(input)).toEqual({
+      topLeft: {
+        x: 9.644970580935478,
+        y: 29.430537507538304,
+      },
+      overlapArea: 800.0721590301928,
+      overlapCount: 1,
+      mode: 'least-overlap',
+    });
+  });
+
+  it('bounds dense placement sweep work without changing the exact result', () => {
     let seed = 12345;
     const random = (): number => {
       seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0;
       return seed / 4_294_967_296;
     };
-    const diagnostics = { exactCandidateScores: 0 };
+    const diagnostics = {
+      exactCandidateScores: 0,
+      collisionProbeCandidates: 0,
+      leastOverlapAreaProbes: 0,
+      obstacleIntersectionTests: 0,
+      collisionSweepConstraintVisits: 0,
+      collisionSweepEventUpdates: 0,
+      horizontalWeightEvaluations: 0,
+      horizontalWeightBufferAllocations: 0,
+      verticalSweepEventVisits: 0,
+    };
     const obstacles = Array.from({ length: 400 }, () => ({
       x: 16 + random() * 1038,
       y: 16 + random() * 728,
@@ -557,9 +606,29 @@ describe('findNewNodePlacement', () => {
       diagnostics,
     });
 
-    expect(result).not.toBeNull();
-    expect(diagnostics.exactCandidateScores).toBeGreaterThan(0);
-    expect(diagnostics.exactCandidateScores).toBeLessThan(20_000);
+    expect(result).toEqual({
+      topLeft: { x: 16, y: 744 },
+      overlapArea: 136_355.24828116415,
+      overlapCount: 18,
+      mode: 'least-overlap',
+    });
+    expect.soft(diagnostics.exactCandidateScores).toBeGreaterThan(0);
+    expect.soft(diagnostics.exactCandidateScores).toBeLessThan(64);
+    expect.soft(diagnostics.collisionProbeCandidates).toBeGreaterThan(0);
+    expect.soft(diagnostics.leastOverlapAreaProbes).toBeGreaterThan(0);
+    expect.soft(diagnostics.leastOverlapAreaProbes).toBeLessThan(10_000);
+    expect.soft(diagnostics.obstacleIntersectionTests).toBeGreaterThan(0);
+    expect.soft(diagnostics.obstacleIntersectionTests).toBeLessThan(100_000);
+    expect.soft(diagnostics.collisionSweepEventUpdates).toBeGreaterThan(0);
+    expect
+      .soft(diagnostics.collisionSweepConstraintVisits + diagnostics.collisionSweepEventUpdates)
+      .toBeLessThan(5_000);
+    expect.soft(diagnostics.horizontalWeightEvaluations).toBeGreaterThan(0);
+    expect.soft(diagnostics.horizontalWeightEvaluations).toBeLessThan(400_000);
+    expect.soft(diagnostics.horizontalWeightBufferAllocations).toBeGreaterThan(0);
+    expect.soft(diagnostics.horizontalWeightBufferAllocations).toBeLessThan(4);
+    expect.soft(diagnostics.verticalSweepEventVisits).toBeGreaterThan(0);
+    expect.soft(diagnostics.verticalSweepEventVisits).toBeLessThan(2_500_000);
   });
 
   it('uses a visible neighbor to resolve otherwise equal placements', () => {
