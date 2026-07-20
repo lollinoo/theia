@@ -547,7 +547,8 @@ describe('virtual mode', () => {
     expect(createDevice).toHaveBeenCalledWith(
       expect.not.objectContaining({ area_ids: ['map-area-1'] }),
     );
-    expect(onDeviceAdded).toHaveBeenCalled();
+    expect(onDeviceAdded).toHaveBeenCalledWith('new-dev');
+    expect(onDeviceAdded).toHaveBeenCalledTimes(1);
   });
 
   it('adds an existing physical device to the selected saved map when create reports duplicate address', async () => {
@@ -594,7 +595,8 @@ describe('virtual mode', () => {
 
     expect(fetchDevices).toHaveBeenCalled();
     expect(assignCredentialProfile).not.toHaveBeenCalled();
-    expect(onDeviceAdded).toHaveBeenCalled();
+    expect(onDeviceAdded).toHaveBeenCalledWith('existing-dev');
+    expect(onDeviceAdded).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/already exists/i)).not.toBeInTheDocument();
   });
 
@@ -802,7 +804,8 @@ describe('virtual mode', () => {
       expect(createDevice).toHaveBeenCalled();
       expect(assignCredentialProfile).toHaveBeenCalledWith('new-dev', 'p1');
       expect(setWinBoxProfile).toHaveBeenCalledWith('new-dev', 'p1');
-      expect(onDeviceAdded).toHaveBeenCalled();
+      expect(onDeviceAdded).toHaveBeenCalledWith('new-dev');
+      expect(onDeviceAdded).toHaveBeenCalledTimes(1);
     });
   });
 
