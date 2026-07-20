@@ -2,6 +2,7 @@
  * Exercises toolbar component behavior so refactors preserve the documented contract.
  */
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { Toolbar } from './Toolbar';
 
@@ -25,6 +26,18 @@ const defaultProps = {
   snapToGrid: true,
   alertCount: 0,
 };
+
+function SnapPreferenceToolbarHarness() {
+  const [snapToGrid, setSnapToGrid] = useState(true);
+
+  return (
+    <Toolbar
+      {...defaultProps}
+      snapToGrid={snapToGrid}
+      onToggleSnapToGrid={() => setSnapToGrid((current) => !current)}
+    />
+  );
+}
 
 describe('Toolbar (COMP-04)', () => {
   it('renders MaterialIcon components — no inline SVGs', () => {
@@ -82,6 +95,19 @@ describe('Toolbar (COMP-04)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Snap to grid: On' }));
 
     expect(onToggleSnapToGrid).toHaveBeenCalledOnce();
+  });
+
+  it('retains focus on the snap action when its state label changes', () => {
+    render(<SnapPreferenceToolbarHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
+    const enabledToggle = screen.getByRole('button', { name: 'Snap to grid: On' });
+    enabledToggle.focus();
+
+    fireEvent.click(enabledToggle);
+
+    const disabledToggle = screen.getByRole('button', { name: 'Snap to grid: Off' });
+    expect(disabledToggle).toBe(enabledToggle);
+    expect(disabledToggle).toHaveFocus();
   });
 
   it('does not render border-b separators between buttons', () => {

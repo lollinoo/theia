@@ -34,6 +34,19 @@ describe('canvas grid', () => {
     expect(snapPositionToGrid({ x: 44, y: 46 }, [20, 25])).toEqual({ x: 40, y: 50 });
   });
 
+  it('reuses an exactly aligned fractional-grid position', () => {
+    const aligned = { x: 0.3, y: -0.3 };
+
+    expect(snapPositionToGrid(aligned, [0.1, 0.1])).toBe(aligned);
+  });
+
+  it('snaps unaligned fractional coordinates to stable exact values', () => {
+    expect(snapPositionToGrid({ x: 0.26, y: -0.26 }, [0.1, 0.1])).toEqual({
+      x: 0.3,
+      y: -0.3,
+    });
+  });
+
   it('normalizes generated negative zero', () => {
     const snapped = snapPositionToGrid({ x: -1, y: -0 }, [30, 30]);
 

@@ -18,6 +18,7 @@ interface ToolbarProps {
 }
 
 interface ToolbarAction {
+  id: string;
   label: string;
   onClick: () => void;
   icon: ReactNode;
@@ -50,12 +51,14 @@ export function Toolbar({
   const snapLabel = `Snap to grid: ${snapToGrid ? 'On' : 'Off'}`;
   const buttons: ToolbarAction[] = [
     {
+      id: 'edit-mode',
       label: 'Edit Mode (E)',
       onClick: onToggleEditMode,
       active: editMode,
       icon: <MaterialIcon name="edit" />,
     },
     {
+      id: 'snap-to-grid',
       label: snapLabel,
       ariaLabel: snapLabel,
       onClick: onToggleSnapToGrid,
@@ -64,21 +67,25 @@ export function Toolbar({
       icon: <MaterialIcon name="grid_4x4" />,
     },
     {
+      id: 'search',
       label: `Search (${modifier}+K)`,
       onClick: onSearch,
       icon: <MaterialIcon name="search" />,
     },
     {
+      id: 'add-device',
       label: 'Add Device (A)',
       onClick: onAddDevice,
       icon: <MaterialIcon name="add" />,
     },
     {
+      id: 'create-link',
       label: 'Create Link (L)',
       onClick: onCreateLink,
       icon: <MaterialIcon name="link" />,
     },
     {
+      id: 'alerts',
       label: 'Alerts',
       onClick: onAlerts,
       icon: (
@@ -114,7 +121,7 @@ export function Toolbar({
 
       {buttons.map((btn) => (
         <button
-          key={btn.label}
+          key={btn.id}
           type="button"
           className={`relative ${expanded ? 'flex' : 'hidden sm:flex'} h-11 w-11 items-center justify-center rounded-xl border border-transparent transition-[background-color,color,border-color,transform] duration-150 hover:-translate-y-0.5 hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${'active' in btn && btn.active ? 'border-primary/35 bg-primary/12 text-primary' : 'text-on-bg-secondary hover:text-on-bg'}`}
           onClick={btn.onClick}

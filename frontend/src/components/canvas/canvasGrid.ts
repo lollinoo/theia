@@ -8,12 +8,36 @@ import type { DeviceNode } from '../DeviceCard';
 /** Grid used by the topology canvas for optional snapped movement. */
 export const canvasSnapGrid: SnapGrid = [30, 30];
 
+function decimalPlaces(value: number): number {
+  const [coefficient, exponentText] = value.toString().toLowerCase().split('e');
+  const fractionLength = coefficient.split('.')[1]?.length ?? 0;
+  const exponent = Number(exponentText ?? 0);
+  return Math.max(0, fractionLength - exponent);
+}
+
+function stabilizeDecimalPlaces(value: number, places: number): number {
+  const [coefficient, exponentText] = value.toString().toLowerCase().split('e');
+  const exponent = Number(exponentText ?? 0);
+  const shifted = Number(`${coefficient}e${exponent + places}`);
+  if (!Number.isFinite(shifted)) {
+    return value;
+  }
+
+  const stabilized = Number(`${Math.round(shifted)}e-${places}`);
+  return Number.isFinite(stabilized) ? stabilized : value;
+}
+
 function normalizedCoordinate(coordinate: number, step: number): number {
   if (!Number.isFinite(coordinate) || !Number.isFinite(step) || step <= 0) {
     return coordinate;
   }
 
-  const snapped = Math.round(coordinate / step) * step;
+  const stepCount = Math.round(coordinate / step);
+  if (!Number.isFinite(stepCount)) {
+    return coordinate;
+  }
+
+  const snapped = stabilizeDecimalPlaces(stepCount * step, decimalPlaces(step));
   return Object.is(snapped, -0) ? 0 : snapped;
 }
 
