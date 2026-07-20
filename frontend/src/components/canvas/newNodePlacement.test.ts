@@ -68,7 +68,7 @@ function expectContained(
   );
 }
 
-function findExhaustiveZeroOverlapPoint(input: NewNodePlacementInput): ScreenPoint | null {
+function findExhaustiveZeroOverlapPoint(input: NewNodePlacementInput, gap = 0): ScreenPoint | null {
   const usableViewport = insetScreenRect(
     input.viewport,
     input.marginPx ?? NEW_NODE_VIEWPORT_MARGIN_PX,
@@ -89,12 +89,48 @@ function findExhaustiveZeroOverlapPoint(input: NewNodePlacementInput): ScreenPoi
   for (let y = minimumY; y <= maximumY; y += 1) {
     for (let x = minimumX; x <= maximumX; x += 1) {
       const candidate = { x, y, ...input.nodeSize };
-      if (input.obstacles.every((obstacle) => intersectionArea(candidate, obstacle) === 0)) {
+      if (
+        input.obstacles.every(
+          (obstacle) => intersectionArea(candidate, expandRect(obstacle, gap)) === 0,
+        )
+      ) {
         return { x, y };
       }
     }
   }
   return null;
+}
+
+function findExhaustiveMinimumOverlapArea(input: NewNodePlacementInput): number | null {
+  const usableViewport = insetScreenRect(
+    input.viewport,
+    input.marginPx ?? NEW_NODE_VIEWPORT_MARGIN_PX,
+  );
+  if (
+    !usableViewport ||
+    input.nodeSize.width > usableViewport.width ||
+    input.nodeSize.height > usableViewport.height
+  ) {
+    return null;
+  }
+
+  const minimumX = Math.ceil(usableViewport.x);
+  const maximumX = Math.floor(usableViewport.x + usableViewport.width - input.nodeSize.width);
+  const minimumY = Math.ceil(usableViewport.y);
+  const maximumY = Math.floor(usableViewport.y + usableViewport.height - input.nodeSize.height);
+  let minimumOverlapArea = Number.POSITIVE_INFINITY;
+
+  for (let y = minimumY; y <= maximumY; y += 1) {
+    for (let x = minimumX; x <= maximumX; x += 1) {
+      const candidate = { x, y, ...input.nodeSize };
+      const overlapArea = input.obstacles.reduce(
+        (total, obstacle) => total + intersectionArea(candidate, obstacle),
+        0,
+      );
+      minimumOverlapArea = Math.min(minimumOverlapArea, overlapArea);
+    }
+  }
+  return minimumOverlapArea;
 }
 
 const COMPLETE_SEARCH_REGRESSION_INPUT = {
@@ -355,6 +391,41 @@ describe('findNewNodePlacement', () => {
     expectContained(result, viewport, nodeSize);
   });
 
+  it('finds a complete preferred-gap placement before accepting a no-gap fallback', () => {
+    const input = {
+      viewport: { x: 0, y: 0, width: 240, height: 180 },
+      nodeSize: { width: 50, height: 36 },
+      obstacles: [
+        { x: 151, y: 75, width: 68, height: 16 },
+        { x: 40, y: 23, width: 22, height: 37 },
+        { x: 185, y: 74, width: 23, height: 21 },
+        { x: 48, y: 148, width: 33, height: 34 },
+        { x: 155, y: 89, width: 53, height: 45 },
+        { x: -12, y: 31, width: 69, height: 13 },
+        { x: -7, y: 100, width: 59, height: 49 },
+        { x: 188, y: 119, width: 44, height: 58 },
+      ],
+    } satisfies NewNodePlacementInput;
+    const exhaustivePoint = findExhaustiveZeroOverlapPoint(input, NEW_NODE_PREFERRED_GAP_PX);
+    expect(exhaustivePoint).not.toBeNull();
+
+    const result = findNewNodePlacement(input);
+    expect(result).not.toBeNull();
+    if (!result) return;
+
+    const placementRect = resultRect(result, input.nodeSize);
+    expect(result.mode).toBe('preferred-gap');
+    expect(result.overlapArea).toBe(0);
+    expect(result.overlapCount).toBe(0);
+    expect(
+      input.obstacles.every(
+        (obstacle) =>
+          intersectionArea(placementRect, expandRect(obstacle, NEW_NODE_PREFERRED_GAP_PX)) === 0,
+      ),
+    ).toBe(true);
+    expectContained(result, input.viewport, input.nodeSize);
+  });
+
   it('finds a no-gap placement when free critical axes come from different obstacles', () => {
     const { viewport, nodeSize, obstacles } = COMPLETE_SEARCH_REGRESSION_INPUT;
     const result = findNewNodePlacement(COMPLETE_SEARCH_REGRESSION_INPUT);
@@ -430,6 +501,65 @@ describe('findNewNodePlacement', () => {
     expect(result.overlapArea).toBe(overlapAreas.reduce((total, area) => total + area, 0));
     expect(result.overlapCount).toBe(overlapAreas.length);
     expectContained(result, viewport, nodeSize);
+  });
+
+  it('uses the global minimum total overlap area when every contained position collides', () => {
+    const input = {
+      viewport: { x: 0, y: 0, width: 160, height: 130 },
+      nodeSize: { width: 50, height: 36 },
+      obstacles: [
+        { x: 111, y: 36, width: 64, height: 16 },
+        { x: 131, y: 58, width: 51, height: 56 },
+        { x: 12, y: 11, width: 31, height: 65 },
+        { x: 34, y: 105, width: 51, height: 65 },
+        { x: 122, y: 86, width: 45, height: 64 },
+        { x: 27, y: 1, width: 64, height: 44 },
+        { x: 42, y: 67, width: 33, height: 38 },
+        { x: 8, y: 57, width: 28, height: 18 },
+      ],
+    } satisfies NewNodePlacementInput;
+    const oracleMinimumOverlapArea = findExhaustiveMinimumOverlapArea(input);
+    expect(oracleMinimumOverlapArea).toBe(6);
+
+    const result = findNewNodePlacement(input);
+    expect(result).not.toBeNull();
+    if (!result) return;
+
+    const placementRect = resultRect(result, input.nodeSize);
+    const exactOverlapArea = input.obstacles.reduce(
+      (total, obstacle) => total + intersectionArea(placementRect, obstacle),
+      0,
+    );
+    expect(result.mode).toBe('least-overlap');
+    expect(result.overlapArea).toBe(exactOverlapArea);
+    expect(result.overlapArea).toBe(oracleMinimumOverlapArea);
+    expectContained(result, input.viewport, input.nodeSize);
+  });
+
+  it('bounds exact scoring effort for a dense deterministic placement search', () => {
+    let seed = 12345;
+    const random = (): number => {
+      seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0;
+      return seed / 4_294_967_296;
+    };
+    const diagnostics = { exactCandidateScores: 0 };
+    const obstacles = Array.from({ length: 400 }, () => ({
+      x: 16 + random() * 1038,
+      y: 16 + random() * 728,
+      width: 370,
+      height: 140,
+    }));
+
+    const result = findNewNodePlacement({
+      viewport: { x: 0, y: 0, width: 1440, height: 900 },
+      nodeSize: { width: 370, height: 140 },
+      obstacles,
+      diagnostics,
+    });
+
+    expect(result).not.toBeNull();
+    expect(diagnostics.exactCandidateScores).toBeGreaterThan(0);
+    expect(diagnostics.exactCandidateScores).toBeLessThan(20_000);
   });
 
   it('uses a visible neighbor to resolve otherwise equal placements', () => {
