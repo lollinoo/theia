@@ -161,7 +161,7 @@ function buildSubject(options: { snapshot?: SnapshotPayload | null; alerts?: Ale
       ['dev-2', { x: 320, y: 120 }],
     ]),
     currentPositions: new Map(),
-    defaultPosition: undefined,
+    explicitPositions: new Map(),
     editMode: false,
     openDeviceMenu: vi.fn(),
     openEdgeMenu: vi.fn(),

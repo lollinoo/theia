@@ -36,7 +36,7 @@ export interface BuildCanvasTopologyCompositionCacheKeyInput {
   savedPositions: PositionMap;
   computedPositions: ComputedPositionMap;
   currentPositions: PositionMap;
-  defaultPosition?: { x: number; y: number };
+  explicitPositions: Map<string, { x: number; y: number }>;
   editMode: boolean;
   placementDeviceIds: Set<string>;
   runtimeIdentity?: string;
@@ -338,7 +338,7 @@ export function buildCanvasTopologyCompositionCacheKey(
       savedPositions: positionMapSignature(input.savedPositions),
       computedPositions: positionMapSignature(input.computedPositions),
       currentPositions: positionMapSignature(input.currentPositions),
-      defaultPosition: input.defaultPosition ?? null,
+      explicitPositions: positionMapSignature(input.explicitPositions),
       editMode: input.editMode,
       placementDeviceIds: placementSignature(input.placementDeviceIds),
       runtime: runtimeSignature(input),

@@ -91,7 +91,7 @@ describe('buildTopologyNodes', () => {
       [mockDevice()],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       mockSnapshot(),
@@ -120,7 +120,7 @@ describe('buildTopologyNodes', () => {
       ],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       {
@@ -155,7 +155,7 @@ describe('buildTopologyNodes', () => {
       ],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       mockSnapshot(),
@@ -172,7 +172,7 @@ describe('buildTopologyNodes', () => {
       [mockDevice({ status: 'up' })],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       mockSnapshot(),
@@ -193,7 +193,7 @@ describe('buildTopologyNodes', () => {
       [mockDevice({ status: 'up' })],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       mockSnapshot(),
@@ -215,7 +215,7 @@ describe('buildTopologyNodes', () => {
       [mockDevice({ status: 'up' })],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       {
@@ -239,7 +239,7 @@ describe('buildTopologyNodes', () => {
       [mockDevice({ status: 'up', ip: '10.0.0.1', device_type: 'router' })],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       {
@@ -282,7 +282,10 @@ describe('buildTopologyNodes', () => {
       ],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([
+        ['dev-1', { x: 120, y: 180 }],
+        ['dev-2', { x: 120, y: 180 }],
+      ]),
       false,
       vi.fn(),
       mockSnapshot(),
@@ -320,7 +323,7 @@ describe('buildTopologyNodes', () => {
         ['dev-1', { x: 900, y: 910 }],
         ['dev-2', { x: 320, y: 420 }],
       ]),
-      { x: 50, y: 60 },
+      new Map([['dev-2', { x: 50, y: 60 }]]),
       false,
       vi.fn(),
       null,
@@ -334,5 +337,78 @@ describe('buildTopologyNodes', () => {
     expect(nodes[0].position).toEqual({ x: 25, y: 35 });
     expect(nodes[0].data.pinned).toBe(true);
     expect(nodes[1].position).toEqual({ x: 50, y: 60 });
+  });
+
+  it('applies only the keyed explicit override ahead of current positions', () => {
+    const explicitPositions = new Map([['dev-new', { x: 450, y: 275 }]]);
+    const currentPositions = new Map([
+      ['dev-old', { x: 10, y: 20, pinned: true }],
+      ['dev-new', { x: 9000, y: 9000, pinned: true }],
+    ]);
+    const nodes = buildTopologyNodes(
+      [
+        mockDevice({ id: 'dev-old' }),
+        mockDevice({
+          id: 'dev-new',
+          hostname: 'router-new',
+          ip: '10.0.0.2',
+          sys_name: 'router-new',
+        }),
+      ],
+      new Map(),
+      new Map(),
+      explicitPositions,
+      false,
+      vi.fn(),
+      null,
+      [],
+      [],
+      undefined,
+      currentPositions,
+      new Set(),
+    );
+
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+    expect(nodesById.get('dev-old')?.position).toEqual({ x: 10, y: 20 });
+    expect(nodesById.get('dev-old')?.data.pinned).toBe(true);
+    expect(nodesById.get('dev-new')?.position).toEqual({ x: 450, y: 275 });
+    expect(nodesById.get('dev-new')?.data.pinned).toBe(false);
+  });
+
+  it('ignores non-finite keyed overrides without changing current or saved priority', () => {
+    const nodes = buildTopologyNodes(
+      [
+        mockDevice({ id: 'dev-current' }),
+        mockDevice({
+          id: 'dev-saved',
+          hostname: 'router-saved',
+          ip: '10.0.0.3',
+          sys_name: 'router-saved',
+        }),
+      ],
+      new Map([
+        ['dev-current', { x: 100, y: 120, pinned: false }],
+        ['dev-saved', { x: 30, y: 40, pinned: true }],
+      ]),
+      new Map(),
+      new Map([
+        ['dev-current', { x: Number.POSITIVE_INFINITY, y: 275 }],
+        ['dev-saved', { x: 450, y: Number.NaN }],
+      ]),
+      false,
+      vi.fn(),
+      null,
+      [],
+      [],
+      undefined,
+      new Map([['dev-current', { x: 10, y: 20, pinned: true }]]),
+      new Set(),
+    );
+
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+    expect(nodesById.get('dev-current')?.position).toEqual({ x: 10, y: 20 });
+    expect(nodesById.get('dev-current')?.data.pinned).toBe(true);
+    expect(nodesById.get('dev-saved')?.position).toEqual({ x: 30, y: 40 });
+    expect(nodesById.get('dev-saved')?.data.pinned).toBe(true);
   });
 });

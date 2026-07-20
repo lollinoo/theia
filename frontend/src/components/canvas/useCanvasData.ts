@@ -422,6 +422,15 @@ export function useCanvasData({
             computedPositions: Map<string, { x: number; y: number }>,
             placementDeviceIds: Set<string>,
           ) => {
+            const explicitPositions =
+              defaultPosition === undefined
+                ? new Map<string, { x: number; y: number }>()
+                : new Map(
+                    Array.from(placementDeviceIds, (deviceId) => [
+                      deviceId,
+                      { x: defaultPosition.x, y: defaultPosition.y },
+                    ]),
+                  );
             const compositionInput = {
               devices: fetchedDevices,
               links: fetchedLinks,
@@ -429,7 +438,7 @@ export function useCanvasData({
               savedPositions: effectivePositions,
               computedPositions,
               currentPositions: currentPositionsForComposition,
-              defaultPosition,
+              explicitPositions,
               editMode,
               openDeviceMenu,
               openEdgeMenu,
@@ -450,7 +459,7 @@ export function useCanvasData({
                 savedPositions: effectivePositions,
                 computedPositions,
                 currentPositions: currentPositionsForComposition,
-                defaultPosition,
+                explicitPositions,
                 editMode,
                 placementDeviceIds,
                 runtimeIdentity: topologySource.runtimeIdentity,

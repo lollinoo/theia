@@ -179,7 +179,7 @@ function buildLegacyStructuralCompositionCacheSignature(
     savedPositions: legacyPositionEntries(input.savedPositions),
     computedPositions: legacyPositionEntries(input.computedPositions),
     currentPositions: legacyPositionEntries(input.currentPositions),
-    defaultPosition: input.defaultPosition ?? null,
+    explicitPositions: legacyPositionEntries(input.explicitPositions),
     editMode: input.editMode,
     placementDeviceIds: [...input.placementDeviceIds].sort((left, right) =>
       left.localeCompare(right),
@@ -347,13 +347,17 @@ function benchmarkOperations(
   const devicesById = new Map(runtimeDevices.map((device) => [device.id, device]));
   const currentPositions = new Map(scenario.positions);
   const placementDeviceIds = new Set<string>();
+  const explicitPositions =
+    runtimeDevices[0] === undefined
+      ? new Map<string, { x: number; y: number }>()
+      : new Map([[runtimeDevices[0].id, { x: 120, y: 120 }]]);
 
   const nodes = measureLocalMetric(samples, scenarioName, 'buildTopologyNodes', () =>
     buildTopologyNodes(
       runtimeDevices,
       scenario.positions,
       new Map(),
-      { x: 120, y: 120 },
+      explicitPositions,
       false,
       noopDeviceMenu,
       scenario.runtimeSnapshot,
@@ -385,7 +389,7 @@ function benchmarkOperations(
     savedPositions: scenario.positions,
     computedPositions: new Map<string, { x: number; y: number }>(),
     currentPositions: buildCurrentPositions(nodes),
-    defaultPosition: { x: 120, y: 120 },
+    explicitPositions,
     editMode: false,
     openDeviceMenu: noopDeviceMenu,
     openEdgeMenu: noopEdgeMenu,
@@ -410,7 +414,7 @@ function benchmarkOperations(
     savedPositions: scenario.positions,
     computedPositions: compositionInput.computedPositions,
     currentPositions: compositionInput.currentPositions,
-    defaultPosition: compositionInput.defaultPosition,
+    explicitPositions: compositionInput.explicitPositions,
     editMode: compositionInput.editMode,
     placementDeviceIds,
     runtimeIdentity: `benchmark:${scenarioName}`,

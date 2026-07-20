@@ -70,7 +70,7 @@ function baseInput(
     savedPositions: new Map([['dev-1', { x: 100, y: 120, pinned: true }]]),
     computedPositions: new Map(),
     currentPositions: new Map(),
-    defaultPosition: { x: 20, y: 30 },
+    explicitPositions: new Map(),
     editMode: false,
     placementDeviceIds: new Set(),
     runtimeIdentity: 'rt-sha256:abc',
@@ -151,6 +151,32 @@ describe('buildCanvasTopologyCompositionCacheKey', () => {
       { savedPositions: new Map([['dev-1', { x: 100, y: 120, pinned: true }]]) },
       { savedPositions: new Map([['dev-1', { x: 101, y: 120, pinned: true }]]) },
     );
+  });
+
+  it('includes keyed explicit positions in a stable signature', () => {
+    const empty = buildKey({ explicitPositions: new Map() });
+    const first = buildKey({
+      explicitPositions: new Map([
+        ['dev-old', { x: 10, y: 20 }],
+        ['dev-new', { x: 50, y: 60 }],
+      ]),
+    });
+    const changedX = buildKey({
+      explicitPositions: new Map([
+        ['dev-old', { x: 10, y: 20 }],
+        ['dev-new', { x: 51, y: 60 }],
+      ]),
+    });
+    const reverseInsertionOrder = buildKey({
+      explicitPositions: new Map([
+        ['dev-new', { x: 50, y: 60 }],
+        ['dev-old', { x: 10, y: 20 }],
+      ]),
+    });
+
+    expect(first.signature).not.toBe(empty.signature);
+    expect(changedX.signature).not.toBe(first.signature);
+    expect(reverseInsertionOrder.signature).toBe(first.signature);
   });
 
   it('keeps mutable input signatures stable when equal values arrive in different orders', () => {
@@ -268,6 +294,7 @@ describe('buildCanvasTopologyCompositionCacheKey', () => {
       ['dev-2', { x: 110, y: 120, pinned: false }],
       ['dev-1', { x: 90, y: 100, pinned: true }],
     ]);
+    const explicitPositions = new Map<string, { x: number; y: number }>();
     const placementDeviceIds = new Set(['dev-2', 'dev-1']);
     const alerts: AlertDTO[] = [
       {
@@ -297,6 +324,7 @@ describe('buildCanvasTopologyCompositionCacheKey', () => {
         savedPositions,
         computedPositions,
         currentPositions,
+        explicitPositions,
         placementDeviceIds,
         alerts,
       });
@@ -305,6 +333,7 @@ describe('buildCanvasTopologyCompositionCacheKey', () => {
         savedPositions,
         computedPositions,
         currentPositions,
+        explicitPositions,
         placementDeviceIds,
         alerts,
       });

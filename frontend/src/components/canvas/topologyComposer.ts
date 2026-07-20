@@ -18,7 +18,7 @@ interface ComposeCanvasTopologyInput {
   savedPositions: Map<string, { x: number; y: number; pinned?: boolean }>;
   computedPositions: Map<string, { x: number; y: number }>;
   currentPositions: Map<string, { x: number; y: number; pinned?: boolean }>;
-  defaultPosition: { x: number; y: number } | undefined;
+  explicitPositions: Map<string, { x: number; y: number }>;
   editMode: boolean;
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void;
   openEdgeMenu: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeId: string) => void;
@@ -78,7 +78,7 @@ export function composeCanvasTopology({
   savedPositions,
   computedPositions,
   currentPositions,
-  defaultPosition,
+  explicitPositions,
   editMode,
   openDeviceMenu,
   openEdgeMenu,
@@ -90,7 +90,7 @@ export function composeCanvasTopology({
     devices,
     savedPositions,
     computedPositions,
-    defaultPosition,
+    explicitPositions,
     editMode,
     openDeviceMenu,
     null,

@@ -50,7 +50,7 @@ export function buildTopologyNodes(
   devices: Device[],
   savedPositions: Map<string, { x: number; y: number; pinned?: boolean }>,
   computedPositions: Map<string, { x: number; y: number }>,
-  defaultPosition: { x: number; y: number } | undefined,
+  explicitPositions: Map<string, { x: number; y: number }>,
   editMode: boolean,
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void,
   pendingSnapshot: SnapshotPayload | null,
@@ -79,15 +79,18 @@ export function buildTopologyNodes(
   return devices.map((device) => {
     const current = currentPositions.get(device.id);
     const saved = savedPositions.get(device.id);
-    const canPlaceDevice = placementDeviceIds.has(device.id);
-    const placementPosition = canPlaceDevice
-      ? (defaultPosition ?? computedPositions.get(device.id))
+    const explicit = explicitPositions.get(device.id);
+    const computed = placementDeviceIds.has(device.id)
+      ? computedPositions.get(device.id)
       : undefined;
-    const position = hasUsablePosition(current)
-      ? current
-      : hasUsablePosition(saved)
-        ? saved
-        : placementPosition;
+    const position = hasUsablePosition(explicit)
+      ? explicit
+      : hasUsablePosition(current)
+        ? current
+        : hasUsablePosition(saved)
+          ? saved
+          : computed;
+    const explicitlyPlaced = hasUsablePosition(explicit);
     const resolvedPosition = position ?? { x: 0, y: 0 };
     const selfLinks = selfLinksByDeviceId.get(device.id);
 
@@ -123,7 +126,7 @@ export function buildTopologyNodes(
         kind: 'device',
         device,
         runtime,
-        pinned: current?.pinned ?? saved?.pinned ?? false,
+        pinned: explicitlyPlaced ? false : (current?.pinned ?? saved?.pinned ?? false),
         highlighted: false,
         editMode,
         onContextMenu: openDeviceMenu,
