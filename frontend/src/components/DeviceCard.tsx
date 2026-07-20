@@ -2,7 +2,7 @@
  * Renders device card UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import { Handle, type Node, type NodeProps, Position } from '@xyflow/react';
+import { type Node, type NodeProps } from '@xyflow/react';
 import { type CSSProperties, memo, useLayoutEffect } from 'react';
 import type { Device, Link } from '../types/api';
 import {
@@ -31,6 +31,7 @@ import {
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
 import { MaterialIcon } from './MaterialIcon';
+import { NodeBorderHandles } from './NodeBorderHandles';
 import { StatusDot } from './StatusDot';
 
 /** Describes the device node data contract used by the UI component boundary. */
@@ -65,9 +66,6 @@ export interface DeviceNodeRuntimeData {
 }
 
 type ReadoutTone = 'default' | 'ok' | 'warning' | 'critical' | 'muted';
-
-const universalHandleClassName =
-  '!h-2 !w-2 !rounded-full !border-2 !border-bg !bg-surface-container-high shadow-none';
 
 const deviceTypeLabels: Record<string, string> = {
   router: 'Router',
@@ -621,36 +619,33 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
     const ghostLabel =
       data.device.sys_name || data.device.tags?.display_name || data.device.ip || 'Ghost';
     return (
-      <>
-        <Handle type="target" position={Position.Top} className={universalHandleClassName} />
-        <div
-          data-testid="device-node-card"
-          data-topology-node-variant="ghost-device"
-          className="topology-node-card topology-render-contained relative w-[132px] cursor-pointer rounded-2xl border border-dashed border-outline bg-surface/72 text-center transition-[border-color,background-color,color] duration-150 hover:bg-surface-container"
-          style={{ ...ghostFrameStyle(firstColor), boxShadow: 'var(--nt-node-shadow)' }}
-          onClick={() => data.onGhostClick?.(data.device.id)}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              data.onGhostClick?.(data.device.id);
-            }
-          }}
-        >
-          <div data-testid="semantic-detail-node" className="topology-semantic-card px-3 py-2">
-            <p className="topology-semantic-detail-only truncate text-[11px] font-medium uppercase text-on-bg-secondary">
-              cross-area
-            </p>
-            <p
-              className="topology-semantic-identity mt-1 text-sm font-semibold text-on-bg"
-              style={readableIdentityFontStyle(14)}
-            >
-              <span className="topology-semantic-identity-text block truncate">{ghostLabel}</span>
-            </p>
-          </div>
+      <div
+        data-testid="device-node-card"
+        data-topology-node-variant="ghost-device"
+        className="topology-node-card topology-render-contained relative w-[132px] cursor-pointer rounded-2xl border border-dashed border-outline bg-surface/72 text-center transition-[border-color,background-color,color] duration-150 hover:bg-surface-container"
+        style={{ ...ghostFrameStyle(firstColor), boxShadow: 'var(--nt-node-shadow)' }}
+        onClick={() => data.onGhostClick?.(data.device.id)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            data.onGhostClick?.(data.device.id);
+          }
+        }}
+      >
+        <NodeBorderHandles isConnectable={false} />
+        <div data-testid="semantic-detail-node" className="topology-semantic-card px-3 py-2">
+          <p className="topology-semantic-detail-only truncate text-[11px] font-medium uppercase text-on-bg-secondary">
+            cross-area
+          </p>
+          <p
+            className="topology-semantic-identity mt-1 text-sm font-semibold text-on-bg"
+            style={readableIdentityFontStyle(14)}
+          >
+            <span className="topology-semantic-identity-text block truncate">{ghostLabel}</span>
+          </p>
         </div>
-        <Handle type="source" position={Position.Bottom} className={universalHandleClassName} />
-      </>
+      </div>
     );
   }
 
@@ -694,38 +689,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           ) : null}
         </button>
       ) : null}
-      <Handle
-        id="top"
-        type="source"
-        position={Position.Top}
-        isConnectable={!!data.editMode}
-        style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
-        className={`${universalHandleClassName} !-top-1 !left-1/2 !-translate-x-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
-      />
-      <Handle
-        id="right"
-        type="source"
-        position={Position.Right}
-        isConnectable={!!data.editMode}
-        style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
-        className={`${universalHandleClassName} !-right-1 !top-1/2 !-translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
-      />
-      <Handle
-        id="bottom"
-        type="source"
-        position={Position.Bottom}
-        isConnectable={!!data.editMode}
-        style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
-        className={`${universalHandleClassName} !-bottom-1 !left-1/2 !-translate-x-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
-      />
-      <Handle
-        id="left"
-        type="source"
-        position={Position.Left}
-        isConnectable={!!data.editMode}
-        style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
-        className={`${universalHandleClassName} !-left-1 !top-1/2 !-translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
-      />
+      <NodeBorderHandles isConnectable={data.editMode === true} />
 
       <div
         data-testid="semantic-detail-node"

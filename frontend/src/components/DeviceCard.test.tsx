@@ -16,6 +16,12 @@ import type { DeviceNode, DeviceNodeData } from './DeviceCard';
 import DeviceCard, { getDeviceRenderSignature } from './DeviceCard';
 import { type DeviceMonitoringState, resolveDeviceMonitoringState } from './deviceVisualState';
 
+vi.mock('./NodeBorderHandles', () => ({
+  NodeBorderHandles: ({ isConnectable }: { isConnectable: boolean }) => (
+    <span data-testid="node-border-handles" data-is-connectable={String(isConnectable)} />
+  ),
+}));
+
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
     id: 'dev-1',
@@ -144,6 +150,12 @@ function renderDeviceCard(data: DeviceCardTestData = {}) {
   );
 }
 
+function expectSingleBorderHandleSet(isConnectable: boolean) {
+  const handleSets = screen.getAllByTestId('node-border-handles');
+  expect(handleSets).toHaveLength(1);
+  expect(handleSets[0]).toHaveAttribute('data-is-connectable', String(isConnectable));
+}
+
 function rgbContrastRatio(foreground: string, background: [number, number, number]): number {
   const channels = foreground.match(/\d+/g)?.map(Number);
   if (channels?.length !== 3) return 0;
@@ -164,6 +176,73 @@ function rgbContrastRatio(foreground: string, background: [number, number, numbe
 }
 
 describe('DeviceCard', () => {
+  it('makes physical node borders connectable only in edit mode', () => {
+    const viewModeCard = renderDeviceCard({ metrics: mockMetrics() });
+    expectSingleBorderHandleSet(false);
+    viewModeCard.unmount();
+
+    renderDeviceCard({ editMode: true, metrics: mockMetrics() });
+    expectSingleBorderHandleSet(true);
+  });
+
+  it('makes monitorable virtual node borders connectable only in edit mode', () => {
+    const device = mockDevice({
+      device_type: 'virtual',
+      ip: '192.168.1.1',
+      tags: { display_name: 'Cloud VPN', virtual_subtype: 'cloud' },
+    });
+    const viewModeCard = renderDeviceCard({
+      device,
+      isVirtual: true,
+      subtype: 'cloud',
+      metrics: mockMetrics(),
+    });
+    expectSingleBorderHandleSet(false);
+    viewModeCard.unmount();
+
+    renderDeviceCard({
+      device,
+      isVirtual: true,
+      subtype: 'cloud',
+      editMode: true,
+      metrics: mockMetrics(),
+    });
+    expectSingleBorderHandleSet(true);
+  });
+
+  it('makes unmonitored virtual node borders connectable only in edit mode', () => {
+    const device = mockDevice({
+      device_type: 'virtual',
+      ip: '',
+      tags: { display_name: 'AWS Cloud', virtual_subtype: 'cloud' },
+    });
+    const viewModeCard = renderDeviceCard({
+      device,
+      isVirtual: true,
+      subtype: 'cloud',
+    });
+    expectSingleBorderHandleSet(false);
+    viewModeCard.unmount();
+
+    renderDeviceCard({
+      device,
+      isVirtual: true,
+      subtype: 'cloud',
+      editMode: true,
+    });
+    expectSingleBorderHandleSet(true);
+  });
+
+  it('keeps ghost border handles measured but never connectable', () => {
+    renderDeviceCard({
+      kind: 'ghost-device',
+      isGhost: true,
+      editMode: true,
+    });
+
+    expectSingleBorderHandleSet(false);
+  });
+
   it('renders physical node card body with hostname, status, address, telemetry, and compact runtime readouts', () => {
     renderDeviceCard({ metrics: mockMetrics() });
 
