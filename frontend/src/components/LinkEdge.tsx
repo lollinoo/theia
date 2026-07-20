@@ -2,8 +2,10 @@
  * Renders link edge UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import { BaseEdge, type Edge, type EdgeProps, getBezierPath } from '@xyflow/react';
+import { BaseEdge, type Edge, type EdgeProps, useInternalNode } from '@xyflow/react';
 import { memo, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import type { DeviceNode } from './DeviceCard';
+import { buildFloatingEdgePath, deviceNodeBorderRadius, nodeRect } from './floatingEdgeGeometry';
 import { buildSelfLoopPathModel } from './linkEdgeGeometry';
 import { registerLinkLabel, unregisterLinkLabel } from './linkLabelRegistry';
 import { type LinkEdgeData, resolveEdgeTone, resolveLinkBadgePresentation } from './linkSemantics';
@@ -19,11 +21,11 @@ function LinkEdgeInner({
   sourceY,
   targetX,
   targetY,
-  sourcePosition,
-  targetPosition,
   selected,
   data,
 }: EdgeProps<LinkEdgeType>) {
+  const sourceNode = useInternalNode<DeviceNode>(source);
+  const targetNode = useInternalNode<DeviceNode>(target);
   const [hovered, setHovered] = useState(false);
   const interactionMode = data?.interactionMode ?? 'idle';
   const isInteractive = interactionMode === 'interactive';
@@ -33,6 +35,69 @@ function LinkEdgeInner({
   const index = data?.parallelIndex || 0;
   const isSelfLoop =
     source === target || data?.link?.source_device_id === data?.link?.target_device_id;
+  const sourceBounds = nodeRect(sourceNode);
+  const targetBounds = nodeRect(targetNode);
+  const sourceBoundsX = sourceBounds?.x ?? null;
+  const sourceBoundsY = sourceBounds?.y ?? null;
+  const sourceBoundsWidth = sourceBounds?.width ?? null;
+  const sourceBoundsHeight = sourceBounds?.height ?? null;
+  const targetBoundsX = targetBounds?.x ?? null;
+  const targetBoundsY = targetBounds?.y ?? null;
+  const targetBoundsWidth = targetBounds?.width ?? null;
+  const targetBoundsHeight = targetBounds?.height ?? null;
+  const sourceRadius = deviceNodeBorderRadius(sourceNode);
+  const targetRadius = deviceNodeBorderRadius(targetNode);
+  const floatingPath = useMemo(
+    () =>
+      buildFloatingEdgePath({
+        sourceRect:
+          sourceBoundsX === null ||
+          sourceBoundsY === null ||
+          sourceBoundsWidth === null ||
+          sourceBoundsHeight === null
+            ? null
+            : {
+                x: sourceBoundsX,
+                y: sourceBoundsY,
+                width: sourceBoundsWidth,
+                height: sourceBoundsHeight,
+              },
+        targetRect:
+          targetBoundsX === null ||
+          targetBoundsY === null ||
+          targetBoundsWidth === null ||
+          targetBoundsHeight === null
+            ? null
+            : {
+                x: targetBoundsX,
+                y: targetBoundsY,
+                width: targetBoundsWidth,
+                height: targetBoundsHeight,
+              },
+        fallbackSource: { x: sourceX, y: sourceY },
+        fallbackTarget: { x: targetX, y: targetY },
+        parallelIndex: index,
+        sourceRadius,
+        targetRadius,
+      }),
+    [
+      index,
+      sourceBoundsHeight,
+      sourceBoundsWidth,
+      sourceBoundsX,
+      sourceBoundsY,
+      sourceRadius,
+      sourceX,
+      sourceY,
+      targetBoundsHeight,
+      targetBoundsWidth,
+      targetBoundsX,
+      targetBoundsY,
+      targetRadius,
+      targetX,
+      targetY,
+    ],
+  );
   const { edgePath, labelX, labelY } = isSelfLoop
     ? buildSelfLoopPathModel({
         sourceX,
@@ -41,22 +106,7 @@ function LinkEdgeInner({
         targetY,
         parallelIndex: index,
       })
-    : (() => {
-        const [path, x, y] = getBezierPath({
-          sourceX,
-          sourceY,
-          targetX,
-          targetY,
-          sourcePosition,
-          targetPosition,
-        });
-
-        return {
-          edgePath: path,
-          labelX: x,
-          labelY: y,
-        };
-      })();
+    : floatingPath;
 
   const sign = index % 2 === 0 ? 1 : -1;
   const magnitude = Math.ceil(index / 2) * 20;
@@ -205,6 +255,7 @@ const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
     prev.data?.interactionMode === next.data?.interactionMode &&
     prev.data?.areaColor === next.data?.areaColor &&
     prev.data?.emphasis === next.data?.emphasis &&
+    prev.data?.parallelIndex === next.data?.parallelIndex &&
     prev.source === next.source &&
     prev.target === next.target &&
     prev.sourceX === next.sourceX &&

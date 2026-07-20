@@ -14,6 +14,7 @@ vi.mock('@xyflow/react', () => ({
   ),
   EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
   getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
+  useInternalNode: () => undefined,
   useStore: () => {
     throw new Error('LinkEdge must not subscribe to the React Flow viewport store');
   },

@@ -65,6 +65,7 @@ import { useCanvasSelection } from './canvas/useCanvasSelection';
 import { useCanvasSnapPreference } from './canvas/useCanvasSnapPreference';
 import DeviceCard, { type DeviceNode, resolveDeviceNodeReadabilityScale } from './DeviceCard';
 import { minimapColorForDevice } from './deviceVisualState';
+import { FloatingConnectionLine } from './FloatingConnectionLine';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
 import { resolveLinkBadgeScale } from './linkSemantics';
@@ -1030,6 +1031,7 @@ export default function Canvas({
         panOnDrag
         zoomOnScroll
         zoomOnDoubleClick={false}
+        connectionLineComponent={FloatingConnectionLine}
         connectionLineStyle={{ stroke: 'var(--color-edge-default)', strokeWidth: 10 }}
         proOptions={{ hideAttribution: true }}
         className="bg-transparent"

@@ -1,26 +1,50 @@
 /**
  * Exercises link edge render component behavior so refactors preserve the documented contract.
  */
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { CSSProperties, ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import LinkEdge from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
 import { clearLinkLabelRegistry } from './linkLabelRegistry';
 
+const flowState = vi.hoisted(() => ({
+  internalNodes: {} as Record<string, unknown>,
+}));
+
 vi.mock('@xyflow/react', () => ({
-  BaseEdge: ({ id, style }: { id: string; style?: CSSProperties }) => (
-    <path data-testid={id} style={style} />
+  BaseEdge: ({ id, path, style }: { id: string; path: string; style?: CSSProperties }) => (
+    <path data-testid={id} d={path} style={style} />
   ),
   EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
   getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
+  useInternalNode: (id: string) => flowState.internalNodes[id],
 }));
 
-function renderEdge(
-  overrides: Record<string, unknown> = {},
-  dataOverrides: Record<string, unknown> = {},
+function mockInternalNode(
+  id: string,
+  x: number,
+  y: number,
+  width = 100,
+  height = 60,
+  data: Record<string, unknown> = {},
 ) {
-  return render(
+  return {
+    id,
+    data,
+    measured: { width, height },
+    internals: { positionAbsolute: { x, y } },
+  };
+}
+
+function EdgeFixture({
+  overrides = {},
+  dataOverrides = {},
+}: {
+  overrides?: Record<string, unknown>;
+  dataOverrides?: Record<string, unknown>;
+}) {
+  return (
     <>
       <svg>
         <LinkEdge
@@ -36,6 +60,10 @@ function renderEdge(
             targetPosition: 'left',
             selected: false,
             data: {
+              link: {
+                source_device_id: 'dev-1',
+                target_device_id: 'dev-2',
+              },
               bandwidthLabel: '1 Gbps',
               speedLabel: 'SPD 1 Gbps',
               negotiationState: 'matched',
@@ -51,11 +79,25 @@ function renderEdge(
         />
       </svg>
       <LinkLabelLayer />
-    </>,
+    </>
   );
 }
 
+function renderEdge(
+  overrides: Record<string, unknown> = {},
+  dataOverrides: Record<string, unknown> = {},
+) {
+  return render(<EdgeFixture overrides={overrides} dataOverrides={dataOverrides} />);
+}
+
 describe('LinkEdge render', () => {
+  beforeEach(() => {
+    flowState.internalNodes = {
+      'dev-1': mockInternalNode('dev-1', 0, 0),
+      'dev-2': mockInternalNode('dev-2', 300, 0),
+    };
+  });
+
   afterEach(() => {
     act(() => {
       clearLinkLabelRegistry();
@@ -82,6 +124,40 @@ describe('LinkEdge render', () => {
     expect(hitTarget).not.toBeNull();
     expect(hitTarget).not.toHaveAttribute('role', 'button');
     expect(hitTarget).not.toHaveAttribute('tabindex');
+  });
+
+  it('renders from live rounded node borders and updates when an endpoint moves', () => {
+    const { rerender } = renderEdge();
+    const firstPath = screen.getByTestId('edge-1').getAttribute('d');
+
+    expect(firstPath).toMatch(/^M 100,30 C /);
+    expect(firstPath).toMatch(/ 300,30$/);
+    expect(firstPath).not.toBe('M0 0 C0 0 10 10 10 10');
+
+    flowState.internalNodes['dev-2'] = mockInternalNode('dev-2', 420, 120);
+    rerender(<EdgeFixture overrides={{ selected: true }} />);
+
+    expect(screen.getByTestId('edge-1').getAttribute('d')).not.toBe(firstPath);
+  });
+
+  it('keeps the existing self-loop geometry and context menu behavior', () => {
+    const onContextMenu = vi.fn();
+    const { container } = renderEdge(
+      {
+        id: 'edge-loop',
+        source: 'dev-1',
+        target: 'dev-1',
+        sourceX: 236,
+        sourceY: 120,
+        targetX: 76,
+        targetY: 120,
+      },
+      { onContextMenu },
+    );
+
+    expect(screen.getByTestId('edge-loop').getAttribute('d')).toMatch(/^M 236,120 C /);
+    fireEvent.contextMenu(container.querySelector('path.cursor-pointer') as SVGPathElement);
+    expect(onContextMenu).toHaveBeenCalledWith(expect.anything(), 'edge-loop');
   });
 
   it('keeps warning mismatches amber instead of green', () => {

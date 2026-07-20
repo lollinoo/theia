@@ -148,6 +148,16 @@ describe('LinkEdge', () => {
     expect(content).not.toContain('y: labelYOffset + 20');
   });
 
+  it('subscribes only to its two endpoint nodes for floating geometry', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+
+    expect(content).toContain('useInternalNode<DeviceNode>(source)');
+    expect(content).toContain('useInternalNode<DeviceNode>(target)');
+    expect(content).toContain('buildFloatingEdgePath({');
+    expect(content).not.toContain('useNodes(');
+    expect(content).not.toContain('getNodes(');
+  });
+
   it('keeps the main stroke bound to semantic tone and only uses halo color for emphasis', () => {
     const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
     expect(content).toContain('stroke: tone.color');
@@ -182,6 +192,11 @@ describe('LinkEdge', () => {
     expect(content).toContain(
       'prev.data?.targetDeviceSnmpReachable === next.data?.targetDeviceSnmpReachable',
     );
+  });
+
+  it('keeps parallel lane changes in the memo comparator', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    expect(content).toContain('prev.data?.parallelIndex === next.data?.parallelIndex');
   });
 
   it('renders a stacked negotiated-rate and throughput group without a standalone AUTO pill', () => {

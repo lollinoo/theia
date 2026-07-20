@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanvasMap, Device, Link } from '../types/api';
 import Canvas from './Canvas';
 import type { DeviceNode } from './DeviceCard';
+import { FloatingConnectionLine } from './FloatingConnectionLine';
 
 const defaultCanvasProps = {
   mapId: null,
@@ -142,6 +143,9 @@ vi.mock('@xyflow/react', () => ({
     onNodesChange,
     snapToGrid,
     snapGrid,
+    connectionLineComponent,
+    connectionLineStyle,
+    connectionMode,
   }: {
     children: React.ReactNode;
     nodes: DeviceNode[];
@@ -156,6 +160,9 @@ vi.mock('@xyflow/react', () => ({
     onNodesChange?: (changes: unknown[]) => void;
     snapToGrid?: boolean;
     snapGrid?: [number, number];
+    connectionLineComponent?: unknown;
+    connectionLineStyle?: React.CSSProperties;
+    connectionMode?: unknown;
   }) => {
     testState.reactFlowRenderCount += 1;
     testState.displayedNodes = nodes;
@@ -164,6 +171,9 @@ vi.mock('@xyflow/react', () => ({
       proOptions,
       snapToGrid,
       snapGrid,
+      connectionLineComponent,
+      connectionLineStyle,
+      connectionMode,
     };
     const draggedNode = nodes.find((node) => node.id === 'dev-a');
     return (
@@ -464,6 +474,28 @@ describe('Canvas drag state ownership', () => {
     );
 
     expect(testState.reactFlowProps.proOptions).toEqual({ hideAttribution: true });
+  });
+
+  it('uses the floating connection preview while preserving loose connection behavior', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    expect(testState.reactFlowProps).toMatchObject({
+      connectionLineComponent: FloatingConnectionLine,
+      connectionLineStyle: {
+        stroke: 'var(--color-edge-default)',
+        strokeWidth: 10,
+      },
+      connectionMode: 'loose',
+    });
   });
 
   it('wires native snapping and persists snapped or exact drag coordinates from the preference', () => {
