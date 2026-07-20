@@ -16,6 +16,7 @@ export type CanvasMetricName =
   | 'renderProjection'
   | 'runtimePatch'
   | 'incrementalLayout'
+  | 'newNodePlacement'
   | 'computeForceLayout'
   | 'deviceCardRender'
   | 'frameTime'

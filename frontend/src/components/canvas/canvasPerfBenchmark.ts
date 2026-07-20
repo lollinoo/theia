@@ -26,6 +26,7 @@ import {
   buildIncrementalLayoutInputs,
   computeIncrementalLayoutPositions,
 } from './incrementalLayout';
+import { findNewNodePlacement } from './newNodePlacement';
 import { buildTopologyNodes } from './nodeBuilder';
 import { buildRuntimeState } from './runtimeAdapters';
 import {
@@ -54,6 +55,7 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'renderProjection',
   'runtimePatch',
   'incrementalLayout',
+  'newNodePlacement',
   'computeForceLayout',
 ] as const satisfies CanvasMetricName[];
 
@@ -179,7 +181,7 @@ function buildLegacyStructuralCompositionCacheSignature(
     savedPositions: legacyPositionEntries(input.savedPositions),
     computedPositions: legacyPositionEntries(input.computedPositions),
     currentPositions: legacyPositionEntries(input.currentPositions),
-    defaultPosition: input.defaultPosition ?? null,
+    explicitPositions: legacyPositionEntries(input.explicitPositions),
     editMode: input.editMode,
     placementDeviceIds: [...input.placementDeviceIds].sort((left, right) =>
       left.localeCompare(right),
@@ -347,13 +349,17 @@ function benchmarkOperations(
   const devicesById = new Map(runtimeDevices.map((device) => [device.id, device]));
   const currentPositions = new Map(scenario.positions);
   const placementDeviceIds = new Set<string>();
+  const explicitPositions =
+    runtimeDevices[0] === undefined
+      ? new Map<string, { x: number; y: number }>()
+      : new Map([[runtimeDevices[0].id, { x: 120, y: 120 }]]);
 
   const nodes = measureLocalMetric(samples, scenarioName, 'buildTopologyNodes', () =>
     buildTopologyNodes(
       runtimeDevices,
       scenario.positions,
       new Map(),
-      { x: 120, y: 120 },
+      explicitPositions,
       false,
       noopDeviceMenu,
       scenario.runtimeSnapshot,
@@ -385,7 +391,7 @@ function benchmarkOperations(
     savedPositions: scenario.positions,
     computedPositions: new Map<string, { x: number; y: number }>(),
     currentPositions: buildCurrentPositions(nodes),
-    defaultPosition: { x: 120, y: 120 },
+    explicitPositions,
     editMode: false,
     openDeviceMenu: noopDeviceMenu,
     openEdgeMenu: noopEdgeMenu,
@@ -410,7 +416,7 @@ function benchmarkOperations(
     savedPositions: scenario.positions,
     computedPositions: compositionInput.computedPositions,
     currentPositions: compositionInput.currentPositions,
-    defaultPosition: compositionInput.defaultPosition,
+    explicitPositions: compositionInput.explicitPositions,
     editMode: compositionInput.editMode,
     placementDeviceIds,
     runtimeIdentity: `benchmark:${scenarioName}`,
@@ -545,6 +551,18 @@ function benchmarkOperations(
       height: 1600,
     });
   });
+
+  const placementObstacles = scenario.devices.map((device) => {
+    const position = scenario.positions.get(device.id) ?? { x: 0, y: 0 };
+    return { x: position.x, y: position.y, width: 370, height: 140 };
+  });
+  measureLocalMetric(samples, scenarioName, 'newNodePlacement', () =>
+    findNewNodePlacement({
+      viewport: { x: 0, y: 0, width: 1440, height: 900 },
+      nodeSize: { width: 370, height: 140 },
+      obstacles: placementObstacles,
+    }),
+  );
 
   const { layoutNodes, layoutEdges } = buildLayoutInputs(scenario);
   measureLocalMetric(samples, scenarioName, 'computeForceLayout', () =>

@@ -19,6 +19,7 @@ describe('canvasPerfBenchmark', () => {
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('buildCanvasTopologyCompositionCacheKeyLegacy');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('composeCanvasTopologyCached');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('renderProjection');
+    expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('newNodePlacement');
 
     const result = runCanvasPerfBenchmark({
       iterations: 1,
@@ -34,6 +35,7 @@ describe('canvasPerfBenchmark', () => {
     );
     expect(result.scenarios.small.metrics.composeCanvasTopologyCached.count).toBe(1);
     expect(result.scenarios.small.metrics.renderProjection.count).toBe(1);
+    expect(result.scenarios.small.metrics.newNodePlacement.count).toBe(1);
   });
 
   it('produces aggregate metrics for every official scenario and benchmarked function', () => {
