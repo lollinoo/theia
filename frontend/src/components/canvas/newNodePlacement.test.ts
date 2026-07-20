@@ -5,6 +5,7 @@ import {
   insetScreenRect,
   NEW_NODE_PREFERRED_GAP_PX,
   NEW_NODE_VIEWPORT_MARGIN_PX,
+  type NewNodePlacementInput,
   type NewNodePlacementResult,
   type ScreenRect,
   type ScreenSize,
@@ -33,6 +34,15 @@ function expandRect(rect: ScreenRect, gap: number): ScreenRect {
 
 function resultRect(result: NewNodePlacementResult, nodeSize: ScreenSize): ScreenRect {
   return { ...result.topLeft, ...nodeSize };
+}
+
+function validationInput(overrides: Partial<NewNodePlacementInput> = {}): NewNodePlacementInput {
+  return {
+    viewport: { x: 0, y: 0, width: 400, height: 260 },
+    nodeSize: { width: 100, height: 80 },
+    obstacles: [{ x: 170, y: 100, width: 60, height: 60 }],
+    ...overrides,
+  };
 }
 
 function expectContained(
@@ -78,15 +88,142 @@ describe('findNewNodePlacement', () => {
       nodeSize: { width: 100, height: 100 },
     },
     {
+      viewport: { x: 0, y: 0, width: 800, height: -1 },
+      nodeSize: { width: 100, height: 100 },
+    },
+    {
+      viewport: { x: Number.NaN, y: 0, width: 800, height: 600 },
+      nodeSize: { width: 100, height: 100 },
+    },
+    {
+      viewport: { x: 0, y: Number.POSITIVE_INFINITY, width: 800, height: 600 },
+      nodeSize: { width: 100, height: 100 },
+    },
+    {
       viewport: { x: 0, y: 0, width: 800, height: 600 },
       nodeSize: { width: Number.NaN, height: 100 },
     },
     {
       viewport: { x: 0, y: 0, width: 800, height: 600 },
+      nodeSize: { width: 0, height: 100 },
+    },
+    {
+      viewport: { x: 0, y: 0, width: 800, height: 600 },
       nodeSize: { width: 100, height: -1 },
+    },
+    {
+      viewport: { x: 0, y: 0, width: 800, height: 600 },
+      nodeSize: { width: 100, height: Number.POSITIVE_INFINITY },
     },
   ])('returns null for invalid geometry', ({ viewport, nodeSize }) => {
     expect(findNewNodePlacement({ viewport, nodeSize, obstacles: [] })).toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'a non-finite obstacle coordinate',
+      obstacle: { x: Number.NaN, y: 40, width: 80, height: 60 },
+    },
+    {
+      name: 'a non-positive obstacle width',
+      obstacle: { x: 100, y: 40, width: 0, height: 60 },
+    },
+    {
+      name: 'a non-positive obstacle height',
+      obstacle: { x: 100, y: 40, width: 80, height: -1 },
+    },
+  ])('returns null for $name', ({ obstacle }) => {
+    expect(
+      findNewNodePlacement({
+        viewport: { x: 0, y: 0, width: 400, height: 260 },
+        nodeSize: { width: 100, height: 80 },
+        obstacles: [obstacle],
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { name: 'a non-finite neighbor x coordinate', center: { x: Number.NaN, y: 80 } },
+    {
+      name: 'a non-finite neighbor y coordinate',
+      center: { x: 120, y: Number.POSITIVE_INFINITY },
+    },
+  ])('returns null for $name', ({ center }) => {
+    expect(
+      findNewNodePlacement({
+        viewport: { x: 0, y: 0, width: 400, height: 260 },
+        nodeSize: { width: 100, height: 80 },
+        obstacles: [],
+        visibleNeighborCenters: [center],
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { name: 'a negative margin', input: validationInput({ marginPx: -1 }) },
+    {
+      name: 'a non-finite margin',
+      input: validationInput({ marginPx: Number.NaN }),
+    },
+    {
+      name: 'a negative preferred gap',
+      input: validationInput({ preferredGapPx: -1 }),
+    },
+    {
+      name: 'a non-finite preferred gap',
+      input: validationInput({ preferredGapPx: Number.NaN }),
+    },
+    {
+      name: 'a negative candidate step',
+      input: validationInput({
+        viewport: { x: 0, y: 0, width: 132, height: 132 },
+        nodeSize: { width: 100, height: 100 },
+        candidateStepPx: -1,
+      }),
+    },
+    {
+      name: 'a zero candidate step',
+      input: validationInput({
+        viewport: { x: 0, y: 0, width: 132, height: 132 },
+        nodeSize: { width: 100, height: 100 },
+        candidateStepPx: 0,
+      }),
+    },
+    {
+      name: 'a non-finite candidate step',
+      input: validationInput({ candidateStepPx: Number.NaN }),
+    },
+    {
+      name: 'a negative spatial cell',
+      input: validationInput({ spatialCellPx: -1 }),
+    },
+    {
+      name: 'a zero spatial cell',
+      input: validationInput({
+        viewport: { x: 0, y: 0, width: 100, height: 100 },
+        nodeSize: { width: 100, height: 100 },
+        obstacles: [{ x: 0, y: 0, width: 20, height: 20 }],
+        marginPx: 0,
+        preferredGapPx: 0,
+        spatialCellPx: 0,
+      }),
+    },
+    {
+      name: 'a non-finite spatial cell',
+      input: validationInput({ spatialCellPx: Number.NaN }),
+    },
+  ])('returns null for $name configuration', ({ input }) => {
+    expect(findNewNodePlacement(input)).toBeNull();
+  });
+
+  it('returns null when the viewport inset leaves no usable area', () => {
+    expect(
+      findNewNodePlacement({
+        viewport: { x: 0, y: 0, width: NEW_NODE_VIEWPORT_MARGIN_PX * 2, height: 200 },
+        nodeSize: { width: 10, height: 10 },
+        obstacles: [],
+      }),
+    ).toBeNull();
   });
 
   it('centers an oversized node to maximize the visible portion', () => {

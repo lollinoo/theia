@@ -41,14 +41,22 @@ export interface NewNodePlacementResult {
   mode: PlacementMode;
 }
 
-function isFinitePoint(point: ScreenPoint): boolean {
+function isValidScreenPoint(point: ScreenPoint): boolean {
   return Number.isFinite(point.x) && Number.isFinite(point.y);
 }
 
-function isPositiveSize(size: ScreenSize): boolean {
+function isValidScreenSize(size: ScreenSize): boolean {
   return (
     Number.isFinite(size.width) && size.width > 0 && Number.isFinite(size.height) && size.height > 0
   );
+}
+
+function isFiniteNonNegative(value: number): boolean {
+  return Number.isFinite(value) && value >= 0;
+}
+
+function isFinitePositive(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
 }
 
 function intersectionArea(left: ScreenRect, right: ScreenRect): number {
@@ -349,19 +357,17 @@ export function findNewNodePlacement(input: NewNodePlacementInput): NewNodePlace
   const spatialCellPx = input.spatialCellPx ?? NEW_NODE_SPATIAL_CELL_PX;
 
   if (
-    !isFinitePoint(input.viewport) ||
-    !isPositiveSize(input.viewport) ||
-    !isPositiveSize(input.nodeSize) ||
-    input.obstacles.some((obstacle) => !isFinitePoint(obstacle) || !isPositiveSize(obstacle)) ||
-    input.visibleNeighborCenters?.some((center) => !isFinitePoint(center)) ||
-    !Number.isFinite(marginPx) ||
-    marginPx < 0 ||
-    !Number.isFinite(preferredGapPx) ||
-    preferredGapPx < 0 ||
-    !Number.isFinite(candidateStepPx) ||
-    candidateStepPx <= 0 ||
-    !Number.isFinite(spatialCellPx) ||
-    spatialCellPx <= 0
+    !isValidScreenPoint(input.viewport) ||
+    !isValidScreenSize(input.viewport) ||
+    !isValidScreenSize(input.nodeSize) ||
+    input.obstacles.some(
+      (obstacle) => !isValidScreenPoint(obstacle) || !isValidScreenSize(obstacle),
+    ) ||
+    input.visibleNeighborCenters?.some((center) => !isValidScreenPoint(center)) ||
+    !isFiniteNonNegative(marginPx) ||
+    !isFiniteNonNegative(preferredGapPx) ||
+    !isFinitePositive(candidateStepPx) ||
+    !isFinitePositive(spatialCellPx)
   ) {
     return null;
   }
