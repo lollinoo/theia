@@ -390,10 +390,8 @@ export function useCanvasData({
           if (manualEdgeMigrationResult.status === 'stale') {
             return 'stale';
           }
-          lastCanvasTopologyEtagByMapRef.current.set(
-            requestMapKey,
-            manualEdgeMigrationResult.appliedCount > 0 ? null : (topologySource.etag ?? null),
-          );
+          const nextCanvasTopologyEtag =
+            manualEdgeMigrationResult.appliedCount > 0 ? null : (topologySource.etag ?? null);
 
           const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
           const currentNodePositions =
@@ -441,7 +439,7 @@ export function useCanvasData({
                   placedDeviceIds: new Set<string>(),
                 };
           const shouldFitViewAfterLoad =
-            explicitPlacement.positions.size === 0 &&
+            pendingDeviceIds.size === 0 &&
             buildShouldFitViewAfterTopologyLoad({
               trigger,
               forceFitView: options.forceFitView === true,
@@ -537,6 +535,7 @@ export function useCanvasData({
             if (shouldFitViewAfterLoad) {
               requestFitViewAfterLoad();
             }
+            lastCanvasTopologyEtagByMapRef.current.set(requestMapKey, nextCanvasTopologyEtag);
             return 'applied';
           }
 
@@ -628,6 +627,7 @@ export function useCanvasData({
             placementDeviceCount: appliedPlacementDeviceIds.size,
             structureChanged,
           });
+          lastCanvasTopologyEtagByMapRef.current.set(requestMapKey, nextCanvasTopologyEtag);
           return 'applied';
         } catch (loadError) {
           if (!isCurrentTopologyLoad()) {

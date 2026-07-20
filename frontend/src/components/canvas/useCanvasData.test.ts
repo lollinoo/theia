@@ -2948,6 +2948,79 @@ describe('useCanvasData', () => {
     expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
   });
 
+  it('retries pending placement without an ETag after post-fetch application failure', async () => {
+    const newDevice = mockDevice({
+      id: 'dev-after-application-failure',
+      hostname: 'router-after-application-failure',
+      ip: '10.0.0.59',
+      sys_name: 'router-after-application-failure',
+    });
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [mockDevice()],
+        topology_version: 'topo-before-application-failure',
+      }),
+    );
+    const getCanvasClientRect = vi.fn((): ScreenRect | null => ({
+      x: 100,
+      y: 60,
+      width: 1000,
+      height: 700,
+    }));
+    const { result, reactFlow } = renderUseCanvasData(null, null, { getCanvasClientRect });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const failedApplicationResponse = {
+      ...canvasTopologyOkResponse({
+        devices: [mockDevice(), newDevice],
+        topology_version: 'topo-placement-application-failed',
+      }),
+      etag: '"topo-placement-application-failed"',
+    };
+    const recoveredResponse = {
+      ...canvasTopologyOkResponse({
+        devices: [mockDevice(), newDevice],
+        topology_version: 'topo-placement-application-recovered',
+      }),
+      etag: '"topo-placement-application-recovered"',
+    };
+    getCanvasClientRect.mockImplementationOnce(() => {
+      throw new Error('canvas geometry unavailable');
+    });
+    vi.mocked(fetchCanvasTopology)
+      .mockResolvedValueOnce(failedApplicationResponse)
+      .mockImplementationOnce((etag?: string) => {
+        if (etag === failedApplicationResponse.etag) {
+          return Promise.resolve({
+            status: 'not-modified' as const,
+            etag,
+          });
+        }
+        return Promise.resolve(recoveredResponse);
+      });
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement(newDevice.id);
+    });
+
+    expect(result.current.error).toBe('canvas geometry unavailable');
+    expect(result.current.nodes.find((node) => node.id === newDevice.id)).toBeUndefined();
+    expect(reactFlow.screenToFlowPosition).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect.soft(fetchCanvasTopology).toHaveBeenNthCalledWith(1, undefined);
+    expect.soft(fetchCanvasTopology).toHaveBeenNthCalledWith(2, undefined);
+    expect.soft(result.current.nodes.find((node) => node.id === newDevice.id)).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+  });
+
   it('lets a winning refresh consume placement intent while an older request becomes stale', async () => {
     const newDevice = mockDevice({
       id: 'dev-race',
@@ -3180,6 +3253,43 @@ describe('useCanvasData', () => {
       y: 9000,
     });
     expect(reactFlow.screenToFlowPosition).not.toHaveBeenCalled();
+  });
+
+  it('does not fit while pending placement waits for canvas geometry', async () => {
+    const pendingDevice = mockDevice({
+      hostname: 'router-pending-geometry',
+      sys_name: 'router-pending-geometry',
+    });
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [],
+        topology_version: 'topo-empty-before-pending-placement',
+      }),
+    );
+    const getCanvasClientRect = vi.fn((): ScreenRect | null => null);
+    const { result, reactFlow } = renderUseCanvasData(null, null, { getCanvasClientRect });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    vi.mocked(reactFlow.fitView).mockClear();
+    vi.mocked(reactFlow.screenToFlowPosition).mockClear();
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [pendingDevice],
+        topology_version: 'topo-pending-placement-without-geometry',
+      }),
+    );
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement(pendingDevice.id);
+    });
+
+    expect(result.current.nodes.find((node) => node.id === pendingDevice.id)).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).not.toHaveBeenCalled();
+    expect(reactFlow.fitView).not.toHaveBeenCalled();
   });
 
   it('retains placement intent when canvas geometry is invalid', async () => {
