@@ -357,7 +357,6 @@ export function useCanvasData({
             return 'applied';
           }
 
-          lastCanvasTopologyEtagByMapRef.current.set(requestMapKey, topologySource.etag ?? null);
           const fetchedDevices = topologySource.devices;
           const fetchedLinks = topologySource.links;
           const fetchedAreas = topologySource.areas;
@@ -391,9 +390,10 @@ export function useCanvasData({
           if (manualEdgeMigrationResult.status === 'stale') {
             return 'stale';
           }
-          if (manualEdgeMigrationResult.appliedCount > 0) {
-            lastCanvasTopologyEtagByMapRef.current.set(requestMapKey, null);
-          }
+          lastCanvasTopologyEtagByMapRef.current.set(
+            requestMapKey,
+            manualEdgeMigrationResult.appliedCount > 0 ? null : (topologySource.etag ?? null),
+          );
 
           const topologyIdentity = buildTopologyIdentity(fetchedDevices, fetchedLinks);
           const currentNodePositions =

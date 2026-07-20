@@ -3026,14 +3026,20 @@ describe('useCanvasData', () => {
     };
     const migrationEntered = deferred<void>();
     const migrationRelease = deferred<{ status: 'not-run'; appliedCount: 0 }>();
-    const staleResponse = canvasTopologyOkResponse({
-      devices: [staleBaseDevice, staleTargetDevice],
-      topology_version: 'topo-post-migration-stale',
-    });
-    const winningResponse = canvasTopologyOkResponse({
-      devices: [winningBaseDevice, winningTargetDevice],
-      topology_version: 'topo-post-migration-winner',
-    });
+    const staleResponse = {
+      ...canvasTopologyOkResponse({
+        devices: [staleBaseDevice, staleTargetDevice],
+        topology_version: 'topo-post-migration-stale',
+      }),
+      etag: '"topo-post-migration-stale"',
+    };
+    const winningResponse = {
+      ...canvasTopologyOkResponse({
+        devices: [winningBaseDevice, winningTargetDevice],
+        topology_version: 'topo-post-migration-winner',
+      }),
+      etag: '"topo-post-migration-winner"',
+    };
     const { result, reactFlow } = renderUseCanvasData(null);
 
     await act(async () => {
@@ -3042,9 +3048,18 @@ describe('useCanvasData', () => {
     });
     positionMocks.savePositions.mockClear();
     vi.mocked(reactFlow.screenToFlowPosition).mockClear();
+    vi.mocked(fetchCanvasTopology).mockClear();
     vi.mocked(fetchCanvasTopology)
       .mockResolvedValueOnce(staleResponse)
-      .mockResolvedValueOnce(winningResponse);
+      .mockImplementationOnce((etag?: string) => {
+        if (etag === staleResponse.etag) {
+          return Promise.resolve({
+            status: 'not-modified' as const,
+            etag,
+          });
+        }
+        return Promise.resolve(winningResponse);
+      });
     manualEdgeMigrationOrchestratorControl.runOverride = () => {
       manualEdgeMigrationOrchestratorControl.runOverride = null;
       migrationEntered.resolve();
@@ -3060,12 +3075,6 @@ describe('useCanvasData', () => {
     await act(async () => {
       await result.current.loadTopology(true);
     });
-    const winningPosition = result.current.nodes.find(
-      (node) => node.id === winningTargetDevice.id,
-    )?.position;
-    expect(winningPosition).toBeDefined();
-    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
-    expect(positionMocks.savePositions).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       migrationRelease.resolve({ status: 'not-run', appliedCount: 0 });
@@ -3073,6 +3082,13 @@ describe('useCanvasData', () => {
       await Promise.resolve();
     });
 
+    expect(fetchCanvasTopology).toHaveBeenNthCalledWith(2, undefined);
+    const winningPosition = result.current.nodes.find(
+      (node) => node.id === winningTargetDevice.id,
+    )?.position;
+    expect(winningPosition).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+    expect(positionMocks.savePositions).toHaveBeenCalledTimes(1);
     expect(result.current.devices.find((device) => device.id === 'dev-1')?.hostname).toBe(
       'winning-router',
     );
@@ -3090,6 +3106,7 @@ describe('useCanvasData', () => {
       await result.current.loadTopology(true);
     });
 
+    expect(fetchCanvasTopology).toHaveBeenNthCalledWith(3, winningResponse.etag);
     expect(
       result.current.nodes.find((node) => node.id === winningTargetDevice.id)?.position,
     ).toEqual(winningPosition);
