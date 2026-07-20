@@ -83,6 +83,14 @@ describe('NodeBorderHandles', () => {
     }
   });
 
+  it('stacks every border strip above the self-link badge layer', () => {
+    render(<NodeBorderHandles isConnectable />);
+
+    for (const handle of screen.getAllByTestId(/^border-handle-/)) {
+      expect(handle.style.zIndex).toBe('30');
+    }
+  });
+
   it('removes pointer interaction from every disabled border strip', () => {
     render(<NodeBorderHandles isConnectable={false} />);
 

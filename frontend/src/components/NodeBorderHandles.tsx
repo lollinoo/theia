@@ -18,7 +18,7 @@ const transparentHandleStyle: CSSProperties = {
   background: 'transparent',
   borderWidth: 0,
   borderRadius: 0,
-  zIndex: 10,
+  zIndex: 30,
 };
 
 /** Renders four continuous, invisible connection hit zones around a node border. */

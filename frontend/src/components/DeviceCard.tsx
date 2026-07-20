@@ -619,37 +619,39 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
     const ghostLabel =
       data.device.sys_name || data.device.tags?.display_name || data.device.ip || 'Ghost';
     return (
-      <div
-        data-testid="device-node-card"
-        data-topology-node-variant="ghost-device"
-        className="topology-node-card topology-render-contained relative w-[132px] cursor-pointer rounded-2xl border border-dashed border-outline bg-surface/72 text-center transition-[border-color,background-color,color] duration-150 hover:bg-surface-container"
-        style={{ ...ghostFrameStyle(firstColor), boxShadow: 'var(--nt-node-shadow)' }}
-        onClick={() => data.onGhostClick?.(data.device.id)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            data.onGhostClick?.(data.device.id);
-          }
-        }}
-      >
+      <>
         <NodeBorderHandles isConnectable={false} />
-        <div data-testid="semantic-detail-node" className="topology-semantic-card px-3 py-2">
-          <p className="topology-semantic-detail-only truncate text-[11px] font-medium uppercase text-on-bg-secondary">
-            cross-area
-          </p>
-          <p
-            className="topology-semantic-identity mt-1 text-sm font-semibold text-on-bg"
-            style={readableIdentityFontStyle(14)}
-          >
-            <span className="topology-semantic-identity-text block truncate">{ghostLabel}</span>
-          </p>
+        <div
+          data-testid="device-node-card"
+          data-topology-node-variant="ghost-device"
+          className="topology-node-card topology-render-contained relative w-[132px] cursor-pointer rounded-2xl border border-dashed border-outline bg-surface/72 text-center transition-[border-color,background-color,color] duration-150 hover:bg-surface-container"
+          style={{ ...ghostFrameStyle(firstColor), boxShadow: 'var(--nt-node-shadow)' }}
+          onClick={() => data.onGhostClick?.(data.device.id)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              data.onGhostClick?.(data.device.id);
+            }
+          }}
+        >
+          <div data-testid="semantic-detail-node" className="topology-semantic-card px-3 py-2">
+            <p className="topology-semantic-detail-only truncate text-[11px] font-medium uppercase text-on-bg-secondary">
+              cross-area
+            </p>
+            <p
+              className="topology-semantic-identity mt-1 text-sm font-semibold text-on-bg"
+              style={readableIdentityFontStyle(14)}
+            >
+              <span className="topology-semantic-identity-text block truncate">{ghostLabel}</span>
+            </p>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
-  return (
+  const card = (
     // biome-ignore lint/a11y/noStaticElementInteractions: The card shell only owns pointer context-menu plumbing; child controls expose keyboard actions.
     <div
       data-testid="device-node-card"
@@ -689,8 +691,6 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           ) : null}
         </button>
       ) : null}
-      <NodeBorderHandles isConnectable={data.editMode === true} />
-
       <div
         data-testid="semantic-detail-node"
         className={
@@ -935,6 +935,13 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         )}
       </div>
     </div>
+  );
+
+  return (
+    <>
+      <NodeBorderHandles isConnectable={data.editMode === true} />
+      {card}
+    </>
   );
 }
 

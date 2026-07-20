@@ -152,8 +152,11 @@ function renderDeviceCard(data: DeviceCardTestData = {}) {
 
 function expectSingleBorderHandleSet(isConnectable: boolean) {
   const handleSets = screen.getAllByTestId('node-border-handles');
+  const card = screen.getByTestId('device-node-card');
   expect(handleSets).toHaveLength(1);
   expect(handleSets[0]).toHaveAttribute('data-is-connectable', String(isConnectable));
+  expect(handleSets[0].parentElement).toBe(card.parentElement);
+  expect(card).not.toContainElement(handleSets[0]);
 }
 
 function rgbContrastRatio(foreground: string, background: [number, number, number]): number {
@@ -304,6 +307,25 @@ describe('DeviceCard', () => {
     expect(selfLinkButton).toHaveTextContent('ether1');
     expect(selfLinkButton).not.toHaveClass('shadow-floating');
     expect(selfLinkButton).not.toHaveClass('backdrop-blur-sm');
+  });
+
+  it('keeps the handle layer outside a regular card and above its self-link badge', () => {
+    renderDeviceCard({
+      editMode: true,
+      metrics: mockMetrics(),
+      selfLinks: [mockLink()],
+    });
+
+    const card = screen.getByTestId('device-node-card');
+    const handleLayer = screen.getByTestId('node-border-handles');
+    const selfLinkButton = screen.getByRole('button', {
+      name: /view details for self link/i,
+    });
+
+    expect(card).toContainElement(selfLinkButton);
+    expect(selfLinkButton).toHaveClass('z-20');
+    expect(handleLayer.parentElement).toBe(card.parentElement);
+    expect(card).not.toContainElement(handleLayer);
   });
 
   it('records a render metric sample when canvas render metrics are enabled', () => {
