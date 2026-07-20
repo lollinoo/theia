@@ -119,6 +119,10 @@ const testState = vi.hoisted(() => ({
   backgroundProps: {} as Record<string, unknown>,
   reactFlowProps: {} as Record<string, unknown>,
   reactFlowRenderCount: 0,
+  snapRenderHistory: [] as {
+    snapToGrid: boolean;
+    positions: { x: number; y: number }[];
+  }[],
 }));
 
 vi.mock('@xyflow/react', () => ({
@@ -166,6 +170,10 @@ vi.mock('@xyflow/react', () => ({
   }) => {
     testState.reactFlowRenderCount += 1;
     testState.displayedNodes = nodes;
+    testState.snapRenderHistory.push({
+      snapToGrid: snapToGrid === true,
+      positions: nodes.map((node) => ({ ...node.position })),
+    });
     testState.reactFlowProps = {
       onlyRenderVisibleElements,
       proOptions,
@@ -360,6 +368,20 @@ vi.mock('./canvas/useCanvasData', async () => {
         lastSeededNodesRef.current = testState.canonicalNodes;
         params.setNodes(testState.canonicalNodes);
       });
+      const snapCurrentNodePositions = ReactRuntime.useCallback(
+        (grid: [number, number]) => {
+          params.setNodes((currentNodes) =>
+            currentNodes.map((node) => ({
+              ...node,
+              position: {
+                x: Math.round(node.position.x / grid[0]) * grid[0],
+                y: Math.round(node.position.y / grid[1]) * grid[1],
+              },
+            })),
+          );
+        },
+        [params.setNodes],
+      );
 
       testState.canvasDataParams = params;
       return {
@@ -378,6 +400,7 @@ vi.mock('./canvas/useCanvasData', async () => {
         dismissTopologyRecoveryNotice: vi.fn(),
         retryTopologyRefresh: vi.fn(),
         updateNodePosition: testState.updateNodePosition,
+        snapCurrentNodePositions,
         renderedMapKey: testState.renderedMapKey,
       };
     },
@@ -440,6 +463,7 @@ describe('Canvas drag state ownership', () => {
     testState.backgroundProps = {};
     testState.reactFlowProps = {};
     testState.reactFlowRenderCount = 0;
+    testState.snapRenderHistory = [];
     window.localStorage.clear();
   });
 
@@ -553,6 +577,35 @@ describe('Canvas drag state ownership', () => {
       x: 444,
       y: 555,
     });
+  });
+
+  it('never renders enabled snapping with off-grid controlled nodes', () => {
+    window.localStorage.setItem('theia.canvas.snapToGrid', 'false');
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    expect(testState.displayedNodes[0]?.position).toEqual({ x: 100, y: 100 });
+    testState.snapRenderHistory = [];
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Snap to grid: Off' }));
+    });
+
+    const enabledRenders = testState.snapRenderHistory.filter((render) => render.snapToGrid);
+    expect(enabledRenders.length).toBeGreaterThan(0);
+    expect(
+      enabledRenders.every((render) =>
+        render.positions.every((position) => position.x % 30 === 0 && position.y % 30 === 0),
+      ),
+    ).toBe(true);
   });
 
   it('filters ghost measurements while applying real node changes through graph state', () => {

@@ -124,6 +124,7 @@ interface UseCanvasDataReturn {
   dismissTopologyRecoveryNotice: () => void;
   retryTopologyRefresh: () => void;
   updateNodePosition: (deviceId: string, position: { x: number; y: number }) => void;
+  snapCurrentNodePositions: (grid: SnapGrid) => void;
 }
 
 interface RuntimeSummary {
@@ -190,7 +191,6 @@ export function useCanvasData({
   const topologyLinksRef = useRef<Link[]>([]);
   const nodesRef = useRef<DeviceNode[]>(nodes);
   const snapGridRef = useRef<SnapGrid | null>(snapGrid);
-  const previousSnapGridRef = useRef<SnapGrid | null>(snapGrid);
   const activeMapKeyRef = useRef<string>(mapKey);
   const mountedMapKeyRef = useRef<string | null>(null);
   const topologyLoadSequenceRef = useRef(0);
@@ -267,45 +267,41 @@ export function useCanvasData({
     onTopologyAreasChange?.(topologyAreas);
   }, [topologyAreas, onTopologyAreasChange]);
 
-  useEffect(() => {
-    const wasEnabled = previousSnapGridRef.current !== null;
-    previousSnapGridRef.current = snapGrid;
-    if (snapGrid === null || wasEnabled) {
-      return;
-    }
+  const snapCurrentNodePositions = useCallback(
+    (grid: SnapGrid) => {
+      const currentNodes = nodesRef.current;
+      const normalizedNodes = snapNodesToGrid(currentNodes, grid);
+      if (normalizedNodes === currentNodes) {
+        return;
+      }
 
-    const ownerMapKey = nodesOwnerMapKeyRef.current;
-    if (ownerMapKey !== activeMapKeyRef.current) {
-      return;
-    }
-
-    const currentNodes = nodesRef.current;
-    const normalizedNodes = snapNodesToGrid(currentNodes, snapGrid);
-    if (normalizedNodes === currentNodes) {
-      return;
-    }
-
-    const devicesById = new Map(devicesRef.current.map((device) => [device.id, device]));
-    setNodes(normalizedNodes);
-    currentNodePositionsByMapRef.current.set(
-      ownerMapKey,
-      nodePositionsToPositionMap(normalizedNodes),
-    );
-    setEdges((currentEdges) => {
-      const existingEdgeData = new Map<string, LinkEdgeData>(
-        currentEdges.map((edge) => [edge.id, edge.data ?? {}]),
+      const ownerMapKey = nodesOwnerMapKeyRef.current;
+      nodesRef.current = normalizedNodes;
+      setNodes(normalizedNodes);
+      currentNodePositionsByMapRef.current.set(
+        ownerMapKey,
+        nodePositionsToPositionMap(normalizedNodes),
       );
-      return buildTopologyEdges(
-        topologyLinksRef.current,
-        devicesById,
-        normalizedNodes,
-        existingEdgeData,
-        openEdgeMenu,
-        alertsRef.current,
-      );
-    });
-    void savePositions(buildPositionPayload(normalizedNodes));
-  }, [openEdgeMenu, savePositions, setEdges, setNodes, snapGrid]);
+      const devicesById = new Map(devicesRef.current.map((device) => [device.id, device]));
+      setEdges((currentEdges) => {
+        const existingEdgeData = new Map<string, LinkEdgeData>(
+          currentEdges.map((edge) => [edge.id, edge.data ?? {}]),
+        );
+        return buildTopologyEdges(
+          topologyLinksRef.current,
+          devicesById,
+          normalizedNodes,
+          existingEdgeData,
+          openEdgeMenu,
+          alertsRef.current,
+        );
+      });
+      if (ownerMapKey === activeMapKeyRef.current) {
+        void savePositions(buildPositionPayload(normalizedNodes));
+      }
+    },
+    [openEdgeMenu, savePositions, setEdges, setNodes],
+  );
 
   const loadTopology = useCallback(
     async (
@@ -999,5 +995,6 @@ export function useCanvasData({
     dismissTopologyRecoveryNotice,
     retryTopologyRefresh,
     updateNodePosition,
+    snapCurrentNodePositions,
   };
 }

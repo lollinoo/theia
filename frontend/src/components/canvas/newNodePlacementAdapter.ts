@@ -1,4 +1,4 @@
-import type { ReactFlowInstance, SnapGrid } from '@xyflow/react';
+import type { ReactFlowInstance, SnapGrid, XYPosition } from '@xyflow/react';
 
 import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
@@ -7,6 +7,9 @@ import type { LinkEdgeType } from '../LinkEdge';
 import {
   findNewNodePlacement,
   NEW_NODE_PREFERRED_GAP_PX,
+  NEW_NODE_VIEWPORT_MARGIN_PX,
+  type PlacementMode,
+  type ScreenPoint,
   type ScreenRect,
   type ScreenSize,
 } from './newNodePlacement';
@@ -86,6 +89,158 @@ function rectanglesIntersect(left: ScreenRect, right: ScreenRect): boolean {
     left.y < right.y + right.height &&
     left.y + left.height > right.y
   );
+}
+
+function intersectionArea(left: ScreenRect, right: ScreenRect): number {
+  const overlapWidth = Math.max(
+    0,
+    Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x),
+  );
+  const overlapHeight = Math.max(
+    0,
+    Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y),
+  );
+  return overlapWidth * overlapHeight;
+}
+
+function expandScreenRect(rect: ScreenRect, gap: number): ScreenRect {
+  return {
+    x: rect.x - gap,
+    y: rect.y - gap,
+    width: rect.width + gap * 2,
+    height: rect.height + gap * 2,
+  };
+}
+
+function isContainedInViewport(rect: ScreenRect, viewport: ScreenRect): boolean {
+  const tolerance = 1e-7;
+  return (
+    rect.x + tolerance >= viewport.x &&
+    rect.y + tolerance >= viewport.y &&
+    rect.x + rect.width <= viewport.x + viewport.width + tolerance &&
+    rect.y + rect.height <= viewport.y + viewport.height + tolerance
+  );
+}
+
+function squaredDistance(left: ScreenPoint, right: ScreenPoint): number {
+  const deltaX = left.x - right.x;
+  const deltaY = left.y - right.y;
+  return deltaX * deltaX + deltaY * deltaY;
+}
+
+function compareRank(left: number[], right: number[]): number {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] < right[index]) return -1;
+    if (left[index] > right[index]) return 1;
+  }
+  return 0;
+}
+
+interface ProjectedGridCandidate {
+  flowPosition: XYPosition;
+  screenRect: ScreenRect;
+}
+
+const snappedPlacementSearchRadius = 2;
+
+function nearbyGridPositions(base: XYPosition, grid: SnapGrid): XYPosition[] {
+  if (!Number.isFinite(grid[0]) || grid[0] <= 0 || !Number.isFinite(grid[1]) || grid[1] <= 0) {
+    return [base];
+  }
+
+  const positions: XYPosition[] = [];
+  for (let ring = 0; ring <= snappedPlacementSearchRadius; ring += 1) {
+    for (let yOffset = -ring; yOffset <= ring; yOffset += 1) {
+      for (let xOffset = -ring; xOffset <= ring; xOffset += 1) {
+        if (Math.max(Math.abs(xOffset), Math.abs(yOffset)) !== ring) continue;
+        positions.push({
+          x: base.x + xOffset * grid[0],
+          y: base.y + yOffset * grid[1],
+        });
+      }
+    }
+  }
+  return positions;
+}
+
+function collisionRank(
+  candidate: ProjectedGridCandidate,
+  obstacles: ScreenRect[],
+  gap: number,
+): { overlapArea: number; overlapCount: number } {
+  let overlapArea = 0;
+  let overlapCount = 0;
+  for (const obstacle of obstacles) {
+    const area = intersectionArea(
+      candidate.screenRect,
+      gap === 0 ? obstacle : expandScreenRect(obstacle, gap),
+    );
+    if (area <= 0) continue;
+    overlapArea += area;
+    overlapCount += 1;
+  }
+  return { overlapArea, overlapCount };
+}
+
+function selectProjectedGridCandidate({
+  reactFlow,
+  baseFlowPosition,
+  desiredScreenTopLeft,
+  targetSize,
+  canvasRect,
+  obstacles,
+  mode,
+  snapGrid,
+}: {
+  reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
+  baseFlowPosition: XYPosition;
+  desiredScreenTopLeft: ScreenPoint;
+  targetSize: ScreenSize;
+  canvasRect: ScreenRect;
+  obstacles: ScreenRect[];
+  mode: PlacementMode;
+  snapGrid: SnapGrid | null;
+}): ProjectedGridCandidate | null {
+  const usableViewport = {
+    x: canvasRect.x + NEW_NODE_VIEWPORT_MARGIN_PX,
+    y: canvasRect.y + NEW_NODE_VIEWPORT_MARGIN_PX,
+    width: canvasRect.width - NEW_NODE_VIEWPORT_MARGIN_PX * 2,
+    height: canvasRect.height - NEW_NODE_VIEWPORT_MARGIN_PX * 2,
+  };
+  const flowPositions = snapGrid
+    ? nearbyGridPositions(baseFlowPosition, snapGrid)
+    : [baseFlowPosition];
+  let best: { candidate: ProjectedGridCandidate; rank: number[] } | null = null;
+
+  for (const [candidateIndex, flowPosition] of flowPositions.entries()) {
+    if (!Number.isFinite(flowPosition.x) || !Number.isFinite(flowPosition.y)) continue;
+    const screenTopLeft = reactFlow.flowToScreenPosition(flowPosition);
+    const screenRect = { ...screenTopLeft, ...targetSize };
+    if (!isValidScreenRect(screenRect)) continue;
+
+    const candidate = { flowPosition, screenRect };
+    const distance = squaredDistance(screenTopLeft, desiredScreenTopLeft);
+    let rank: number[];
+    if (mode === 'oversized') {
+      if (!rectanglesIntersect(screenRect, canvasRect)) continue;
+      rank = [distance, candidateIndex];
+    } else {
+      if (!isContainedInViewport(screenRect, usableViewport)) continue;
+      const gap = mode === 'preferred-gap' ? NEW_NODE_PREFERRED_GAP_PX : 0;
+      const collision = collisionRank(candidate, obstacles, gap);
+      if (mode !== 'least-overlap' && collision.overlapCount > 0) continue;
+      rank =
+        mode === 'least-overlap'
+          ? [collision.overlapArea, collision.overlapCount, distance, candidateIndex]
+          : [distance, candidateIndex];
+    }
+
+    if (!best || compareRank(rank, best.rank) < 0) {
+      best = { candidate, rank };
+    }
+  }
+
+  return best?.candidate ?? null;
 }
 
 function expandedObstacleFilter(canvasRect: ScreenRect, largestTargetSize: ScreenSize): ScreenRect {
@@ -208,21 +363,28 @@ export function buildExplicitNodePlacements({
     });
     if (!placement) continue;
 
-    const flowPosition = reactFlow.screenToFlowPosition(
+    const baseFlowPosition = reactFlow.screenToFlowPosition(
       placement.topLeft,
       snapGrid ? { snapToGrid: true, snapGrid } : { snapToGrid: false },
     );
-    if (!Number.isFinite(flowPosition.x) || !Number.isFinite(flowPosition.y)) continue;
+    if (!Number.isFinite(baseFlowPosition.x) || !Number.isFinite(baseFlowPosition.y)) continue;
 
-    positions.set(target.id, flowPosition);
+    const selectedCandidate = selectProjectedGridCandidate({
+      reactFlow,
+      baseFlowPosition,
+      desiredScreenTopLeft: placement.topLeft,
+      targetSize: target.screenSize,
+      canvasRect,
+      obstacles,
+      mode: placement.mode,
+      snapGrid,
+    });
+    if (!selectedCandidate) continue;
+
+    positions.set(target.id, selectedCandidate.flowPosition);
     placedDeviceIds.add(target.id);
-    const selectedScreenTopLeft = reactFlow.flowToScreenPosition(flowPosition);
-    const selectedScreenRect = {
-      ...selectedScreenTopLeft,
-      ...target.screenSize,
-    };
-    obstacles.push(selectedScreenRect);
-    obstacleRectsById.set(target.id, selectedScreenRect);
+    obstacles.push(selectedCandidate.screenRect);
+    obstacleRectsById.set(target.id, selectedCandidate.screenRect);
   }
 
   return { positions, placedDeviceIds };
