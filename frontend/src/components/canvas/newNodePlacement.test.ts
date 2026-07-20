@@ -7,6 +7,7 @@ import {
   NEW_NODE_VIEWPORT_MARGIN_PX,
   type NewNodePlacementInput,
   type NewNodePlacementResult,
+  type ScreenPoint,
   type ScreenRect,
   type ScreenSize,
 } from './newNodePlacement';
@@ -66,6 +67,77 @@ function expectContained(
     usableViewport.y + usableViewport.height,
   );
 }
+
+function findExhaustiveZeroOverlapPoint(input: NewNodePlacementInput): ScreenPoint | null {
+  const usableViewport = insetScreenRect(
+    input.viewport,
+    input.marginPx ?? NEW_NODE_VIEWPORT_MARGIN_PX,
+  );
+  if (
+    !usableViewport ||
+    input.nodeSize.width > usableViewport.width ||
+    input.nodeSize.height > usableViewport.height
+  ) {
+    return null;
+  }
+
+  const minimumX = Math.ceil(usableViewport.x);
+  const maximumX = Math.floor(usableViewport.x + usableViewport.width - input.nodeSize.width);
+  const minimumY = Math.ceil(usableViewport.y);
+  const maximumY = Math.floor(usableViewport.y + usableViewport.height - input.nodeSize.height);
+
+  for (let y = minimumY; y <= maximumY; y += 1) {
+    for (let x = minimumX; x <= maximumX; x += 1) {
+      const candidate = { x, y, ...input.nodeSize };
+      if (input.obstacles.every((obstacle) => intersectionArea(candidate, obstacle) === 0)) {
+        return { x, y };
+      }
+    }
+  }
+  return null;
+}
+
+const COMPLETE_SEARCH_REGRESSION_INPUT = {
+  viewport: { x: 37, y: 29, width: 224, height: 176 },
+  nodeSize: { width: 56, height: 42 },
+  obstacles: [
+    { x: 81, y: 25, width: 56, height: 13 },
+    { x: 144, y: 33, width: 63, height: 54 },
+    { x: 45, y: 163, width: 50, height: 15 },
+    { x: 191, y: 162, width: 30, height: 22 },
+    { x: 140, y: 93, width: 25, height: 48 },
+    { x: 92, y: 22, width: 51, height: 38 },
+    { x: 142, y: 172, width: 23, height: 22 },
+    { x: 112, y: 186, width: 52, height: 35 },
+    { x: 151, y: 131, width: 57, height: 38 },
+    { x: 157, y: 168, width: 47, height: 50 },
+    { x: 105, y: 82, width: 17, height: 43 },
+    { x: 67, y: 12, width: 67, height: 54 },
+  ],
+} satisfies NewNodePlacementInput;
+
+const COMPLETENESS_FIXTURES: { name: string; input: NewNodePlacementInput }[] = [
+  {
+    name: 'a gap using critical axes from different obstacles',
+    input: COMPLETE_SEARCH_REGRESSION_INPUT,
+  },
+  {
+    name: 'a gap along the bottom viewport edge',
+    input: {
+      viewport: { x: 0, y: 0, width: 96, height: 96 },
+      nodeSize: { width: 24, height: 24 },
+      obstacles: [{ x: 36, y: 36, width: 24, height: 20 }],
+    },
+  },
+  {
+    name: 'a gap along the left viewport edge',
+    input: {
+      viewport: { x: 10, y: 20, width: 112, height: 96 },
+      nodeSize: { width: 24, height: 20 },
+      obstacles: [{ x: 50, y: 30, width: 18, height: 70 }],
+    },
+  },
+];
 
 describe('findNewNodePlacement', () => {
   it('centers a fitting node inside the inset client-space viewport', () => {
@@ -281,6 +353,47 @@ describe('findNewNodePlacement', () => {
     ).toBeGreaterThan(0);
     expect(result.mode).toBe('no-gap');
     expectContained(result, viewport, nodeSize);
+  });
+
+  it('finds a no-gap placement when free critical axes come from different obstacles', () => {
+    const { viewport, nodeSize, obstacles } = COMPLETE_SEARCH_REGRESSION_INPUT;
+    const result = findNewNodePlacement(COMPLETE_SEARCH_REGRESSION_INPUT);
+
+    expect(result).toMatchObject({
+      overlapArea: 0,
+      overlapCount: 0,
+      mode: 'no-gap',
+    });
+    expectContained(result, viewport, nodeSize);
+    if (!result) return;
+
+    const placementRect = resultRect(result, nodeSize);
+    expect(obstacles.every((obstacle) => intersectionArea(placementRect, obstacle) === 0)).toBe(
+      true,
+    );
+  });
+
+  it.each(
+    COMPLETENESS_FIXTURES,
+  )('returns a contained zero-overlap result for $name when an exhaustive pixel scan finds one', ({
+    input,
+  }) => {
+    const exhaustivePoint = findExhaustiveZeroOverlapPoint(input);
+    expect(exhaustivePoint).not.toBeNull();
+    if (!exhaustivePoint) return;
+
+    const result = findNewNodePlacement(input);
+    expect(result).not.toBeNull();
+    if (!result) return;
+
+    const placementRect = resultRect(result, input.nodeSize);
+    expect(result.overlapArea).toBe(0);
+    expect(result.overlapCount).toBe(0);
+    expect(['preferred-gap', 'no-gap']).toContain(result.mode);
+    expect(
+      input.obstacles.every((obstacle) => intersectionArea(placementRect, obstacle) === 0),
+    ).toBe(true);
+    expectContained(result, input.viewport, input.nodeSize);
   });
 
   it('uses least-overlap placement and reports exact collision statistics on a dense map', () => {

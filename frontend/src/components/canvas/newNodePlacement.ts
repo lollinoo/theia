@@ -227,6 +227,62 @@ function axisCandidates(minimum: number, maximum: number, step: number): number[
   return values;
 }
 
+function criticalAxisCandidates(
+  minimum: number,
+  maximum: number,
+  nodeExtent: number,
+  obstacles: ScreenRect[],
+  obstacleStart: (obstacle: ScreenRect) => number,
+  obstacleExtent: (obstacle: ScreenRect) => number,
+): number[] {
+  // Every free arrangement cell has a corner on a viewport or obstacle-separation axis.
+  const values = new Set<number>([minimum, maximum]);
+  const addClamped = (value: number): void => {
+    values.add(Math.min(maximum, Math.max(minimum, value)));
+  };
+
+  for (const obstacle of obstacles) {
+    const start = obstacleStart(obstacle);
+    addClamped(start - nodeExtent);
+    addClamped(start + obstacleExtent(obstacle));
+  }
+  return [...values].sort((left, right) => left - right);
+}
+
+function* generateCriticalAxisCandidates(
+  usableViewport: ScreenRect,
+  nodeSize: ScreenSize,
+  obstacles: ScreenRect[],
+): Generator<ScreenPoint> {
+  const maximumX = usableViewport.x + usableViewport.width - nodeSize.width;
+  const maximumY = usableViewport.y + usableViewport.height - nodeSize.height;
+  const relevantObstacles = obstacles.filter(
+    (obstacle) => intersectionArea(obstacle, usableViewport) > 0,
+  );
+  const xCandidates = criticalAxisCandidates(
+    usableViewport.x,
+    maximumX,
+    nodeSize.width,
+    relevantObstacles,
+    (obstacle) => obstacle.x,
+    (obstacle) => obstacle.width,
+  );
+  const yCandidates = criticalAxisCandidates(
+    usableViewport.y,
+    maximumY,
+    nodeSize.height,
+    relevantObstacles,
+    (obstacle) => obstacle.y,
+    (obstacle) => obstacle.height,
+  );
+
+  for (const y of yCandidates) {
+    for (const x of xCandidates) {
+      yield { x, y };
+    }
+  }
+}
+
 function generateCandidates(
   usableViewport: ScreenRect,
   nodeSize: ScreenSize,
@@ -294,7 +350,7 @@ function generateCandidates(
 }
 
 function findBestCollisionFreeCandidate(
-  candidates: ScreenPoint[],
+  candidates: Iterable<ScreenPoint>,
   nodeSize: ScreenSize,
   spatialHash: SpatialHash,
   gap: number,
@@ -441,6 +497,23 @@ export function findNewNodePlacement(input: NewNodePlacementInput): NewNodePlace
   if (noGapCandidate) {
     return {
       topLeft: noGapCandidate,
+      overlapArea: 0,
+      overlapCount: 0,
+      mode: 'no-gap',
+    };
+  }
+
+  const criticalAxisCandidate = findBestCollisionFreeCandidate(
+    generateCriticalAxisCandidates(usableViewport, input.nodeSize, input.obstacles),
+    input.nodeSize,
+    spatialHash,
+    0,
+    viewportCenter,
+    visibleNeighborCenters,
+  );
+  if (criticalAxisCandidate) {
+    return {
+      topLeft: criticalAxisCandidate,
       overlapArea: 0,
       overlapCount: 0,
       mode: 'no-gap',
