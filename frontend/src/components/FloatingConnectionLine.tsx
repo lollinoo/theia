@@ -16,12 +16,14 @@ export function FloatingConnectionLine({
   toX,
   toY,
 }: ConnectionLineComponentProps<DeviceNode>): JSX.Element {
+  const laneOrientation = toNode === null || fromNode.id <= toNode.id ? 1 : -1;
   const { edgePath } = buildFloatingEdgePath({
     sourceRect: nodeRect(fromNode),
     targetRect: nodeRect(toNode),
     fallbackSource: { x: fromX, y: fromY },
     fallbackTarget: { x: toX, y: toY },
     parallelIndex: 0,
+    laneOrientation,
     sourceRadius: deviceNodeBorderRadius(fromNode),
     targetRadius: deviceNodeBorderRadius(toNode),
   });

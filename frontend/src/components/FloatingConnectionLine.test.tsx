@@ -36,6 +36,15 @@ function connectionProps(
   } as ConnectionLineComponentProps<DeviceNode>;
 }
 
+function normalizedCubicPath(path: string, reverse: boolean) {
+  const values = path.match(/-?\d+(?:\.\d+)?/g)?.map(Number);
+  if (values?.length !== 8) {
+    throw new Error(`Expected one cubic path, received: ${path}`);
+  }
+  const points = [values.slice(0, 2), values.slice(2, 4), values.slice(4, 6), values.slice(6, 8)];
+  return reverse ? points.reverse() : points;
+}
+
 describe('FloatingConnectionLine', () => {
   it('floats from the source border to a pointer-only target with default styling', () => {
     const { container } = render(
@@ -76,5 +85,42 @@ describe('FloatingConnectionLine', () => {
       strokeDasharray: '6 4',
       strokeWidth: '10',
     });
+  });
+
+  it('uses hovered endpoint ids to keep preview orientation stable in either direction', () => {
+    const forward = render(
+      <svg>
+        <FloatingConnectionLine
+          {...connectionProps({
+            fromNode: mockInternalNode('device-a', 0, 0),
+            toNode: mockInternalNode('device-b', 300, 0),
+          })}
+        />
+      </svg>,
+    );
+    const forwardPath = forward.container.querySelector('path')?.getAttribute('d');
+    forward.unmount();
+
+    const reverse = render(
+      <svg>
+        <FloatingConnectionLine
+          {...connectionProps({
+            fromNode: mockInternalNode('device-b', 300, 0),
+            fromX: 300,
+            fromY: 30,
+            toNode: mockInternalNode('device-a', 0, 0),
+            toX: 100,
+            toY: 30,
+          })}
+        />
+      </svg>,
+    );
+    const reversePath = reverse.container.querySelector('path')?.getAttribute('d');
+
+    expect(forwardPath).toBeDefined();
+    expect(reversePath).toBeDefined();
+    expect(normalizedCubicPath(reversePath as string, true)).toEqual(
+      normalizedCubicPath(forwardPath as string, false),
+    );
   });
 });

@@ -199,6 +199,16 @@ describe('LinkEdge', () => {
     expect(content).toContain('prev.data?.parallelIndex === next.data?.parallelIndex');
   });
 
+  it('memoizes lane orientation from stable endpoint ids', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+
+    expect(content).toContain('const laneOrientation = source <= target ? 1 : -1;');
+    expect(content).toMatch(/parallelIndex: index,\s+laneOrientation,/);
+    expect(content).toMatch(/\[\s+index,\s+laneOrientation,/);
+    expect(content).toContain('prev.source === next.source');
+    expect(content).toContain('prev.target === next.target');
+  });
+
   it('renders a stacked negotiated-rate and throughput group without a standalone AUTO pill', () => {
     const edgeContent = readFileSync(LINK_EDGE_PATH, 'utf-8');
     const labelLayerContent = readFileSync(LINK_LABEL_LAYER_PATH, 'utf-8');

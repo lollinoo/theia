@@ -24,6 +24,7 @@ interface FloatingEdgePathOptions {
   fallbackSource: XYPosition;
   fallbackTarget: XYPosition;
   parallelIndex: number;
+  laneOrientation?: 1 | -1;
   sourceRadius?: number;
   targetRadius?: number;
 }
@@ -207,6 +208,7 @@ export function buildFloatingEdgePath({
   fallbackSource,
   fallbackTarget,
   parallelIndex,
+  laneOrientation = 1,
   sourceRadius = DEFAULT_NODE_RADIUS,
   targetRadius = DEFAULT_NODE_RADIUS,
 }: FloatingEdgePathOptions): EdgePathModel {
@@ -235,9 +237,12 @@ export function buildFloatingEdgePath({
     { x: target.x - source.x, y: target.y - source.y },
     centerDirection,
   );
-  const perpendicular = { x: -edgeDirection.y, y: edgeDirection.x };
+  const perpendicular = {
+    x: -edgeDirection.y * laneOrientation,
+    y: edgeDirection.x * laneOrientation,
+  };
   const distance = Math.hypot(target.x - source.x, target.y - source.y);
-  const controlLength = clamp(distance * 0.42, 48, 180);
+  const controlLength = Math.min(clamp(distance * 0.42, 48, 180), distance * 0.45);
   const lane =
     parallelIndex === 0
       ? 1

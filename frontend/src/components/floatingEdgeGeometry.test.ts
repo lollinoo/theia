@@ -44,8 +44,7 @@ function expectOnRoundedBorder(
   ).toBe(true);
 }
 
-function cubicMidpoint(model: EdgePathModel) {
-  const t = 0.5;
+function cubicPoint(model: EdgePathModel, t: number) {
   const inverse = 1 - t;
   return {
     x:
@@ -59,6 +58,20 @@ function cubicMidpoint(model: EdgePathModel) {
       3 * inverse * t ** 2 * model.targetControl.y +
       t ** 3 * model.target.y,
   };
+}
+
+function normalizedCubicCoordinates(model: EdgePathModel, reverse: boolean) {
+  const points = reverse
+    ? [model.target, model.targetControl, model.sourceControl, model.source]
+    : [model.source, model.sourceControl, model.targetControl, model.target];
+  return points.map((point) => [
+    Math.round(point.x * 1_000_000) / 1_000_000,
+    Math.round(point.y * 1_000_000) / 1_000_000,
+  ]);
+}
+
+function stableLaneOrientation(sourceKey: string, targetKey: string): 1 | -1 {
+  return sourceKey.localeCompare(targetKey) <= 0 ? 1 : -1;
 }
 
 describe('nodeRect', () => {
@@ -203,6 +216,44 @@ describe('buildFloatingEdgePath', () => {
     expectOnRoundedBorder(model.target, targetRect, 20);
   });
 
+  it('does not overshoot back into nearby aligned node interiors', () => {
+    const sourceRect = { x: 0, y: 0, width: 100, height: 60 };
+    const targetRect = { x: 108, y: 0, width: 100, height: 60 };
+    const model = buildFloatingEdgePath({
+      sourceRect,
+      targetRect,
+      fallbackSource: { x: 100, y: 30 },
+      fallbackTarget: { x: 108, y: 30 },
+      parallelIndex: 0,
+      sourceRadius: 20,
+      targetRadius: 20,
+    });
+
+    for (const t of [0.1, 0.25, 0.5, 0.75, 0.9]) {
+      const point = cubicPoint(model, t);
+      expect(point.x).toBeGreaterThanOrEqual(model.source.x);
+      expect(point.x).toBeLessThanOrEqual(model.target.x);
+    }
+    expect(cubicPoint(model, 0.5).y - model.source.y).toBeGreaterThanOrEqual(20);
+    expectFiniteModel(model);
+  });
+
+  it('keeps the clean 180px longitudinal cap for distant nodes', () => {
+    const model = buildFloatingEdgePath({
+      sourceRect: { x: 0, y: 0, width: 100, height: 60 },
+      targetRect: { x: 600, y: 0, width: 100, height: 60 },
+      fallbackSource: { x: 100, y: 30 },
+      fallbackTarget: { x: 600, y: 30 },
+      parallelIndex: 0,
+      sourceRadius: 20,
+      targetRadius: 20,
+    });
+
+    expect(model.sourceControl.x - model.source.x).toBe(180);
+    expect(model.target.x - model.targetControl.x).toBe(180);
+    expectFiniteModel(model);
+  });
+
   it('alternates and separates parallel cubic lanes', () => {
     const options = {
       sourceRect: { x: 0, y: 0, width: 100, height: 60 },
@@ -231,6 +282,37 @@ describe('buildFloatingEdgePath', () => {
     );
   });
 
+  it('keeps reversed nonzero lanes distinct using stable endpoint ordering', () => {
+    const leftRect = { x: 0, y: 0, width: 100, height: 60 };
+    const rightRect = { x: 300, y: 0, width: 100, height: 60 };
+    const forwardOptions = {
+      sourceRect: leftRect,
+      targetRect: rightRect,
+      fallbackSource: { x: 100, y: 30 },
+      fallbackTarget: { x: 300, y: 30 },
+      parallelIndex: 2,
+      sourceRadius: 20,
+      targetRadius: 20,
+      laneOrientation: stableLaneOrientation('device-a', 'device-b'),
+    };
+    const reverseOptions = {
+      sourceRect: rightRect,
+      targetRect: leftRect,
+      fallbackSource: { x: 300, y: 30 },
+      fallbackTarget: { x: 100, y: 30 },
+      parallelIndex: 1,
+      sourceRadius: 20,
+      targetRadius: 20,
+      laneOrientation: stableLaneOrientation('device-b', 'device-a'),
+    };
+    const forward = buildFloatingEdgePath(forwardOptions);
+    const reverse = buildFloatingEdgePath(reverseOptions);
+
+    expect(normalizedCubicCoordinates(reverse, true)).not.toEqual(
+      normalizedCubicCoordinates(forward, false),
+    );
+  });
+
   it('evaluates the cubic midpoint for its label anchor', () => {
     const model = buildFloatingEdgePath({
       sourceRect: { x: 0, y: 0, width: 100, height: 60 },
@@ -241,7 +323,7 @@ describe('buildFloatingEdgePath', () => {
       sourceRadius: 20,
       targetRadius: 24,
     });
-    const midpoint = cubicMidpoint(model);
+    const midpoint = cubicPoint(model, 0.5);
 
     expect(model.labelX).toBeCloseTo(midpoint.x, 8);
     expect(model.labelY).toBeCloseTo(midpoint.y, 8);

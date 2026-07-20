@@ -33,6 +33,7 @@ function LinkEdgeInner({
   const isConnected = data?.emphasis === 'connected';
   const isMuted = data?.emphasis === 'muted';
   const index = data?.parallelIndex || 0;
+  const laneOrientation = source <= target ? 1 : -1;
   const isSelfLoop =
     source === target || data?.link?.source_device_id === data?.link?.target_device_id;
   const sourceBounds = nodeRect(sourceNode);
@@ -77,11 +78,13 @@ function LinkEdgeInner({
         fallbackSource: { x: sourceX, y: sourceY },
         fallbackTarget: { x: targetX, y: targetY },
         parallelIndex: index,
+        laneOrientation,
         sourceRadius,
         targetRadius,
       }),
     [
       index,
+      laneOrientation,
       sourceBoundsHeight,
       sourceBoundsWidth,
       sourceBoundsX,

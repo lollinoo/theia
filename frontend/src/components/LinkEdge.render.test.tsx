@@ -10,16 +10,29 @@ import { clearLinkLabelRegistry } from './linkLabelRegistry';
 
 const flowState = vi.hoisted(() => ({
   internalNodes: {} as Record<string, unknown>,
+  listeners: new Set<() => void>(),
 }));
 
-vi.mock('@xyflow/react', () => ({
-  BaseEdge: ({ id, path, style }: { id: string; path: string; style?: CSSProperties }) => (
-    <path data-testid={id} d={path} style={style} />
-  ),
-  EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
-  getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
-  useInternalNode: (id: string) => flowState.internalNodes[id],
-}));
+vi.mock('@xyflow/react', async () => {
+  const { useSyncExternalStore } = await import('react');
+
+  return {
+    BaseEdge: ({ id, path, style }: { id: string; path: string; style?: CSSProperties }) => (
+      <path data-testid={id} d={path} style={style} />
+    ),
+    EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
+    getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
+    useInternalNode: (id: string) =>
+      useSyncExternalStore(
+        (listener) => {
+          flowState.listeners.add(listener);
+          return () => flowState.listeners.delete(listener);
+        },
+        () => flowState.internalNodes[id],
+        () => flowState.internalNodes[id],
+      ),
+  };
+});
 
 function mockInternalNode(
   id: string,
@@ -90,8 +103,25 @@ function renderEdge(
   return render(<EdgeFixture overrides={overrides} dataOverrides={dataOverrides} />);
 }
 
+function updateInternalNode(id: string, node: unknown) {
+  act(() => {
+    flowState.internalNodes = { ...flowState.internalNodes, [id]: node };
+    for (const listener of flowState.listeners) listener();
+  });
+}
+
+function normalizedCubicPath(path: string, reverse: boolean) {
+  const values = path.match(/-?\d+(?:\.\d+)?/g)?.map(Number);
+  if (values?.length !== 8) {
+    throw new Error(`Expected one cubic path, received: ${path}`);
+  }
+  const points = [values.slice(0, 2), values.slice(2, 4), values.slice(4, 6), values.slice(6, 8)];
+  return reverse ? points.reverse() : points;
+}
+
 describe('LinkEdge render', () => {
   beforeEach(() => {
+    flowState.listeners.clear();
     flowState.internalNodes = {
       'dev-1': mockInternalNode('dev-1', 0, 0),
       'dev-2': mockInternalNode('dev-2', 300, 0),
@@ -127,17 +157,40 @@ describe('LinkEdge render', () => {
   });
 
   it('renders from live rounded node borders and updates when an endpoint moves', () => {
-    const { rerender } = renderEdge();
+    renderEdge();
     const firstPath = screen.getByTestId('edge-1').getAttribute('d');
 
     expect(firstPath).toMatch(/^M 100,30 C /);
     expect(firstPath).toMatch(/ 300,30$/);
     expect(firstPath).not.toBe('M0 0 C0 0 10 10 10 10');
 
-    flowState.internalNodes['dev-2'] = mockInternalNode('dev-2', 420, 120);
-    rerender(<EdgeFixture overrides={{ selected: true }} />);
+    updateInternalNode('dev-2', mockInternalNode('dev-2', 420, 120));
 
     expect(screen.getByTestId('edge-1').getAttribute('d')).not.toBe(firstPath);
+  });
+
+  it('uses stable endpoint ids to keep reversed parallel lanes distinct', () => {
+    const forward = renderEdge({ id: 'edge-forward' }, { parallelIndex: 2 });
+    const forwardPath = forward.getByTestId('edge-forward').getAttribute('d');
+    forward.unmount();
+
+    const reverse = renderEdge(
+      { id: 'edge-reverse', source: 'dev-2', target: 'dev-1' },
+      {
+        link: {
+          source_device_id: 'dev-2',
+          target_device_id: 'dev-1',
+        },
+        parallelIndex: 1,
+      },
+    );
+    const reversePath = reverse.getByTestId('edge-reverse').getAttribute('d');
+
+    expect(forwardPath).not.toBeNull();
+    expect(reversePath).not.toBeNull();
+    expect(normalizedCubicPath(reversePath as string, true)).not.toEqual(
+      normalizedCubicPath(forwardPath as string, false),
+    );
   });
 
   it('keeps the existing self-loop geometry and context menu behavior', () => {
