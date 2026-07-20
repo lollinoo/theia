@@ -122,6 +122,10 @@ test('keeps a new virtual node inside the panned and zoomed viewport', async ({
     await waitForViewportTransformToSettle(viewport);
     await zoomIn.click();
     const zoomedTransform = await waitForViewportTransformToSettle(viewport);
+    const zoomScale = await viewport.evaluate(
+      (element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).a,
+    );
+    expect(zoomScale).toBeGreaterThan(1);
 
     const pane = page.locator('.react-flow__pane');
     await expect(pane).toBeVisible();
