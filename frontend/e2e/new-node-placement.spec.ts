@@ -2,7 +2,7 @@
  * Exercises viewport-aware new-node placement in the real topology canvas.
  * Keeps browser pan, zoom, creation, containment, and cleanup behavior covered together.
  */
-import { expect, type Locator, type Page, test } from '@playwright/test';
+import { expect, type Locator, type Page, type Response, test } from '@playwright/test';
 
 interface BoundingBox {
   x: number;
@@ -76,24 +76,96 @@ async function visiblePaneDragStart(
   return point;
 }
 
-async function cleanupCreatedDevice(page: Page, deviceId: string): Promise<Error | undefined> {
-  try {
-    const csrfCookie = (await page.context().cookies()).find(
-      (cookie) => cookie.name === 'theia_csrf',
-    );
-    if (!csrfCookie) {
-      return new Error('The authenticated browser context did not contain theia_csrf');
-    }
+async function csrfHeaders(page: Page): Promise<{ 'X-CSRF-Token': string }> {
+  const csrfCookie = (await page.context().cookies()).find(
+    (cookie) => cookie.name === 'theia_csrf',
+  );
+  if (!csrfCookie) {
+    throw new Error('The authenticated browser context did not contain theia_csrf');
+  }
+  return { 'X-CSRF-Token': csrfCookie.value };
+}
 
-    const deleteResponse = await page.request.delete(
-      `/api/v1/devices/${encodeURIComponent(deviceId)}`,
-      {
-        headers: { 'X-CSRF-Token': csrfCookie.value },
-      },
+async function findSeedDeviceId(page: Page): Promise<string> {
+  const response = await page.request.get('/api/v1/devices');
+  if (!response.ok()) {
+    throw new Error(`Device list returned ${response.status()}: ${await response.text()}`);
+  }
+
+  const payload = (await response.json()) as {
+    data?: Array<{ id?: unknown; attributes?: { hostname?: unknown } }>;
+  };
+  const seedDevice = payload.data?.find(
+    (device) => device.attributes?.hostname === 'router-a' && typeof device.id === 'string',
+  );
+  if (typeof seedDevice?.id !== 'string' || seedDevice.id === '') {
+    throw new Error('The seeded router-a device was not available');
+  }
+  return seedDevice.id;
+}
+
+async function createDedicatedMap(
+  page: Page,
+  mapName: string,
+  seedDeviceId: string,
+): Promise<string> {
+  const response = await page.request.post('/api/v1/canvas/maps', {
+    headers: await csrfHeaders(page),
+    data: {
+      name: mapName,
+      source_area_id: null,
+      filter: { device_ids: [seedDeviceId] },
+    },
+  });
+  if (!response.ok()) {
+    throw new Error(`Map creation returned ${response.status()}: ${await response.text()}`);
+  }
+
+  const payload = (await response.json()) as { data?: { id?: unknown } };
+  if (typeof payload.data?.id !== 'string' || payload.data.id === '') {
+    throw new Error('Map creation response did not include an id');
+  }
+  return payload.data.id;
+}
+
+function savesDevicePosition(response: Response, mapId: string, deviceId?: string): boolean {
+  if (!deviceId) {
+    return false;
+  }
+
+  const url = new URL(response.url());
+  if (
+    response.request().method() !== 'PUT' ||
+    url.pathname !== `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/positions`
+  ) {
+    return false;
+  }
+
+  try {
+    const payload = response.request().postDataJSON() as {
+      positions?: Array<{ device_id?: unknown }>;
+    };
+    return (
+      Array.isArray(payload.positions) &&
+      payload.positions.some((position) => position.device_id === deviceId)
     );
+  } catch {
+    return false;
+  }
+}
+
+async function cleanupResource(
+  page: Page,
+  path: string,
+  resourceName: string,
+): Promise<Error | undefined> {
+  try {
+    const deleteResponse = await page.request.delete(path, {
+      headers: await csrfHeaders(page),
+    });
     if (!deleteResponse.ok()) {
       return new Error(
-        `Device cleanup returned ${deleteResponse.status()}: ${await deleteResponse.text()}`,
+        `${resourceName} cleanup returned ${deleteResponse.status()}: ${await deleteResponse.text()}`,
       );
     }
   } catch (error) {
@@ -104,13 +176,27 @@ async function cleanupCreatedDevice(page: Page, deviceId: string): Promise<Error
 test('keeps a new virtual node inside the panned and zoomed viewport', async ({
   page,
 }, testInfo) => {
-  const deviceName = `Viewport placement ${Date.now()}-${testInfo.workerIndex}`;
+  const uniqueSuffix = `${Date.now()}-${testInfo.workerIndex}`;
+  const mapName = `Viewport placement map ${uniqueSuffix}`;
+  const deviceName = `Viewport placement ${uniqueSuffix}`;
+  let dedicatedMapId: string | undefined;
   let createdDeviceId: string | undefined;
+  let positionSavePromise: Promise<Response> | undefined;
+  let positionSaveConfirmed = false;
   let primaryFailure: unknown;
-  let cleanupFailure: Error | undefined;
+  const cleanupFailures: Error[] = [];
 
   try {
+    const seedDeviceId = await findSeedDeviceId(page);
+    const mapId = await createDedicatedMap(page, mapName, seedDeviceId);
+    dedicatedMapId = mapId;
     await page.goto('/');
+
+    const mapSelector = page.getByLabel(/Select topology map/);
+    await expect(mapSelector).toBeVisible();
+    await mapSelector.click();
+    await page.getByRole('option', { name: mapName, exact: true }).click();
+    await expect(mapSelector).toContainText(mapName);
 
     const canvasRoot = page.getByTestId('topology-canvas-root');
     const viewport = page.locator('.react-flow__viewport');
@@ -150,6 +236,12 @@ test('keeps a new virtual node inside the panned and zoomed viewport', async ({
     await page.getByRole('button', { name: 'Virtual Node', exact: true }).click();
     await page.getByPlaceholder('e.g. ISP Gateway').fill(deviceName);
 
+    positionSavePromise = page.waitForResponse(
+      (response) => savesDevicePosition(response, mapId, createdDeviceId),
+      { timeout: 10_000 },
+    );
+    // Keep creation failures from leaving the independently registered response waiter unhandled.
+    void positionSavePromise.catch(() => {});
     const [createResponse] = await Promise.all([
       page.waitForResponse((response) => {
         const url = new URL(response.url());
@@ -179,16 +271,52 @@ test('keeps a new virtual node inside the panned and zoomed viewport', async ({
 
     expectInsideViewport(nodeBox, canvasBox);
     expect(await waitForViewportTransformToSettle(viewport)).toBe(placementTransform);
+
+    const positionSaveResponse = await positionSavePromise;
+    expect(
+      positionSaveResponse.ok(),
+      `position save returned ${positionSaveResponse.status()}`,
+    ).toBe(true);
+    positionSaveConfirmed = true;
   } catch (error) {
     primaryFailure = error;
   } finally {
+    if (createdDeviceId && positionSavePromise && !positionSaveConfirmed) {
+      try {
+        const positionSaveResponse = await positionSavePromise;
+        if (!positionSaveResponse.ok()) {
+          cleanupFailures.push(
+            new Error(`Position save returned ${positionSaveResponse.status()} before cleanup`),
+          );
+        }
+      } catch (error) {
+        cleanupFailures.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
     if (createdDeviceId) {
-      cleanupFailure = await cleanupCreatedDevice(page, createdDeviceId);
+      const cleanupFailure = await cleanupResource(
+        page,
+        `/api/v1/devices/${encodeURIComponent(createdDeviceId)}`,
+        'Device',
+      );
+      if (cleanupFailure) {
+        cleanupFailures.push(cleanupFailure);
+      }
+    }
+    if (dedicatedMapId) {
+      const cleanupFailure = await cleanupResource(
+        page,
+        `/api/v1/canvas/maps/${encodeURIComponent(dedicatedMapId)}`,
+        'Map',
+      );
+      if (cleanupFailure) {
+        cleanupFailures.push(cleanupFailure);
+      }
     }
   }
 
   if (primaryFailure !== undefined) {
-    if (cleanupFailure) {
+    for (const cleanupFailure of cleanupFailures) {
       testInfo.annotations.push({
         type: 'cleanup-error',
         description: cleanupFailure.message,
@@ -196,7 +324,7 @@ test('keeps a new virtual node inside the panned and zoomed viewport', async ({
     }
     throw primaryFailure;
   }
-  if (cleanupFailure) {
-    throw cleanupFailure;
+  if (cleanupFailures.length > 0) {
+    throw new Error(cleanupFailures.map((failure) => failure.message).join('; '));
   }
 });
