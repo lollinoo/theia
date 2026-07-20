@@ -26,6 +26,7 @@ import {
   buildIncrementalLayoutInputs,
   computeIncrementalLayoutPositions,
 } from './incrementalLayout';
+import { findNewNodePlacement } from './newNodePlacement';
 import { buildTopologyNodes } from './nodeBuilder';
 import { buildRuntimeState } from './runtimeAdapters';
 import {
@@ -54,6 +55,7 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'renderProjection',
   'runtimePatch',
   'incrementalLayout',
+  'newNodePlacement',
   'computeForceLayout',
 ] as const satisfies CanvasMetricName[];
 
@@ -549,6 +551,18 @@ function benchmarkOperations(
       height: 1600,
     });
   });
+
+  const placementObstacles = scenario.devices.map((device) => {
+    const position = scenario.positions.get(device.id) ?? { x: 0, y: 0 };
+    return { x: position.x, y: position.y, width: 370, height: 140 };
+  });
+  measureLocalMetric(samples, scenarioName, 'newNodePlacement', () =>
+    findNewNodePlacement({
+      viewport: { x: 0, y: 0, width: 1440, height: 900 },
+      nodeSize: { width: 370, height: 140 },
+      obstacles: placementObstacles,
+    }),
+  );
 
   const { layoutNodes, layoutEdges } = buildLayoutInputs(scenario);
   measureLocalMetric(samples, scenarioName, 'computeForceLayout', () =>
