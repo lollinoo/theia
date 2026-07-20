@@ -48,6 +48,7 @@ import {
   projectCanvasRenderGraph,
 } from './canvas/canvasRenderProjection';
 import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
+import type { ScreenRect } from './canvas/newNodePlacement';
 import { buildRuntimeState } from './canvas/runtimeAdapters';
 import { resolveTopologyZoomBand, type TopologyZoomBand } from './canvas/topologyZoom';
 import { useAreaFilteredTopology } from './canvas/useAreaFilteredTopology';
@@ -418,6 +419,16 @@ export default function Canvas({
     },
     [refreshWinboxFlow, setDeviceMenu],
   );
+  const getCanvasClientRect = useCallback((): ScreenRect | null => {
+    const rect = canvasRootRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return {
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+  }, []);
 
   const {
     devices,
@@ -428,6 +439,7 @@ export default function Canvas({
     error,
     renderedMapKey,
     loadTopology,
+    requestNewNodePlacement,
     runtimeSummary,
     grafanaUrlRef,
     grafanaDashboardConfigRef,
@@ -448,6 +460,7 @@ export default function Canvas({
     openEdgeMenu,
     openSelfLinkDetails,
     reactFlow,
+    getCanvasClientRect,
     nodes,
     setNodes,
     setEdges,
@@ -863,9 +876,9 @@ export default function Canvas({
           topologyLinks={topologyLinks}
           topologyAreas={topologyAreas}
           loadTopology={loadTopology}
+          requestNewNodePlacement={requestNewNodePlacement}
           setDevices={setDevices}
           setNodes={setNodes}
-          reactFlow={reactFlow}
           runtimeState={runtimeState}
           mapId={mapId}
           mapName={mapName}

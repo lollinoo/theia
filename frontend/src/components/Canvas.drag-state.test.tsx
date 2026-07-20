@@ -108,7 +108,11 @@ const testState = vi.hoisted(() => ({
   nodesInitialized: true,
   renderedMapKey: 'default:' as string | null,
   reactFlowStore: { width: 1200, height: 800 },
-  canvasDataParams: null as null | { mapId: string | null; mapName?: string },
+  canvasDataParams: null as null | {
+    mapId: string | null;
+    mapName?: string;
+    getCanvasClientRect: () => unknown;
+  },
   canvasPanelsProps: {} as Record<string, unknown>,
   reactFlowProps: {} as Record<string, unknown>,
   reactFlowRenderCount: 0,
@@ -298,6 +302,7 @@ vi.mock('./canvas/useCanvasData', async () => {
     useCanvasData: (params: {
       mapId: string | null;
       mapName?: string;
+      getCanvasClientRect: () => unknown;
       setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
     }) => {
       const lastSeededNodesRef = ReactRuntime.useRef<DeviceNode[] | null>(null);
@@ -317,6 +322,7 @@ vi.mock('./canvas/useCanvasData', async () => {
         loading: false,
         error: null,
         loadTopology: testState.loadTopology,
+        requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
         runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
         grafanaUrlRef: { current: '' },
         grafanaDashboardConfigRef: { current: null },

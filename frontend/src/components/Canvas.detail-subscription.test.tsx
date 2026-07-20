@@ -170,6 +170,7 @@ vi.mock('./canvas/useCanvasData', () => ({
     loading: false,
     error: null,
     loadTopology: vi.fn().mockResolvedValue(undefined),
+    requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
     runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
     grafanaUrlRef: { current: '' },
     grafanaDashboardConfigRef: { current: null },
