@@ -35,6 +35,7 @@ function renderControls(
     onWaypointPointerMove: vi.fn(),
     onWaypointPointerUp: vi.fn(),
     onWaypointPointerCancel: vi.fn(),
+    onWaypointLostPointerCapture: vi.fn(),
     onWaypointNudge: vi.fn(),
     onWaypointRemove: vi.fn(),
     ...overrides,
@@ -77,6 +78,7 @@ describe('LinkRouteControls', () => {
       onWaypointPointerMove: vi.fn(),
       onWaypointPointerUp: vi.fn(),
       onWaypointPointerCancel: vi.fn(),
+      onWaypointLostPointerCapture: vi.fn(),
     };
     const { props } = renderControls({ ...callbacks }, parentPointerDown);
     const second = screen.getByRole('button', {
@@ -87,6 +89,7 @@ describe('LinkRouteControls', () => {
       fireEvent.pointerMove(second, { pointerId: 7, clientX: 82, clientY: 92 });
       fireEvent.pointerUp(second, { pointerId: 7, clientX: 82, clientY: 92 });
       fireEvent.pointerCancel(second, { pointerId: 7 });
+      fireEvent.lostPointerCapture(second, { pointerId: 7 });
     });
 
     expect(props.onWaypointFocus).toHaveBeenCalledWith(1);
@@ -94,6 +97,7 @@ describe('LinkRouteControls', () => {
     expect(callbacks.onWaypointPointerMove).toHaveBeenCalledWith(expect.anything(), 1);
     expect(callbacks.onWaypointPointerUp).toHaveBeenCalledWith(expect.anything(), 1);
     expect(callbacks.onWaypointPointerCancel).toHaveBeenCalledWith(expect.anything(), 1);
+    expect(callbacks.onWaypointLostPointerCapture).toHaveBeenCalledWith(expect.anything(), 1);
     expect(parentPointerDown).not.toHaveBeenCalled();
   });
 
@@ -114,6 +118,7 @@ describe('LinkRouteControls', () => {
           onWaypointPointerMove={vi.fn()}
           onWaypointPointerUp={vi.fn()}
           onWaypointPointerCancel={vi.fn()}
+          onWaypointLostPointerCapture={vi.fn()}
           onWaypointNudge={(index, dx, dy) => {
             onWaypointNudge(index, dx, dy);
             setRoute((current) => nudgeRouteWaypoint(current, index, dx, dy));
@@ -165,6 +170,7 @@ describe('LinkRouteControls', () => {
           onWaypointPointerMove={vi.fn()}
           onWaypointPointerUp={vi.fn()}
           onWaypointPointerCancel={vi.fn()}
+          onWaypointLostPointerCapture={vi.fn()}
           onWaypointNudge={vi.fn()}
           onWaypointRemove={(index) => {
             onWaypointRemove(index);

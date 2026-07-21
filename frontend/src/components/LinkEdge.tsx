@@ -74,7 +74,7 @@ function LinkEdgeInner({
   const hasFrozenBadgePresentationRef = useRef(false);
   const activeRoute = draftRoute ?? data?.route ?? null;
   const renderedRoute = draftIsAutomatic ? null : activeRoute;
-  const routeEditable = data?.routeEditable === true;
+  const routeEditable = data?.routeEditable === true && typeof data.onRouteCommit === 'function';
   const canEditRoute = selected === true && routeEditable;
   const interactionMode = data?.interactionMode ?? 'idle';
   const isInteractive = interactionMode === 'interactive';
@@ -240,6 +240,9 @@ function LinkEdgeInner({
     }
   };
 
+  const pointerFlowPosition = (clientX: number, clientY: number): LinkWaypoint =>
+    screenToFlowPosition({ x: clientX, y: clientY }, { snapToGrid: false });
+
   const applyLatestPointerPoint = (): LinkRoute | null => {
     const gesture = pointerGestureRef.current;
     const point = latestPointerPointRef.current;
@@ -291,6 +294,30 @@ function LinkEdgeInner({
     target.releasePointerCapture(gesture.pointerId);
   };
 
+  const abandonPointerGesture = (event: ReactPointerEvent<RoutePointerTarget>) => {
+    const gesture = pointerGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) {
+      return;
+    }
+
+    pointerGestureRef.current = null;
+    clearAnimationFrame();
+    latestPointerPointRef.current = null;
+    suppressNextClickRef.current = false;
+    if (gesture.dragging) {
+      event.preventDefault();
+      event.stopPropagation();
+      draftRouteRef.current = null;
+      clearFrozenBadgePresentation();
+      setDraftRoute(null);
+      setDraftIsAutomatic(false);
+      if (gesture.kind === 'path') {
+        setSelectedWaypointIndex(null);
+      }
+    }
+    releasePointer(gesture);
+  };
+
   const handleEdgePointerDown = (event: ReactPointerEvent<SVGPathElement>) => {
     suppressNextClickRef.current = false;
     if (!canEditRoute || event.button !== 0 || pointerGestureRef.current !== null) {
@@ -323,11 +350,8 @@ function LinkEdgeInner({
         return;
       }
 
-      const originPoint = screenToFlowPosition({
-        x: gesture.originClient.x,
-        y: gesture.originClient.y,
-      });
-      const currentPoint = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const originPoint = pointerFlowPosition(gesture.originClient.x, gesture.originClient.y);
+      const currentPoint = pointerFlowPosition(event.clientX, event.clientY);
       const insertion = nearestRouteInsertion(routePath.segments, originPoint);
       const insertionPoint =
         isSelfLoop && gesture.baseRoute === null ? originPoint : insertion.point;
@@ -361,15 +385,11 @@ function LinkEdgeInner({
 
     event.preventDefault();
     event.stopPropagation();
-    queuePointerPoint(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+    queuePointerPoint(pointerFlowPosition(event.clientX, event.clientY));
   };
 
   const handleEdgePointerLeave = (event: ReactPointerEvent<SVGPathElement>) => {
-    const gesture = pointerGestureRef.current;
-    if (gesture?.pointerId === event.pointerId && !gesture.dragging) {
-      pointerGestureRef.current = null;
-      latestPointerPointRef.current = null;
-    }
+    abandonPointerGesture(event);
   };
 
   const waypointPointForClientPosition = (
@@ -381,14 +401,11 @@ function LinkEdgeInner({
       gesture.waypointIndex === null
         ? undefined
         : gesture.baseRoute?.waypoints[gesture.waypointIndex];
-    const currentPoint = screenToFlowPosition({ x: clientX, y: clientY });
+    const currentPoint = pointerFlowPosition(clientX, clientY);
     if (!waypoint) {
       return currentPoint;
     }
-    const originPoint = screenToFlowPosition({
-      x: gesture.originClient.x,
-      y: gesture.originClient.y,
-    });
+    const originPoint = pointerFlowPosition(gesture.originClient.x, gesture.originClient.y);
     return {
       x: waypoint.x + currentPoint.x - originPoint.x,
       y: waypoint.y + currentPoint.y - originPoint.y,
@@ -405,9 +422,9 @@ function LinkEdgeInner({
     }
 
     if (!gesture.dragging) {
-      releasePointer(gesture);
       pointerGestureRef.current = null;
       latestPointerPointRef.current = null;
+      releasePointer(gesture);
       return;
     }
 
@@ -417,19 +434,19 @@ function LinkEdgeInner({
       latestPointerPointRef.current =
         gesture.kind === 'waypoint'
           ? waypointPointForClientPosition(gesture, event.clientX, event.clientY)
-          : screenToFlowPosition({ x: event.clientX, y: event.clientY });
+          : pointerFlowPosition(event.clientX, event.clientY);
     }
     const nextRoute = flushPointerPoint();
     if (nextRoute) {
       data?.onRouteCommit?.(id, nextRoute);
     }
-    releasePointer(gesture);
     pointerGestureRef.current = null;
     latestPointerPointRef.current = null;
     draftRouteRef.current = null;
     clearFrozenBadgePresentation();
     setDraftRoute(null);
     setDraftIsAutomatic(false);
+    releasePointer(gesture);
   };
 
   const handleWaypointPointerDown = (
@@ -497,7 +514,7 @@ function LinkEdgeInner({
 
     event.preventDefault();
     event.stopPropagation();
-    const pointerPoint = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    const pointerPoint = pointerFlowPosition(event.clientX, event.clientY);
     const insertion = nearestRouteInsertion(routePath.segments, pointerPoint);
     const insertionPoint = isSelfLoop && renderedRoute === null ? pointerPoint : insertion.point;
     const nextRoute = insertRouteWaypoint(renderedRoute, insertion.insertIndex, insertionPoint);
@@ -615,7 +632,8 @@ function LinkEdgeInner({
         onPointerMove={handleEdgePointerMove}
         onPointerLeave={handleEdgePointerLeave}
         onPointerUp={(event) => finishPointerGesture(event, true)}
-        onPointerCancel={(event) => finishPointerGesture(event, false)}
+        onPointerCancel={abandonPointerGesture}
+        onLostPointerCapture={abandonPointerGesture}
         onContextMenu={(event) => {
           if (!data?.onContextMenu) {
             return;
@@ -666,7 +684,8 @@ function LinkEdgeInner({
         onWaypointPointerDown={handleWaypointPointerDown}
         onWaypointPointerMove={handleWaypointPointerMove}
         onWaypointPointerUp={(event) => finishPointerGesture(event, true)}
-        onWaypointPointerCancel={(event) => finishPointerGesture(event, false)}
+        onWaypointPointerCancel={(event) => abandonPointerGesture(event)}
+        onWaypointLostPointerCapture={(event) => abandonPointerGesture(event)}
         onWaypointNudge={handleWaypointNudge}
         onWaypointRemove={handleWaypointRemove}
       />

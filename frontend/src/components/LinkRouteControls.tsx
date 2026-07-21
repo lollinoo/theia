@@ -18,6 +18,10 @@ export interface LinkRouteControlsProps {
   onWaypointPointerMove: (event: PointerEvent<HTMLButtonElement>, waypointIndex: number) => void;
   onWaypointPointerUp: (event: PointerEvent<HTMLButtonElement>, waypointIndex: number) => void;
   onWaypointPointerCancel: (event: PointerEvent<HTMLButtonElement>, waypointIndex: number) => void;
+  onWaypointLostPointerCapture: (
+    event: PointerEvent<HTMLButtonElement>,
+    waypointIndex: number,
+  ) => void;
   onWaypointNudge: (waypointIndex: number, dx: number, dy: number) => void;
   onWaypointRemove: (waypointIndex: number) => void;
 }
@@ -34,6 +38,7 @@ export function LinkRouteControls({
   onWaypointPointerMove,
   onWaypointPointerUp,
   onWaypointPointerCancel,
+  onWaypointLostPointerCapture,
   onWaypointNudge,
   onWaypointRemove,
 }: LinkRouteControlsProps) {
@@ -117,6 +122,10 @@ export function LinkRouteControls({
             onPointerCancel={(event) => {
               event.stopPropagation();
               onWaypointPointerCancel(event, index);
+            }}
+            onLostPointerCapture={(event) => {
+              event.stopPropagation();
+              onWaypointLostPointerCapture(event, index);
             }}
             onKeyDown={(event) => handleKeyDown(event, index)}
           >
