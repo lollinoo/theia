@@ -1,10 +1,9 @@
 /**
- * Builds reusable automatic and waypoint-driven link paths with straight terminal leads.
+ * Builds reusable waypoint-driven link paths with straight terminal leads.
  */
 import type { Rect, XYPosition } from '@xyflow/react';
 import type { LinkRoute } from '../types/api';
 import {
-  buildFloatingEdgePath,
   type EdgePathModel,
   type FloatingEndpoint,
   resolveFloatingEndpoints,
@@ -26,7 +25,7 @@ export interface EditableCubicSegment {
   insertIndex: number;
 }
 
-/** Complete render and interaction geometry for one automatic or manual link route. */
+/** Complete render and interaction geometry for one manual link route. */
 export interface EditableEdgePathModel extends EdgePathModel {
   segments: EditableCubicSegment[];
   waypoints: XYPosition[];
@@ -37,7 +36,7 @@ interface EditableLinkPathOptions {
   targetRect: Rect | null;
   fallbackSource: XYPosition;
   fallbackTarget: XYPosition;
-  route?: LinkRoute | null;
+  route: LinkRoute;
   parallelIndex: number;
   laneOrientation?: 1 | -1;
   sourceRadius?: number;
@@ -305,29 +304,8 @@ function sampledHalfLengthPoint(
   return finitePoint(points[points.length - 1] ?? source);
 }
 
-/** Builds one complete automatic or waypoint-driven edge path model. */
+/** Builds one complete waypoint-driven edge path model. */
 export function buildEditableLinkPath(options: EditableLinkPathOptions): EditableEdgePathModel {
-  if (!options.route || options.route.waypoints.length === 0) {
-    const automatic = buildFloatingEdgePath(options);
-    const segments = [
-      {
-        start: automatic.sourceLead,
-        control1: automatic.sourceControl,
-        control2: automatic.targetControl,
-        end: automatic.targetLead,
-        insertIndex: 0,
-      },
-    ];
-    const label = sampledHalfLengthPoint(automatic.source, segments, automatic.target);
-    return {
-      ...automatic,
-      labelX: label.x,
-      labelY: label.y,
-      segments,
-      waypoints: [],
-    };
-  }
-
   const waypoints = options.route.waypoints.map(finitePoint);
   const endpoints = manualEndpoints(options, waypoints);
   const source = endpoints.source.point;

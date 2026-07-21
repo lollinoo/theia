@@ -12,6 +12,7 @@ const flowState = vi.hoisted(() => ({
   internalNodes: {} as Record<string, unknown>,
   listeners: new Set<() => void>(),
   screenToFlowPosition: vi.fn((position: { x: number; y: number }) => position),
+  getBezierPath: vi.fn((_options?: unknown) => ['M0 0 C0 0 10 10 10 10', 48, 24] as const),
 }));
 
 const MAP_A_OWNER = { mapId: 'map-a', generation: 1 } as const;
@@ -32,7 +33,7 @@ vi.mock('@xyflow/react', async () => {
       <path data-testid={id} d={path} style={style} />
     ),
     EdgeLabelRenderer: ({ children }: { children: ReactNode }) => <>{children}</>,
-    getBezierPath: () => ['M0 0 C0 0 10 10 10 10', 48, 24],
+    getBezierPath: (options: unknown) => flowState.getBezierPath(options),
     useReactFlow: () => ({ screenToFlowPosition: flowState.screenToFlowPosition }),
     useInternalNode: (id: string) =>
       useSyncExternalStore(
@@ -170,26 +171,11 @@ function installAnimationFrameQueue() {
   };
 }
 
-function normalizedCompositePath(path: string, reverse: boolean) {
-  const tokens = path.match(/[MLC]|-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi);
-  if (
-    tokens?.length !== 16 ||
-    tokens[0] !== 'M' ||
-    tokens[3] !== 'L' ||
-    tokens[6] !== 'C' ||
-    tokens[13] !== 'L'
-  ) {
-    throw new Error(`Expected an M-L-C-L composite path, received: ${path}`);
-  }
-  const point = (index: number) => [Number(tokens[index]), Number(tokens[index + 1])];
-  const points = [point(1), point(4), point(7), point(9), point(11), point(14)];
-  return reverse ? [points[5], points[4], points[3], points[2], points[1], points[0]] : points;
-}
-
 describe('LinkEdge render', () => {
   beforeEach(() => {
     flowState.screenToFlowPosition.mockReset();
     flowState.screenToFlowPosition.mockImplementation((position) => position);
+    flowState.getBezierPath.mockClear();
     flowState.listeners.clear();
     flowState.internalNodes = {
       'dev-1': mockInternalNode('dev-1', 0, 0),
@@ -904,17 +890,31 @@ describe('LinkEdge render', () => {
     expect(screen.queryByRole('button', { name: /Move waypoint/ })).not.toBeInTheDocument();
   });
 
-  it('renders from live rounded node borders and updates when an endpoint moves', () => {
+  it('uses the historical XYFlow Bezier for an unedited non-self link', () => {
     renderEdge();
-    const firstPath = screen.getByTestId('edge-1').getAttribute('d');
 
-    expect(firstPath).toMatch(/^M 100,30 L /);
-    expect(firstPath).toMatch(/ C .* L 300,30$/);
-    expect(firstPath).not.toBe('M0 0 C0 0 10 10 10 10');
+    expect(flowState.getBezierPath).toHaveBeenCalledWith({
+      sourceX: 0,
+      sourceY: 0,
+      sourcePosition: 'right',
+      targetX: 100,
+      targetY: 100,
+      targetPosition: 'left',
+    });
+    expect(screen.getByTestId('edge-1')).toHaveAttribute('d', 'M0 0 C0 0 10 10 10 10');
+  });
 
-    updateInternalNode('dev-2', mockInternalNode('dev-2', 420, 120));
+  it('uses waypoint geometry only after a route is present', () => {
+    renderEdge(
+      { selected: true },
+      {
+        routeEditable: true,
+        onRouteCommit: vi.fn(),
+        route: { version: 1, waypoints: [{ x: 210, y: 125 }] },
+      },
+    );
 
-    expect(screen.getByTestId('edge-1').getAttribute('d')).not.toBe(firstPath);
+    expect(screen.getByTestId('edge-1')).not.toHaveAttribute('d', 'M0 0 C0 0 10 10 10 10');
   });
 
   it('selects and edits automatic and manual self-link routes through shared controls', () => {
@@ -1013,28 +1013,16 @@ describe('LinkEdge render', () => {
     });
   });
 
-  it('uses stable endpoint ids to keep reversed parallel lanes distinct', () => {
-    const forward = renderEdge({ id: 'edge-forward' }, { parallelIndex: 2 });
-    const forwardPath = forward.getByTestId('edge-forward').getAttribute('d');
-    forward.unmount();
+  it('does not add parallel-lane curvature to automatic links', () => {
+    const base = renderEdge({ id: 'edge-base' }, { parallelIndex: 0 });
+    const basePath = base.getByTestId('edge-base').getAttribute('d');
+    base.unmount();
 
-    const reverse = renderEdge(
-      { id: 'edge-reverse', source: 'dev-2', target: 'dev-1' },
-      {
-        link: {
-          source_device_id: 'dev-2',
-          target_device_id: 'dev-1',
-        },
-        parallelIndex: 1,
-      },
-    );
-    const reversePath = reverse.getByTestId('edge-reverse').getAttribute('d');
+    const parallel = renderEdge({ id: 'edge-parallel' }, { parallelIndex: 5 });
+    const parallelPath = parallel.getByTestId('edge-parallel').getAttribute('d');
 
-    expect(forwardPath).not.toBeNull();
-    expect(reversePath).not.toBeNull();
-    expect(normalizedCompositePath(reversePath as string, true)).not.toEqual(
-      normalizedCompositePath(forwardPath as string, false),
-    );
+    expect(basePath).toBe('M0 0 C0 0 10 10 10 10');
+    expect(parallelPath).toBe(basePath);
   });
 
   it('keeps the existing self-loop geometry and context menu behavior', () => {

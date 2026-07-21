@@ -1,5 +1,5 @@
 /**
- * Renders the in-progress connection with the same floating geometry as saved links.
+ * Renders the in-progress connection with a border-aware preview path.
  */
 import type { ConnectionLineComponentProps } from '@xyflow/react';
 import type { JSX } from 'react';

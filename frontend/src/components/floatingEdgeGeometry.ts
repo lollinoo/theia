@@ -308,7 +308,7 @@ export function buildFloatingEdgePath({
     parallelIndex === 0
       ? 1
       : (parallelIndex % 2 === 1 ? -1 : 1) * (Math.ceil(parallelIndex / 2) + 1);
-  const bend = Math.max(28, Math.min(MAX_AUTOMATIC_BEND, distance * 0.18)) * lane;
+  const bend = Math.min(MAX_AUTOMATIC_BEND, distance * 0.18) * lane;
   const sourceControl = finitePoint(
     outwardControl(sourceLead, endpoints.source.normal, perpendicular, curveControlLength, bend),
   );

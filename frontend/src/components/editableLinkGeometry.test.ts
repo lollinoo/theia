@@ -109,29 +109,6 @@ function sampledHalfLengthPoint(model: EditableEdgePathModel): XYPosition {
 }
 
 describe('buildEditableLinkPath', () => {
-  it('models an automatic composite core as one insertable cubic segment', () => {
-    const model = buildEditableLinkPath({
-      sourceRect: { x: 0, y: 0, width: 100, height: 60 },
-      targetRect: { x: 500, y: 0, width: 100, height: 60 },
-      fallbackSource: { x: 100, y: 30 },
-      fallbackTarget: { x: 500, y: 30 },
-      parallelIndex: 0,
-    });
-
-    expect(model.waypoints).toEqual([]);
-    expect(model.segments).toEqual([
-      {
-        start: model.sourceLead,
-        control1: model.sourceControl,
-        control2: model.targetControl,
-        end: model.targetLead,
-        insertIndex: 0,
-      },
-    ]);
-    expect(model.edgePath).toMatch(/^M .* L .* C .* L .*$/);
-    expectFiniteModel(model);
-  });
-
   it('builds a one-waypoint spline with terminal leads and ordered insertion segments', () => {
     const sourceRect = { x: 0, y: 0, width: 100, height: 60 };
     const targetRect = { x: 500, y: 0, width: 100, height: 60 };
@@ -160,6 +137,24 @@ describe('buildEditableLinkPath', () => {
     expectOnRoundedBorder(model.source, sourceRect, 20);
     expectOnRoundedBorder(model.target, targetRect, 20);
     expectFiniteModel(model);
+  });
+
+  it('does not inject lateral curvature into a collinear manual route', () => {
+    const model = buildEditableLinkPath({
+      sourceRect: { x: 0, y: 0, width: 100, height: 60 },
+      targetRect: { x: 500, y: 0, width: 100, height: 60 },
+      fallbackSource: { x: 100, y: 30 },
+      fallbackTarget: { x: 500, y: 30 },
+      route: { version: 1, waypoints: [{ x: 300, y: 30 }] },
+      parallelIndex: 0,
+    });
+
+    for (const segment of model.segments) {
+      expect(segment.start.y).toBeCloseTo(30);
+      expect(segment.control1.y).toBeCloseTo(30);
+      expect(segment.control2.y).toBeCloseTo(30);
+      expect(segment.end.y).toBeCloseTo(30);
+    }
   });
 
   it('passes through three ordered waypoints and ignores automatic lane offsets', () => {

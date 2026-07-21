@@ -2,7 +2,14 @@
  * Renders link edge UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import { BaseEdge, type Edge, type EdgeProps, useInternalNode, useReactFlow } from '@xyflow/react';
+import {
+  BaseEdge,
+  type Edge,
+  type EdgeProps,
+  getBezierPath,
+  useInternalNode,
+  useReactFlow,
+} from '@xyflow/react';
 import {
   memo,
   type MouseEvent as ReactMouseEvent,
@@ -52,14 +59,26 @@ interface RoutePointerGesture {
   editToken: LinkRouteEditToken;
 }
 
+function routeInsertion(
+  route: LinkRoute | null,
+  segments: Parameters<typeof nearestRouteInsertion>[0],
+  point: LinkWaypoint,
+) {
+  return route === null || route.waypoints.length === 0
+    ? { insertIndex: 0, point }
+    : nearestRouteInsertion(segments, point);
+}
+
 function LinkEdgeInner({
   id,
   source,
   target,
   sourceX,
   sourceY,
+  sourcePosition,
   targetX,
   targetY,
+  targetPosition,
   selected,
   data,
 }: EdgeProps<LinkEdgeType>) {
@@ -139,33 +158,46 @@ function LinkEdgeInner({
           },
     [targetBoundsHeight, targetBoundsWidth, targetBoundsX, targetBoundsY],
   );
-  const editablePath = useMemo(
-    () =>
-      buildEditableLinkPath({
-        sourceRect,
-        targetRect,
-        fallbackSource: { x: sourceX, y: sourceY },
-        fallbackTarget: { x: targetX, y: targetY },
-        route: renderedRoute,
-        parallelIndex: index,
-        laneOrientation,
-        sourceRadius,
-        targetRadius,
-      }),
-    [
-      index,
-      laneOrientation,
-      renderedRoute,
-      sourceRect,
-      sourceRadius,
+  const isAutomaticRoute = renderedRoute === null || renderedRoute.waypoints.length === 0;
+  const automaticPath = useMemo(() => {
+    const [edgePath, labelX, labelY] = getBezierPath({
       sourceX,
       sourceY,
-      targetRect,
-      targetRadius,
+      sourcePosition,
       targetX,
       targetY,
-    ],
-  );
+      targetPosition,
+    });
+    return { edgePath, labelX, labelY, segments: [], waypoints: [] };
+  }, [sourcePosition, sourceX, sourceY, targetPosition, targetX, targetY]);
+  const manualPath = useMemo(() => {
+    if (renderedRoute === null || renderedRoute.waypoints.length === 0) {
+      return null;
+    }
+    return buildEditableLinkPath({
+      sourceRect,
+      targetRect,
+      fallbackSource: { x: sourceX, y: sourceY },
+      fallbackTarget: { x: targetX, y: targetY },
+      route: renderedRoute,
+      parallelIndex: index,
+      laneOrientation,
+      sourceRadius,
+      targetRadius,
+    });
+  }, [
+    index,
+    laneOrientation,
+    renderedRoute,
+    sourceRect,
+    sourceRadius,
+    sourceX,
+    sourceY,
+    targetRect,
+    targetRadius,
+    targetX,
+    targetY,
+  ]);
   const selfLoopPath = useMemo(
     () =>
       buildSelfLoopPathModel({
@@ -177,8 +209,11 @@ function LinkEdgeInner({
       }),
     [index, sourceX, sourceY, targetX, targetY],
   );
-  const routePath =
-    isSelfLoop && renderedRoute === null ? { ...editablePath, ...selfLoopPath } : editablePath;
+  const routePath = isAutomaticRoute
+    ? isSelfLoop
+      ? { ...automaticPath, ...selfLoopPath }
+      : automaticPath
+    : manualPath!;
   const { edgePath, labelX, labelY } = routePath;
 
   const sign = index % 2 === 0 ? 1 : -1;
@@ -365,13 +400,11 @@ function LinkEdgeInner({
 
       const originPoint = pointerFlowPosition(gesture.originClient.x, gesture.originClient.y);
       const currentPoint = pointerFlowPosition(event.clientX, event.clientY);
-      const insertion = nearestRouteInsertion(routePath.segments, originPoint);
-      const insertionPoint =
-        isSelfLoop && gesture.baseRoute === null ? originPoint : insertion.point;
+      const insertion = routeInsertion(gesture.baseRoute, routePath.segments, originPoint);
       const insertedRoute = insertRouteWaypoint(
         gesture.baseRoute,
         insertion.insertIndex,
-        insertionPoint,
+        insertion.point,
       );
       if (insertedRoute === gesture.baseRoute) {
         pointerGestureRef.current = null;
@@ -529,9 +562,8 @@ function LinkEdgeInner({
     event.preventDefault();
     event.stopPropagation();
     const pointerPoint = pointerFlowPosition(event.clientX, event.clientY);
-    const insertion = nearestRouteInsertion(routePath.segments, pointerPoint);
-    const insertionPoint = isSelfLoop && renderedRoute === null ? pointerPoint : insertion.point;
-    const nextRoute = insertRouteWaypoint(renderedRoute, insertion.insertIndex, insertionPoint);
+    const insertion = routeInsertion(renderedRoute, routePath.segments, pointerPoint);
+    const nextRoute = insertRouteWaypoint(renderedRoute, insertion.insertIndex, insertion.point);
     if (nextRoute === renderedRoute) {
       return;
     }

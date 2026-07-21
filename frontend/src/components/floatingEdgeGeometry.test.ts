@@ -273,7 +273,7 @@ describe('buildFloatingEdgePath', () => {
     expectFiniteModel(model);
   });
 
-  it('keeps a visible bend between nearby aligned nodes', () => {
+  it('does not impose a minimum bend between nearby aligned endpoints', () => {
     const sourceRect = { x: 0, y: 0, width: 100, height: 60 };
     const targetRect = { x: 108, y: 0, width: 100, height: 60 };
     const model = buildFloatingEdgePath({
@@ -286,10 +286,9 @@ describe('buildFloatingEdgePath', () => {
       targetRadius: 20,
     });
 
-    expect(Math.abs(model.sourceControl.y - model.source.y)).toBeGreaterThanOrEqual(28);
-    expect(Math.abs(model.targetControl.y - model.target.y)).toBeGreaterThanOrEqual(28);
-    expectOnRoundedBorder(model.source, sourceRect, 20);
-    expectOnRoundedBorder(model.target, targetRect, 20);
+    expect(Math.abs(model.sourceControl.y - model.source.y)).toBeGreaterThan(0);
+    expect(Math.abs(model.sourceControl.y - model.source.y)).toBeLessThan(28);
+    expect(Math.abs(model.targetControl.y - model.target.y)).toBeLessThan(28);
   });
 
   it('does not overshoot back into nearby aligned node interiors', () => {
@@ -310,7 +309,6 @@ describe('buildFloatingEdgePath', () => {
       expect(point.x).toBeGreaterThanOrEqual(model.source.x);
       expect(point.x).toBeLessThanOrEqual(model.target.x);
     }
-    expect(cubicPoint(model, 0.5).y - model.source.y).toBeGreaterThanOrEqual(20);
     expectFiniteModel(model);
   });
 

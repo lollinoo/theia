@@ -153,6 +153,7 @@ describe('LinkEdge', () => {
 
     expect(content).toContain('useInternalNode<DeviceNode>(source)');
     expect(content).toContain('useInternalNode<DeviceNode>(target)');
+    expect(content).toContain('getBezierPath({');
     expect(content).toContain('buildEditableLinkPath({');
     expect(content).not.toContain('useNodes(');
     expect(content).not.toContain('getNodes(');
