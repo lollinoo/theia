@@ -3,13 +3,20 @@
  * Keeps canvas lifecycle, projected graph state, and cleanup behavior explicit for callers.
  */
 
-import type { EdgeChange, NodeChange } from '@xyflow/react';
+import type { EdgeChange, NodeChange, SnapGrid } from '@xyflow/react';
 import * as ReactFlow from '@xyflow/react';
 import type React from 'react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
+import { canvasSnapGrid, snapNodeChangesToGrid } from './canvasGrid';
+
+/** Configures optional controlled-state snapping for the topology canvas. */
+export interface UseCanvasGraphStateOptions {
+  snapToGrid?: boolean;
+  snapGrid?: SnapGrid;
+}
 
 /** Describes the canvas graph state contract used by the topology canvas. */
 export interface CanvasGraphState {
@@ -32,7 +39,10 @@ function buildIndexById(items: { id: string }[]): Map<string, number> {
 }
 
 /** Coordinates canvas graph state behavior for the topology canvas. */
-export function useCanvasGraphState(): CanvasGraphState {
+export function useCanvasGraphState({
+  snapToGrid = true,
+  snapGrid = canvasSnapGrid,
+}: UseCanvasGraphStateOptions = {}): CanvasGraphState {
   const [nodes, setNodes] = useState<DeviceNode[]>([]);
   const [edges, setEdges] = useState<LinkEdgeType[]>([]);
 
@@ -51,9 +61,12 @@ export function useCanvasGraphState(): CanvasGraphState {
 
   const onNodesChange = useCallback(
     (changes: NodeChange<DeviceNode>[]) => {
-      setNodes((currentNodes) => ReactFlow.applyNodeChanges<DeviceNode>(changes, currentNodes));
+      const normalizedChanges = snapToGrid ? snapNodeChangesToGrid(changes, snapGrid) : changes;
+      setNodes((currentNodes) =>
+        ReactFlow.applyNodeChanges<DeviceNode>(normalizedChanges, currentNodes),
+      );
     },
-    [setNodes],
+    [setNodes, snapGrid, snapToGrid],
   );
 
   const onEdgesChange = useCallback(

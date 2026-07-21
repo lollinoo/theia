@@ -437,6 +437,10 @@ var apiRouteSpecs = []apiRouteSpec{
 		methodPolicy(http.MethodPatch, domain.PermissionTopologyUpdate),
 		methodPolicy(http.MethodDelete, domain.PermissionTopologyUpdate),
 	)),
+	protectedRoute("canvas map link route", "/api/v1/canvas/maps/{mapID}/link-routes/{linkID}", "/api/v1/canvas/maps/", routeHandlerCanvasMapItem, routeMiddlewareNormalJSON, policy(
+		methodPolicy(http.MethodPut, domain.PermissionTopologyUpdate),
+		methodPolicy(http.MethodDelete, domain.PermissionTopologyUpdate),
+	)),
 
 	protectedRoute("devices", "/api/v1/devices", "/api/v1/devices", routeHandlerDeviceCollection, routeMiddlewareNormalJSON, policy(
 		methodPolicy(http.MethodGet, domain.PermissionDevicesRead),

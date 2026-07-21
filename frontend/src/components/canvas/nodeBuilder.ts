@@ -2,6 +2,8 @@
  * Defines node builder behavior for the topology canvas.
  * Documents how canonical topology data is projected into the interactive view layer.
  */
+import type { SnapGrid } from '@xyflow/react';
+
 import type { Device, Link } from '../../types/api';
 import { type AlertDTO, alertStatusForDevice, type SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode, DeviceNodeRuntimeData } from '../DeviceCard';
@@ -9,6 +11,7 @@ import {
   resolveDeviceMonitoringState,
   sanitizeDeviceMetricsForDisplay,
 } from '../deviceVisualState';
+import { snapPositionToGrid } from './canvasGrid';
 import { preferVisibleLinks } from './edgeBuilder';
 
 function normalizeSnapshotStatus(status: string | undefined): Device['status'] | undefined {
@@ -59,6 +62,7 @@ export function buildTopologyNodes(
   onSelfLinkClick?: (link: Link) => void,
   currentPositions: Map<string, { x: number; y: number; pinned?: boolean }> = new Map(),
   placementDeviceIds: Set<string> = new Set(devices.map((device) => device.id)),
+  snapGrid: SnapGrid | null = null,
 ): DeviceNode[] {
   const selfLinksByDeviceId = new Map<string, Link[]>();
   for (const link of preferVisibleLinks(links)) {
@@ -91,7 +95,13 @@ export function buildTopologyNodes(
           ? saved
           : computed;
     const explicitlyPlaced = hasUsablePosition(explicit);
-    const resolvedPosition = position ?? { x: 0, y: 0 };
+    const computedPlacement =
+      !hasUsablePosition(current) && !hasUsablePosition(saved) && hasUsablePosition(computed);
+    const unresolvedPosition = position ?? { x: 0, y: 0 };
+    const resolvedPosition =
+      snapGrid && (explicitlyPlaced || computedPlacement)
+        ? snapPositionToGrid(unresolvedPosition, snapGrid)
+        : unresolvedPosition;
     const selfLinks = selfLinksByDeviceId.get(device.id);
 
     const runtimeDevice = pendingSnapshot?.devices[device.id];

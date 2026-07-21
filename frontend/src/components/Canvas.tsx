@@ -36,6 +36,7 @@ import {
   recordCanvasDiagnosticEvent,
   updateCanvasDiagnosticsState,
 } from './canvas/canvasDiagnostics';
+import { canvasSnapGrid } from './canvas/canvasGrid';
 import { isGhostDeviceNode, topologyFitViewPadding } from './canvas/canvasHelpers';
 import {
   clearSelectedGraphItems,
@@ -59,13 +60,16 @@ import { useCanvasFitView } from './canvas/useCanvasFitView';
 import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';
 import { useCanvasGraphState } from './canvas/useCanvasGraphState';
 import { useCanvasInteractionState } from './canvas/useCanvasInteractionState';
+import { useCanvasLinkRoutes } from './canvas/useCanvasLinkRoutes';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { useCanvasSelection } from './canvas/useCanvasSelection';
+import { useCanvasSnapPreference } from './canvas/useCanvasSnapPreference';
 import DeviceCard, { type DeviceNode, resolveDeviceNodeReadabilityScale } from './DeviceCard';
 import { minimapColorForDevice } from './deviceVisualState';
+import { FloatingConnectionLine } from './FloatingConnectionLine';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
-import { resolveLinkBadgeScale } from './linkSemantics';
+import { type LinkRouteCommit, resolveLinkBadgeScale } from './linkSemantics';
 import SearchOverlay from './SearchOverlay';
 import { ShortcutHelp } from './ShortcutHelp';
 import { SidePanel } from './SidePanel';
@@ -130,6 +134,39 @@ function setEdgeInteractionMode(
   return changed ? nextEdges : edges;
 }
 
+/** Updates persisted-route gesture availability only when edit ownership changes. */
+function setLinkRouteAvailability(
+  edges: LinkEdgeType[],
+  editMode: boolean,
+  onRouteCommit: LinkRouteCommit | undefined,
+): LinkEdgeType[] {
+  let nextEdges: LinkEdgeType[] | null = null;
+
+  edges.forEach((edge, edgeIndex) => {
+    const routeEditable =
+      editMode && onRouteCommit !== undefined && edge.data?.routeEditToken !== undefined;
+    const edgeRouteCommit = routeEditable ? onRouteCommit : undefined;
+    if (
+      edge.data?.routeEditable === routeEditable &&
+      edge.data?.onRouteCommit === edgeRouteCommit
+    ) {
+      return;
+    }
+
+    nextEdges ??= edges.slice();
+    nextEdges[edgeIndex] = {
+      ...edge,
+      data: {
+        ...(edge.data ?? {}),
+        routeEditable,
+        onRouteCommit: edgeRouteCommit,
+      },
+    };
+  });
+
+  return nextEdges ?? edges;
+}
+
 /**
  * Describes the canonical topology inputs and host callbacks owned by App.
  * Canvas projects these inputs into React Flow nodes/edges while reporting selected detail state upward.
@@ -187,6 +224,7 @@ export default function Canvas({
   chromeHidden,
   onChromeHiddenChange,
 }: CanvasProps) {
+  const { snapToGrid, toggleSnapToGrid } = useCanvasSnapPreference();
   const {
     nodes,
     edges,
@@ -196,7 +234,27 @@ export default function Canvas({
     onEdgesChange,
     nodeIndexByIdRef,
     edgeIndexByIdRef,
-  } = useCanvasGraphState();
+  } = useCanvasGraphState({ snapToGrid, snapGrid: canvasSnapGrid });
+  const {
+    commitOwnedLinkRoute,
+    getLinkRouteEditToken,
+    routeOwnerToken,
+    resetLinkRoute,
+    reconcileLinkRouteEdges,
+    linkRouteError,
+    dismissLinkRouteError,
+  } = useCanvasLinkRoutes({ mapId, setEdges, edgeIndexByIdRef });
+  const onLinkRouteCommit = useMemo<LinkRouteCommit | undefined>(() => {
+    if (routeOwnerToken === null) {
+      return undefined;
+    }
+    return (edgeId, route, editToken) => {
+      if (editToken.owner !== routeOwnerToken) {
+        return;
+      }
+      commitOwnedLinkRoute(edgeId, route, editToken);
+    };
+  }, [commitOwnedLinkRoute, routeOwnerToken]);
   const { diagnosticsVisible, closeDiagnostics } = useCanvasDiagnosticsToggle();
   const { canvasInteractionActive, beginCanvasInteraction, endCanvasInteraction } =
     useCanvasInteractionState({ onInteractionActiveChange });
@@ -456,6 +514,9 @@ export default function Canvas({
     reconnecting,
     prometheusStatus,
     editMode,
+    onLinkRouteCommit,
+    getLinkRouteEditToken,
+    reconcileLinkRouteEdges,
     openDeviceMenu,
     openEdgeMenu,
     openSelfLinkDetails,
@@ -464,12 +525,17 @@ export default function Canvas({
     nodes,
     setNodes,
     setEdges,
+    snapGrid: snapToGrid ? canvasSnapGrid : null,
     nodeIndexByIdRef,
     edgeIndexByIdRef,
     onDevicesChange,
     onLinksChange,
     onTopologyAreasChange,
   });
+
+  useEffect(() => {
+    setEdges((currentEdges) => setLinkRouteAvailability(currentEdges, editMode, onLinkRouteCommit));
+  }, [editMode, onLinkRouteCommit, setEdges]);
 
   useEffect(() => {
     onTopologyLoadingChange?.(loading);
@@ -843,7 +909,9 @@ export default function Canvas({
           onCreateLink={() => setPanelContent({ type: 'create-link' })}
           onAlerts={() => setPanelContent({ type: 'alerts' })}
           onToggleEditMode={() => setEditMode((m) => !m)}
+          onToggleSnapToGrid={toggleSnapToGrid}
           editMode={editMode}
+          snapToGrid={snapToGrid}
           alertCount={runtimeSummary.alertCount}
         />
       )}
@@ -860,6 +928,8 @@ export default function Canvas({
         setDeviceMenu={setDeviceMenu}
         setEdgeMenu={setEdgeMenu}
         setPanelContent={setPanelContent}
+        editMode={editMode}
+        resetLinkRoute={resetLinkRoute}
       />
 
       <SidePanel
@@ -898,6 +968,8 @@ export default function Canvas({
       <CanvasOverlays
         editMode={editMode}
         reconnecting={reconnecting}
+        linkRouteError={linkRouteError}
+        dismissLinkRouteError={dismissLinkRouteError}
         topologyRecoveryNotice={topologyRecoveryNotice}
         dismissTopologyRecoveryNotice={dismissTopologyRecoveryNotice}
         retryTopologyRefresh={retryTopologyRefresh}
@@ -1019,14 +1091,17 @@ export default function Canvas({
         fitViewOptions={{ padding: currentTopologyFitViewPadding }}
         onlyRenderVisibleElements
         nodesDraggable={editMode}
+        snapToGrid={snapToGrid}
+        snapGrid={canvasSnapGrid}
         panOnDrag
         zoomOnScroll
         zoomOnDoubleClick={false}
+        connectionLineComponent={FloatingConnectionLine}
         connectionLineStyle={{ stroke: 'var(--color-edge-default)', strokeWidth: 10 }}
         proOptions={{ hideAttribution: true }}
         className="bg-transparent"
       >
-        <Background color="var(--color-edge-muted)" gap={30} size={1.1} />
+        <Background color="var(--color-edge-muted)" gap={canvasSnapGrid[0]} size={1.1} />
         <LinkLabelLayer />
         {!effectiveChromeHidden && <TopologyMiniMap />}
       </ReactFlow>

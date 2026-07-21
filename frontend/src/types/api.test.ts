@@ -286,6 +286,39 @@ describe('parseCanvasMapsResponse', () => {
 });
 
 describe('parseCanvasTopologyResponse', () => {
+  it('parses valid saved link routes and omits invalid entries', () => {
+    const topology = parseCanvasTopologyResponse(
+      canvasTopologyPayload({
+        link_routes: {
+          'link-1': { version: 1, waypoints: [{ x: 12.5, y: -8 }] },
+          'wrong-version': { version: 2, waypoints: [{ x: 0, y: 0 }] },
+          empty: { version: 1, waypoints: [] },
+          'too-many': {
+            version: 1,
+            waypoints: Array.from({ length: 17 }, (_, index) => ({ x: index, y: index })),
+          },
+          'non-finite': { version: 1, waypoints: [{ x: Number.POSITIVE_INFINITY, y: 0 }] },
+          'non-number': { version: 1, waypoints: [{ x: '12.5', y: 0 }] },
+        },
+      }),
+    );
+
+    expect(topology.link_routes).toEqual({
+      'link-1': { version: 1, waypoints: [{ x: 12.5, y: -8 }] },
+    });
+  });
+
+  it.each([
+    undefined,
+    null,
+    [],
+    'invalid',
+  ])('defaults absent or malformed link routes to {}', (linkRoutes) => {
+    expect(
+      parseCanvasTopologyResponse(canvasTopologyPayload({ link_routes: linkRoutes })).link_routes,
+    ).toEqual({});
+  });
+
   it('parses the versioned canvas read model into frontend topology types', () => {
     const payload = {
       schema_version: 1,

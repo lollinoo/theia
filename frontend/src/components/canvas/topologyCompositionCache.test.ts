@@ -3,8 +3,10 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Device, Link } from '../../types/api';
+import type { Device, Link, LinkRouteMap } from '../../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
+import { buildRuntimeState } from './runtimeAdapters';
+import { composeCanvasTopology } from './topologyComposer';
 import {
   type BuildCanvasTopologyCompositionCacheKeyInput,
   buildCanvasTopologyCompositionCacheKey,
@@ -72,6 +74,7 @@ function baseInput(
     currentPositions: new Map(),
     explicitPositions: new Map(),
     editMode: false,
+    snapGrid: null,
     placementDeviceIds: new Set(),
     runtimeIdentity: 'rt-sha256:abc',
     runtimeVersion: 7,
@@ -109,6 +112,56 @@ function expectCacheInvalidates(
 }
 
 describe('buildCanvasTopologyCompositionCacheKey', () => {
+  it('uses a deterministic route signature when server topology identifiers are absent', () => {
+    const firstRoutes: LinkRouteMap = {
+      'link-2': { version: 1, waypoints: [{ x: 30, y: 40 }] },
+      'link-1': { version: 1, waypoints: [{ x: 10, y: 20 }] },
+    };
+    const secondRoutes: LinkRouteMap = {
+      'link-1': { version: 1, waypoints: [{ x: 10, y: 20 }] },
+      'link-2': { version: 1, waypoints: [{ x: 30, y: 40 }] },
+    };
+
+    const first = buildKey({
+      topologyVersion: undefined,
+      topologyEtag: null,
+      linkRoutes: firstRoutes,
+    });
+    const second = buildKey({
+      topologyVersion: undefined,
+      topologyEtag: null,
+      linkRoutes: secondRoutes,
+    });
+
+    expect(first.signature).toBe(second.signature);
+  });
+
+  it('invalidates when route coordinates change without server topology identifiers', () => {
+    expectCacheInvalidates(
+      {
+        topologyVersion: undefined,
+        topologyEtag: null,
+        linkRoutes: { 'link-1': { version: 1, waypoints: [{ x: 10, y: 20 }] } },
+      },
+      {
+        topologyVersion: undefined,
+        topologyEtag: null,
+        linkRoutes: { 'link-1': { version: 1, waypoints: [{ x: 11, y: 20 }] } },
+      },
+    );
+  });
+
+  it('invalidates when the route commit callback identity changes', () => {
+    expectCacheInvalidates({ onLinkRouteCommit: vi.fn() }, { onLinkRouteCommit: vi.fn() });
+  });
+
+  it('uses different signatures for disabled and enabled grid modes', () => {
+    const disabled = buildKey({ snapGrid: null });
+    const enabled = buildKey({ snapGrid: [30, 30] });
+
+    expect(enabled.signature).not.toBe(disabled.signature);
+  });
+
   it('uses server topology identity without traversing device or link presentation fields', () => {
     const explodingDevice = Object.defineProperties(
       {},
@@ -403,5 +456,68 @@ describe('buildCanvasTopologyCompositionCacheKey', () => {
       { runtimeIdentity: undefined, runtimeVersion: undefined, runtimeSnapshot: firstSnapshot },
       { runtimeIdentity: undefined, runtimeVersion: undefined, runtimeSnapshot: secondSnapshot },
     );
+  });
+});
+
+describe('composeCanvasTopology saved routes', () => {
+  it.each([
+    { editMode: false, expectedEditable: false },
+    { editMode: true, expectedEditable: true },
+  ])('attaches an isolated matching saved route with editability $expectedEditable', ({
+    editMode,
+    expectedEditable,
+  }) => {
+    const devices = [
+      mockDevice(),
+      mockDevice({
+        id: 'dev-2',
+        hostname: 'switch-01',
+        ip: '10.0.0.2',
+        sys_name: 'switch-01',
+      }),
+    ];
+    const links = [mockLink()];
+    const route = { version: 1 as const, waypoints: [{ x: 12.5, y: -8 }] };
+    const onLinkRouteCommit = vi.fn();
+    const runtimeState = buildRuntimeState({
+      devices,
+      links,
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const { edges } = composeCanvasTopology({
+      devices,
+      links,
+      linkRoutes: {
+        'link-1': route,
+        orphan: { version: 1, waypoints: [{ x: 99, y: 100 }] },
+      },
+      onLinkRouteCommit,
+      runtimeState,
+      savedPositions: new Map(),
+      computedPositions: new Map([
+        ['dev-1', { x: 100, y: 120 }],
+        ['dev-2', { x: 320, y: 120 }],
+      ]),
+      currentPositions: new Map(),
+      explicitPositions: new Map(),
+      editMode,
+      openDeviceMenu: vi.fn(),
+      openEdgeMenu: vi.fn(),
+      placementDeviceIds: new Set(['dev-1', 'dev-2']),
+      alerts: [],
+      snapGrid: null,
+    });
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.data.route).toEqual(route);
+    expect(edges[0]?.data.route).not.toBe(route);
+    expect(edges[0]?.data.routeEditable).toBe(expectedEditable);
+    expect(edges[0]?.data.onRouteCommit).toBe(onLinkRouteCommit);
+
+    edges[0]!.data.route!.waypoints[0]!.x = 999;
+    expect(route.waypoints[0]?.x).toBe(12.5);
   });
 });

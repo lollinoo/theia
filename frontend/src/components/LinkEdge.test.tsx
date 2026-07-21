@@ -148,6 +148,34 @@ describe('LinkEdge', () => {
     expect(content).not.toContain('y: labelYOffset + 20');
   });
 
+  it('subscribes only to its two endpoint nodes for floating geometry', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+
+    expect(content).toContain('useInternalNode<DeviceNode>(source)');
+    expect(content).toContain('useInternalNode<DeviceNode>(target)');
+    expect(content).toContain('getBezierPath({');
+    expect(content).toContain('buildEditableLinkPath({');
+    expect(content).not.toContain('useNodes(');
+    expect(content).not.toContain('getNodes(');
+  });
+
+  it('uses the stable React Flow coordinate API without a viewport-store subscription', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+
+    expect(content).toContain('useReactFlow');
+    expect(content).toContain('screenToFlowPosition');
+    expect(content).not.toContain('useStore');
+  });
+
+  it('keeps route editing inputs in the custom edge memo boundary', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+
+    expect(content).toContain('prev.data?.route === next.data?.route');
+    expect(content).toContain('prev.data?.routeEditable === next.data?.routeEditable');
+    expect(content).toContain('prev.data?.routeEditToken === next.data?.routeEditToken');
+    expect(content).toContain('prev.data?.onRouteCommit === next.data?.onRouteCommit');
+  });
+
   it('keeps the main stroke bound to semantic tone and only uses halo color for emphasis', () => {
     const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
     expect(content).toContain('stroke: tone.color');
@@ -182,6 +210,21 @@ describe('LinkEdge', () => {
     expect(content).toContain(
       'prev.data?.targetDeviceSnmpReachable === next.data?.targetDeviceSnmpReachable',
     );
+  });
+
+  it('keeps parallel lane changes in the memo comparator', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    expect(content).toContain('prev.data?.parallelIndex === next.data?.parallelIndex');
+  });
+
+  it('memoizes lane orientation from stable endpoint ids', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+
+    expect(content).toContain('const laneOrientation = source <= target ? 1 : -1;');
+    expect(content).toMatch(/parallelIndex: index,\s+laneOrientation,/);
+    expect(content).toMatch(/\[\s+index,\s+laneOrientation,/);
+    expect(content).toContain('prev.source === next.source');
+    expect(content).toContain('prev.target === next.target');
   });
 
   it('renders a stacked negotiated-rate and throughput group without a standalone AUTO pill', () => {

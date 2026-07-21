@@ -99,6 +99,8 @@ func TestRequiredPermissionsForRegisteredProtectedRoutes(t *testing.T) {
 		{name: "canvas map device add", method: http.MethodPost, path: "/api/v1/canvas/maps/" + id + "/devices/" + id, want: []string{domain.PermissionTopologyUpdate}},
 		{name: "canvas map device patch", method: http.MethodPatch, path: "/api/v1/canvas/maps/" + id + "/devices/" + id, want: []string{domain.PermissionTopologyUpdate}},
 		{name: "canvas map device remove", method: http.MethodDelete, path: "/api/v1/canvas/maps/" + id + "/devices/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map link route update", method: http.MethodPut, path: "/api/v1/canvas/maps/" + id + "/link-routes/" + id, want: []string{domain.PermissionTopologyUpdate}},
+		{name: "canvas map link route delete", method: http.MethodDelete, path: "/api/v1/canvas/maps/" + id + "/link-routes/" + id, want: []string{domain.PermissionTopologyUpdate}},
 
 		{name: "devices list", method: http.MethodGet, path: "/api/v1/devices", want: []string{domain.PermissionDevicesRead}},
 		{name: "devices create", method: http.MethodPost, path: "/api/v1/devices", want: []string{domain.PermissionDevicesCreate, domain.PermissionDevicesUpdate}},

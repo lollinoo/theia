@@ -7,6 +7,7 @@ import { computeForceLayout } from '../../hooks/useAutoLayout';
 import type { Device } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
+import { buildEditableLinkPath } from '../editableLinkGeometry';
 import { projectAreaTopology } from './areaProjection';
 import {
   aggregateCanvasMetricSamples,
@@ -56,6 +57,7 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'runtimePatch',
   'incrementalLayout',
   'newNodePlacement',
+  'editableLinkGeometry',
   'computeForceLayout',
 ] as const satisfies CanvasMetricName[];
 
@@ -83,6 +85,12 @@ export interface RunCanvasPerfBenchmarkOptions {
   warmupIterations?: number;
   iterationsByScenario?: Partial<Record<CanvasPerfScenarioName, number>>;
   scenarioNames?: CanvasPerfScenarioName[];
+}
+
+/** Configures the isolated worst-case editable link geometry benchmark. */
+export interface RunEditableLinkGeometryBenchmarkOptions {
+  iterations?: number;
+  warmupIterations?: number;
 }
 
 const defaultIterationsByScenario: Record<CanvasPerfScenarioName, number> = {
@@ -118,6 +126,16 @@ const noopEdgeMenu = (() => undefined) as unknown as (
 ) => void;
 const noopGhostClick = () => undefined;
 
+const editableLinkBenchmarkRoute = {
+  version: 1 as const,
+  waypoints: Array.from({ length: 16 }, (_, index) => ({
+    x: 320 + index * 88,
+    y: index % 2 === 0 ? 96 : 544,
+  })),
+};
+const editableLinkBenchmarkSourceRect = { x: 32, y: 260, width: 240, height: 120 };
+const editableLinkBenchmarkTargetRect = { x: 1_720, y: 260, width: 240, height: 120 };
+
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
@@ -142,6 +160,48 @@ function measureLocalMetric<T>(
       timestamp: Date.now(),
     });
   }
+}
+
+function benchmarkEditableLinkGeometry(
+  samples: CanvasMetricSample[],
+  scenarioName: CanvasPerfScenarioName,
+): void {
+  measureLocalMetric(samples, scenarioName, 'editableLinkGeometry', () =>
+    buildEditableLinkPath({
+      sourceRect: editableLinkBenchmarkSourceRect,
+      targetRect: editableLinkBenchmarkTargetRect,
+      fallbackSource: { x: 272, y: 320 },
+      fallbackTarget: { x: 1_720, y: 320 },
+      route: editableLinkBenchmarkRoute,
+      parallelIndex: 0,
+    }),
+  );
+}
+
+/** Measures maximum-size editable link geometry without running unrelated graph benchmarks. */
+export function runEditableLinkGeometryBenchmark(
+  options: RunEditableLinkGeometryBenchmarkOptions = {},
+): CanvasMetricAggregate {
+  const scenarioName = 'stress';
+  const measuredSamples: CanvasMetricSample[] = [];
+  const warmupSamples: CanvasMetricSample[] = [];
+  const warmupIterations = options.warmupIterations ?? 3;
+  const iterations = options.iterations ?? defaultIterationsByScenario.stress;
+
+  for (let index = 0; index < warmupIterations; index += 1) {
+    benchmarkEditableLinkGeometry(warmupSamples, scenarioName);
+  }
+
+  for (let index = 0; index < iterations; index += 1) {
+    benchmarkEditableLinkGeometry(measuredSamples, scenarioName);
+  }
+
+  const metric =
+    aggregateCanvasMetricSamples(measuredSamples)[`${scenarioName}:editableLinkGeometry`];
+  if (!metric) {
+    throw new Error('Editable link geometry benchmark requires at least one measured iteration.');
+  }
+  return metric;
 }
 
 function legacyPositionEntries(
@@ -397,6 +457,7 @@ function benchmarkOperations(
     openEdgeMenu: noopEdgeMenu,
     placementDeviceIds,
     alerts: scenario.alerts,
+    snapGrid: null,
   };
 
   measureLocalMetric(samples, scenarioName, 'composeCanvasTopology', () =>
@@ -418,6 +479,7 @@ function benchmarkOperations(
     currentPositions: compositionInput.currentPositions,
     explicitPositions: compositionInput.explicitPositions,
     editMode: compositionInput.editMode,
+    snapGrid: compositionInput.snapGrid,
     placementDeviceIds,
     runtimeIdentity: `benchmark:${scenarioName}`,
     runtimeVersion: 1,
@@ -563,6 +625,8 @@ function benchmarkOperations(
       obstacles: placementObstacles,
     }),
   );
+
+  benchmarkEditableLinkGeometry(samples, scenarioName);
 
   const { layoutNodes, layoutEdges } = buildLayoutInputs(scenario);
   measureLocalMetric(samples, scenarioName, 'computeForceLayout', () =>

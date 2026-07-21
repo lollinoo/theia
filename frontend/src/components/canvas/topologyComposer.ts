@@ -2,11 +2,13 @@
  * Defines topology composer behavior for the topology canvas.
  * Documents how canonical topology data is projected into the interactive view layer.
  */
-import type { Link } from '../../types/api';
+import type { SnapGrid } from '@xyflow/react';
+
+import { copyLinkRoute, type Link, type LinkRouteMap } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
-import { type LinkEdgeData } from '../linkSemantics';
+import { type LinkEdgeData, type LinkRouteCommit, type LinkRouteEditToken } from '../linkSemantics';
 import { buildTopologyEdges } from './edgeBuilder';
 import { buildTopologyNodes } from './nodeBuilder';
 import type { RuntimeState } from './runtimeAdapters';
@@ -14,6 +16,9 @@ import type { RuntimeState } from './runtimeAdapters';
 interface ComposeCanvasTopologyInput {
   devices: Parameters<typeof buildTopologyNodes>[0];
   links: Link[];
+  linkRoutes?: LinkRouteMap;
+  onLinkRouteCommit?: LinkRouteCommit;
+  getLinkRouteEditToken?: (edgeId: string) => LinkRouteEditToken | undefined;
   runtimeState: RuntimeState;
   savedPositions: Map<string, { x: number; y: number; pinned?: boolean }>;
   computedPositions: Map<string, { x: number; y: number }>;
@@ -25,6 +30,7 @@ interface ComposeCanvasTopologyInput {
   openSelfLinkDetails?: (link: Link) => void;
   placementDeviceIds: Set<string>;
   alerts: AlertDTO[];
+  snapGrid: SnapGrid | null;
 }
 
 interface ComposeCanvasTopologyResult {
@@ -36,7 +42,14 @@ interface ComposeCanvasTopologyResult {
  * Converts runtime snapshots into the edge data consumed by React Flow edges.
  * Static topology stays unchanged while status, health, and throughput remain live.
  */
-function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeData> {
+function buildRuntimeEdgeData(
+  runtimeState: RuntimeState,
+  links: Link[],
+  linkRoutes: LinkRouteMap,
+  editMode: boolean,
+  onLinkRouteCommit?: LinkRouteCommit,
+  getLinkRouteEditToken?: (edgeId: string) => LinkRouteEditToken | undefined,
+): Map<string, LinkEdgeData> {
   const edgeDataById = new Map<string, LinkEdgeData>();
 
   for (const [linkId, runtimeLink] of runtimeState.linksById.entries()) {
@@ -64,8 +77,21 @@ function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeD
     });
   }
 
+  for (const link of links) {
+    const route = linkRoutes[link.id];
+    edgeDataById.set(link.id, {
+      ...edgeDataById.get(link.id),
+      route: route === undefined ? undefined : copyLinkRoute(route),
+      routeEditable: editMode && onLinkRouteCommit !== undefined,
+      routeEditToken: getLinkRouteEditToken?.(link.id),
+      onRouteCommit: onLinkRouteCommit,
+    });
+  }
+
   return edgeDataById;
 }
+
+const emptyLinkRoutes: LinkRouteMap = {};
 
 /**
  * Builds React Flow nodes and edges from static topology plus runtime overlays.
@@ -74,6 +100,9 @@ function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeD
 export function composeCanvasTopology({
   devices,
   links,
+  linkRoutes = emptyLinkRoutes,
+  onLinkRouteCommit,
+  getLinkRouteEditToken,
   runtimeState,
   savedPositions,
   computedPositions,
@@ -85,6 +114,7 @@ export function composeCanvasTopology({
   openSelfLinkDetails,
   placementDeviceIds,
   alerts,
+  snapGrid,
 }: ComposeCanvasTopologyInput): ComposeCanvasTopologyResult {
   const nodes = buildTopologyNodes(
     devices,
@@ -99,6 +129,7 @@ export function composeCanvasTopology({
     openSelfLinkDetails,
     currentPositions,
     placementDeviceIds,
+    snapGrid,
   ).map((node) => {
     const runtimeDevice = runtimeState.devicesById.get(node.id);
     if (!runtimeDevice) {
@@ -127,7 +158,14 @@ export function composeCanvasTopology({
     links,
     runtimeDevicesById,
     nodes,
-    buildRuntimeEdgeData(runtimeState),
+    buildRuntimeEdgeData(
+      runtimeState,
+      links,
+      linkRoutes,
+      editMode,
+      onLinkRouteCommit,
+      getLinkRouteEditToken,
+    ),
     openEdgeMenu,
     alerts,
   );

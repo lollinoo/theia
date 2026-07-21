@@ -2,7 +2,7 @@
  * Exercises use canvas data topology canvas behavior so refactors preserve the documented contract.
  */
 import { act, renderHook } from '@testing-library/react';
-import type { ReactFlowInstance } from '@xyflow/react';
+import type { ReactFlowInstance, SnapGrid } from '@xyflow/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,7 +23,7 @@ import {
   resetCanvasRuntimeBootstrap,
 } from '../../hooks/canvasRuntimeBootstrap';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
-import type { Area, Device } from '../../types/api';
+import type { Area, Device, Link, LinkRoute } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
@@ -139,6 +139,22 @@ function mockArea(overrides: Partial<Area> = {}): Area {
   };
 }
 
+function mockLink(overrides: Partial<Link> = {}): Link {
+  return {
+    id: 'link-1',
+    source_device_id: 'dev-1',
+    source_if_name: 'ether1',
+    target_device_id: 'dev-2',
+    target_if_name: 'ether2',
+    discovery_protocol: 'lldp',
+    source_if_speed: 1_000_000_000,
+    source_if_oper_status: 'up',
+    target_if_speed: 1_000_000_000,
+    target_if_oper_status: 'up',
+    ...overrides,
+  };
+}
+
 function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   return {
     devices: {
@@ -176,6 +192,10 @@ function renderUseCanvasData(
     onDevicesChange?: (devices: Device[]) => void;
     onTopologyAreasChange?: (areas: Area[]) => void;
     getCanvasClientRect?: () => ScreenRect | null;
+    snapGrid?: SnapGrid | null;
+    editMode?: boolean;
+    onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+    reconcileLinkRouteEdges?: (edges: LinkEdgeType[]) => LinkEdgeType[];
   } = {},
 ) {
   const canvasRect = { x: 100, y: 60, width: 1000, height: 700 };
@@ -198,8 +218,20 @@ function renderUseCanvasData(
   const openDeviceMenu = vi.fn();
   const openEdgeMenu = vi.fn();
 
+  interface RenderProps {
+    currentSnapshot: SnapshotPayload | null;
+    currentMapId?: string | null;
+    currentMapName?: string;
+    currentSnapGrid?: SnapGrid | null;
+  }
+
   const rendered = renderHook(
-    ({ currentSnapshot, currentMapId = null, currentMapName = 'Default' }) => {
+    ({
+      currentSnapshot,
+      currentMapId = null,
+      currentMapName = 'Default',
+      currentSnapGrid = options.snapGrid ?? null,
+    }: RenderProps) => {
       const [nodes, setNodes] = useState<DeviceNode[]>([]);
       nodesForGeometry = nodes;
       const [edges, setEdges] = useState<LinkEdgeType[]>([]);
@@ -210,14 +242,17 @@ function renderUseCanvasData(
         snapshot: currentSnapshot,
         reconnecting: false,
         prometheusStatus,
-        editMode: false,
+        editMode: options.editMode ?? false,
         openDeviceMenu,
         openEdgeMenu,
+        onLinkRouteCommit: options.onLinkRouteCommit,
+        reconcileLinkRouteEdges: options.reconcileLinkRouteEdges,
         reactFlow,
         getCanvasClientRect,
         nodes,
         setNodes,
         setEdges,
+        snapGrid: currentSnapGrid,
         onDevicesChange: options.onDevicesChange,
         onTopologyAreasChange: options.onTopologyAreasChange,
       });
@@ -234,7 +269,8 @@ function renderUseCanvasData(
         currentSnapshot: snapshot,
         currentMapId: options.mapId ?? null,
         currentMapName: options.mapName ?? 'Default',
-      },
+        currentSnapGrid: options.snapGrid ?? null,
+      } as RenderProps,
     },
   );
 
@@ -384,6 +420,70 @@ describe('useCanvasData', () => {
     expect(positionMocks.usePositions).toHaveBeenCalledWith('map-1');
     expect(fetchCanvasMapBootstrap).toHaveBeenCalledWith('map-1', { force: false });
     expect(fetchCanvasBootstrap).not.toHaveBeenCalled();
+  });
+
+  it('threads loaded saved routes and the commit callback into edge composition', async () => {
+    const link = mockLink();
+    const route = { version: 1 as const, waypoints: [{ x: 12.5, y: -8 }] };
+    const onLinkRouteCommit = vi.fn();
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        links: [link],
+        link_routes: { 'link-1': route },
+      }),
+    );
+
+    renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Core Map',
+      editMode: true,
+      onLinkRouteCommit,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const edgeBuildCalls = vi.mocked(buildTopologyEdges).mock.calls;
+    const edgeDataById = edgeBuildCalls[edgeBuildCalls.length - 1]?.[3];
+    expect(edgeDataById?.get('link-1')).toMatchObject({
+      route,
+      routeEditable: true,
+      onRouteCommit: onLinkRouteCommit,
+    });
+  });
+
+  it('reconciles composed refresh edges before replacing canonical edge state', async () => {
+    const staleEdge = {
+      id: 'link-1',
+      source: 'dev-1',
+      target: 'dev-2',
+      data: { route: { version: 1 as const, waypoints: [{ x: 10, y: 20 }] } },
+    } as LinkEdgeType;
+    const reconciledEdge = {
+      ...staleEdge,
+      data: { route: { version: 1 as const, waypoints: [{ x: 70, y: 80 }] } },
+    } as LinkEdgeType;
+    const reconcileLinkRouteEdges = vi.fn(() => [reconciledEdge]);
+    vi.mocked(buildTopologyEdges).mockReturnValueOnce([staleEdge]);
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({ links: [mockLink()] }),
+    );
+
+    const { result } = renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Core Map',
+      reconcileLinkRouteEdges,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(reconcileLinkRouteEdges).toHaveBeenCalledWith([staleEdge]);
+    expect(result.current.edges).toEqual([reconciledEdge]);
   });
 
   it.each([
@@ -1051,6 +1151,27 @@ describe('useCanvasData', () => {
     expect(positionMocks.savePositions).not.toHaveBeenCalled();
   });
 
+  it('loads off-grid saved positions verbatim when snapping is enabled', async () => {
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [mockDevice()],
+        positions: {
+          'dev-1': { device_id: 'dev-1', x: 44, y: 46, pinned: true },
+        },
+      }),
+    );
+
+    const { result } = renderUseCanvasData(null, null, { snapGrid: [30, 30] });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes[0]?.position).toEqual({ x: 44, y: 46 });
+    expect(positionMocks.savePositions).not.toHaveBeenCalled();
+  });
+
   it('fits the view after switching maps even when the target map already has saved positions', async () => {
     vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
       canvasBootstrapResponse({
@@ -1399,6 +1520,7 @@ describe('useCanvasData', () => {
         nodes,
         setNodes,
         setEdges,
+        snapGrid: null,
       });
     });
 
@@ -1514,6 +1636,7 @@ describe('useCanvasData', () => {
         nodes,
         setNodes,
         setEdges,
+        snapGrid: null,
       });
     });
 

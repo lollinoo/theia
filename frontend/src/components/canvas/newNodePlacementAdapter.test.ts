@@ -4,14 +4,21 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
-import { NEW_NODE_VIEWPORT_MARGIN_PX, type ScreenRect } from './newNodePlacement';
+import {
+  NEW_NODE_PREFERRED_GAP_PX,
+  NEW_NODE_VIEWPORT_MARGIN_PX,
+  type ScreenRect,
+} from './newNodePlacement';
 import { buildExplicitNodePlacements } from './newNodePlacementAdapter';
 
 interface ReactFlowStubOptions {
   canvasRect: ScreenRect;
   viewport?: { x: number; y: number; zoom: number };
   nodes?: DeviceNode[];
-  screenToFlowPosition?: (point: { x: number; y: number }) => { x: number; y: number };
+  screenToFlowPosition?: (
+    point: { x: number; y: number },
+    options?: { snapToGrid?: boolean; snapGrid?: [number, number] },
+  ) => { x: number; y: number };
 }
 
 function device(overrides: Partial<Device> & Pick<Device, 'id'>): Device {
@@ -106,10 +113,20 @@ function reactFlowStub({
   }));
   const screenToFlowPosition = vi.fn(
     screenToFlowOverride ??
-      (({ x, y }: { x: number; y: number }) => ({
-        x: (x - canvasRect.x - viewport.x) / viewport.zoom,
-        y: (y - canvasRect.y - viewport.y) / viewport.zoom,
-      })),
+      ((
+        { x, y }: { x: number; y: number },
+        options?: { snapToGrid?: boolean; snapGrid?: [number, number] },
+      ) => {
+        const position = {
+          x: (x - canvasRect.x - viewport.x) / viewport.zoom,
+          y: (y - canvasRect.y - viewport.y) / viewport.zoom,
+        };
+        if (!options?.snapToGrid || !options.snapGrid) return position;
+        return {
+          x: Math.round(position.x / options.snapGrid[0]) * options.snapGrid[0],
+          y: Math.round(position.y / options.snapGrid[1]) * options.snapGrid[1],
+        };
+      }),
   );
   const reactFlow = {
     flowToScreenPosition,
@@ -174,6 +191,188 @@ describe('buildExplicitNodePlacements', () => {
     };
     expectContainedInCanvasInset(screenRect, canvasRect);
     expect(screenToFlowPosition).toHaveBeenCalledWith(screenTopLeft, { snapToGrid: false });
+  });
+
+  it('delegates enabled snapping to React Flow and projects the snapped point for obstacles', () => {
+    const canvasRect = { x: 0, y: 0, width: 1000, height: 700 };
+    const snappedFlowPosition = { x: 330, y: 270 };
+    const { reactFlow, flowToScreenPosition, screenToFlowPosition } = reactFlowStub({
+      canvasRect,
+      screenToFlowPosition: () => snappedFlowPosition,
+    });
+
+    const result = buildExplicitNodePlacements({
+      reactFlow,
+      canvasRect,
+      devices: [device({ id: 'target' })],
+      links: [],
+      deviceIds: new Set(['target']),
+      snapGrid: [30, 30],
+    });
+
+    expect(screenToFlowPosition).toHaveBeenCalledWith(
+      { x: 315, y: 280 },
+      { snapToGrid: true, snapGrid: [30, 30] },
+    );
+    expect(result.positions.get('target')).toEqual(snappedFlowPosition);
+    expect(flowToScreenPosition).toHaveBeenCalledWith(snappedFlowPosition);
+  });
+
+  it.each([
+    {
+      zoom: 0.1,
+      canvasRect: { x: 0, y: 0, width: 500, height: 300 },
+      viewport: { x: 2.1, y: 0.6, zoom: 0.1 },
+      obstacle: { x: 205, y: 116, width: 2, height: 2 },
+      expected: { x: 2310, y: 1410 },
+    },
+    {
+      zoom: 1,
+      canvasRect: { x: 0, y: 0, width: 1000, height: 700 },
+      viewport: { x: 1, y: 0, zoom: 1 },
+      obstacle: { x: 260, y: 230, width: 20, height: 20 },
+      expected: { x: 330, y: 270 },
+    },
+    {
+      zoom: 2,
+      canvasRect: { x: 0, y: 0, width: 1400, height: 900 },
+      viewport: { x: 6, y: 42, zoom: 2 },
+      obstacle: { x: 260, y: 230, width: 30, height: 30 },
+      expected: { x: 150, y: 150 },
+    },
+  ])('uses a nearby safe grid point when base snapping collides at zoom $zoom', ({
+    canvasRect,
+    viewport,
+    obstacle,
+    expected,
+  }) => {
+    const target = device({ id: 'target' });
+    const existing = device({ id: 'existing' });
+    const { reactFlow, flowToScreenPosition } = reactFlowStub({
+      canvasRect,
+      viewport,
+      nodes: [
+        node(
+          existing,
+          {
+            x: (obstacle.x - canvasRect.x - viewport.x) / viewport.zoom,
+            y: (obstacle.y - canvasRect.y - viewport.y) / viewport.zoom,
+          },
+          {
+            measured: {
+              width: obstacle.width / viewport.zoom,
+              height: obstacle.height / viewport.zoom,
+            },
+          },
+        ),
+      ],
+    });
+
+    const result = buildExplicitNodePlacements({
+      reactFlow,
+      canvasRect,
+      devices: [target, existing],
+      links: [],
+      deviceIds: new Set([target.id]),
+      snapGrid: [30, 30],
+    });
+
+    expect(result.positions.get(target.id)).toEqual(expected);
+    const selected = result.positions.get(target.id);
+    if (!selected) return;
+    const screenRect = {
+      ...flowToScreenPosition(selected),
+      width: 370 * viewport.zoom,
+      height: 140 * viewport.zoom,
+    };
+    expectContainedInCanvasInset(screenRect, canvasRect);
+    expect(
+      intersectionArea(screenRect, {
+        x: obstacle.x - NEW_NODE_PREFERRED_GAP_PX,
+        y: obstacle.y - NEW_NODE_PREFERRED_GAP_PX,
+        width: obstacle.width + NEW_NODE_PREFERRED_GAP_PX * 2,
+        height: obstacle.height + NEW_NODE_PREFERRED_GAP_PX * 2,
+      }),
+    ).toBe(0);
+  });
+
+  it.each([
+    { zoom: 0.1, canvasRect: { x: 0, y: 0, width: 70, height: 100 } },
+    { zoom: 1, canvasRect: { x: 0, y: 0, width: 403, height: 300 } },
+    { zoom: 2, canvasRect: { x: 0, y: 0, width: 773, height: 400 } },
+  ])('rejects explicit placement when no local grid point fits at zoom $zoom', ({
+    zoom,
+    canvasRect,
+  }) => {
+    const target = device({ id: 'target' });
+    const { reactFlow } = reactFlowStub({
+      canvasRect,
+      viewport: { x: 0, y: 0, zoom },
+    });
+
+    const result = buildExplicitNodePlacements({
+      reactFlow,
+      canvasRect,
+      devices: [target],
+      links: [],
+      deviceIds: new Set([target.id]),
+      snapGrid: [30, 30],
+    });
+
+    expect(result.positions).toEqual(new Map());
+    expect(result.placedDeviceIds).toEqual(new Set());
+  });
+
+  it('keeps no-gap snapped placement from overlapping an obstacle', () => {
+    const canvasRect = { x: 0, y: 0, width: 500, height: 220 };
+    const viewport = { x: 10, y: 20, zoom: 1 };
+    const obstacle = { x: 90, y: 50, width: 10, height: 10 };
+    const target = device({ id: 'target' });
+    const existing = device({ id: 'existing' });
+    const { reactFlow, flowToScreenPosition } = reactFlowStub({
+      canvasRect,
+      viewport,
+      nodes: [node(existing, { x: 80, y: 30 }, { measured: { width: 10, height: 10 } })],
+    });
+
+    const result = buildExplicitNodePlacements({
+      reactFlow,
+      canvasRect,
+      devices: [target, existing],
+      links: [],
+      deviceIds: new Set([target.id]),
+      snapGrid: [30, 30],
+    });
+
+    expect(result.positions.get(target.id)).toEqual({ x: 90, y: 30 });
+    const selected = result.positions.get(target.id);
+    if (!selected) return;
+    expect(
+      intersectionArea({ ...flowToScreenPosition(selected), width: 370, height: 140 }, obstacle),
+    ).toBe(0);
+  });
+
+  it('selects the least-overlap local grid point when overlap is unavoidable', () => {
+    const canvasRect = { x: 0, y: 0, width: 500, height: 220 };
+    const viewport = { x: 10, y: 1, zoom: 1 };
+    const target = device({ id: 'target' });
+    const existing = device({ id: 'existing' });
+    const { reactFlow } = reactFlowStub({
+      canvasRect,
+      viewport,
+      nodes: [node(existing, { x: 60, y: 59 }, { measured: { width: 50, height: 100 } })],
+    });
+
+    const result = buildExplicitNodePlacements({
+      reactFlow,
+      canvasRect,
+      devices: [target, existing],
+      links: [],
+      deviceIds: new Set([target.id]),
+      snapGrid: [30, 30],
+    });
+
+    expect(result.positions.get(target.id)).toEqual({ x: 90, y: 60 });
   });
 
   it('uses measured node dimensions before the rendered-card fallback', () => {
@@ -316,7 +515,8 @@ describe('buildExplicitNodePlacements', () => {
     });
 
     expect(result.positions.get(target.id)).toEqual({ x: 315, y: 280 });
-    expect(flowToScreenPosition).not.toHaveBeenCalled();
+    expect(flowToScreenPosition).toHaveBeenCalledOnce();
+    expect(flowToScreenPosition).toHaveBeenCalledWith({ x: 315, y: 280 });
   });
 
   it('excludes hidden existing nodes from placement obstacles', () => {
@@ -346,7 +546,8 @@ describe('buildExplicitNodePlacements', () => {
     });
 
     expect(result.positions.get(target.id)).toEqual({ x: 315, y: 280 });
-    expect(flowToScreenPosition).not.toHaveBeenCalled();
+    expect(flowToScreenPosition).toHaveBeenCalledOnce();
+    expect(flowToScreenPosition).toHaveBeenCalledWith({ x: 315, y: 280 });
   });
 
   it('keeps a measured ghost node as an obstacle without a fetched device match', () => {
