@@ -413,6 +413,55 @@ function expectOnRoundedBorder(
   expect(onStraightSide || Math.abs(cornerDistance - radius) < 2).toBe(true);
 }
 
+async function expectAutomaticPathAnchoredToNodeHandles(
+  path: Locator,
+  sourceNode: Locator,
+  targetNode: Locator,
+) {
+  const [source, target] = await path.evaluate((element) => {
+    const svgPath = element as SVGPathElement;
+    const matrix = svgPath.getScreenCTM();
+    if (!matrix) throw new Error('The link path did not expose a screen transform');
+    const length = svgPath.getTotalLength();
+    const transform = (point: DOMPoint) => point.matrixTransform(matrix);
+    const sourcePoint = transform(svgPath.getPointAtLength(0));
+    const targetPoint = transform(svgPath.getPointAtLength(length));
+    return [
+      { x: sourcePoint.x, y: sourcePoint.y },
+      { x: targetPoint.x, y: targetPoint.y },
+    ] as const;
+  });
+  const handleBoxes = (node: Locator) =>
+    node.locator('.react-flow__handle').evaluateAll((handles) =>
+      handles
+        .map((handle) => {
+          const { x, y, width, height } = handle.getBoundingClientRect();
+          return { x, y, width, height };
+        })
+        .filter((box) => box.width > 0 && box.height > 0),
+    );
+  const [sourceHandleBoxes, targetHandleBoxes] = await Promise.all([
+    handleBoxes(sourceNode),
+    handleBoxes(targetNode),
+  ]);
+  const endpointIsOnHandle = (
+    point: ScreenPoint,
+    boxes: Array<{ x: number; y: number; width: number; height: number }>,
+  ) =>
+    boxes.some(
+      (box) =>
+        point.x >= box.x - 2 &&
+        point.x <= box.x + box.width + 2 &&
+        point.y >= box.y - 2 &&
+        point.y <= box.y + box.height + 2,
+    );
+
+  expect(sourceHandleBoxes).not.toHaveLength(0);
+  expect(targetHandleBoxes).not.toHaveLength(0);
+  expect(endpointIsOnHandle(source, sourceHandleBoxes)).toBe(true);
+  expect(endpointIsOnHandle(target, targetHandleBoxes)).toBe(true);
+}
+
 async function expectPathAnchoredToNodeBorders(
   page: Page,
   path: Locator,
@@ -497,7 +546,7 @@ test('edits and persists a map-local link route', async ({ page }) => {
   let hitPath = visibleLinkHitPath(page);
   await expect(hitPath).toBeVisible();
   await waitForPathToSettle(hitPath);
-  await expectPathAnchoredToNodeBorders(page, hitPath, sourceNode, targetNode);
+  await expectAutomaticPathAnchoredToNodeHandles(hitPath, sourceNode, targetNode);
 
   const snapToggle = page.getByRole('button', { name: /Snap to grid: (On|Off)/ });
   const snapIcon = snapToggle.locator('.material-symbols-rounded', { hasText: 'grid_4x4' });
