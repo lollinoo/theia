@@ -549,6 +549,13 @@ test('edits and persists a map-local link route', async ({ page }) => {
   await expectAutomaticPathAnchoredToNodeHandles(hitPath, sourceNode, targetNode);
 
   const snapToggle = page.getByRole('button', { name: /Snap to grid: (On|Off)/ });
+  await expect(snapToggle).toHaveCount(0);
+
+  const editMode = page.getByTitle('Edit Mode (E)');
+  await editMode.click();
+  await expect(editMode).toHaveClass(/bg-primary\/12/);
+  await expect(snapToggle).toHaveCount(1);
+
   const snapIcon = snapToggle.locator('.material-symbols-rounded', { hasText: 'grid_4x4' });
   await expect(snapIcon).toHaveCount(1);
   await expect(snapIcon).toHaveText('grid_4x4');
@@ -597,9 +604,6 @@ test('edits and persists a map-local link route', async ({ page }) => {
   await snapToggle.click();
   await expect(snapToggle).toHaveAttribute('aria-pressed', initialSnapState as string);
 
-  const editMode = page.getByTitle('Edit Mode (E)');
-  await editMode.click();
-  await expect(editMode).toHaveClass(/bg-primary\/12/);
   await selectLinkAtPathRatio(page, hitPath);
 
   const firstRouteSave = page.waitForResponse((response) =>
