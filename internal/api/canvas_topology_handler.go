@@ -54,20 +54,21 @@ func NewCanvasTopologyHandler(
 }
 
 type canvasTopologyResponse struct {
-	SchemaVersion   int                          `json:"schema_version"`
-	TopologyVersion string                       `json:"topology_version"`
-	RuntimeStreamID string                       `json:"runtime_stream_id,omitempty"`
-	RuntimeVersion  *uint64                      `json:"runtime_version,omitempty"`
-	RuntimeIdentity string                       `json:"runtime_identity,omitempty"`
-	RuntimeSnapshot *ws.SnapshotPayload          `json:"runtime_snapshot,omitempty"`
-	GeneratedAt     string                       `json:"generated_at"`
-	Map             *canvasMapResponse           `json:"map,omitempty"`
-	Devices         []jsonAPIResource            `json:"devices"`
-	Links           []enrichedLinkResponse       `json:"links"`
-	Positions       map[string]canvasPosition    `json:"positions"`
-	Areas           []areaResponse               `json:"areas"`
-	Capabilities    canvasTopologyCapabilities   `json:"capabilities"`
-	Settings        canvasTopologyCanvasSettings `json:"settings"`
+	SchemaVersion   int                                `json:"schema_version"`
+	TopologyVersion string                             `json:"topology_version"`
+	RuntimeStreamID string                             `json:"runtime_stream_id,omitempty"`
+	RuntimeVersion  *uint64                            `json:"runtime_version,omitempty"`
+	RuntimeIdentity string                             `json:"runtime_identity,omitempty"`
+	RuntimeSnapshot *ws.SnapshotPayload                `json:"runtime_snapshot,omitempty"`
+	GeneratedAt     string                             `json:"generated_at"`
+	Map             *canvasMapResponse                 `json:"map,omitempty"`
+	Devices         []jsonAPIResource                  `json:"devices"`
+	Links           []enrichedLinkResponse             `json:"links"`
+	LinkRoutes      map[string]canvasLinkRouteResponse `json:"link_routes,omitempty"`
+	Positions       map[string]canvasPosition          `json:"positions"`
+	Areas           []areaResponse                     `json:"areas"`
+	Capabilities    canvasTopologyCapabilities         `json:"capabilities"`
+	Settings        canvasTopologyCanvasSettings       `json:"settings"`
 }
 
 type canvasMapResponse struct {
@@ -90,6 +91,12 @@ type canvasPosition struct {
 	Y         float64 `json:"y"`
 	Pinned    bool    `json:"pinned"`
 	UpdatedAt string  `json:"updated_at,omitempty"`
+}
+
+type canvasLinkRouteResponse struct {
+	Version   int                  `json:"version"`
+	Waypoints []domain.CanvasPoint `json:"waypoints"`
+	UpdatedAt string               `json:"updated_at,omitempty"`
 }
 
 type canvasTopologyCapabilities struct {
