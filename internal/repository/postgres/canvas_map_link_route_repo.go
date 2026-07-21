@@ -3,6 +3,7 @@ package postgres
 // This file defines map-local link route persistence and membership enforcement.
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -25,12 +26,13 @@ func NewCanvasMapLinkRouteRepo(db *sql.DB) *CanvasMapLinkRouteRepo {
 }
 
 // GetAllForMap retrieves validated link routes ordered by canonical link ID.
-func (r *CanvasMapLinkRouteRepo) GetAllForMap(mapID uuid.UUID) ([]domain.CanvasMapLinkRoute, error) {
+func (r *CanvasMapLinkRouteRepo) GetAllForMap(ctx context.Context, mapID uuid.UUID) ([]domain.CanvasMapLinkRoute, error) {
 	if mapID == uuid.Nil {
 		return nil, fmt.Errorf("canvas map id is required")
 	}
 
-	rows, err := r.db.Query(
+	rows, err := r.db.QueryContext(
+		ctx,
 		`SELECT link_id, route_version, waypoints_json, updated_at
 		 FROM canvas_map_link_routes
 		 WHERE map_id = ?
@@ -58,6 +60,7 @@ func (r *CanvasMapLinkRouteRepo) GetAllForMap(mapID uuid.UUID) ([]domain.CanvasM
 
 // UpsertForMap creates or replaces one route after verifying that its link belongs to the map.
 func (r *CanvasMapLinkRouteRepo) UpsertForMap(
+	ctx context.Context,
 	mapID uuid.UUID,
 	route domain.CanvasMapLinkRoute,
 ) (domain.CanvasMapLinkRoute, error) {
@@ -73,36 +76,22 @@ func (r *CanvasMapLinkRouteRepo) UpsertForMap(
 		return domain.CanvasMapLinkRoute{}, fmt.Errorf("encoding canvas map link route waypoints: %w", err)
 	}
 
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.CanvasMapLinkRoute{}, fmt.Errorf("starting canvas map link route transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, mapID); err != nil {
+	if err := ensureCanvasMapExistsContext(ctx, tx, mapID); err != nil {
 		return domain.CanvasMapLinkRoute{}, err
 	}
-	var membershipMarker int
-	if err := tx.QueryRow(
-		`SELECT 1
-		 FROM canvas_map_links
-		 WHERE map_id = ? AND link_id = ?
-		 FOR KEY SHARE`,
-		mapID.String(),
-		route.LinkID.String(),
-	).Scan(&membershipMarker); err == sql.ErrNoRows {
-		return domain.CanvasMapLinkRoute{}, fmt.Errorf(
-			"link %s on canvas map %s: %w",
-			route.LinkID,
-			mapID,
-			domain.ErrCanvasMapLinkRouteNotMember,
-		)
-	} else if err != nil {
-		return domain.CanvasMapLinkRoute{}, fmt.Errorf("checking canvas map link route membership for %s: %w", route.LinkID, err)
+	if err := lockCanvasMapLinkMembership(ctx, tx, mapID, route.LinkID); err != nil {
+		return domain.CanvasMapLinkRoute{}, err
 	}
 
 	route.UpdatedAt = time.Now().UTC()
-	if _, err := tx.Exec(
+	if _, err := tx.ExecContext(
+		ctx,
 		`INSERT INTO canvas_map_link_routes
 			(map_id, link_id, route_version, waypoints_json, updated_at)
 		 VALUES (?, ?, ?, ?, ?)
@@ -125,19 +114,58 @@ func (r *CanvasMapLinkRouteRepo) UpsertForMap(
 }
 
 // DeleteForMap removes one map-local route without changing canonical link membership.
-func (r *CanvasMapLinkRouteRepo) DeleteForMap(mapID uuid.UUID, linkID uuid.UUID) error {
+func (r *CanvasMapLinkRouteRepo) DeleteForMap(ctx context.Context, mapID uuid.UUID, linkID uuid.UUID) error {
 	if mapID == uuid.Nil {
 		return fmt.Errorf("canvas map id is required")
 	}
 	if linkID == uuid.Nil {
 		return fmt.Errorf("link id is required")
 	}
-	if _, err := r.db.Exec(
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting canvas map link route delete transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := ensureCanvasMapExistsContext(ctx, tx, mapID); err != nil {
+		return err
+	}
+	if err := lockCanvasMapLinkMembership(ctx, tx, mapID, linkID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(
+		ctx,
 		`DELETE FROM canvas_map_link_routes WHERE map_id = ? AND link_id = ?`,
 		mapID.String(),
 		linkID.String(),
 	); err != nil {
 		return fmt.Errorf("deleting canvas map link route for %s: %w", linkID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing canvas map link route delete for %s: %w", linkID, err)
+	}
+	return nil
+}
+
+func lockCanvasMapLinkMembership(ctx context.Context, tx *Tx, mapID uuid.UUID, linkID uuid.UUID) error {
+	var membershipMarker int
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT 1
+		 FROM canvas_map_links
+		 WHERE map_id = ? AND link_id = ?
+		 FOR KEY SHARE`,
+		mapID.String(),
+		linkID.String(),
+	).Scan(&membershipMarker); err == sql.ErrNoRows {
+		return fmt.Errorf(
+			"link %s on canvas map %s: %w",
+			linkID,
+			mapID,
+			domain.ErrCanvasMapLinkRouteNotMember,
+		)
+	} else if err != nil {
+		return fmt.Errorf("checking canvas map link route membership for %s: %w", linkID, err)
 	}
 	return nil
 }

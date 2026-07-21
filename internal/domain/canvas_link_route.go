@@ -3,6 +3,7 @@ package domain
 // This file defines map-local link route contracts and validation invariants.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -35,9 +36,9 @@ type CanvasMapLinkRoute struct {
 
 // CanvasMapLinkRouteRepository persists map-local link routes independently of canonical links.
 type CanvasMapLinkRouteRepository interface {
-	GetAllForMap(mapID uuid.UUID) ([]CanvasMapLinkRoute, error)
-	UpsertForMap(mapID uuid.UUID, route CanvasMapLinkRoute) (CanvasMapLinkRoute, error)
-	DeleteForMap(mapID uuid.UUID, linkID uuid.UUID) error
+	GetAllForMap(ctx context.Context, mapID uuid.UUID) ([]CanvasMapLinkRoute, error)
+	UpsertForMap(ctx context.Context, mapID uuid.UUID, route CanvasMapLinkRoute) (CanvasMapLinkRoute, error)
+	DeleteForMap(ctx context.Context, mapID uuid.UUID, linkID uuid.UUID) error
 }
 
 // ValidateCanvasMapLinkRoute enforces the supported route shape and finite coordinates.

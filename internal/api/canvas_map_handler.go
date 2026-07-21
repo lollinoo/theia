@@ -114,8 +114,27 @@ type canvasMapPatchDeviceRequest struct {
 }
 
 type canvasLinkRouteRequest struct {
-	Version   int                  `json:"version"`
-	Waypoints []domain.CanvasPoint `json:"waypoints"`
+	Version   int                              `json:"version"`
+	Waypoints []canvasLinkRouteWaypointRequest `json:"waypoints"`
+}
+
+type canvasLinkRouteWaypointRequest struct {
+	X *float64 `json:"x"`
+	Y *float64 `json:"y"`
+}
+
+func (r canvasLinkRouteRequest) domainWaypoints() ([]domain.CanvasPoint, error) {
+	waypoints := make([]domain.CanvasPoint, 0, len(r.Waypoints))
+	for i, waypoint := range r.Waypoints {
+		if waypoint.X == nil {
+			return nil, fmt.Errorf("waypoints[%d].x is required", i)
+		}
+		if waypoint.Y == nil {
+			return nil, fmt.Errorf("waypoints[%d].y is required", i)
+		}
+		waypoints = append(waypoints, domain.CanvasPoint{X: *waypoint.X, Y: *waypoint.Y})
+	}
+	return waypoints, nil
 }
 
 type canvasMapAreaRepository interface {
@@ -358,17 +377,22 @@ func (h *CanvasMapHandler) HandleSaveLinkRoute(w http.ResponseWriter, r *http.Re
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	waypoints, err := req.domainWaypoints()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	route := domain.CanvasMapLinkRoute{
 		LinkID:    linkID,
 		Version:   req.Version,
-		Waypoints: req.Waypoints,
+		Waypoints: waypoints,
 	}
 	if err := domain.ValidateCanvasMapLinkRoute(route); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	saved, err := h.linkRouteRepo.UpsertForMap(mapID, route)
+	saved, err := h.linkRouteRepo.UpsertForMap(r.Context(), mapID, route)
 	if err != nil {
 		h.writeCanvasMapLinkRouteMutationError(w, "save", err)
 		return
@@ -402,27 +426,7 @@ func (h *CanvasMapHandler) HandleDeleteLinkRoute(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusNotFound, "link not found")
 		return
 	}
-	membership, err := h.mapRepo.GetMembership(mapID)
-	if err != nil {
-		if isCanvasMapNotFoundError(err) {
-			writeError(w, http.StatusNotFound, "canvas map not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", err)
-		return
-	}
-	isMember := false
-	for _, memberLinkID := range membership.LinkIDs {
-		if memberLinkID == linkID {
-			isMember = true
-			break
-		}
-	}
-	if !isMember {
-		writeError(w, http.StatusBadRequest, domain.ErrCanvasMapLinkRouteNotMember.Error())
-		return
-	}
-	if err := h.linkRouteRepo.DeleteForMap(mapID, linkID); err != nil {
+	if err := h.linkRouteRepo.DeleteForMap(r.Context(), mapID, linkID); err != nil {
 		h.writeCanvasMapLinkRouteMutationError(w, "delete", err)
 		return
 	}
@@ -967,21 +971,30 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 		return canvasTopologyResponse{}, false
 	}
 
+	responsePlan := loaded.Plan
 	var linkRoutes map[string]canvasLinkRouteResponse
 	if h.linkRouteRepo != nil {
-		routes, err := h.linkRouteRepo.GetAllForMap(canvasMap.ID)
+		routes, err := h.linkRouteRepo.GetAllForMap(r.Context(), canvasMap.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list canvas map link routes", err)
 			return canvasTopologyResponse{}, false
 		}
-		linkRoutes = make(map[string]canvasLinkRouteResponse, len(routes))
+		loadedLinkIDs := make(map[uuid.UUID]struct{}, len(responsePlan.Links))
+		for _, link := range responsePlan.Links {
+			loadedLinkIDs[link.ID] = struct{}{}
+		}
 		for _, route := range routes {
+			if _, ok := loadedLinkIDs[route.LinkID]; !ok {
+				continue
+			}
+			if linkRoutes == nil {
+				linkRoutes = make(map[string]canvasLinkRouteResponse)
+			}
 			linkRoutes[route.LinkID.String()] = canvasLinkRouteToResponse(route)
 		}
 	}
 
 	canvasMap = loaded.Map
-	responsePlan := loaded.Plan
 	response := h.canvasTopology.buildResponse(responsePlan.Devices, responsePlan.Links, responsePlan.Positions, responsePlan.Areas)
 	applyCanvasMapDeviceVisualColors(response.Devices, responsePlan.VisualColors)
 	mapResponse := mapToResponse(canvasMap)

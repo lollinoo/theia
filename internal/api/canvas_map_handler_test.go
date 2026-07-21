@@ -3,6 +3,7 @@ package api
 // This file exercises canvas map handler behavior so refactors preserve the documented contract.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -106,11 +107,12 @@ func TestCanvasMapHandlerDeleteDefaultMapReturnsConflict(t *testing.T) {
 
 func TestCanvasMapHandlerSaveLinkRoute(t *testing.T) {
 	fixture := newCanvasMapLinkRouteHandlerFixture(t)
+	requestContext := context.WithValue(context.Background(), canvasMapLinkRouteContextKey{}, "save")
 	request := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/canvas/maps/"+fixture.mapID.String()+"/link-routes/"+fixture.linkID.String(),
 		strings.NewReader(`{"version":1,"waypoints":[{"x":120,"y":80}]}`),
-	)
+	).WithContext(requestContext)
 	response := httptest.NewRecorder()
 
 	fixture.handler.HandleSaveLinkRoute(response, request)
@@ -140,6 +142,66 @@ func TestCanvasMapHandlerSaveLinkRoute(t *testing.T) {
 	}
 	if body.Data.UpdatedAt != formatCanvasMapTimestamp(stored.UpdatedAt) {
 		t.Fatalf("updated_at = %q, want %q", body.Data.UpdatedAt, formatCanvasMapTimestamp(stored.UpdatedAt))
+	}
+	if fixture.routeRepo.upsertContext != requestContext {
+		t.Fatal("save did not propagate the request context to route persistence")
+	}
+}
+
+func TestCanvasMapHandlerSaveLinkRouteRequiresEveryWaypointCoordinate(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantError string
+	}{
+		{
+			name:      "missing x",
+			body:      `{"version":1,"waypoints":[{"y":80}]}`,
+			wantError: "waypoints[0].x is required",
+		},
+		{
+			name:      "missing y",
+			body:      `{"version":1,"waypoints":[{"x":120}]}`,
+			wantError: "waypoints[0].y is required",
+		},
+		{
+			name:      "null x",
+			body:      `{"version":1,"waypoints":[{"x":null,"y":80}]}`,
+			wantError: "waypoints[0].x is required",
+		},
+		{
+			name:      "null y",
+			body:      `{"version":1,"waypoints":[{"x":120,"y":null}]}`,
+			wantError: "waypoints[0].y is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newCanvasMapLinkRouteHandlerFixture(t)
+			request := httptest.NewRequest(
+				http.MethodPut,
+				"/api/v1/canvas/maps/"+fixture.mapID.String()+"/link-routes/"+fixture.linkID.String(),
+				strings.NewReader(tt.body),
+			)
+			response := httptest.NewRecorder()
+
+			fixture.handler.HandleSaveLinkRoute(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+			}
+			var body map[string]string
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatalf("decode error response: %v", err)
+			}
+			if body["error"] != tt.wantError {
+				t.Fatalf("error = %q, want %q", body["error"], tt.wantError)
+			}
+			if fixture.routeRepo.upsertCalls != 0 {
+				t.Fatalf("route repository upsert calls = %d, want 0", fixture.routeRepo.upsertCalls)
+			}
+		})
 	}
 }
 
@@ -291,11 +353,12 @@ func TestCanvasMapHandlerDeleteLinkRoute(t *testing.T) {
 			Waypoints: []domain.CanvasPoint{{X: 120, Y: 80}},
 		},
 	}
+	requestContext := context.WithValue(context.Background(), canvasMapLinkRouteContextKey{}, "delete")
 	request := httptest.NewRequest(
 		http.MethodDelete,
 		"/api/v1/canvas/maps/"+fixture.mapID.String()+"/link-routes/"+fixture.linkID.String(),
 		nil,
-	)
+	).WithContext(requestContext)
 	response := httptest.NewRecorder()
 
 	fixture.handler.HandleDeleteLinkRoute(response, request)
@@ -308,6 +371,12 @@ func TestCanvasMapHandlerDeleteLinkRoute(t *testing.T) {
 	}
 	if _, ok := fixture.routeRepo.routes[fixture.mapID][fixture.linkID]; ok {
 		t.Fatal("route still exists after delete")
+	}
+	if fixture.routeRepo.deleteContext != requestContext {
+		t.Fatal("delete did not propagate the request context to route persistence")
+	}
+	if fixture.mapRepo.getMembershipCalls != 0 {
+		t.Fatalf("map membership reads = %d, want 0 for atomic repository validation", fixture.mapRepo.getMembershipCalls)
 	}
 
 	repeatedRequest := httptest.NewRequest(
@@ -365,7 +434,7 @@ func TestCanvasMapHandlerDeleteLinkRouteValidatesIDsAndFailures(t *testing.T) {
 		{
 			name: "link outside map membership",
 			prepare: func(_ *testing.T, f canvasMapLinkRouteHandlerFixture) {
-				f.mapRepo.membership.LinkIDs = nil
+				f.routeRepo.deleteErr = fmt.Errorf("membership rejected: %w", domain.ErrCanvasMapLinkRouteNotMember)
 			},
 			want: http.StatusBadRequest,
 		},
@@ -446,6 +515,57 @@ func TestCanvasMapHandlerTopologyVersionChangesForLinkRoute(t *testing.T) {
 	}
 }
 
+func TestCanvasMapHandlerTopologyFiltersRoutesAgainstLoadedLinks(t *testing.T) {
+	fixture := newCanvasMapLinkRouteHandlerFixture(t)
+	extraLinkID := uuid.New()
+	fixture.routeRepo.routes[fixture.mapID] = map[uuid.UUID]domain.CanvasMapLinkRoute{
+		fixture.linkID: {
+			LinkID:    fixture.linkID,
+			Version:   domain.CanvasMapLinkRouteVersion,
+			Waypoints: []domain.CanvasPoint{{X: 120, Y: 80}},
+		},
+		extraLinkID: {
+			LinkID:    extraLinkID,
+			Version:   domain.CanvasMapLinkRouteVersion,
+			Waypoints: []domain.CanvasPoint{{X: 220, Y: 180}},
+		},
+	}
+	requestContext := context.WithValue(context.Background(), canvasMapLinkRouteContextKey{}, "topology")
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/canvas/maps/"+fixture.mapID.String()+"/topology",
+		nil,
+	).WithContext(requestContext)
+	responseRecorder := httptest.NewRecorder()
+
+	response, ok := fixture.handler.buildMapTopologyResponse(responseRecorder, request)
+	if !ok {
+		t.Fatalf("topology failed: status=%d body=%s", responseRecorder.Code, responseRecorder.Body.String())
+	}
+	if len(response.Links) != 1 || response.Links[0].ID != fixture.linkID.String() {
+		t.Fatalf("links = %#v, want only %s", response.Links, fixture.linkID)
+	}
+	if _, ok := response.LinkRoutes[fixture.linkID.String()]; !ok {
+		t.Fatalf("link_routes = %#v, want matching route %s", response.LinkRoutes, fixture.linkID)
+	}
+	if _, ok := response.LinkRoutes[extraLinkID.String()]; ok {
+		t.Fatalf("link_routes = %#v, did not want stale route %s", response.LinkRoutes, extraLinkID)
+	}
+	if fixture.routeRepo.getAllContext != requestContext {
+		t.Fatal("topology did not propagate the request context to route persistence")
+	}
+
+	delete(fixture.routeRepo.routes[fixture.mapID], fixture.linkID)
+	responseRecorder = httptest.NewRecorder()
+	response, ok = fixture.handler.buildMapTopologyResponse(responseRecorder, request)
+	if !ok {
+		t.Fatalf("topology with no matching routes failed: status=%d body=%s", responseRecorder.Code, responseRecorder.Body.String())
+	}
+	if response.LinkRoutes != nil {
+		t.Fatalf("link_routes = %#v, want nil when no route matches the loaded links", response.LinkRoutes)
+	}
+}
+
 type canvasMapLinkRouteHandlerFixture struct {
 	handler   *CanvasMapHandler
 	mapID     uuid.UUID
@@ -455,20 +575,50 @@ type canvasMapLinkRouteHandlerFixture struct {
 	routeRepo *fakeCanvasMapHandlerLinkRouteRepo
 }
 
+type canvasMapLinkRouteContextKey struct{}
+
 func newCanvasMapLinkRouteHandlerFixture(t *testing.T) canvasMapLinkRouteHandlerFixture {
 	t.Helper()
 
 	mapID := uuid.New()
 	linkID := uuid.New()
+	sourceDeviceID := uuid.New()
+	targetDeviceID := uuid.New()
 	mapRepo := &fakeCanvasMapHandlerMapRepo{
 		maps: map[uuid.UUID]domain.CanvasMap{
-			mapID: {ID: mapID, Name: "Operations"},
+			mapID: {ID: mapID, Name: "Operations", MembershipMaterialized: true},
 		},
-		membership: domain.CanvasMapMembership{LinkIDs: []uuid.UUID{linkID}},
+		membership: domain.CanvasMapMembership{
+			Devices: []domain.CanvasMapDeviceMembership{
+				{DeviceID: sourceDeviceID, Role: domain.CanvasMapDeviceRoleBase},
+				{DeviceID: targetDeviceID, Role: domain.CanvasMapDeviceRoleBase},
+			},
+			LinkIDs: []uuid.UUID{linkID},
+		},
 	}
 	mapPositionRepo := &fakeCanvasMapHandlerPositionRepo{}
-	canvasTopology, _, linkRepo, positionRepo, areaRepo := newTestCanvasTopologyHandler(t)
-	if err := linkRepo.Create(&domain.Link{ID: linkID}); err != nil {
+	canvasTopology, deviceRepo, linkRepo, positionRepo, areaRepo := newTestCanvasTopologyHandler(t)
+	if err := deviceRepo.Create(&domain.Device{
+		ID:         sourceDeviceID,
+		Hostname:   "route-source",
+		IP:         "192.0.2.10",
+		DeviceType: domain.DeviceTypeRouter,
+	}); err != nil {
+		t.Fatalf("seed source device: %v", err)
+	}
+	if err := deviceRepo.Create(&domain.Device{
+		ID:         targetDeviceID,
+		Hostname:   "route-target",
+		IP:         "192.0.2.11",
+		DeviceType: domain.DeviceTypeRouter,
+	}); err != nil {
+		t.Fatalf("seed target device: %v", err)
+	}
+	if err := linkRepo.Create(&domain.Link{
+		ID:             linkID,
+		SourceDeviceID: sourceDeviceID,
+		TargetDeviceID: targetDeviceID,
+	}); err != nil {
 		t.Fatalf("seed canonical link: %v", err)
 	}
 	routeRepo := &fakeCanvasMapHandlerLinkRouteRepo{routes: make(map[uuid.UUID]map[uuid.UUID]domain.CanvasMapLinkRoute)}
@@ -522,10 +672,11 @@ func assertCanvasMapHandlerErrorEnvelope(t *testing.T, response *httptest.Respon
 
 // fakeCanvasMapHandlerMapRepo provides the CanvasMapRepository surface needed by handler tests.
 type fakeCanvasMapHandlerMapRepo struct {
-	maps       map[uuid.UUID]domain.CanvasMap
-	membership domain.CanvasMapMembership
-	getErr     error
-	deleted    bool
+	maps               map[uuid.UUID]domain.CanvasMap
+	membership         domain.CanvasMapMembership
+	getErr             error
+	deleted            bool
+	getMembershipCalls int
 }
 
 // Create records no maps because delete tests do not exercise creation.
@@ -570,6 +721,7 @@ func (r *fakeCanvasMapHandlerMapRepo) Duplicate(uuid.UUID, string) (domain.Canva
 }
 
 func (r *fakeCanvasMapHandlerMapRepo) GetMembership(uuid.UUID) (domain.CanvasMapMembership, error) {
+	r.getMembershipCalls++
 	return r.membership, nil
 }
 
@@ -609,13 +761,21 @@ func (r *fakeCanvasMapHandlerPositionRepo) DeleteByDeviceID(uuid.UUID) error {
 
 // fakeCanvasMapHandlerLinkRouteRepo records map-local route mutations and topology reads.
 type fakeCanvasMapHandlerLinkRouteRepo struct {
-	routes    map[uuid.UUID]map[uuid.UUID]domain.CanvasMapLinkRoute
-	getAllErr error
-	upsertErr error
-	deleteErr error
+	routes        map[uuid.UUID]map[uuid.UUID]domain.CanvasMapLinkRoute
+	getAllErr     error
+	upsertErr     error
+	deleteErr     error
+	upsertCalls   int
+	getAllContext context.Context
+	upsertContext context.Context
+	deleteContext context.Context
 }
 
-func (r *fakeCanvasMapHandlerLinkRouteRepo) GetAllForMap(mapID uuid.UUID) ([]domain.CanvasMapLinkRoute, error) {
+func (r *fakeCanvasMapHandlerLinkRouteRepo) GetAllForMap(
+	ctx context.Context,
+	mapID uuid.UUID,
+) ([]domain.CanvasMapLinkRoute, error) {
+	r.getAllContext = ctx
 	if r.getAllErr != nil {
 		return nil, r.getAllErr
 	}
@@ -629,9 +789,12 @@ func (r *fakeCanvasMapHandlerLinkRouteRepo) GetAllForMap(mapID uuid.UUID) ([]dom
 }
 
 func (r *fakeCanvasMapHandlerLinkRouteRepo) UpsertForMap(
+	ctx context.Context,
 	mapID uuid.UUID,
 	route domain.CanvasMapLinkRoute,
 ) (domain.CanvasMapLinkRoute, error) {
+	r.upsertContext = ctx
+	r.upsertCalls++
 	if r.upsertErr != nil {
 		return domain.CanvasMapLinkRoute{}, r.upsertErr
 	}
@@ -649,7 +812,12 @@ func (r *fakeCanvasMapHandlerLinkRouteRepo) UpsertForMap(
 	return route, nil
 }
 
-func (r *fakeCanvasMapHandlerLinkRouteRepo) DeleteForMap(mapID uuid.UUID, linkID uuid.UUID) error {
+func (r *fakeCanvasMapHandlerLinkRouteRepo) DeleteForMap(
+	ctx context.Context,
+	mapID uuid.UUID,
+	linkID uuid.UUID,
+) error {
+	r.deleteContext = ctx
 	if r.deleteErr != nil {
 		return r.deleteErr
 	}
