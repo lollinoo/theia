@@ -5,7 +5,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Device, Link } from '../types/api';
+import type { Device, Link, LinkRoute } from '../types/api';
 import Canvas from './Canvas';
 
 const defaultCanvasProps = {
@@ -71,12 +71,17 @@ const testState = vi.hoisted(() => ({
       area_ids: [],
     },
   ] satisfies Device[],
+  canvasDataParams: null as {
+    onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+  } | null,
 }));
 
 const apiMocks = vi.hoisted(() => ({
   createBridgeLaunchRequest: vi.fn(),
+  deleteCanvasMapLinkRoute: vi.fn(),
   fetchSettings: vi.fn(),
   fetchUserSettings: vi.fn(),
+  saveCanvasMapLinkRoute: vi.fn(),
 }));
 
 vi.mock('@xyflow/react', async () => {
@@ -223,22 +228,31 @@ vi.mock('../hooks/useDeviceWinboxAvailability', () => ({
 }));
 
 vi.mock('./canvas/useCanvasData', () => ({
-  useCanvasData: () => ({
-    devices: testState.devices,
-    setDevices: vi.fn(),
-    topologyLinks: [],
-    loading: false,
-    error: null,
-    loadTopology: vi.fn().mockResolvedValue(undefined),
-    requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
-    runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
-    grafanaUrlRef: { current: '' },
-    grafanaDashboardConfigRef: { current: null },
-    refreshSettings: vi.fn(),
-    topologyRecoveryNotice: null,
-    dismissTopologyRecoveryNotice: vi.fn(),
-    retryTopologyRefresh: vi.fn(),
-  }),
+  useCanvasData: (params: {
+    onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+  }) => {
+    testState.canvasDataParams = params;
+    return {
+      devices: testState.devices,
+      setDevices: vi.fn(),
+      topologyLinks: [],
+      topologyAreas: [],
+      loading: false,
+      error: null,
+      renderedMapKey: 'default:',
+      loadTopology: vi.fn().mockResolvedValue(undefined),
+      requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
+      runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
+      grafanaUrlRef: { current: '' },
+      grafanaDashboardConfigRef: { current: null },
+      refreshSettings: vi.fn(),
+      topologyRecoveryNotice: null,
+      dismissTopologyRecoveryNotice: vi.fn(),
+      retryTopologyRefresh: vi.fn(),
+      updateNodePosition: vi.fn(),
+      snapCurrentNodePositions: vi.fn(),
+    };
+  },
 }));
 
 vi.mock('./canvas/useAreaFilteredTopology', () => ({
@@ -253,11 +267,14 @@ vi.mock('../api/client', () => apiMocks);
 
 describe('Canvas link details edge clicks', () => {
   beforeEach(() => {
+    testState.canvasDataParams = null;
     apiMocks.fetchSettings.mockReset();
     apiMocks.fetchSettings.mockResolvedValue({});
     apiMocks.fetchUserSettings.mockReset();
     apiMocks.fetchUserSettings.mockResolvedValue({ preferences: { bridge_port: 1337 } });
     apiMocks.createBridgeLaunchRequest.mockReset();
+    apiMocks.deleteCanvasMapLinkRoute.mockReset();
+    apiMocks.saveCanvasMapLinkRoute.mockReset();
   });
 
   it('opens link details when an edge is clicked in view mode', () => {
@@ -317,5 +334,26 @@ describe('Canvas link details edge clicks', () => {
     await waitFor(() => {
       expect(screen.getByTestId('panel-state')).toHaveTextContent('link-details:edit:link-1');
     });
+  });
+
+  it('exposes one stable route commit only while a persisted map ID owns the canvas', () => {
+    const props = {
+      ...defaultCanvasProps,
+      snapshot: null,
+      reconnecting: false,
+      prometheusStatus: null,
+      selectedAreaId: null,
+      areas: [],
+    };
+    const { rerender } = render(<Canvas {...props} mapId={null} />);
+
+    expect(testState.canvasDataParams?.onLinkRouteCommit).toBeUndefined();
+
+    rerender(<Canvas {...props} mapId="map-a" />);
+    const savedMapCommit = testState.canvasDataParams?.onLinkRouteCommit;
+    expect(savedMapCommit).toEqual(expect.any(Function));
+
+    rerender(<Canvas {...props} mapId="map-b" />);
+    expect(testState.canvasDataParams?.onLinkRouteCommit).toBe(savedMapCommit);
   });
 });

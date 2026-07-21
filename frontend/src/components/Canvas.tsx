@@ -60,6 +60,7 @@ import { useCanvasFitView } from './canvas/useCanvasFitView';
 import { useCanvasFrameMetrics } from './canvas/useCanvasFrameMetrics';
 import { useCanvasGraphState } from './canvas/useCanvasGraphState';
 import { useCanvasInteractionState } from './canvas/useCanvasInteractionState';
+import { useCanvasLinkRoutes } from './canvas/useCanvasLinkRoutes';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { useCanvasSelection } from './canvas/useCanvasSelection';
 import { useCanvasSnapPreference } from './canvas/useCanvasSnapPreference';
@@ -201,6 +202,8 @@ export default function Canvas({
     nodeIndexByIdRef,
     edgeIndexByIdRef,
   } = useCanvasGraphState({ snapToGrid, snapGrid: canvasSnapGrid });
+  const { commitLinkRoute, resetLinkRoute, linkRouteError, dismissLinkRouteError } =
+    useCanvasLinkRoutes({ mapId, setEdges, edgeIndexByIdRef });
   const { diagnosticsVisible, closeDiagnostics } = useCanvasDiagnosticsToggle();
   const { canvasInteractionActive, beginCanvasInteraction, endCanvasInteraction } =
     useCanvasInteractionState({ onInteractionActiveChange });
@@ -461,6 +464,7 @@ export default function Canvas({
     reconnecting,
     prometheusStatus,
     editMode,
+    onLinkRouteCommit: mapId === null ? undefined : commitLinkRoute,
     openDeviceMenu,
     openEdgeMenu,
     openSelfLinkDetails,
@@ -874,6 +878,8 @@ export default function Canvas({
         setDeviceMenu={setDeviceMenu}
         setEdgeMenu={setEdgeMenu}
         setPanelContent={setPanelContent}
+        editMode={editMode}
+        resetLinkRoute={resetLinkRoute}
       />
 
       <SidePanel
@@ -912,6 +918,8 @@ export default function Canvas({
       <CanvasOverlays
         editMode={editMode}
         reconnecting={reconnecting}
+        linkRouteError={linkRouteError}
+        dismissLinkRouteError={dismissLinkRouteError}
         topologyRecoveryNotice={topologyRecoveryNotice}
         dismissTopologyRecoveryNotice={dismissTopologyRecoveryNotice}
         retryTopologyRefresh={retryTopologyRefresh}

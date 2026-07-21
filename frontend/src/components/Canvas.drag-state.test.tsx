@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CanvasMap, Device, Link } from '../types/api';
+import type { CanvasMap, Device, Link, LinkRoute } from '../types/api';
 import Canvas from './Canvas';
 import type { DeviceNode } from './DeviceCard';
 import { FloatingConnectionLine } from './FloatingConnectionLine';
@@ -85,6 +85,8 @@ const testState = vi.hoisted(() => ({
   canonicalNodes: [] as DeviceNode[],
   displayedNodes: [] as DeviceNode[],
   setEdges: vi.fn(),
+  deleteCanvasMapLinkRoute: vi.fn(),
+  saveCanvasMapLinkRoute: vi.fn(),
   applyNodeChanges: vi.fn((changes: MockNodeChange[], currentNodes: DeviceNode[]) => {
     let nextNodes = currentNodes;
     for (const change of changes) {
@@ -114,6 +116,7 @@ const testState = vi.hoisted(() => ({
     mapName?: string;
     getCanvasClientRect: () => unknown;
     snapGrid: [number, number] | null;
+    onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
   },
   canvasPanelsProps: {} as Record<string, unknown>,
   backgroundProps: {} as Record<string, unknown>,
@@ -348,7 +351,9 @@ vi.mock('../contexts/ThemeContext', () => ({
   adaptAreaColor: (color: string) => color,
 }));
 vi.mock('../api/client', () => ({
+  deleteCanvasMapLinkRoute: (...args: unknown[]) => testState.deleteCanvasMapLinkRoute(...args),
   removeDeviceFromCanvasMap: (...args: unknown[]) => testState.removeDeviceFromCanvasMap(...args),
+  saveCanvasMapLinkRoute: (...args: unknown[]) => testState.saveCanvasMapLinkRoute(...args),
 }));
 vi.mock('./canvas/useCanvasData', async () => {
   const ReactRuntime = await import('react');
@@ -359,6 +364,7 @@ vi.mock('./canvas/useCanvasData', async () => {
       getCanvasClientRect: () => unknown;
       setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
       snapGrid: [number, number] | null;
+      onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
     }) => {
       const lastSeededNodesRef = ReactRuntime.useRef<DeviceNode[] | null>(null);
       ReactRuntime.useLayoutEffect(() => {
@@ -447,6 +453,8 @@ describe('Canvas drag state ownership', () => {
     ];
     testState.displayedNodes = [];
     testState.setEdges.mockReset();
+    testState.deleteCanvasMapLinkRoute.mockReset();
+    testState.saveCanvasMapLinkRoute.mockReset();
     testState.applyNodeChanges.mockClear();
     testState.savePositions.mockReset();
     testState.loadTopology.mockReset();
@@ -876,6 +884,7 @@ describe('Canvas drag state ownership', () => {
     expect(testState.canvasDataParams).toMatchObject({
       mapId: 'map-backbone',
       mapName: 'Backbone',
+      onLinkRouteCommit: expect.any(Function),
     });
     expect(
       testState.displayedNodes.map((node) => `${node.id}:${node.data.isGhost === true}`),
