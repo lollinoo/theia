@@ -39,6 +39,7 @@ interface PendingLinkRoute {
   route: LinkRoute | null;
   sequence: number;
   owner: LinkRouteMutationOwner;
+  authorityEpoch: number;
 }
 
 interface LinkRouteQueue {
@@ -53,6 +54,8 @@ interface LinkRouteQueue {
   latestSequence: number;
   overlayActive: boolean;
   overlayRoute: LinkRoute | null;
+  authorityEpoch: number;
+  invalidated: boolean;
 }
 
 const linkRouteSaveError =
@@ -184,6 +187,9 @@ export function useCanvasLinkRoutes({
       void request
         .then(
           (savedRoute) => {
+            if (queue.invalidated || mutation.authorityEpoch !== queue.authorityEpoch) {
+              return;
+            }
             queue.confirmed = copyOptionalRoute(savedRoute);
             queue.confirmedSequence = mutation.sequence;
             queue.confirmedInitialized = true;
@@ -195,12 +201,18 @@ export function useCanvasLinkRoutes({
                   queue,
                   mutation.owner,
                   queue.overlayRoute,
-                  () => queue.latestSequence === mutation.sequence,
+                  () =>
+                    !queue.invalidated &&
+                    mutation.authorityEpoch === queue.authorityEpoch &&
+                    queue.latestSequence === mutation.sequence,
                 );
               }
             }
           },
           () => {
+            if (queue.invalidated || mutation.authorityEpoch !== queue.authorityEpoch) {
+              return;
+            }
             const isLatestMutation = queue.latestSequence === mutation.sequence;
             const hasNoNewerConfirmation = queue.confirmedSequence < mutation.sequence;
             if (!isLatestMutation || !hasNoNewerConfirmation) {
@@ -217,11 +229,15 @@ export function useCanvasLinkRoutes({
               mutation.owner,
               queue.confirmed,
               () =>
+                !queue.invalidated &&
+                mutation.authorityEpoch === queue.authorityEpoch &&
                 queue.latestSequence === mutation.sequence &&
                 queue.confirmedSequence < mutation.sequence,
             );
             setLinkRouteError((currentError) =>
               hasOwner(ownerRef.current, mutation.owner) &&
+              !queue.invalidated &&
+              mutation.authorityEpoch === queue.authorityEpoch &&
               queue.latestSequence === mutation.sequence &&
               queue.confirmedSequence < mutation.sequence
                 ? linkRouteSaveError
@@ -231,6 +247,12 @@ export function useCanvasLinkRoutes({
         )
         .finally(() => {
           queue.running = false;
+          if (queue.invalidated && queue.pendingLatest === null) {
+            if (queuesRef.current.get(queue.key) === queue) {
+              queuesRef.current.delete(queue.key);
+            }
+            return;
+          }
           drain(queue);
         });
     },
@@ -259,18 +281,41 @@ export function useCanvasLinkRoutes({
           latestSequence: 0,
           overlayActive: false,
           overlayRoute: null,
+          authorityEpoch: 0,
+          invalidated: false,
         };
         queuesRef.current.set(key, queue);
+      }
+
+      if (queue.invalidated) {
+        queue.invalidated = false;
+        queue.confirmed = null;
+        queue.confirmedInitialized = false;
       }
 
       const nextRoute = copyOptionalRoute(route);
       const sequence = queue.latestSequence + 1;
       queue.latestSequence = sequence;
       const mutationOwner = { mapId: owner.mapId, generation: owner.generation };
-      queue.pendingLatest = { route: nextRoute, sequence, owner: mutationOwner };
+      const mutationEpoch = queue.authorityEpoch;
+      queue.pendingLatest = {
+        route: nextRoute,
+        sequence,
+        owner: mutationOwner,
+        authorityEpoch: mutationEpoch,
+      };
       queue.overlayRoute = copyOptionalRoute(nextRoute);
       queue.overlayActive = true;
-      patchEdgeRoute(queue, mutationOwner, nextRoute, undefined, true);
+      patchEdgeRoute(
+        queue,
+        mutationOwner,
+        nextRoute,
+        () =>
+          !queue.invalidated &&
+          queue.authorityEpoch === mutationEpoch &&
+          queue.latestSequence === sequence,
+        true,
+      );
       drainQueue(queue);
     },
     [drainQueue, patchEdgeRoute],
@@ -289,6 +334,7 @@ export function useCanvasLinkRoutes({
       return edges;
     }
     const ownerMapId = owner.mapId;
+    const currentEdgeIds = new Set(edges.map((edge) => edge.id));
 
     let reconciledEdges: LinkEdgeType[] | null = null;
     edges.forEach((edge, edgeIndex) => {
@@ -303,6 +349,7 @@ export function useCanvasLinkRoutes({
         if (queueIsIdle) {
           queue.confirmed = fetchedRoute;
           queue.confirmedInitialized = true;
+          queuesRef.current.delete(queue.key);
         }
         return;
       }
@@ -312,6 +359,7 @@ export function useCanvasLinkRoutes({
           queue.confirmed = copyOptionalRoute(fetchedRoute);
           queue.confirmedInitialized = true;
           queue.overlayActive = false;
+          queuesRef.current.delete(queue.key);
         }
         return;
       }
@@ -325,6 +373,25 @@ export function useCanvasLinkRoutes({
       reconciledEdges ??= edges.slice();
       reconciledEdges[edgeIndex] = { ...edge, data };
     });
+
+    for (const [key, queue] of queuesRef.current) {
+      if (queue.mapId !== ownerMapId || currentEdgeIds.has(queue.edgeId)) {
+        continue;
+      }
+      if (!queue.running) {
+        queuesRef.current.delete(key);
+        continue;
+      }
+      if (!queue.invalidated) {
+        queue.authorityEpoch += 1;
+      }
+      queue.invalidated = true;
+      queue.pendingLatest = null;
+      queue.confirmed = null;
+      queue.confirmedInitialized = false;
+      queue.overlayActive = false;
+      queue.overlayRoute = null;
+    }
 
     return reconciledEdges ?? edges;
   }, []);

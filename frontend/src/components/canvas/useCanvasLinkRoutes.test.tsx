@@ -248,6 +248,120 @@ describe('useCanvasLinkRoutes', () => {
     expect(acceptedEdges[0]).toBe(caughtUpRefresh[0]);
   });
 
+  it('evicts a confirmed overlay when authoritative topology no longer contains the link', async () => {
+    const save = deferred<LinkRoute>();
+    apiMocks.saveCanvasMapLinkRoute.mockReturnValueOnce(save.promise);
+    const { result } = renderHook(() =>
+      useLinkRouteHarness('map-a', [mockEdge('link-a', ORIGINAL_ROUTE)]),
+    );
+
+    await act(async () => {
+      result.current.commitLinkRoute('link-a', FIRST_ROUTE);
+      await flushAsyncWork();
+      save.resolve(FIRST_ROUTE);
+      await save.promise;
+      await flushAsyncWork();
+    });
+
+    const absentRefresh: LinkEdgeType[] = [];
+    expect(result.current.reconcileLinkRouteEdges(absentRefresh)).toBe(absentRefresh);
+
+    const readdedWithAutomaticRouting = [mockEdge('link-a')];
+    const reconciledReaddedEdges = result.current.reconcileLinkRouteEdges(
+      readdedWithAutomaticRouting,
+    );
+    expect(reconciledReaddedEdges).toBe(readdedWithAutomaticRouting);
+    expect(reconciledReaddedEdges[0]?.data).not.toHaveProperty('route');
+  });
+
+  it('does not let a tombstoned in-flight PUT patch a link that reappears automatically', async () => {
+    const save = deferred<LinkRoute>();
+    apiMocks.saveCanvasMapLinkRoute.mockReturnValueOnce(save.promise);
+    const { result } = renderHook(() =>
+      useLinkRouteHarness('map-a', [mockEdge('link-a', ORIGINAL_ROUTE)]),
+    );
+
+    await act(async () => {
+      result.current.commitLinkRoute('link-a', FIRST_ROUTE);
+      await flushAsyncWork();
+    });
+    const absentRefresh: LinkEdgeType[] = [];
+    expect(result.current.reconcileLinkRouteEdges(absentRefresh)).toBe(absentRefresh);
+    act(() => {
+      result.current.replaceEdges(absentRefresh);
+    });
+
+    const readdedEdge = mockEdge('link-a');
+    act(() => {
+      result.current.replaceEdges([readdedEdge]);
+    });
+
+    await act(async () => {
+      save.resolve(FIRST_ROUTE);
+      await save.promise;
+      await flushAsyncWork();
+    });
+
+    expect(result.current.edges[0]).toBe(readdedEdge);
+    expect(result.current.edges[0]?.data).not.toHaveProperty('route');
+    expect(result.current.linkRouteError).toBeNull();
+  });
+
+  it('serializes a new edit behind a tombstoned request when the link reappears', async () => {
+    const staleSave = deferred<LinkRoute>();
+    const readdedSave = deferred<LinkRoute>();
+    apiMocks.saveCanvasMapLinkRoute
+      .mockReturnValueOnce(staleSave.promise)
+      .mockReturnValueOnce(readdedSave.promise);
+    const { result } = renderHook(() =>
+      useLinkRouteHarness('map-a', [mockEdge('link-a', ORIGINAL_ROUTE)]),
+    );
+
+    await act(async () => {
+      result.current.commitLinkRoute('link-a', FIRST_ROUTE);
+      await flushAsyncWork();
+    });
+    const absentRefresh: LinkEdgeType[] = [];
+    result.current.reconcileLinkRouteEdges(absentRefresh);
+    act(() => {
+      result.current.replaceEdges(absentRefresh);
+    });
+
+    const readdedWithAutomaticRouting = [mockEdge('link-a')];
+    expect(result.current.reconcileLinkRouteEdges(readdedWithAutomaticRouting)).toBe(
+      readdedWithAutomaticRouting,
+    );
+    act(() => {
+      result.current.replaceEdges(readdedWithAutomaticRouting);
+    });
+    act(() => {
+      result.current.commitLinkRoute('link-a', SECOND_ROUTE);
+    });
+
+    expect(result.current.edges[0]?.data?.route).toEqual(SECOND_ROUTE);
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      staleSave.resolve(FIRST_ROUTE);
+      await staleSave.promise;
+      await flushAsyncWork();
+    });
+
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenCalledTimes(2);
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenLastCalledWith(
+      'map-a',
+      'link-a',
+      SECOND_ROUTE,
+    );
+    expect(result.current.edges[0]?.data?.route).toEqual(SECOND_ROUTE);
+
+    await act(async () => {
+      readdedSave.resolve(SECOND_ROUTE);
+      await readdedSave.promise;
+      await flushAsyncWork();
+    });
+  });
+
   it('keeps a DELETE overlay across stale refreshes until automatic routing catches up', async () => {
     const deletion = deferred<void>();
     apiMocks.deleteCanvasMapLinkRoute.mockReturnValueOnce(deletion.promise);
