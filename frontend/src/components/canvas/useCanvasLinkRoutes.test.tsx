@@ -153,6 +153,132 @@ describe('useCanvasLinkRoutes', () => {
     );
   });
 
+  it('keeps one write queue when the same map and link are revisited before a save settles', async () => {
+    const firstSave = deferred<LinkRoute>();
+    const revisitedSave = deferred<LinkRoute>();
+    apiMocks.saveCanvasMapLinkRoute
+      .mockReturnValueOnce(firstSave.promise)
+      .mockReturnValueOnce(revisitedSave.promise);
+    const { result, rerender } = renderHook(
+      ({ mapId }) => useLinkRouteHarness(mapId, [mockEdge('link-a', ORIGINAL_ROUTE)]),
+      { initialProps: { mapId: 'map-a' as string | null } },
+    );
+
+    await act(async () => {
+      result.current.commitLinkRoute('link-a', FIRST_ROUTE);
+      await flushAsyncWork();
+    });
+
+    rerender({ mapId: 'map-b' });
+    act(() => {
+      result.current.replaceEdges([mockEdge('link-a', THIRD_ROUTE)]);
+    });
+    rerender({ mapId: 'map-a' });
+    act(() => {
+      result.current.replaceEdges([mockEdge('link-a', ORIGINAL_ROUTE)]);
+      result.current.commitLinkRoute('link-a', SECOND_ROUTE);
+    });
+
+    expect(result.current.edges[0]?.data?.route).toEqual(SECOND_ROUTE);
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      firstSave.resolve(FIRST_ROUTE);
+      await firstSave.promise;
+      await flushAsyncWork();
+    });
+
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenCalledTimes(2);
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenLastCalledWith(
+      'map-a',
+      'link-a',
+      SECOND_ROUTE,
+    );
+    expect(result.current.edges[0]?.data?.route).toEqual(SECOND_ROUTE);
+
+    await act(async () => {
+      revisitedSave.resolve(SECOND_ROUTE);
+      await revisitedSave.promise;
+      await flushAsyncWork();
+    });
+  });
+
+  it('overlays stale refresh edges while a PUT is pending and until the saved route catches up', async () => {
+    const save = deferred<LinkRoute>();
+    apiMocks.saveCanvasMapLinkRoute.mockReturnValueOnce(save.promise);
+    const { result } = renderHook(() =>
+      useLinkRouteHarness('map-a', [mockEdge('link-a', ORIGINAL_ROUTE)]),
+    );
+
+    await act(async () => {
+      result.current.commitLinkRoute('link-a', FIRST_ROUTE);
+      await flushAsyncWork();
+    });
+
+    const staleEdge = mockEdge('link-a', ORIGINAL_ROUTE);
+    const staleRefresh = [staleEdge];
+    const optimisticEdges = result.current.reconcileLinkRouteEdges(staleRefresh);
+
+    expect(optimisticEdges).not.toBe(staleRefresh);
+    expect(optimisticEdges[0]).not.toBe(staleEdge);
+    expect(optimisticEdges[0]?.data?.route).toEqual(FIRST_ROUTE);
+    expect(staleEdge.data?.route).toEqual(ORIGINAL_ROUTE);
+
+    const optimisticRoute = optimisticEdges[0]?.data?.route;
+    if (optimisticRoute === undefined) {
+      throw new Error('expected an optimistic route overlay');
+    }
+    optimisticRoute.waypoints[0]!.x = 999;
+    expect(result.current.reconcileLinkRouteEdges(staleRefresh)[0]?.data?.route).toEqual(
+      FIRST_ROUTE,
+    );
+
+    await act(async () => {
+      save.resolve(FIRST_ROUTE);
+      await save.promise;
+      await flushAsyncWork();
+    });
+
+    expect(result.current.reconcileLinkRouteEdges(staleRefresh)[0]?.data?.route).toEqual(
+      FIRST_ROUTE,
+    );
+    const caughtUpRefresh = [mockEdge('link-a', FIRST_ROUTE)];
+    const acceptedEdges = result.current.reconcileLinkRouteEdges(caughtUpRefresh);
+    expect(acceptedEdges).toBe(caughtUpRefresh);
+    expect(acceptedEdges[0]).toBe(caughtUpRefresh[0]);
+  });
+
+  it('keeps a DELETE overlay across stale refreshes until automatic routing catches up', async () => {
+    const deletion = deferred<void>();
+    apiMocks.deleteCanvasMapLinkRoute.mockReturnValueOnce(deletion.promise);
+    const { result } = renderHook(() =>
+      useLinkRouteHarness('map-a', [mockEdge('link-a', ORIGINAL_ROUTE)]),
+    );
+
+    await act(async () => {
+      result.current.resetLinkRoute('link-a');
+      await flushAsyncWork();
+    });
+
+    const staleEdge = mockEdge('link-a', ORIGINAL_ROUTE);
+    const staleRefresh = [staleEdge];
+    const pendingDeleteEdges = result.current.reconcileLinkRouteEdges(staleRefresh);
+    expect(pendingDeleteEdges[0]?.data).not.toHaveProperty('route');
+    expect(staleEdge.data?.route).toEqual(ORIGINAL_ROUTE);
+
+    await act(async () => {
+      deletion.resolve();
+      await deletion.promise;
+      await flushAsyncWork();
+    });
+
+    expect(result.current.reconcileLinkRouteEdges(staleRefresh)[0]?.data).not.toHaveProperty(
+      'route',
+    );
+    const caughtUpRefresh = [mockEdge('link-a')];
+    expect(result.current.reconcileLinkRouteEdges(caughtUpRefresh)).toBe(caughtUpRefresh);
+  });
+
   it('advances the confirmed route on success and restores it when the latest save fails', async () => {
     const firstSave = deferred<LinkRoute>();
     const secondSave = deferred<LinkRoute>();
@@ -249,6 +375,38 @@ describe('useCanvasLinkRoutes', () => {
 
     expect(result.current.edges).toEqual([mapBEdge]);
     expect(result.current.linkRouteError).toBeNull();
+  });
+
+  it('retains an old-map failure rollback for reconciliation when that map is revisited', async () => {
+    const oldMapSave = deferred<LinkRoute>();
+    apiMocks.saveCanvasMapLinkRoute.mockReturnValueOnce(oldMapSave.promise);
+    const { result, rerender } = renderHook(
+      ({ mapId }) => useLinkRouteHarness(mapId, [mockEdge('link-a', ORIGINAL_ROUTE)]),
+      { initialProps: { mapId: 'map-a' as string | null } },
+    );
+
+    await act(async () => {
+      result.current.commitLinkRoute('link-a', FIRST_ROUTE);
+      await flushAsyncWork();
+    });
+    rerender({ mapId: 'map-b' });
+    const mapBEdge = mockEdge('link-a', THIRD_ROUTE);
+    act(() => {
+      result.current.replaceEdges([mapBEdge]);
+    });
+
+    await act(async () => {
+      oldMapSave.reject(new Error('late old-map failure'));
+      await oldMapSave.promise.catch(() => undefined);
+      await flushAsyncWork();
+    });
+
+    expect(result.current.edges).toEqual([mapBEdge]);
+    expect(result.current.linkRouteError).toBeNull();
+
+    rerender({ mapId: 'map-a' });
+    const refreshedMapAEdges = [mockEdge('link-a', ORIGINAL_ROUTE)];
+    expect(result.current.reconcileLinkRouteEdges(refreshedMapAEdges)).toBe(refreshedMapAEdges);
   });
 
   it('uses DELETE and removes optimistic route data for automatic routing', async () => {

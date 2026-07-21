@@ -93,6 +93,7 @@ interface UseCanvasDataParams {
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void;
   openEdgeMenu: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void;
   onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+  reconcileLinkRouteEdges?: (edges: LinkEdgeType[]) => LinkEdgeType[];
   openSelfLinkDetails?: (link: Link) => void;
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
   getCanvasClientRect: () => ScreenRect | null;
@@ -163,6 +164,7 @@ export function useCanvasData({
   openDeviceMenu,
   openEdgeMenu,
   onLinkRouteCommit,
+  reconcileLinkRouteEdges,
   openSelfLinkDetails,
   reactFlow,
   getCanvasClientRect,
@@ -525,7 +527,7 @@ export function useCanvasData({
               alerts: alertsRef.current,
               snapGrid: snapGridRef.current,
             };
-            return topologyCompositionCacheRef.current.compose(
+            const composition = topologyCompositionCacheRef.current.compose(
               compositionInput,
               buildCanvasTopologyCompositionCacheKey({
                 mapKey,
@@ -554,6 +556,11 @@ export function useCanvasData({
                 onLinkRouteCommit,
               }),
             );
+            const reconciledEdges = reconcileLinkRouteEdges?.(composition.edges);
+            if (reconciledEdges === undefined || reconciledEdges === composition.edges) {
+              return composition;
+            }
+            return { ...composition, edges: reconciledEdges };
           };
 
           if (!structureChanged) {
@@ -715,6 +722,7 @@ export function useCanvasData({
       openEdgeMenu,
       openSelfLinkDetails,
       onLinkRouteCommit,
+      reconcileLinkRouteEdges,
       reactFlow,
       getCanvasClientRect,
       setNodes,

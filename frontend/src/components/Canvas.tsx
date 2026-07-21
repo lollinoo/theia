@@ -22,7 +22,7 @@ import { removeDeviceFromCanvasMap } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useWinboxFlow } from '../hooks/useWinboxFlow';
-import type { Area, CanvasMap, Device, Link } from '../types/api';
+import type { Area, CanvasMap, Device, Link, LinkRoute } from '../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
 import { resolveGrafanaDashboardUrl } from '../utils/grafanaDashboard';
 import { CanvasChromeControls } from './canvas/CanvasChromeControls';
@@ -134,6 +134,34 @@ function setEdgeInteractionMode(
   return changed ? nextEdges : edges;
 }
 
+/** Updates persisted-route gesture availability only when edit ownership changes. */
+function setLinkRouteAvailability(
+  edges: LinkEdgeType[],
+  editMode: boolean,
+  onRouteCommit: ((edgeId: string, route: LinkRoute | null) => void) | undefined,
+): LinkEdgeType[] {
+  const routeEditable = editMode && onRouteCommit !== undefined;
+  let nextEdges: LinkEdgeType[] | null = null;
+
+  edges.forEach((edge, edgeIndex) => {
+    if (edge.data?.routeEditable === routeEditable && edge.data?.onRouteCommit === onRouteCommit) {
+      return;
+    }
+
+    nextEdges ??= edges.slice();
+    nextEdges[edgeIndex] = {
+      ...edge,
+      data: {
+        ...(edge.data ?? {}),
+        routeEditable,
+        onRouteCommit,
+      },
+    };
+  });
+
+  return nextEdges ?? edges;
+}
+
 /**
  * Describes the canonical topology inputs and host callbacks owned by App.
  * Canvas projects these inputs into React Flow nodes/edges while reporting selected detail state upward.
@@ -202,8 +230,14 @@ export default function Canvas({
     nodeIndexByIdRef,
     edgeIndexByIdRef,
   } = useCanvasGraphState({ snapToGrid, snapGrid: canvasSnapGrid });
-  const { commitLinkRoute, resetLinkRoute, linkRouteError, dismissLinkRouteError } =
-    useCanvasLinkRoutes({ mapId, setEdges, edgeIndexByIdRef });
+  const {
+    commitLinkRoute,
+    resetLinkRoute,
+    reconcileLinkRouteEdges,
+    linkRouteError,
+    dismissLinkRouteError,
+  } = useCanvasLinkRoutes({ mapId, setEdges, edgeIndexByIdRef });
+  const onLinkRouteCommit = mapId === null ? undefined : commitLinkRoute;
   const { diagnosticsVisible, closeDiagnostics } = useCanvasDiagnosticsToggle();
   const { canvasInteractionActive, beginCanvasInteraction, endCanvasInteraction } =
     useCanvasInteractionState({ onInteractionActiveChange });
@@ -464,7 +498,8 @@ export default function Canvas({
     reconnecting,
     prometheusStatus,
     editMode,
-    onLinkRouteCommit: mapId === null ? undefined : commitLinkRoute,
+    onLinkRouteCommit,
+    reconcileLinkRouteEdges,
     openDeviceMenu,
     openEdgeMenu,
     openSelfLinkDetails,
@@ -486,6 +521,10 @@ export default function Canvas({
     }
     toggleSnapToGrid();
   }, [snapCurrentNodePositions, snapToGrid, toggleSnapToGrid]);
+
+  useEffect(() => {
+    setEdges((currentEdges) => setLinkRouteAvailability(currentEdges, editMode, onLinkRouteCommit));
+  }, [editMode, onLinkRouteCommit, setEdges]);
 
   useEffect(() => {
     onTopologyLoadingChange?.(loading);

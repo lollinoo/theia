@@ -1,12 +1,13 @@
 /**
  * Exercises canvas edge details component behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Device, Link, LinkRoute } from '../types/api';
 import Canvas from './Canvas';
+import type { LinkEdgeType } from './LinkEdge';
 
 const defaultCanvasProps = {
   mapId: null,
@@ -92,26 +93,45 @@ vi.mock('@xyflow/react', async () => {
     MiniMap: () => null,
     ReactFlow: ({
       children,
+      edges,
       onEdgeClick,
       onPaneClick,
     }: {
       children: React.ReactNode;
+      edges?: LinkEdgeType[];
       onEdgeClick?: (event: unknown, edge: unknown) => void;
       onPaneClick?: () => void;
-    }) => (
-      <div>
-        <button
-          type="button"
-          onClick={() => onEdgeClick?.({}, { id: 'edge-1', data: { link: testState.link } })}
-        >
-          Trigger edge click
-        </button>
-        <button type="button" onClick={() => onPaneClick?.()}>
-          Trigger pane click
-        </button>
-        {children}
-      </div>
-    ),
+    }) => {
+      const routeEdge = edges?.find((edge) => edge.id === testState.link.id);
+      return (
+        <div>
+          <button
+            type="button"
+            onClick={() => onEdgeClick?.({}, { id: 'edge-1', data: { link: testState.link } })}
+          >
+            Trigger edge click
+          </button>
+          <button type="button" onClick={() => onPaneClick?.()}>
+            Trigger pane click
+          </button>
+          {routeEdge?.data?.routeEditable === true &&
+            typeof routeEdge.data.onRouteCommit === 'function' && (
+              <button
+                type="button"
+                onClick={() =>
+                  routeEdge.data?.onRouteCommit?.(routeEdge.id, {
+                    version: 1,
+                    waypoints: [{ x: 90, y: 45 }],
+                  })
+                }
+              >
+                Commit route gesture
+              </button>
+            )}
+          {children}
+        </div>
+      );
+    },
     applyEdgeChanges: (_changes: unknown, current: unknown) => current,
     useNodesState: () => [[], vi.fn(), vi.fn()],
     useReactFlow: () => ({
@@ -227,33 +247,59 @@ vi.mock('../hooks/useDeviceWinboxAvailability', () => ({
   }),
 }));
 
-vi.mock('./canvas/useCanvasData', () => ({
-  useCanvasData: (params: {
-    onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
-  }) => {
-    testState.canvasDataParams = params;
-    return {
-      devices: testState.devices,
-      setDevices: vi.fn(),
-      topologyLinks: [],
-      topologyAreas: [],
-      loading: false,
-      error: null,
-      renderedMapKey: 'default:',
-      loadTopology: vi.fn().mockResolvedValue(undefined),
-      requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
-      runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
-      grafanaUrlRef: { current: '' },
-      grafanaDashboardConfigRef: { current: null },
-      refreshSettings: vi.fn(),
-      topologyRecoveryNotice: null,
-      dismissTopologyRecoveryNotice: vi.fn(),
-      retryTopologyRefresh: vi.fn(),
-      updateNodePosition: vi.fn(),
-      snapCurrentNodePositions: vi.fn(),
-    };
-  },
-}));
+vi.mock('./canvas/useCanvasData', async () => {
+  const ReactRuntime = await import('react');
+  return {
+    useCanvasData: (params: {
+      editMode: boolean;
+      onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+      setEdges: React.Dispatch<React.SetStateAction<LinkEdgeType[]>>;
+    }) => {
+      const seededEdgesRef = ReactRuntime.useRef(false);
+      ReactRuntime.useLayoutEffect(() => {
+        if (seededEdgesRef.current) {
+          return;
+        }
+        seededEdgesRef.current = true;
+        params.setEdges([
+          {
+            id: testState.link.id,
+            source: testState.link.source_device_id,
+            target: testState.link.target_device_id,
+            data: {
+              link: testState.link,
+              route: { version: 1, waypoints: [{ x: 20, y: 30 }] },
+              routeEditable: params.editMode && params.onLinkRouteCommit !== undefined,
+              onRouteCommit: params.onLinkRouteCommit,
+            },
+          } as LinkEdgeType,
+        ]);
+      }, [params.editMode, params.onLinkRouteCommit, params.setEdges]);
+
+      testState.canvasDataParams = params;
+      return {
+        devices: testState.devices,
+        setDevices: vi.fn(),
+        topologyLinks: [],
+        topologyAreas: [],
+        loading: false,
+        error: null,
+        renderedMapKey: 'default:',
+        loadTopology: vi.fn().mockResolvedValue(undefined),
+        requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
+        runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
+        grafanaUrlRef: { current: '' },
+        grafanaDashboardConfigRef: { current: null },
+        refreshSettings: vi.fn(),
+        topologyRecoveryNotice: null,
+        dismissTopologyRecoveryNotice: vi.fn(),
+        retryTopologyRefresh: vi.fn(),
+        updateNodePosition: vi.fn(),
+        snapCurrentNodePositions: vi.fn(),
+      };
+    },
+  };
+});
 
 vi.mock('./canvas/useAreaFilteredTopology', () => ({
   useAreaFilteredTopology: (devices: Device[]) => ({
@@ -355,5 +401,47 @@ describe('Canvas link details edge clicks', () => {
 
     rerender(<Canvas {...props} mapId="map-b" />);
     expect(testState.canvasDataParams?.onLinkRouteCommit).toBe(savedMapCommit);
+  });
+
+  it('enables route gestures on existing saved-map edges only while Edit Mode is active', async () => {
+    apiMocks.saveCanvasMapLinkRoute.mockImplementation(async (_mapId, _edgeId, route) => route);
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        mapId="map-a"
+        mapName="Map A"
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Commit route gesture' })).not.toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Enable edit mode' }));
+    });
+    const routeGesture = await screen.findByRole('button', { name: 'Commit route gesture' });
+
+    await act(async () => {
+      fireEvent.click(routeGesture);
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenCalledWith('map-a', testState.link.id, {
+      version: 1,
+      waypoints: [{ x: 90, y: 45 }],
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Disable edit mode' }));
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'Commit route gesture' }),
+      ).not.toBeInTheDocument();
+    });
   });
 });

@@ -195,6 +195,7 @@ function renderUseCanvasData(
     snapGrid?: SnapGrid | null;
     editMode?: boolean;
     onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+    reconcileLinkRouteEdges?: (edges: LinkEdgeType[]) => LinkEdgeType[];
   } = {},
 ) {
   const canvasRect = { x: 100, y: 60, width: 1000, height: 700 };
@@ -245,6 +246,7 @@ function renderUseCanvasData(
         openDeviceMenu,
         openEdgeMenu,
         onLinkRouteCommit: options.onLinkRouteCommit,
+        reconcileLinkRouteEdges: options.reconcileLinkRouteEdges,
         reactFlow,
         getCanvasClientRect,
         nodes,
@@ -450,6 +452,38 @@ describe('useCanvasData', () => {
       routeEditable: true,
       onRouteCommit: onLinkRouteCommit,
     });
+  });
+
+  it('reconciles composed refresh edges before replacing canonical edge state', async () => {
+    const staleEdge = {
+      id: 'link-1',
+      source: 'dev-1',
+      target: 'dev-2',
+      data: { route: { version: 1 as const, waypoints: [{ x: 10, y: 20 }] } },
+    } as LinkEdgeType;
+    const reconciledEdge = {
+      ...staleEdge,
+      data: { route: { version: 1 as const, waypoints: [{ x: 70, y: 80 }] } },
+    } as LinkEdgeType;
+    const reconcileLinkRouteEdges = vi.fn(() => [reconciledEdge]);
+    vi.mocked(buildTopologyEdges).mockReturnValueOnce([staleEdge]);
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({ links: [mockLink()] }),
+    );
+
+    const { result } = renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Core Map',
+      reconcileLinkRouteEdges,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(reconcileLinkRouteEdges).toHaveBeenCalledWith([staleEdge]);
+    expect(result.current.edges).toEqual([reconciledEdge]);
   });
 
   it.each([
