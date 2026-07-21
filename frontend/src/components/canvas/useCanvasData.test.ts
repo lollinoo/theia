@@ -23,7 +23,7 @@ import {
   resetCanvasRuntimeBootstrap,
 } from '../../hooks/canvasRuntimeBootstrap';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
-import type { Area, Device } from '../../types/api';
+import type { Area, Device, Link, LinkRoute } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
@@ -139,6 +139,22 @@ function mockArea(overrides: Partial<Area> = {}): Area {
   };
 }
 
+function mockLink(overrides: Partial<Link> = {}): Link {
+  return {
+    id: 'link-1',
+    source_device_id: 'dev-1',
+    source_if_name: 'ether1',
+    target_device_id: 'dev-2',
+    target_if_name: 'ether2',
+    discovery_protocol: 'lldp',
+    source_if_speed: 1_000_000_000,
+    source_if_oper_status: 'up',
+    target_if_speed: 1_000_000_000,
+    target_if_oper_status: 'up',
+    ...overrides,
+  };
+}
+
 function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   return {
     devices: {
@@ -177,6 +193,8 @@ function renderUseCanvasData(
     onTopologyAreasChange?: (areas: Area[]) => void;
     getCanvasClientRect?: () => ScreenRect | null;
     snapGrid?: SnapGrid | null;
+    editMode?: boolean;
+    onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
   } = {},
 ) {
   const canvasRect = { x: 100, y: 60, width: 1000, height: 700 };
@@ -223,9 +241,10 @@ function renderUseCanvasData(
         snapshot: currentSnapshot,
         reconnecting: false,
         prometheusStatus,
-        editMode: false,
+        editMode: options.editMode ?? false,
         openDeviceMenu,
         openEdgeMenu,
+        onLinkRouteCommit: options.onLinkRouteCommit,
         reactFlow,
         getCanvasClientRect,
         nodes,
@@ -399,6 +418,38 @@ describe('useCanvasData', () => {
     expect(positionMocks.usePositions).toHaveBeenCalledWith('map-1');
     expect(fetchCanvasMapBootstrap).toHaveBeenCalledWith('map-1', { force: false });
     expect(fetchCanvasBootstrap).not.toHaveBeenCalled();
+  });
+
+  it('threads loaded saved routes and the commit callback into edge composition', async () => {
+    const link = mockLink();
+    const route = { version: 1 as const, waypoints: [{ x: 12.5, y: -8 }] };
+    const onLinkRouteCommit = vi.fn();
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        links: [link],
+        link_routes: { 'link-1': route },
+      }),
+    );
+
+    renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Core Map',
+      editMode: true,
+      onLinkRouteCommit,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const edgeBuildCalls = vi.mocked(buildTopologyEdges).mock.calls;
+    const edgeDataById = edgeBuildCalls[edgeBuildCalls.length - 1]?.[3];
+    expect(edgeDataById?.get('link-1')).toMatchObject({
+      route,
+      routeEditable: true,
+      onRouteCommit: onLinkRouteCommit,
+    });
   });
 
   it.each([

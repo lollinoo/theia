@@ -1,7 +1,7 @@
 /**
  * Exercises edge builder topology canvas behavior so refactors preserve the documented contract.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
@@ -69,6 +69,30 @@ function mockAlert(overrides: Partial<AlertDTO> = {}): AlertDTO {
 }
 
 describe('buildEdgeData', () => {
+  it.each([
+    { label: 'physical', deviceType: 'router' as const },
+    { label: 'virtual', deviceType: 'virtual' as const },
+  ])('preserves saved route controls for $label links', ({ deviceType }) => {
+    const source = mockDevice({ id: 'dev-1', device_type: deviceType });
+    const target = mockDevice({ id: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', source],
+      ['dev-2', target],
+    ]);
+    const route = { version: 1 as const, waypoints: [{ x: 12.5, y: -8 }] };
+    const onRouteCommit = vi.fn();
+
+    const result = buildEdgeData(mockLink(), devicesByID, {
+      route,
+      routeEditable: true,
+      onRouteCommit,
+    });
+
+    expect(result.route).toBe(route);
+    expect(result.routeEditable).toBe(true);
+    expect(result.onRouteCommit).toBe(onRouteCommit);
+  });
+
   it('physical-physical link with speed mismatch sets speedMismatch=true', () => {
     const source = mockDevice({ id: 'dev-1' });
     const target = mockDevice({ id: 'dev-2' });

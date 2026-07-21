@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createLink, fetchGrafanaDashboardConfig, fetchSettings } from '../../api/client';
 import { publishCanvasRuntimeBootstrap } from '../../hooks/canvasRuntimeBootstrap';
 import { type PositionState, usePositions } from '../../hooks/usePositions';
-import type { Area, Device, GrafanaDashboardConfig, Link } from '../../types/api';
+import type { Area, Device, GrafanaDashboardConfig, Link, LinkRoute } from '../../types/api';
 import {
   type AlertDTO,
   isPrometheusUnavailable,
@@ -92,6 +92,7 @@ interface UseCanvasDataParams {
   editMode: boolean;
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void;
   openEdgeMenu: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void;
+  onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
   openSelfLinkDetails?: (link: Link) => void;
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
   getCanvasClientRect: () => ScreenRect | null;
@@ -161,6 +162,7 @@ export function useCanvasData({
   editMode,
   openDeviceMenu,
   openEdgeMenu,
+  onLinkRouteCommit,
   openSelfLinkDetails,
   reactFlow,
   getCanvasClientRect,
@@ -403,6 +405,7 @@ export function useCanvasData({
 
           const fetchedDevices = topologySource.devices;
           const fetchedLinks = topologySource.links;
+          const fetchedLinkRoutes = topologySource.linkRoutes ?? {};
           const fetchedAreas = topologySource.areas;
           const savedPositions = topologySource.positions;
           const runtimeSnapshot = topologySource.runtimeSnapshot ?? snapshotRef.current;
@@ -507,6 +510,8 @@ export function useCanvasData({
             const compositionInput = {
               devices: fetchedDevices,
               links: fetchedLinks,
+              linkRoutes: fetchedLinkRoutes,
+              onLinkRouteCommit,
               runtimeState,
               savedPositions: effectivePositions,
               computedPositions,
@@ -530,6 +535,7 @@ export function useCanvasData({
                 schemaVersion: topologySource.schemaVersion,
                 devices: fetchedDevices,
                 links: fetchedLinks,
+                linkRoutes: fetchedLinkRoutes,
                 savedPositions: effectivePositions,
                 computedPositions,
                 currentPositions: currentPositionsForComposition,
@@ -545,6 +551,7 @@ export function useCanvasData({
                 openDeviceMenu,
                 openEdgeMenu,
                 openSelfLinkDetails,
+                onLinkRouteCommit,
               }),
             );
           };
@@ -707,6 +714,7 @@ export function useCanvasData({
       openDeviceMenu,
       openEdgeMenu,
       openSelfLinkDetails,
+      onLinkRouteCommit,
       reactFlow,
       getCanvasClientRect,
       setNodes,

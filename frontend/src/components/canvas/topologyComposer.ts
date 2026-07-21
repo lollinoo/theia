@@ -4,7 +4,7 @@
  */
 import type { SnapGrid } from '@xyflow/react';
 
-import type { Link } from '../../types/api';
+import type { Link, LinkRoute, LinkRouteMap } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
@@ -16,6 +16,8 @@ import type { RuntimeState } from './runtimeAdapters';
 interface ComposeCanvasTopologyInput {
   devices: Parameters<typeof buildTopologyNodes>[0];
   links: Link[];
+  linkRoutes?: LinkRouteMap;
+  onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
   runtimeState: RuntimeState;
   savedPositions: Map<string, { x: number; y: number; pinned?: boolean }>;
   computedPositions: Map<string, { x: number; y: number }>;
@@ -39,7 +41,13 @@ interface ComposeCanvasTopologyResult {
  * Converts runtime snapshots into the edge data consumed by React Flow edges.
  * Static topology stays unchanged while status, health, and throughput remain live.
  */
-function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeData> {
+function buildRuntimeEdgeData(
+  runtimeState: RuntimeState,
+  links: Link[],
+  linkRoutes: LinkRouteMap,
+  editMode: boolean,
+  onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void,
+): Map<string, LinkEdgeData> {
   const edgeDataById = new Map<string, LinkEdgeData>();
 
   for (const [linkId, runtimeLink] of runtimeState.linksById.entries()) {
@@ -67,8 +75,19 @@ function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeD
     });
   }
 
+  for (const link of links) {
+    edgeDataById.set(link.id, {
+      ...edgeDataById.get(link.id),
+      route: linkRoutes[link.id],
+      routeEditable: editMode && onLinkRouteCommit !== undefined,
+      onRouteCommit: onLinkRouteCommit,
+    });
+  }
+
   return edgeDataById;
 }
+
+const emptyLinkRoutes: LinkRouteMap = {};
 
 /**
  * Builds React Flow nodes and edges from static topology plus runtime overlays.
@@ -77,6 +96,8 @@ function buildRuntimeEdgeData(runtimeState: RuntimeState): Map<string, LinkEdgeD
 export function composeCanvasTopology({
   devices,
   links,
+  linkRoutes = emptyLinkRoutes,
+  onLinkRouteCommit,
   runtimeState,
   savedPositions,
   computedPositions,
@@ -132,7 +153,7 @@ export function composeCanvasTopology({
     links,
     runtimeDevicesById,
     nodes,
-    buildRuntimeEdgeData(runtimeState),
+    buildRuntimeEdgeData(runtimeState, links, linkRoutes, editMode, onLinkRouteCommit),
     openEdgeMenu,
     alerts,
   );

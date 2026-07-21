@@ -3,7 +3,7 @@
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
-import type { Link } from '../types/api';
+import type { Link, LinkRoute } from '../types/api';
 import { type AlertStatus, type DeviceMetricsDTO, type LinkMetricsDTO } from '../types/metrics';
 import {
   computeLinkBadgeAnchor,
@@ -55,6 +55,9 @@ export interface LinkEdgeData {
   manual?: boolean;
   parallelIndex?: number;
   onContextMenu?: (event: MouseEvent | ReactMouseEvent<SVGPathElement>, edgeID: string) => void;
+  route?: LinkRoute;
+  routeEditable?: boolean;
+  onRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
   metrics?: LinkMetricsDTO | null;
   throughputLabel?: string;
   utilization?: number | null;

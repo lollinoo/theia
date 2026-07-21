@@ -522,6 +522,54 @@ describe('runtime canvas patching', () => {
     expect(patchedEdges[0].data?.utilization).toBe(0.77);
   });
 
+  it('preserves saved route controls while patching edge runtime data', () => {
+    const devices = [mockDevice('dev-1'), mockDevice('dev-2')];
+    const link = mockLink('link-1', 'dev-1', 'dev-2');
+    const devicesById = new Map(devices.map((device) => [device.id, device]));
+    const edge = edgeFor(link, devicesById);
+    const route = { version: 1 as const, waypoints: [{ x: 12.5, y: -8 }] };
+    const onRouteCommit = vi.fn();
+    edge.data = {
+      ...edge.data!,
+      route,
+      routeEditable: true,
+      onRouteCommit,
+    };
+    const runtimeState = buildRuntimeState({
+      devices,
+      links: [link],
+      snapshot: snapshot(
+        {
+          'dev-1': mockDeviceRuntime('dev-1'),
+          'dev-2': mockDeviceRuntime('dev-2'),
+        },
+        {
+          'link-1': mockLinkRuntime('link-1', 'dev-1', 'dev-2', { utilization: 0.77 }),
+        },
+      ),
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const patchedEdges = patchRuntimeEdges({
+      edges: [edge],
+      links: [link],
+      runtimeState,
+      alerts: [],
+      onEdgeContextMenu: vi.fn(),
+      plan: {
+        deviceIds: new Set<string>(),
+        directLinkIds: new Set(['link-1']),
+        edgeIds: new Set(['link-1']),
+      },
+    });
+
+    expect(patchedEdges[0].data?.utilization).toBe(0.77);
+    expect(patchedEdges[0].data?.route).toBe(route);
+    expect(patchedEdges[0].data?.routeEditable).toBe(true);
+    expect(patchedEdges[0].data?.onRouteCommit).toBe(onRouteCommit);
+  });
+
   it('patches runtime edges through a sparse index without replacing unrelated edge objects', () => {
     const devices = [mockDevice('dev-1'), mockDevice('dev-2'), mockDevice('dev-3')];
     const links = [mockLink('link-1', 'dev-1', 'dev-2'), mockLink('link-2', 'dev-2', 'dev-3')];

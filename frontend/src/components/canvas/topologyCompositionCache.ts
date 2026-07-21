@@ -4,7 +4,7 @@
  */
 import type { SnapGrid } from '@xyflow/react';
 
-import type { Device, Link } from '../../types/api';
+import type { Device, Link, LinkRouteMap } from '../../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import {
   type ComposeCanvasTopologyInput,
@@ -24,6 +24,7 @@ export interface CanvasTopologyCompositionCacheKey {
   openDeviceMenu: unknown;
   openEdgeMenu: unknown;
   openSelfLinkDetails?: unknown;
+  onLinkRouteCommit?: unknown;
 }
 
 /** Describes the build canvas topology composition cache key input contract used by the topology canvas. */
@@ -35,6 +36,7 @@ export interface BuildCanvasTopologyCompositionCacheKeyInput {
   schemaVersion?: number;
   devices: Device[];
   links: Link[];
+  linkRoutes?: LinkRouteMap;
   savedPositions: PositionMap;
   computedPositions: ComputedPositionMap;
   currentPositions: PositionMap;
@@ -50,6 +52,7 @@ export interface BuildCanvasTopologyCompositionCacheKeyInput {
   openDeviceMenu: unknown;
   openEdgeMenu: unknown;
   openSelfLinkDetails?: unknown;
+  onLinkRouteCommit?: unknown;
 }
 
 /** Describes the canvas topology composer contract used by the topology canvas. */
@@ -144,6 +147,17 @@ function linkPresentationSignature(links: Link[]): unknown[] {
       target_if_oper_status: link.target_if_oper_status,
     }))
     .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+// linkRoutePresentationSignature captures ordered waypoint coordinates by canonical link ID.
+function linkRoutePresentationSignature(linkRoutes: LinkRouteMap | undefined): unknown[] {
+  return Object.entries(linkRoutes ?? {})
+    .map(([linkId, route]) => ({
+      linkId,
+      version: route.version,
+      waypoints: route.waypoints.map((waypoint) => ({ x: waypoint.x, y: waypoint.y })),
+    }))
+    .sort((left, right) => left.linkId.localeCompare(right.linkId));
 }
 
 // encodeSignaturePart length-prefixes values so adjacent parts cannot collide.
@@ -323,6 +337,7 @@ function topologySignatureLayer(input: BuildCanvasTopologyCompositionCacheKeyInp
     signature: input.topologySignature,
     devices: devicePresentationSignature(input.devices),
     links: linkPresentationSignature(input.links),
+    linkRoutes: linkRoutePresentationSignature(input.linkRoutes),
   };
 }
 
@@ -355,6 +370,7 @@ export function buildCanvasTopologyCompositionCacheKey(
     openDeviceMenu: input.openDeviceMenu,
     openEdgeMenu: input.openEdgeMenu,
     openSelfLinkDetails: input.openSelfLinkDetails,
+    onLinkRouteCommit: input.onLinkRouteCommit,
   };
 }
 
@@ -367,7 +383,8 @@ function cacheKeysEqual(
     previous.signature !== next.signature ||
     previous.openDeviceMenu !== next.openDeviceMenu ||
     previous.openEdgeMenu !== next.openEdgeMenu ||
-    previous.openSelfLinkDetails !== next.openSelfLinkDetails
+    previous.openSelfLinkDetails !== next.openSelfLinkDetails ||
+    previous.onLinkRouteCommit !== next.onLinkRouteCommit
   ) {
     return false;
   }
