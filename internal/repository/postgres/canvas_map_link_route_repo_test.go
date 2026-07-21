@@ -212,6 +212,102 @@ func TestCanvasMapRepoDuplicateCopiesLinkRoutes(t *testing.T) {
 	assertCanvasMapLinkRouteContent(t, routes[0], want)
 }
 
+func TestCanvasMapRepoDuplicateCopiesLinkRoutesOnlyForCopiedMembership(t *testing.T) {
+	initialLinkID := uuid.MustParse("00000000-0000-0000-0000-000000000742")
+	lateLinkID := uuid.MustParse("00000000-0000-0000-0000-000000000743")
+	fixture := newCanvasMapLinkRouteTestFixture(t, initialLinkID)
+	insertCanvasMapLinkRouteTestLink(t, fixture.db, lateLinkID, fixture.sourceDeviceID, fixture.targetDeviceID)
+	const advisoryLockKey int64 = 260027
+	installCanvasMapLinkMembershipCopyPause(t, fixture.db, fixture.canvasMap.ID, advisoryLockKey)
+
+	ctx := context.Background()
+	lockConn, err := fixture.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open advisory lock connection: %v", err)
+	}
+	defer lockConn.Close()
+	if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, advisoryLockKey); err != nil {
+		t.Fatalf("acquire advisory lock: %v", err)
+	}
+	lockHeld := true
+	unlock := func() {
+		t.Helper()
+		if !lockHeld {
+			return
+		}
+		if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, advisoryLockKey); err != nil {
+			t.Fatalf("release advisory lock: %v", err)
+		}
+		lockHeld = false
+	}
+	defer func() {
+		if lockHeld {
+			_, _ = lockConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, advisoryLockKey)
+		}
+	}()
+
+	type duplicateResult struct {
+		canvasMap domain.CanvasMap
+		err       error
+	}
+	duplicateDone := make(chan duplicateResult, 1)
+	go func() {
+		duplicate, err := fixture.mapRepo.Duplicate(fixture.canvasMap.ID, "Concurrent Route Copy")
+		duplicateDone <- duplicateResult{canvasMap: duplicate, err: err}
+	}()
+	waitForCanvasMapLinkRouteAdvisoryWaiter(t, fixture.db, advisoryLockKey)
+
+	if err := fixture.mapRepo.AddDeviceMembership(
+		fixture.canvasMap.ID,
+		domain.CanvasMapDeviceMembership{
+			DeviceID: fixture.sourceDeviceID,
+			Role:     domain.CanvasMapDeviceRoleBase,
+		},
+		[]uuid.UUID{lateLinkID},
+		nil,
+	); err != nil {
+		t.Fatalf("add concurrent source link membership: %v", err)
+	}
+	lateRoute := domain.CanvasMapLinkRoute{
+		LinkID:    lateLinkID,
+		Version:   domain.CanvasMapLinkRouteVersion,
+		Waypoints: []domain.CanvasPoint{{X: 300, Y: 150}},
+	}
+	if _, err := fixture.routeRepo.UpsertForMap(fixture.canvasMap.ID, lateRoute); err != nil {
+		t.Fatalf("upsert concurrent source route: %v", err)
+	}
+
+	unlock()
+	var result duplicateResult
+	select {
+	case result = <-duplicateDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting to duplicate canvas map")
+	}
+	if result.err != nil {
+		t.Fatalf("duplicate canvas map: %v", result.err)
+	}
+
+	membership, err := fixture.mapRepo.GetMembership(result.canvasMap.ID)
+	if err != nil {
+		t.Fatalf("get duplicate membership: %v", err)
+	}
+	for _, linkID := range membership.LinkIDs {
+		if linkID == lateLinkID {
+			t.Fatalf("duplicate unexpectedly copied late link membership %s", lateLinkID)
+		}
+	}
+	routes, err := fixture.routeRepo.GetAllForMap(result.canvasMap.ID)
+	if err != nil {
+		t.Fatalf("get duplicate routes: %v", err)
+	}
+	for _, route := range routes {
+		if route.LinkID == lateLinkID {
+			t.Fatalf("duplicate copied route for non-member late link %s: %#v", lateLinkID, route)
+		}
+	}
+}
+
 func TestCanvasMapLinkRouteMembershipLifecycle(t *testing.T) {
 	linkID := uuid.MustParse("00000000-0000-0000-0000-000000000751")
 
@@ -455,6 +551,42 @@ func installCanvasMapLinkRouteInsertPause(t *testing.T, db *sql.DB, advisoryLock
 	t.Cleanup(func() {
 		_, _ = db.Exec(`DROP TRIGGER IF EXISTS test_pause_canvas_map_link_route_insert ON canvas_map_link_routes`)
 		_, _ = db.Exec(`DROP FUNCTION IF EXISTS test_pause_canvas_map_link_route_insert()`)
+	})
+}
+
+func installCanvasMapLinkMembershipCopyPause(
+	t *testing.T,
+	db *sql.DB,
+	sourceMapID uuid.UUID,
+	advisoryLockKey int64,
+) {
+	t.Helper()
+
+	if _, err := db.Exec(`DROP TRIGGER IF EXISTS test_pause_canvas_map_link_membership_copy ON canvas_map_links`); err != nil {
+		t.Fatalf("drop existing link membership copy pause trigger: %v", err)
+	}
+	functionSQL := fmt.Sprintf(`
+		CREATE OR REPLACE FUNCTION test_pause_canvas_map_link_membership_copy()
+		RETURNS trigger AS $$
+		BEGIN
+			IF NEW.map_id <> '%s' THEN
+				PERFORM pg_advisory_xact_lock(%d);
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql`, sourceMapID.String(), advisoryLockKey)
+	if _, err := db.Exec(functionSQL); err != nil {
+		t.Fatalf("install link membership copy pause function: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TRIGGER test_pause_canvas_map_link_membership_copy
+		BEFORE INSERT ON canvas_map_links
+		FOR EACH ROW EXECUTE FUNCTION test_pause_canvas_map_link_membership_copy()`); err != nil {
+		t.Fatalf("install link membership copy pause trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DROP TRIGGER IF EXISTS test_pause_canvas_map_link_membership_copy ON canvas_map_links`)
+		_, _ = db.Exec(`DROP FUNCTION IF EXISTS test_pause_canvas_map_link_membership_copy()`)
 	})
 }
 

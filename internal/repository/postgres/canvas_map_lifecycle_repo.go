@@ -289,9 +289,13 @@ func (r *CanvasMapRepo) Duplicate(id uuid.UUID, name string) (domain.CanvasMap, 
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO canvas_map_link_routes (map_id, link_id, route_version, waypoints_json, updated_at)
-		 SELECT ?, link_id, route_version, waypoints_json, updated_at
-		 FROM canvas_map_link_routes
-		 WHERE map_id = ?`,
+		 SELECT ?, source_routes.link_id, source_routes.route_version, source_routes.waypoints_json, source_routes.updated_at
+		 FROM canvas_map_link_routes source_routes
+		 JOIN canvas_map_links destination_links
+		   ON destination_links.map_id = ?
+		  AND destination_links.link_id = source_routes.link_id
+		 WHERE source_routes.map_id = ?`,
+		copyID.String(),
 		copyID.String(),
 		id.String(),
 	); err != nil {
