@@ -9,14 +9,52 @@ import {
   deviceNodeBorderRadius,
   type EdgePathModel,
   nodeRect,
+  resolveFloatingEndpoints,
 } from './floatingEdgeGeometry';
+
+interface CompositePathPoints {
+  source: { x: number; y: number };
+  sourceLead: { x: number; y: number };
+  sourceControl: { x: number; y: number };
+  targetControl: { x: number; y: number };
+  targetLead: { x: number; y: number };
+  target: { x: number; y: number };
+}
+
+function parseCompositePath(path: string): CompositePathPoints {
+  const tokens = path.match(/[MLC]|-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi);
+  if (
+    tokens?.length !== 16 ||
+    tokens[0] !== 'M' ||
+    tokens[3] !== 'L' ||
+    tokens[6] !== 'C' ||
+    tokens[13] !== 'L'
+  ) {
+    throw new Error(`Expected an M-L-C-L composite path, received: ${path}`);
+  }
+  const point = (xIndex: number) => ({
+    x: Number(tokens[xIndex]),
+    y: Number(tokens[xIndex + 1]),
+  });
+
+  return {
+    source: point(1),
+    sourceLead: point(4),
+    sourceControl: point(7),
+    targetControl: point(9),
+    targetLead: point(11),
+    target: point(14),
+  };
+}
 
 function expectFiniteModel(model: EdgePathModel) {
   expect(model.edgePath).not.toMatch(/NaN|Infinity/);
   for (const point of [
     model.source,
+    model.sourceLead,
     model.sourceControl,
     model.targetControl,
+    model.targetLead,
     model.target,
     { x: model.labelX, y: model.labelY },
   ]) {
@@ -45,25 +83,41 @@ function expectOnRoundedBorder(
 }
 
 function cubicPoint(model: EdgePathModel, t: number) {
+  const path = parseCompositePath(model.edgePath);
   const inverse = 1 - t;
   return {
     x:
-      inverse ** 3 * model.source.x +
+      inverse ** 3 * path.sourceLead.x +
       3 * inverse ** 2 * t * model.sourceControl.x +
       3 * inverse * t ** 2 * model.targetControl.x +
-      t ** 3 * model.target.x,
+      t ** 3 * path.targetLead.x,
     y:
-      inverse ** 3 * model.source.y +
+      inverse ** 3 * path.sourceLead.y +
       3 * inverse ** 2 * t * model.sourceControl.y +
       3 * inverse * t ** 2 * model.targetControl.y +
-      t ** 3 * model.target.y,
+      t ** 3 * path.targetLead.y,
   };
 }
 
 function normalizedCubicCoordinates(model: EdgePathModel, reverse: boolean) {
+  const path = parseCompositePath(model.edgePath);
   const points = reverse
-    ? [model.target, model.targetControl, model.sourceControl, model.source]
-    : [model.source, model.sourceControl, model.targetControl, model.target];
+    ? [
+        path.target,
+        path.targetLead,
+        model.targetControl,
+        model.sourceControl,
+        path.sourceLead,
+        path.source,
+      ]
+    : [
+        path.source,
+        path.sourceLead,
+        model.sourceControl,
+        model.targetControl,
+        path.targetLead,
+        path.target,
+      ];
   return points.map((point) => [
     Math.round(point.x * 1_000_000) / 1_000_000,
     Math.round(point.y * 1_000_000) / 1_000_000,
@@ -118,6 +172,20 @@ describe('deviceNodeBorderRadius', () => {
 });
 
 describe('buildFloatingEdgePath', () => {
+  it('exposes rounded-border endpoint normals for reusable route geometry', () => {
+    const endpoints = resolveFloatingEndpoints({
+      sourceRect: { x: 0, y: 0, width: 100, height: 60 },
+      targetRect: { x: 300, y: 0, width: 100, height: 60 },
+      fallbackSource: { x: 100, y: 30 },
+      fallbackTarget: { x: 300, y: 30 },
+    });
+
+    expect(endpoints).toEqual({
+      source: { point: { x: 100, y: 30 }, normal: { x: 1, y: 0 } },
+      target: { point: { x: 300, y: 30 }, normal: { x: -1, y: 0 } },
+    });
+  });
+
   it('anchors horizontally separated nodes on their right and left borders', () => {
     const sourceRect = { x: 10, y: 20, width: 100, height: 60 };
     const targetRect = { x: 310, y: 20, width: 100, height: 60 };
@@ -135,6 +203,13 @@ describe('buildFloatingEdgePath', () => {
     expect(model.target).toEqual({ x: 310, y: 50 });
     expect(model.sourceControl.x).toBeGreaterThan(model.source.x);
     expect(model.targetControl.x).toBeLessThan(model.target.x);
+    const path = parseCompositePath(model.edgePath);
+    expect(path.source).toEqual(model.source);
+    expect(path.target).toEqual(model.target);
+    expect(path.sourceLead.x).toBeGreaterThan(path.source.x);
+    expect(path.sourceLead.y).toBe(path.source.y);
+    expect(path.targetLead.x).toBeLessThan(path.target.x);
+    expect(path.targetLead.y).toBe(path.target.y);
     expectOnRoundedBorder(model.source, sourceRect, 20);
     expectOnRoundedBorder(model.target, targetRect, 20);
   });
@@ -194,6 +269,7 @@ describe('buildFloatingEdgePath', () => {
 
     expect(model.source).toEqual({ x: 12, y: 34 });
     expect(model.target).toEqual({ x: 12, y: 34 });
+    expect(parseCompositePath(model.edgePath).target).toEqual(model.target);
     expectFiniteModel(model);
   });
 
@@ -254,6 +330,22 @@ describe('buildFloatingEdgePath', () => {
     expectFiniteModel(model);
   });
 
+  it('calms midpoint curvature across an 800px terminal gap', () => {
+    const model = buildFloatingEdgePath({
+      sourceRect: { x: 0, y: 0, width: 100, height: 60 },
+      targetRect: { x: 900, y: 0, width: 100, height: 60 },
+      fallbackSource: { x: 100, y: 30 },
+      fallbackTarget: { x: 900, y: 30 },
+      parallelIndex: 0,
+      sourceRadius: 20,
+      targetRadius: 20,
+    });
+    const midpointDeviation = Math.abs(cubicPoint(model, 0.5).y - model.source.y);
+
+    expect(midpointDeviation).toBeGreaterThan(20);
+    expect(midpointDeviation).toBeLessThan(60);
+  });
+
   it('alternates and separates parallel cubic lanes', () => {
     const options = {
       sourceRect: { x: 0, y: 0, width: 100, height: 60 },
@@ -280,6 +372,31 @@ describe('buildFloatingEdgePath', () => {
     expect(Math.abs(third.sourceControl.y - third.source.y)).toBeGreaterThan(
       Math.abs(base.sourceControl.y - base.source.y),
     );
+  });
+
+  it('keeps skewed parallel controls outside both straight-lead planes', () => {
+    const options = {
+      sourceRect: { x: 0, y: 0, width: 100, height: 60 },
+      targetRect: { x: -160, y: -160, width: 140, height: 80 },
+      fallbackSource: { x: 100, y: 30 },
+      fallbackTarget: { x: -160, y: -120 },
+      sourceRadius: 20,
+      targetRadius: 24,
+    };
+    const endpoints = resolveFloatingEndpoints(options);
+
+    for (const parallelIndex of [0, 1, 2, 3, 4]) {
+      const model = buildFloatingEdgePath({ ...options, parallelIndex });
+      const sourceProjection =
+        (model.sourceControl.x - model.sourceLead.x) * endpoints.source.normal.x +
+        (model.sourceControl.y - model.sourceLead.y) * endpoints.source.normal.y;
+      const targetProjection =
+        (model.targetControl.x - model.targetLead.x) * endpoints.target.normal.x +
+        (model.targetControl.y - model.targetLead.y) * endpoints.target.normal.y;
+
+      expect(sourceProjection).toBeGreaterThanOrEqual(-0.000001);
+      expect(targetProjection).toBeGreaterThanOrEqual(-0.000001);
+    }
   });
 
   it('keeps reversed nonzero lanes distinct using stable endpoint ordering', () => {

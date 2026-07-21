@@ -6,15 +6,19 @@ import type { DeviceNode } from './DeviceCard';
 
 const DEFAULT_NODE_RADIUS = 20;
 const EPSILON = 0.000001;
+const MAX_AUTOMATIC_BEND = 64;
+const MAX_TERMINAL_LEAD = 24;
 
-/** Describes the rendered cubic and its label/control geometry. */
+/** Describes the rendered composite path and its label/control geometry. */
 export interface EdgePathModel {
   edgePath: string;
   labelX: number;
   labelY: number;
   source: XYPosition;
+  sourceLead: XYPosition;
   sourceControl: XYPosition;
   targetControl: XYPosition;
+  targetLead: XYPosition;
   target: XYPosition;
 }
 
@@ -29,7 +33,8 @@ interface FloatingEdgePathOptions {
   targetRadius?: number;
 }
 
-interface BorderIntersection {
+/** One visible border anchor and its outward-facing unit normal. */
+export interface FloatingEndpoint {
   point: XYPosition;
   normal: XYPosition;
 }
@@ -76,7 +81,7 @@ function roundedRectIntersection(
   rect: Rect,
   toward: XYPosition,
   requestedRadius: number,
-): BorderIntersection {
+): FloatingEndpoint {
   const center = rectCenter(rect);
   const direction = normalize({ x: toward.x - center.x, y: toward.y - center.y }, { x: 1, y: 0 });
   const halfWidth = rect.width / 2;
@@ -144,7 +149,7 @@ function fallbackIntersection(
   point: XYPosition,
   toward: XYPosition,
   fallbackNormal: XYPosition,
-): BorderIntersection {
+): FloatingEndpoint {
   return {
     point,
     normal: normalize({ x: toward.x - point.x, y: toward.y - point.y }, fallbackNormal),
@@ -201,17 +206,26 @@ export function deviceNodeBorderRadius(
   return DEFAULT_NODE_RADIUS;
 }
 
-/** Builds one adaptive cubic between live node borders or finite React Flow fallbacks. */
-export function buildFloatingEdgePath({
+/** Resolves finite source and target anchors on their visible rounded borders. */
+export function resolveFloatingEndpoints({
   sourceRect,
   targetRect,
   fallbackSource,
   fallbackTarget,
-  parallelIndex,
-  laneOrientation = 1,
+  sourceToward,
+  targetToward,
   sourceRadius = DEFAULT_NODE_RADIUS,
   targetRadius = DEFAULT_NODE_RADIUS,
-}: FloatingEdgePathOptions): EdgePathModel {
+}: {
+  sourceRect: Rect | null;
+  targetRect: Rect | null;
+  fallbackSource: XYPosition;
+  fallbackTarget: XYPosition;
+  sourceToward?: XYPosition;
+  targetToward?: XYPosition;
+  sourceRadius?: number;
+  targetRadius?: number;
+}): { source: FloatingEndpoint; target: FloatingEndpoint } {
   const safeSource = finitePoint(fallbackSource);
   const safeTarget = finitePoint(fallbackTarget);
   const hasSourceRect = validRect(sourceRect);
@@ -222,20 +236,57 @@ export function buildFloatingEdgePath({
     { x: targetCenter.x - sourceCenter.x, y: targetCenter.y - sourceCenter.y },
     normalize({ x: safeTarget.x - safeSource.x, y: safeTarget.y - safeSource.y }, { x: 1, y: 0 }),
   );
-  const sourceIntersection = hasSourceRect
-    ? roundedRectIntersection(sourceRect, targetCenter, sourceRadius)
-    : fallbackIntersection(safeSource, targetCenter, centerDirection);
-  const targetIntersection = hasTargetRect
-    ? roundedRectIntersection(targetRect, sourceCenter, targetRadius)
-    : fallbackIntersection(safeTarget, sourceCenter, {
+  const safeSourceToward = finitePoint(sourceToward ?? targetCenter);
+  const safeTargetToward = finitePoint(targetToward ?? sourceCenter);
+  const sourceEndpoint = hasSourceRect
+    ? roundedRectIntersection(sourceRect, safeSourceToward, sourceRadius)
+    : fallbackIntersection(safeSource, safeSourceToward, centerDirection);
+  const targetEndpoint = hasTargetRect
+    ? roundedRectIntersection(targetRect, safeTargetToward, targetRadius)
+    : fallbackIntersection(safeTarget, safeTargetToward, {
         x: -centerDirection.x,
         y: -centerDirection.y,
       });
-  const source = finitePoint(sourceIntersection.point);
-  const target = finitePoint(targetIntersection.point);
+
+  return {
+    source: {
+      point: finitePoint(sourceEndpoint.point),
+      normal: normalize(sourceEndpoint.normal, centerDirection),
+    },
+    target: {
+      point: finitePoint(targetEndpoint.point),
+      normal: normalize(targetEndpoint.normal, {
+        x: -centerDirection.x,
+        y: -centerDirection.y,
+      }),
+    },
+  };
+}
+
+/** Builds straight terminal leads around one adaptive cubic core. */
+export function buildFloatingEdgePath({
+  sourceRect,
+  targetRect,
+  fallbackSource,
+  fallbackTarget,
+  parallelIndex,
+  laneOrientation = 1,
+  sourceRadius = DEFAULT_NODE_RADIUS,
+  targetRadius = DEFAULT_NODE_RADIUS,
+}: FloatingEdgePathOptions): EdgePathModel {
+  const endpoints = resolveFloatingEndpoints({
+    sourceRect,
+    targetRect,
+    fallbackSource,
+    fallbackTarget,
+    sourceRadius,
+    targetRadius,
+  });
+  const source = endpoints.source.point;
+  const target = endpoints.target.point;
   const edgeDirection = normalize(
     { x: target.x - source.x, y: target.y - source.y },
-    centerDirection,
+    endpoints.source.normal,
   );
   const perpendicular = {
     x: -edgeDirection.y * laneOrientation,
@@ -243,27 +294,39 @@ export function buildFloatingEdgePath({
   };
   const distance = Math.hypot(target.x - source.x, target.y - source.y);
   const controlLength = Math.min(clamp(distance * 0.42, 48, 180), distance * 0.45);
+  const leadLength = Math.min(MAX_TERMINAL_LEAD, distance * 0.12);
+  const curveControlLength = Math.max(0, controlLength - leadLength);
+  const sourceLead = finitePoint({
+    x: source.x + endpoints.source.normal.x * leadLength,
+    y: source.y + endpoints.source.normal.y * leadLength,
+  });
+  const targetLead = finitePoint({
+    x: target.x + endpoints.target.normal.x * leadLength,
+    y: target.y + endpoints.target.normal.y * leadLength,
+  });
   const lane =
     parallelIndex === 0
       ? 1
       : (parallelIndex % 2 === 1 ? -1 : 1) * (Math.ceil(parallelIndex / 2) + 1);
-  const bend = Math.max(28, Math.min(92, distance * 0.18)) * lane;
+  const bend = Math.max(28, Math.min(MAX_AUTOMATIC_BEND, distance * 0.18)) * lane;
   const sourceControl = finitePoint(
-    outwardControl(source, sourceIntersection.normal, perpendicular, controlLength, bend),
+    outwardControl(sourceLead, endpoints.source.normal, perpendicular, curveControlLength, bend),
   );
   const targetControl = finitePoint(
-    outwardControl(target, targetIntersection.normal, perpendicular, controlLength, bend),
+    outwardControl(targetLead, endpoints.target.normal, perpendicular, curveControlLength, bend),
   );
-  const labelX = (source.x + 3 * sourceControl.x + 3 * targetControl.x + target.x) / 8;
-  const labelY = (source.y + 3 * sourceControl.y + 3 * targetControl.y + target.y) / 8;
+  const labelX = (sourceLead.x + 3 * sourceControl.x + 3 * targetControl.x + targetLead.x) / 8;
+  const labelY = (sourceLead.y + 3 * sourceControl.y + 3 * targetControl.y + targetLead.y) / 8;
 
   return {
-    edgePath: `M ${source.x},${source.y} C ${sourceControl.x},${sourceControl.y} ${targetControl.x},${targetControl.y} ${target.x},${target.y}`,
+    edgePath: `M ${source.x},${source.y} L ${sourceLead.x},${sourceLead.y} C ${sourceControl.x},${sourceControl.y} ${targetControl.x},${targetControl.y} ${targetLead.x},${targetLead.y} L ${target.x},${target.y}`,
     labelX,
     labelY,
     source,
+    sourceLead,
     sourceControl,
     targetControl,
+    targetLead,
     target,
   };
 }

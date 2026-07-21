@@ -36,13 +36,20 @@ function connectionProps(
   } as ConnectionLineComponentProps<DeviceNode>;
 }
 
-function normalizedCubicPath(path: string, reverse: boolean) {
-  const values = path.match(/-?\d+(?:\.\d+)?/g)?.map(Number);
-  if (values?.length !== 8) {
-    throw new Error(`Expected one cubic path, received: ${path}`);
+function normalizedCompositePath(path: string, reverse: boolean) {
+  const tokens = path.match(/[MLC]|-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi);
+  if (
+    tokens?.length !== 16 ||
+    tokens[0] !== 'M' ||
+    tokens[3] !== 'L' ||
+    tokens[6] !== 'C' ||
+    tokens[13] !== 'L'
+  ) {
+    throw new Error(`Expected an M-L-C-L composite path, received: ${path}`);
   }
-  const points = [values.slice(0, 2), values.slice(2, 4), values.slice(4, 6), values.slice(6, 8)];
-  return reverse ? points.reverse() : points;
+  const point = (index: number) => [Number(tokens[index]), Number(tokens[index + 1])];
+  const points = [point(1), point(4), point(7), point(9), point(11), point(14)];
+  return reverse ? [points[5], points[4], points[3], points[2], points[1], points[0]] : points;
 }
 
 describe('FloatingConnectionLine', () => {
@@ -56,11 +63,13 @@ describe('FloatingConnectionLine', () => {
     const path = paths[0];
 
     expect(paths).toHaveLength(1);
-    expect(path).toHaveAttribute('d', expect.stringMatching(/^M 100,30 C .* 300,30$/));
+    expect(path).toHaveAttribute('d', expect.stringMatching(/^M 100,30 L .* C .* L 300,30$/));
     expect(path).toHaveAttribute('pointer-events', 'none');
     expect(path.style.fill).toBe('none');
     expect(path.style.stroke).toBe('var(--color-edge-default)');
     expect(path.style.strokeWidth).toBe('10');
+    expect(container.querySelector('button')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-testid^="link-route-"]')).not.toBeInTheDocument();
   });
 
   it('floats onto a hovered target border and retains incoming line styles', () => {
@@ -78,7 +87,7 @@ describe('FloatingConnectionLine', () => {
     );
     const path = container.querySelector('path');
 
-    expect(path).toHaveAttribute('d', expect.stringMatching(/^M 100,30 C .* 300,30$/));
+    expect(path).toHaveAttribute('d', expect.stringMatching(/^M 100,30 L .* C .* L 300,30$/));
     expect(path).toHaveStyle({
       opacity: '0.45',
       stroke: 'var(--color-edge-default)',
@@ -119,8 +128,8 @@ describe('FloatingConnectionLine', () => {
 
     expect(forwardPath).toBeDefined();
     expect(reversePath).toBeDefined();
-    expect(normalizedCubicPath(reversePath as string, true)).toEqual(
-      normalizedCubicPath(forwardPath as string, false),
+    expect(normalizedCompositePath(reversePath as string, true)).toEqual(
+      normalizedCompositePath(forwardPath as string, false),
     );
   });
 });

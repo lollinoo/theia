@@ -110,13 +110,20 @@ function updateInternalNode(id: string, node: unknown) {
   });
 }
 
-function normalizedCubicPath(path: string, reverse: boolean) {
-  const values = path.match(/-?\d+(?:\.\d+)?/g)?.map(Number);
-  if (values?.length !== 8) {
-    throw new Error(`Expected one cubic path, received: ${path}`);
+function normalizedCompositePath(path: string, reverse: boolean) {
+  const tokens = path.match(/[MLC]|-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi);
+  if (
+    tokens?.length !== 16 ||
+    tokens[0] !== 'M' ||
+    tokens[3] !== 'L' ||
+    tokens[6] !== 'C' ||
+    tokens[13] !== 'L'
+  ) {
+    throw new Error(`Expected an M-L-C-L composite path, received: ${path}`);
   }
-  const points = [values.slice(0, 2), values.slice(2, 4), values.slice(4, 6), values.slice(6, 8)];
-  return reverse ? points.reverse() : points;
+  const point = (index: number) => [Number(tokens[index]), Number(tokens[index + 1])];
+  const points = [point(1), point(4), point(7), point(9), point(11), point(14)];
+  return reverse ? [points[5], points[4], points[3], points[2], points[1], points[0]] : points;
 }
 
 describe('LinkEdge render', () => {
@@ -160,8 +167,8 @@ describe('LinkEdge render', () => {
     renderEdge();
     const firstPath = screen.getByTestId('edge-1').getAttribute('d');
 
-    expect(firstPath).toMatch(/^M 100,30 C /);
-    expect(firstPath).toMatch(/ 300,30$/);
+    expect(firstPath).toMatch(/^M 100,30 L /);
+    expect(firstPath).toMatch(/ C .* L 300,30$/);
     expect(firstPath).not.toBe('M0 0 C0 0 10 10 10 10');
 
     updateInternalNode('dev-2', mockInternalNode('dev-2', 420, 120));
@@ -188,8 +195,8 @@ describe('LinkEdge render', () => {
 
     expect(forwardPath).not.toBeNull();
     expect(reversePath).not.toBeNull();
-    expect(normalizedCubicPath(reversePath as string, true)).not.toEqual(
-      normalizedCubicPath(forwardPath as string, false),
+    expect(normalizedCompositePath(reversePath as string, true)).not.toEqual(
+      normalizedCompositePath(forwardPath as string, false),
     );
   });
 
@@ -208,7 +215,9 @@ describe('LinkEdge render', () => {
       { onContextMenu },
     );
 
-    expect(screen.getByTestId('edge-loop').getAttribute('d')).toMatch(/^M 236,120 C /);
+    const path = screen.getByTestId('edge-loop').getAttribute('d');
+    expect(path).toMatch(/^M 236,120 C /);
+    expect(path).not.toContain(' L ');
     fireEvent.contextMenu(container.querySelector('path.cursor-pointer') as SVGPathElement);
     expect(onContextMenu).toHaveBeenCalledWith(expect.anything(), 'edge-loop');
   });
