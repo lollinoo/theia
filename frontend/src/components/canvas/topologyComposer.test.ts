@@ -177,6 +177,63 @@ function buildSubject(options: {
 }
 
 describe('composeCanvasTopology', () => {
+  it('projects a saved self-link route while retaining its node annotation shortcut', () => {
+    const device = mockDevice();
+    const selfLink = mockLink({
+      id: 'self-link-1',
+      source_device_id: device.id,
+      source_if_name: 'ether1',
+      target_device_id: device.id,
+      target_if_name: 'ether2',
+    });
+    const route = { version: 1 as const, waypoints: [{ x: 260, y: 80 }] };
+    const owner = { mapId: 'map-a', generation: 1 } as const;
+    const routeEditToken = { owner, actionEpoch: 0 } as const;
+    const onLinkRouteCommit = vi.fn();
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [selfLink],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    const { nodes, edges } = composeCanvasTopology({
+      devices: [device],
+      links: [selfLink],
+      linkRoutes: { [selfLink.id]: route },
+      onLinkRouteCommit,
+      getLinkRouteEditToken: () => routeEditToken,
+      runtimeState,
+      savedPositions: new Map(),
+      computedPositions: new Map([[device.id, { x: 100, y: 120 }]]),
+      currentPositions: new Map(),
+      explicitPositions: new Map(),
+      editMode: true,
+      openDeviceMenu: vi.fn(),
+      openEdgeMenu: vi.fn(),
+      openSelfLinkDetails: vi.fn(),
+      placementDeviceIds: new Set([device.id]),
+      alerts: [],
+      snapGrid: null,
+    });
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({
+      id: selfLink.id,
+      source: device.id,
+      target: device.id,
+      data: {
+        route,
+        routeEditable: true,
+        routeEditToken,
+        onRouteCommit: onLinkRouteCommit,
+      },
+    });
+    expect(edges[0]?.data.route).not.toBe(route);
+    expect(nodes[0]?.data.selfLinks?.map((link) => link.id)).toEqual([selfLink.id]);
+  });
+
   it('threads the enabled grid through topology node composition', () => {
     const { nodes } = buildSubject({ snapGrid: [30, 30] });
 

@@ -14,6 +14,8 @@ const TEST_MAP_NAME = 'Backbone e2e';
 const DUPLICATE_TEST_MAP_NAME = `Copy of ${TEST_MAP_NAME}`;
 const TEST_MAP_NAMES = new Set([TEST_MAP_NAME, DUPLICATE_TEST_MAP_NAME]);
 const ROUTE_TEST_DEVICE_NAME = 'Editable route e2e target';
+const SELF_LINK_TEST_DEVICE_NAME = 'Editable self-link e2e target';
+const ROUTE_TEST_DEVICE_NAMES = new Set([ROUTE_TEST_DEVICE_NAME, SELF_LINK_TEST_DEVICE_NAME]);
 
 interface EditableRouteFixture {
   sourceDeviceId: string;
@@ -21,6 +23,12 @@ interface EditableRouteFixture {
   linkId: string;
   routeMapId: string;
   isolationMapId: string;
+}
+
+interface EditableSelfLinkFixture {
+  deviceId: string;
+  linkId: string;
+  mapId: string;
 }
 
 interface ScreenPoint {
@@ -64,7 +72,8 @@ async function getRouteTestDevices(request: APIRequestContext) {
   return (payload.data ?? []).filter(
     (device): device is { id: string; attributes: { tags: { display_name: string } } } =>
       typeof device.id === 'string' &&
-      device.attributes?.tags?.display_name === ROUTE_TEST_DEVICE_NAME,
+      typeof device.attributes?.tags?.display_name === 'string' &&
+      ROUTE_TEST_DEVICE_NAMES.has(device.attributes.tags.display_name),
   );
 }
 
@@ -198,6 +207,60 @@ async function createEditableRouteFixture(page: Page): Promise<EditableRouteFixt
   return { sourceDeviceId, targetDeviceId, linkId, routeMapId, isolationMapId };
 }
 
+async function createEditableSelfLinkFixture(page: Page): Promise<EditableSelfLinkFixture> {
+  const headers = await csrfHeaders(page);
+  const deviceResponse = await page.request.post('/api/v1/devices', {
+    headers,
+    data: {
+      hostname: SELF_LINK_TEST_DEVICE_NAME,
+      ip: '127.0.10.23',
+      snmp: { version: '2c', community: 'public' },
+      tags: { display_name: SELF_LINK_TEST_DEVICE_NAME },
+      skip_primary_map_membership: true,
+    },
+  });
+  expect(deviceResponse.ok(), `device creation returned ${deviceResponse.status()}`).toBe(true);
+  const devicePayload = (await deviceResponse.json()) as { data?: { id?: unknown } };
+  expect(devicePayload.data?.id).toEqual(expect.any(String));
+  const deviceId = devicePayload.data?.id as string;
+
+  const linkResponse = await page.request.post('/api/v1/links', {
+    headers,
+    data: {
+      source_device_id: deviceId,
+      source_if_name: 'loop-e2e0',
+      target_device_id: deviceId,
+      target_if_name: 'loop-e2e1',
+    },
+  });
+  expect(linkResponse.ok(), `self-link creation returned ${linkResponse.status()}`).toBe(true);
+  const linkPayload = (await linkResponse.json()) as { data?: { id?: unknown } };
+  expect(linkPayload.data?.id).toEqual(expect.any(String));
+  const linkId = linkPayload.data?.id as string;
+
+  const mapId = await createFixtureMap(page, TEST_MAP_NAME, [deviceId]);
+  const positionsResponse = await page.request.put(
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/positions`,
+    {
+      headers,
+      data: { positions: [{ device_id: deviceId, x: 420, y: 300, pinned: true }] },
+    },
+  );
+  expect(positionsResponse.ok(), `position save returned ${positionsResponse.status()}`).toBe(true);
+  const topologyResponse = await page.request.get(
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/topology`,
+  );
+  expect(topologyResponse.ok()).toBeTruthy();
+  const topology = (await topologyResponse.json()) as {
+    devices?: Array<{ id?: unknown }>;
+    links?: Array<{ id?: unknown }>;
+  };
+  expect(topology.devices?.map((device) => device.id)).toContain(deviceId);
+  expect(topology.links?.map((link) => link.id)).toContain(linkId);
+
+  return { deviceId, linkId, mapId };
+}
+
 async function openMap(page: Page, mapName: string) {
   const mapSelector = page.getByLabel(/Select topology map/);
   await expect(mapSelector).toBeVisible();
@@ -209,6 +272,10 @@ async function openMap(page: Page, mapName: string) {
 
 function visibleLinkHitPath(page: Page): Locator {
   return page.locator('.react-flow__edge path.cursor-pointer:visible').first();
+}
+
+function visibleLinkHitPathById(page: Page, linkId: string): Locator {
+  return page.locator(`.react-flow__edge[data-id="${linkId}"] path.cursor-pointer:visible`).first();
 }
 
 async function pathScreenPoint(path: Locator, ratio: number): Promise<ScreenPoint> {
@@ -567,4 +634,72 @@ test('edits and persists a map-local link route', async ({ page }) => {
   await selectLinkAtMidpoint(page, hitPath);
   await expect(page.getByRole('button', { name: /Move waypoint/ })).toHaveCount(0);
   await expect(hitPath).not.toHaveAttribute('d', movedManualPath);
+});
+
+test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
+  const fixture = await createEditableSelfLinkFixture(page);
+  await page.goto('/');
+  await openMap(page, TEST_MAP_NAME);
+  await waitForPersistedPositions(page, fixture.mapId, [fixture.deviceId]);
+
+  const editMode = page.getByTitle('Edit Mode (E)');
+  await editMode.click();
+  let hitPath = visibleLinkHitPathById(page, fixture.linkId);
+  await expect(hitPath).toBeVisible();
+  const automaticPath = await waitForPathToSettle(hitPath);
+  await selectLinkAtMidpoint(page, hitPath);
+
+  const firstRouteSave = page.waitForResponse((response) =>
+    linkRouteMutation(response, fixture.mapId, fixture.linkId, 'PUT'),
+  );
+  const loopMidpoint = await pathScreenPoint(hitPath, 0.5);
+  await page.mouse.dblclick(loopMidpoint.x + 60, loopMidpoint.y - 30);
+  expect((await firstRouteSave).ok()).toBe(true);
+
+  let waypoint = page.getByRole('button', {
+    name: `Move waypoint 1 for link ${fixture.linkId}`,
+    exact: true,
+  });
+  await expect(waypoint).toBeVisible();
+  const waypointTransform = await waypoint.evaluate(
+    (element) => (element as HTMLElement).style.transform,
+  );
+  const manualPath = await waitForPathToSettle(hitPath);
+  expect(manualPath).not.toBe(automaticPath);
+
+  await page.reload();
+  await openMap(page, TEST_MAP_NAME);
+  await page.getByTitle('Edit Mode (E)').click();
+  hitPath = visibleLinkHitPathById(page, fixture.linkId);
+  await expect(hitPath).toBeVisible();
+  await selectLinkAtMidpoint(page, hitPath);
+  waypoint = page.getByRole('button', {
+    name: `Move waypoint 1 for link ${fixture.linkId}`,
+    exact: true,
+  });
+  await expect(waypoint).toBeVisible();
+  await expect
+    .poll(() => waypoint.evaluate((element) => (element as HTMLElement).style.transform))
+    .toBe(waypointTransform);
+  await expect(hitPath).toHaveAttribute('d', manualPath);
+
+  const contextPoint = await pathScreenPoint(hitPath, 0.5);
+  await page.mouse.click(contextPoint.x, contextPoint.y, { button: 'right' });
+  const resetRoute = page.getByRole('button', { name: 'Reset automatic route', exact: true });
+  await expect(resetRoute).toBeVisible();
+  const resetResponse = page.waitForResponse((response) =>
+    linkRouteMutation(response, fixture.mapId, fixture.linkId, 'DELETE'),
+  );
+  await resetRoute.click();
+  expect((await resetResponse).ok()).toBe(true);
+  await expect(page.getByRole('button', { name: /Move waypoint/ })).toHaveCount(0);
+
+  await page.reload();
+  await openMap(page, TEST_MAP_NAME);
+  await page.getByTitle('Edit Mode (E)').click();
+  hitPath = visibleLinkHitPathById(page, fixture.linkId);
+  await expect(hitPath).toBeVisible();
+  await selectLinkAtMidpoint(page, hitPath);
+  await expect(page.getByRole('button', { name: /Move waypoint/ })).toHaveCount(0);
+  await expect(hitPath).not.toHaveAttribute('d', manualPath);
 });

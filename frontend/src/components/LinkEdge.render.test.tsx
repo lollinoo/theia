@@ -891,6 +891,77 @@ describe('LinkEdge render', () => {
     expect(screen.getByTestId('edge-1').getAttribute('d')).not.toBe(firstPath);
   });
 
+  it('selects and edits automatic and manual self-link routes through shared controls', () => {
+    vi.useFakeTimers();
+    const onRouteCommit = vi.fn();
+    const selfLinkData = {
+      link: { source_device_id: 'dev-1', target_device_id: 'dev-1' },
+      routeEditable: true,
+      routeEditToken: MAP_A_EDIT_TOKEN,
+      onRouteCommit,
+    };
+    const { container, rerender } = renderEdge(
+      {
+        selected: true,
+        source: 'dev-1',
+        target: 'dev-1',
+        sourceX: 100,
+        sourceY: 20,
+        targetX: 0,
+        targetY: 20,
+      },
+      selfLinkData,
+    );
+    const automaticPath = screen.getByTestId('edge-1').getAttribute('d');
+    const hitTarget = container.querySelector('path.cursor-pointer') as SVGPathElement;
+    expect(screen.queryByRole('button', { name: /Move waypoint/ })).not.toBeInTheDocument();
+
+    act(() => {
+      fireEvent.doubleClick(hitTarget, { clientX: 180, clientY: -40 });
+    });
+    expect(onRouteCommit).toHaveBeenCalledOnce();
+    const manualRoute = onRouteCommit.mock.calls[0]?.[1] as {
+      version: 1;
+      waypoints: Array<{ x: number; y: number }>;
+    };
+    expect(manualRoute.waypoints).toEqual([{ x: 180, y: -40 }]);
+    expect(onRouteCommit.mock.calls[0]?.[2]).toBe(MAP_A_EDIT_TOKEN);
+
+    rerender(
+      <EdgeFixture
+        overrides={{
+          selected: true,
+          source: 'dev-1',
+          target: 'dev-1',
+          sourceX: 100,
+          sourceY: 20,
+          targetX: 0,
+          targetY: 20,
+        }}
+        dataOverrides={{ ...selfLinkData, route: manualRoute }}
+      />,
+    );
+    const manualPath = screen.getByTestId('edge-1').getAttribute('d');
+    expect(manualPath).not.toBe(automaticPath);
+    const waypoint = screen.getByRole('button', {
+      name: 'Move waypoint 1 for link edge-1',
+    });
+    expect(waypoint).toHaveStyle({
+      transform: 'translate(-50%, -50%) translate(180px, -40px)',
+    });
+
+    onRouteCommit.mockClear();
+    act(() => {
+      fireEvent.keyDown(waypoint, { key: 'ArrowDown' });
+      vi.advanceTimersByTime(180);
+    });
+    expect(onRouteCommit).toHaveBeenCalledWith(
+      'edge-1',
+      { version: 1, waypoints: [{ x: 180, y: -39 }] },
+      MAP_A_EDIT_TOKEN,
+    );
+  });
+
   it('recomputes manual-route anchors when an endpoint moves without moving waypoints', () => {
     renderEdge(
       { selected: true },

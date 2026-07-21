@@ -376,6 +376,69 @@ describe('buildTopologyEdges', () => {
     expect(edges.map((edge) => edge.data.parallelIndex)).toEqual([0, 1]);
   });
 
+  it('projects a canonical self-link as a selectable shared edge', () => {
+    const device = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const selfLink = mockLink({
+      id: 'self-link-1',
+      source_device_id: 'dev-1',
+      source_if_name: 'ether1',
+      target_device_id: 'dev-1',
+      target_if_name: 'ether2',
+    });
+
+    const edges = buildTopologyEdges([selfLink], new Map([['dev-1', device]]), [
+      mockNode('dev-1', 120, 80),
+    ]);
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({
+      id: 'self-link-1',
+      source: 'dev-1',
+      target: 'dev-1',
+      sourceHandle: 'right',
+      targetHandle: 'left',
+      type: 'link',
+      selectable: true,
+      data: { link: selfLink, parallelIndex: 0 },
+    });
+  });
+
+  it('assigns deterministic parallel indices to multiple self-links', () => {
+    const device = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const links = [
+      mockLink({
+        id: 'self-link-b',
+        source_device_id: 'dev-1',
+        source_if_name: 'ether3',
+        target_device_id: 'dev-1',
+        target_if_name: 'ether4',
+      }),
+      mockLink({
+        id: 'self-link-a',
+        source_device_id: 'dev-1',
+        source_if_name: 'ether1',
+        target_device_id: 'dev-1',
+        target_if_name: 'ether2',
+      }),
+    ];
+
+    const forward = buildTopologyEdges(links, new Map([['dev-1', device]]), [
+      mockNode('dev-1', 120, 80),
+    ]);
+    const reversed = buildTopologyEdges([...links].reverse(), new Map([['dev-1', device]]), [
+      mockNode('dev-1', 120, 80),
+    ]);
+
+    expect(forward.map((edge) => [edge.id, edge.data.parallelIndex])).toEqual([
+      ['self-link-a', 0],
+      ['self-link-b', 1],
+    ]);
+    expect(reversed.map((edge) => [edge.id, edge.data.parallelIndex])).toEqual([
+      ['self-link-a', 0],
+      ['self-link-b', 1],
+    ]);
+  });
+
   it('hides lower-quality duplicate links when a physical link exists for the same device pair', () => {
     const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
     const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });
@@ -430,7 +493,7 @@ describe('buildTopologyEdges', () => {
     expect(edges[0].data.parallelIndex).toBe(0);
   });
 
-  it('omits self-links from edge rendering so they can be shown as node annotations', () => {
+  it('keeps self-links in edge rendering alongside their separate node annotations', () => {
     const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
     const devicesByID = new Map([['dev-1', dev1]]);
     const nodes = [mockNode('dev-1', 120, 180)];
@@ -444,7 +507,14 @@ describe('buildTopologyEdges', () => {
 
     const edges = buildTopologyEdges(links, devicesByID, nodes);
 
-    expect(edges).toHaveLength(0);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({
+      id: 'link-self',
+      source: 'dev-1',
+      target: 'dev-1',
+      sourceHandle: 'right',
+      targetHandle: 'left',
+    });
   });
 
   it('drops incomplete same-pair edges when a richer edge already provides link speed metadata', () => {
