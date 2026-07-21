@@ -69,6 +69,8 @@ function LinkEdgeInner({
   const animationFrameRef = useRef<number | null>(null);
   const keyboardCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressNextClickRef = useRef(false);
+  const draftBadgePresentationRef = useRef<ReturnType<typeof resolveLinkBadgePresentation>>(null);
+  const hasFrozenBadgePresentationRef = useRef(false);
   const activeRoute = draftRoute ?? data?.route ?? null;
   const renderedRoute = draftIsAutomatic ? null : activeRoute;
   const routeEditable = data?.routeEditable === true;
@@ -205,6 +207,23 @@ function LinkEdgeInner({
       }),
     [data, edgePath, isActive, isConnected, isMuted, labelX, labelYOffset, tone],
   );
+  const registeredBadgePresentation =
+    (draftRoute !== null || draftIsAutomatic) && hasFrozenBadgePresentationRef.current
+      ? draftBadgePresentationRef.current
+      : badgePresentation;
+
+  const freezeBadgePresentation = () => {
+    if (hasFrozenBadgePresentationRef.current) {
+      return;
+    }
+    draftBadgePresentationRef.current = badgePresentation;
+    hasFrozenBadgePresentationRef.current = true;
+  };
+
+  const clearFrozenBadgePresentation = () => {
+    draftBadgePresentationRef.current = null;
+    hasFrozenBadgePresentationRef.current = false;
+  };
 
   const clearAnimationFrame = () => {
     if (animationFrameRef.current !== null) {
@@ -322,6 +341,7 @@ function LinkEdgeInner({
 
       clearKeyboardCommitTimer();
       const nextRoute = moveRouteWaypoint(insertedRoute, insertion.insertIndex, currentPoint);
+      freezeBadgePresentation();
       gesture.dragging = true;
       gesture.waypointIndex = insertion.insertIndex;
       gesture.captureTarget = event.currentTarget;
@@ -373,6 +393,7 @@ function LinkEdgeInner({
     pointerGestureRef.current = null;
     latestPointerPointRef.current = null;
     draftRouteRef.current = null;
+    clearFrozenBadgePresentation();
     setDraftRoute(null);
     setDraftIsAutomatic(false);
   };
@@ -387,6 +408,7 @@ function LinkEdgeInner({
 
     clearKeyboardCommitTimer();
     clearAnimationFrame();
+    freezeBadgePresentation();
     draftRouteRef.current = renderedRoute;
     latestPointerPointRef.current = null;
     pointerGestureRef.current = {
@@ -442,6 +464,7 @@ function LinkEdgeInner({
       keyboardCommitTimerRef.current = null;
       data?.onRouteCommit?.(id, nextRoute);
       draftRouteRef.current = null;
+      clearFrozenBadgePresentation();
       setDraftRoute(null);
       setDraftIsAutomatic(false);
     }, LINK_ROUTE_KEYBOARD_COMMIT_DELAY_MS);
@@ -453,6 +476,7 @@ function LinkEdgeInner({
       return;
     }
     const nextRoute = nudgeRouteWaypoint(currentRoute, waypointIndex, dx, dy);
+    freezeBadgePresentation();
     draftRouteRef.current = nextRoute;
     setSelectedWaypointIndex(waypointIndex);
     setDraftIsAutomatic(false);
@@ -466,6 +490,7 @@ function LinkEdgeInner({
       return;
     }
     const nextRoute = removeRouteWaypoint(currentRoute, waypointIndex);
+    freezeBadgePresentation();
     draftRouteRef.current = nextRoute;
     if (nextRoute) {
       setSelectedWaypointIndex(Math.min(waypointIndex, nextRoute.waypoints.length - 1));
@@ -480,7 +505,7 @@ function LinkEdgeInner({
   };
 
   useLayoutEffect(() => {
-    if (badgePresentation === null || badgePresentation.items.length === 0) {
+    if (registeredBadgePresentation === null || registeredBadgePresentation.items.length === 0) {
       unregisterLinkLabel(id);
       return;
     }
@@ -488,9 +513,9 @@ function LinkEdgeInner({
     registerLinkLabel({
       edgeId: id,
       interactive: isInteractive,
-      presentation: badgePresentation,
+      presentation: registeredBadgePresentation,
     });
-  }, [badgePresentation, id, isInteractive]);
+  }, [id, isInteractive, registeredBadgePresentation]);
 
   useEffect(
     () => () => {

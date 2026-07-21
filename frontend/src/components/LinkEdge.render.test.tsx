@@ -6,7 +6,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import LinkEdge from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
-import { clearLinkLabelRegistry } from './linkLabelRegistry';
+import { clearLinkLabelRegistry, getLinkLabelSnapshot } from './linkLabelRegistry';
 
 const flowState = vi.hoisted(() => ({
   internalNodes: {} as Record<string, unknown>,
@@ -288,6 +288,7 @@ describe('LinkEdge render', () => {
       name: 'Move waypoint 1 for link edge-1',
     });
     const capture = mockPointerCapture(handle);
+    const labelSnapshot = getLinkLabelSnapshot();
 
     act(() => {
       fireEvent.pointerDown(handle, { pointerId: 12, clientX: 170, clientY: 90 });
@@ -303,6 +304,7 @@ describe('LinkEdge render', () => {
       transform: 'translate(-50%, -50%) translate(190px, 115px)',
     });
     expect(onRouteCommit).not.toHaveBeenCalled();
+    expect(getLinkLabelSnapshot()).toBe(labelSnapshot);
 
     act(() => {
       fireEvent.pointerUp(handle, { pointerId: 12, clientX: 190, clientY: 115 });
