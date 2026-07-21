@@ -82,23 +82,23 @@ func (r *CanvasMapLinkRouteRepo) UpsertForMap(
 	if err := ensureCanvasMapExists(tx, mapID); err != nil {
 		return domain.CanvasMapLinkRoute{}, err
 	}
-	var memberCount int
+	var membershipMarker int
 	if err := tx.QueryRow(
-		`SELECT COUNT(*)
+		`SELECT 1
 		 FROM canvas_map_links
-		 WHERE map_id = ? AND link_id = ?`,
+		 WHERE map_id = ? AND link_id = ?
+		 FOR KEY SHARE`,
 		mapID.String(),
 		route.LinkID.String(),
-	).Scan(&memberCount); err != nil {
-		return domain.CanvasMapLinkRoute{}, fmt.Errorf("checking canvas map link route membership for %s: %w", route.LinkID, err)
-	}
-	if memberCount == 0 {
+	).Scan(&membershipMarker); err == sql.ErrNoRows {
 		return domain.CanvasMapLinkRoute{}, fmt.Errorf(
 			"link %s on canvas map %s: %w",
 			route.LinkID,
 			mapID,
 			domain.ErrCanvasMapLinkRouteNotMember,
 		)
+	} else if err != nil {
+		return domain.CanvasMapLinkRoute{}, fmt.Errorf("checking canvas map link route membership for %s: %w", route.LinkID, err)
 	}
 
 	route.UpdatedAt = time.Now().UTC()

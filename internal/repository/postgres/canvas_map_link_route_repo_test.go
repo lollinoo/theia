@@ -3,10 +3,13 @@ package postgres
 // This file exercises map-local link route persistence and membership lifecycle behavior.
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
@@ -91,6 +94,68 @@ func TestCanvasMapLinkRouteRepoRejectsNonMemberLink(t *testing.T) {
 	if !errors.Is(err, domain.ErrCanvasMapLinkRouteNotMember) {
 		t.Fatalf("upsert non-member route error = %v, want ErrCanvasMapLinkRouteNotMember", err)
 	}
+}
+
+func TestCanvasMapLinkRouteRepoConcurrentMembershipRemovalPrunesLateUpsert(t *testing.T) {
+	linkID := uuid.MustParse("00000000-0000-0000-0000-000000000725")
+	fixture := newCanvasMapLinkRouteTestFixture(t, linkID)
+	const advisoryLockKey int64 = 260026
+	installCanvasMapLinkRouteInsertPause(t, fixture.db, advisoryLockKey)
+
+	ctx := context.Background()
+	lockConn, err := fixture.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open advisory lock connection: %v", err)
+	}
+	defer lockConn.Close()
+	if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, advisoryLockKey); err != nil {
+		t.Fatalf("acquire advisory lock: %v", err)
+	}
+	lockHeld := true
+	unlock := func() {
+		t.Helper()
+		if !lockHeld {
+			return
+		}
+		if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, advisoryLockKey); err != nil {
+			t.Fatalf("release advisory lock: %v", err)
+		}
+		lockHeld = false
+	}
+	defer func() {
+		if lockHeld {
+			_, _ = lockConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, advisoryLockKey)
+		}
+	}()
+
+	upsertDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.routeRepo.UpsertForMap(fixture.canvasMap.ID, domain.CanvasMapLinkRoute{
+			LinkID:    linkID,
+			Version:   domain.CanvasMapLinkRouteVersion,
+			Waypoints: []domain.CanvasPoint{{X: 12, Y: 24}},
+		})
+		upsertDone <- err
+	}()
+	waitForCanvasMapLinkRouteAdvisoryWaiter(t, fixture.db, advisoryLockKey)
+
+	removeDone := make(chan error, 1)
+	go func() {
+		removeDone <- fixture.mapRepo.RemoveLink(fixture.canvasMap.ID, linkID)
+	}()
+	removeErr, removeFinished := waitForCanvasMapLinkRemovalState(t, fixture.db, removeDone)
+
+	unlock()
+	if err := waitForCanvasMapLinkRouteOperation(t, upsertDone, "upsert route"); err != nil {
+		t.Fatalf("upsert route: %v", err)
+	}
+	if !removeFinished {
+		removeErr = waitForCanvasMapLinkRouteOperation(t, removeDone, "remove membership")
+	}
+	if removeErr != nil {
+		t.Fatalf("remove link membership: %v", removeErr)
+	}
+	fixture.assertRouteCount(t, 0)
 }
 
 func TestCanvasMapLinkRouteRepoValidatesRoutesOnWriteAndRead(t *testing.T) {
@@ -361,5 +426,106 @@ func insertCanvasMapLinkRouteTestLink(
 		"ether2-"+suffix,
 	); err != nil {
 		t.Fatalf("insert route test link %s: %v", id, err)
+	}
+}
+
+func installCanvasMapLinkRouteInsertPause(t *testing.T, db *sql.DB, advisoryLockKey int64) {
+	t.Helper()
+
+	if _, err := db.Exec(`DROP TRIGGER IF EXISTS test_pause_canvas_map_link_route_insert ON canvas_map_link_routes`); err != nil {
+		t.Fatalf("drop existing route insert pause trigger: %v", err)
+	}
+	functionSQL := fmt.Sprintf(`
+		CREATE OR REPLACE FUNCTION test_pause_canvas_map_link_route_insert()
+		RETURNS trigger AS $$
+		BEGIN
+			PERFORM pg_advisory_xact_lock(%d);
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql`, advisoryLockKey)
+	if _, err := db.Exec(functionSQL); err != nil {
+		t.Fatalf("install route insert pause function: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TRIGGER test_pause_canvas_map_link_route_insert
+		BEFORE INSERT ON canvas_map_link_routes
+		FOR EACH ROW EXECUTE FUNCTION test_pause_canvas_map_link_route_insert()`); err != nil {
+		t.Fatalf("install route insert pause trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DROP TRIGGER IF EXISTS test_pause_canvas_map_link_route_insert ON canvas_map_link_routes`)
+		_, _ = db.Exec(`DROP FUNCTION IF EXISTS test_pause_canvas_map_link_route_insert()`)
+	})
+}
+
+func waitForCanvasMapLinkRouteAdvisoryWaiter(t *testing.T, db *sql.DB, advisoryLockKey int64) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var count int
+		if err := db.QueryRow(
+			`SELECT COUNT(*)
+			 FROM pg_locks
+			 WHERE locktype = 'advisory'
+			   AND granted = FALSE
+			   AND classid = 0
+			   AND objid = $1::oid`,
+			advisoryLockKey,
+		).Scan(&count); err != nil {
+			t.Fatalf("query advisory lock waiters: %v", err)
+		}
+		if count > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for route upsert to pause")
+}
+
+func waitForCanvasMapLinkRemovalState(
+	t *testing.T,
+	db *sql.DB,
+	removeDone <-chan error,
+) (error, bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-removeDone:
+			return err, true
+		default:
+		}
+
+		var count int
+		if err := db.QueryRow(
+			`SELECT COUNT(*)
+			 FROM pg_stat_activity
+			 WHERE datname = current_database()
+			   AND pid <> pg_backend_pid()
+			   AND wait_event_type = 'Lock'
+			   AND query LIKE '%DELETE FROM canvas_map_links%'`,
+		).Scan(&count); err != nil {
+			t.Fatalf("query blocked membership removal: %v", err)
+		}
+		if count > 0 {
+			return nil, false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for membership removal state")
+	return nil, false
+}
+
+func waitForCanvasMapLinkRouteOperation(t *testing.T, done <-chan error, operation string) error {
+	t.Helper()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting to %s", operation)
+		return nil
 	}
 }
