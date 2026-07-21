@@ -2,7 +2,7 @@
  * Exercises optimistic map-local link route persistence, ordering, rollback, and owner isolation.
  */
 import { act, renderHook } from '@testing-library/react';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { StrictMode, useLayoutEffect, useRef, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { LinkRoute } from '../../types/api';
@@ -73,6 +73,27 @@ describe('useCanvasLinkRoutes', () => {
   beforeEach(() => {
     apiMocks.saveCanvasMapLinkRoute.mockReset();
     apiMocks.deleteCanvasMapLinkRoute.mockReset();
+  });
+
+  it('preserves saved-map route ownership across Strict Mode effect replay', async () => {
+    apiMocks.saveCanvasMapLinkRoute.mockImplementation(async (_mapId, _edgeId, route) => route);
+    const { result } = renderHook(
+      () => useLinkRouteHarness('map-a', [mockEdge('link-a', ORIGINAL_ROUTE)]),
+      { wrapper: StrictMode },
+    );
+
+    const editToken = result.current.getLinkRouteEditToken('link-a');
+    expect(editToken).toBeDefined();
+    expect(editToken?.owner).toBe(result.current.routeOwnerToken);
+
+    await act(async () => {
+      result.current.commitOwnedLinkRoute('link-a', FIRST_ROUTE, editToken);
+      await flushAsyncWork();
+    });
+
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenCalledOnce();
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenCalledWith('map-a', 'link-a', FIRST_ROUTE);
+    expect(result.current.edges[0]?.data?.route).toEqual(FIRST_ROUTE);
   });
 
   it('optimistically replaces only the indexed edge before its save resolves', async () => {
@@ -738,6 +759,7 @@ describe('useCanvasLinkRoutes', () => {
     });
 
     expect(setEdges).not.toHaveBeenCalled();
+    expect(result.current.linkRouteError).toBeNull();
   });
 
   it('does not mutate or persist routes without a resolved map ID', async () => {

@@ -177,8 +177,6 @@ export function useCanvasLinkRoutes({
     return () => {
       ownerRef.current = {
         ...ownerRef.current,
-        generation: ownerRef.current.generation + 1,
-        ownerToken: null,
         mounted: false,
       };
     };
