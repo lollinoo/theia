@@ -474,6 +474,23 @@ func pruneCanvasMapPositionsForMembership(
 	return nil
 }
 
+// pruneCanvasMapLinkRoutesForMembership removes routes whose links no longer belong to the map.
+func pruneCanvasMapLinkRoutesForMembership(tx *Tx, mapID uuid.UUID) error {
+	if _, err := tx.Exec(
+		`DELETE FROM canvas_map_link_routes
+		 WHERE canvas_map_link_routes.map_id = ?
+		   AND NOT EXISTS (
+			 SELECT 1 FROM canvas_map_links links
+			 WHERE links.map_id = canvas_map_link_routes.map_id
+			   AND links.link_id = canvas_map_link_routes.link_id
+		   )`,
+		mapID.String(),
+	); err != nil {
+		return fmt.Errorf("pruning non-member canvas map link routes for %s: %w", mapID, err)
+	}
+	return nil
+}
+
 // nullableUUIDString converts optional UUIDs to SQL values without empty-string sentinels.
 func nullableUUIDString(id *uuid.UUID) any {
 	if id == nil {

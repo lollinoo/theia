@@ -287,6 +287,16 @@ func (r *CanvasMapRepo) Duplicate(id uuid.UUID, name string) (domain.CanvasMap, 
 	); err != nil {
 		return domain.CanvasMap{}, fmt.Errorf("copying canvas map link membership: %w", err)
 	}
+	if _, err := tx.Exec(
+		`INSERT INTO canvas_map_link_routes (map_id, link_id, route_version, waypoints_json, updated_at)
+		 SELECT ?, link_id, route_version, waypoints_json, updated_at
+		 FROM canvas_map_link_routes
+		 WHERE map_id = ?`,
+		copyID.String(),
+		id.String(),
+	); err != nil {
+		return domain.CanvasMap{}, fmt.Errorf("copying canvas map link routes: %w", err)
+	}
 
 	if _, err := tx.Exec(
 		`INSERT INTO canvas_map_areas (map_id, area_id, name, description, color, added_at)
