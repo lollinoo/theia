@@ -38,6 +38,7 @@ ICON_NAMES=(
   expand_less
   expand_more
   fit_screen
+  grid_4x4
   history
   hub
   info

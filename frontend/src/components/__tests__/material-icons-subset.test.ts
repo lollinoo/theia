@@ -21,6 +21,17 @@ const REQUIRED_TOPOLOGY_HUB_ICONS = [
   'public',
 ] as const;
 
+const REQUIRED_CANVAS_TOOLBAR_ICONS = [
+  'add',
+  'build',
+  'close',
+  'edit',
+  'grid_4x4',
+  'link',
+  'notifications',
+  'search',
+] as const;
+
 const REQUIRED_DASHBOARD_DEVICE_ACTION_ICONS = ['description', 'history'] as const;
 
 const REQUIRED_AUTH_ADMIN_ICONS = [
@@ -56,6 +67,13 @@ function iconNamesFromScript(): Set<string> {
 }
 
 describe('Material Symbols subset contract', () => {
+  it('declares every canvas toolbar icon in the generated subset inputs', () => {
+    const iconNames = iconNamesFromScript();
+    for (const iconName of REQUIRED_CANVAS_TOOLBAR_ICONS) {
+      expect(iconNames.has(iconName), iconName).toBe(true);
+    }
+  });
+
   it('declares every Topology Hub icon in the generated subset inputs', () => {
     const iconNames = iconNamesFromScript();
 
