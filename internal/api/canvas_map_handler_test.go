@@ -148,7 +148,7 @@ func TestCanvasMapHandlerSaveLinkRouteRejectsInvalidInputAndRepositoryFailures(t
 		name    string
 		path    func(canvasMapLinkRouteHandlerFixture) string
 		body    string
-		prepare func(canvasMapLinkRouteHandlerFixture)
+		prepare func(*testing.T, canvasMapLinkRouteHandlerFixture)
 		want    int
 	}{
 		{
@@ -195,7 +195,7 @@ func TestCanvasMapHandlerSaveLinkRouteRejectsInvalidInputAndRepositoryFailures(t
 		{
 			name: "non-member link",
 			body: `{"version":1,"waypoints":[{"x":1,"y":2}]}`,
-			prepare: func(f canvasMapLinkRouteHandlerFixture) {
+			prepare: func(_ *testing.T, f canvasMapLinkRouteHandlerFixture) {
 				f.routeRepo.upsertErr = fmt.Errorf("membership rejected: %w", domain.ErrCanvasMapLinkRouteNotMember)
 			},
 			want: http.StatusBadRequest,
@@ -203,7 +203,7 @@ func TestCanvasMapHandlerSaveLinkRouteRejectsInvalidInputAndRepositoryFailures(t
 		{
 			name: "missing map",
 			body: `{"version":1,"waypoints":[{"x":1,"y":2}]}`,
-			prepare: func(f canvasMapLinkRouteHandlerFixture) {
+			prepare: func(_ *testing.T, f canvasMapLinkRouteHandlerFixture) {
 				delete(f.mapRepo.maps, f.mapID)
 			},
 			want: http.StatusNotFound,
@@ -211,7 +211,7 @@ func TestCanvasMapHandlerSaveLinkRouteRejectsInvalidInputAndRepositoryFailures(t
 		{
 			name: "missing canonical link",
 			body: `{"version":1,"waypoints":[{"x":1,"y":2}]}`,
-			prepare: func(f canvasMapLinkRouteHandlerFixture) {
+			prepare: func(t *testing.T, f canvasMapLinkRouteHandlerFixture) {
 				if err := f.linkRepo.Delete(f.linkID); err != nil {
 					t.Fatalf("remove canonical link: %v", err)
 				}
@@ -221,7 +221,7 @@ func TestCanvasMapHandlerSaveLinkRouteRejectsInvalidInputAndRepositoryFailures(t
 		{
 			name: "persistence failure",
 			body: `{"version":1,"waypoints":[{"x":1,"y":2}]}`,
-			prepare: func(f canvasMapLinkRouteHandlerFixture) {
+			prepare: func(_ *testing.T, f canvasMapLinkRouteHandlerFixture) {
 				f.routeRepo.upsertErr = errMock
 			},
 			want: http.StatusInternalServerError,
@@ -232,7 +232,7 @@ func TestCanvasMapHandlerSaveLinkRouteRejectsInvalidInputAndRepositoryFailures(t
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newCanvasMapLinkRouteHandlerFixture(t)
 			if tt.prepare != nil {
-				tt.prepare(fixture)
+				tt.prepare(t, fixture)
 			}
 			path := "/api/v1/canvas/maps/" + fixture.mapID.String() + "/link-routes/" + fixture.linkID.String()
 			if tt.path != nil {
