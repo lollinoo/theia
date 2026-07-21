@@ -255,8 +255,9 @@ function LinkEdgeInner({
       }),
     [data, edgePath, isActive, isConnected, isMuted, labelX, labelYOffset, tone],
   );
-  const registeredBadgePresentation =
-    (draftRoute !== null || draftIsAutomatic) && hasFrozenBadgePresentationRef.current
+  const registeredBadgePresentation = canEditRoute
+    ? null
+    : (draftRoute !== null || draftIsAutomatic) && hasFrozenBadgePresentationRef.current
       ? draftBadgePresentationRef.current
       : badgePresentation;
 

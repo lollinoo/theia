@@ -204,6 +204,25 @@ describe('LinkEdge render', () => {
     });
   });
 
+  it('hides rate and throughput badges for the complete route editing session', () => {
+    const dataOverrides = {
+      routeEditable: true,
+      onRouteCommit: vi.fn(),
+      route: { version: 1 as const, waypoints: [{ x: 170, y: 90 }] },
+      throughputLabel: 'TX: 500M / RX: 300M',
+    };
+    const { rerender } = renderEdge({ selected: true }, dataOverrides);
+
+    expect(screen.queryByText('1 Gbps')).not.toBeInTheDocument();
+    expect(screen.queryByText('TX: 500M / RX: 300M')).not.toBeInTheDocument();
+    expect(getLinkLabelSnapshot()).toEqual([]);
+
+    rerender(<EdgeFixture overrides={{ selected: false }} dataOverrides={dataOverrides} />);
+
+    expect(screen.getByText('1 Gbps')).toBeInTheDocument();
+    expect(screen.getByText('TX: 500M / RX: 300M')).toBeInTheDocument();
+  });
+
   it('keeps the transparent pointer hit target out of the button accessibility tree', () => {
     const { container } = renderEdge({}, { onContextMenu: vi.fn() });
     const hitTarget = container.querySelector('path.cursor-pointer');
