@@ -389,6 +389,39 @@ func (h *CanvasMapHandler) HandleDeleteLinkRoute(w http.ResponseWriter, r *http.
 	if !h.loadCanvasMapForLinkRoute(w, mapID) {
 		return
 	}
+	link, err := h.linkRepo.GetByID(linkID)
+	if err != nil {
+		if isLinkNotFoundError(err) {
+			writeError(w, http.StatusNotFound, "link not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load link", err)
+		return
+	}
+	if link == nil {
+		writeError(w, http.StatusNotFound, "link not found")
+		return
+	}
+	membership, err := h.mapRepo.GetMembership(mapID)
+	if err != nil {
+		if isCanvasMapNotFoundError(err) {
+			writeError(w, http.StatusNotFound, "canvas map not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load canvas map membership", err)
+		return
+	}
+	isMember := false
+	for _, memberLinkID := range membership.LinkIDs {
+		if memberLinkID == linkID {
+			isMember = true
+			break
+		}
+	}
+	if !isMember {
+		writeError(w, http.StatusBadRequest, domain.ErrCanvasMapLinkRouteNotMember.Error())
+		return
+	}
 	if err := h.linkRouteRepo.DeleteForMap(mapID, linkID); err != nil {
 		h.writeCanvasMapLinkRouteMutationError(w, "delete", err)
 		return

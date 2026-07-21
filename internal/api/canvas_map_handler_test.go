@@ -309,13 +309,27 @@ func TestCanvasMapHandlerDeleteLinkRoute(t *testing.T) {
 	if _, ok := fixture.routeRepo.routes[fixture.mapID][fixture.linkID]; ok {
 		t.Fatal("route still exists after delete")
 	}
+
+	repeatedRequest := httptest.NewRequest(
+		http.MethodDelete,
+		"/api/v1/canvas/maps/"+fixture.mapID.String()+"/link-routes/"+fixture.linkID.String(),
+		nil,
+	)
+	repeatedResponse := httptest.NewRecorder()
+	fixture.handler.HandleDeleteLinkRoute(repeatedResponse, repeatedRequest)
+	if repeatedResponse.Code != http.StatusNoContent {
+		t.Fatalf("repeated delete status = %d, want 204; body=%s", repeatedResponse.Code, repeatedResponse.Body.String())
+	}
+	if repeatedResponse.Body.Len() != 0 {
+		t.Fatalf("repeated delete body = %q, want empty", repeatedResponse.Body.String())
+	}
 }
 
 func TestCanvasMapHandlerDeleteLinkRouteValidatesIDsAndFailures(t *testing.T) {
 	tests := []struct {
 		name    string
 		path    func(canvasMapLinkRouteHandlerFixture) string
-		prepare func(canvasMapLinkRouteHandlerFixture)
+		prepare func(*testing.T, canvasMapLinkRouteHandlerFixture)
 		want    int
 	}{
 		{
@@ -334,14 +348,30 @@ func TestCanvasMapHandlerDeleteLinkRouteValidatesIDsAndFailures(t *testing.T) {
 		},
 		{
 			name: "missing map",
-			prepare: func(f canvasMapLinkRouteHandlerFixture) {
+			prepare: func(_ *testing.T, f canvasMapLinkRouteHandlerFixture) {
 				delete(f.mapRepo.maps, f.mapID)
 			},
 			want: http.StatusNotFound,
 		},
 		{
+			name: "missing canonical link",
+			prepare: func(t *testing.T, f canvasMapLinkRouteHandlerFixture) {
+				if err := f.linkRepo.Delete(f.linkID); err != nil {
+					t.Fatalf("remove canonical link: %v", err)
+				}
+			},
+			want: http.StatusNotFound,
+		},
+		{
+			name: "link outside map membership",
+			prepare: func(_ *testing.T, f canvasMapLinkRouteHandlerFixture) {
+				f.mapRepo.membership.LinkIDs = nil
+			},
+			want: http.StatusBadRequest,
+		},
+		{
 			name: "persistence failure",
-			prepare: func(f canvasMapLinkRouteHandlerFixture) {
+			prepare: func(_ *testing.T, f canvasMapLinkRouteHandlerFixture) {
 				f.routeRepo.deleteErr = errMock
 			},
 			want: http.StatusInternalServerError,
@@ -352,7 +382,7 @@ func TestCanvasMapHandlerDeleteLinkRouteValidatesIDsAndFailures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newCanvasMapLinkRouteHandlerFixture(t)
 			if tt.prepare != nil {
-				tt.prepare(fixture)
+				tt.prepare(t, fixture)
 			}
 			path := "/api/v1/canvas/maps/" + fixture.mapID.String() + "/link-routes/" + fixture.linkID.String()
 			if tt.path != nil {
@@ -434,6 +464,7 @@ func newCanvasMapLinkRouteHandlerFixture(t *testing.T) canvasMapLinkRouteHandler
 		maps: map[uuid.UUID]domain.CanvasMap{
 			mapID: {ID: mapID, Name: "Operations"},
 		},
+		membership: domain.CanvasMapMembership{LinkIDs: []uuid.UUID{linkID}},
 	}
 	mapPositionRepo := &fakeCanvasMapHandlerPositionRepo{}
 	canvasTopology, _, linkRepo, positionRepo, areaRepo := newTestCanvasTopologyHandler(t)
