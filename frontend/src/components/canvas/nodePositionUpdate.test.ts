@@ -109,11 +109,13 @@ describe('node position update planning', () => {
     expect(edges?.[0].data?.metrics).toEqual({ source: 'existing' });
   });
 
-  it('snaps every persisted node position when a grid is enabled', () => {
+  it('snaps only the moved node while preserving legacy positions when a grid is enabled', () => {
+    const movedNode = node('dev-1', 10, 20);
+    const legacyNode = node('dev-2', 100, 200);
     const plan = buildManualNodePositionUpdate({
       deviceId: 'dev-1',
       position: { x: 321, y: 654 },
-      nodes: [node('dev-1', 10, 20), node('dev-2', 100, 200)],
+      nodes: [movedNode, legacyNode],
       devices: [device('dev-1'), device('dev-2')],
       links: [],
       openEdgeMenu: () => undefined,
@@ -122,12 +124,19 @@ describe('node position update planning', () => {
 
     expect(plan?.nodes.map((current) => current.position)).toEqual([
       { x: 330, y: 660 },
-      { x: 90, y: 210 },
+      { x: 100, y: 200 },
     ]);
+    expect(plan?.nodes[1]).toBe(legacyNode);
     expect(plan?.positionPayload).toEqual([
       { device_id: 'dev-1', x: 330, y: 660, pinned: true },
-      { device_id: 'dev-2', x: 90, y: 210, pinned: false },
+      { device_id: 'dev-2', x: 100, y: 200, pinned: false },
     ]);
+    expect(plan?.positionMap).toEqual(
+      new Map([
+        ['dev-1', { x: 330, y: 660, pinned: true }],
+        ['dev-2', { x: 100, y: 200, pinned: false }],
+      ]),
+    );
   });
 
   it('does not update ghost devices', () => {

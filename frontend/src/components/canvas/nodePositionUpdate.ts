@@ -9,7 +9,7 @@ import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { type LinkEdgeData } from '../linkSemantics';
-import { snapNodesToGrid } from './canvasGrid';
+import { snapPositionToGrid } from './canvasGrid';
 import { buildPositionPayload, isGhostDeviceNode } from './canvasHelpers';
 import { buildTopologyEdges } from './edgeBuilder';
 import { nodePositionsToPositionMap } from './topologyPositionState';
@@ -41,11 +41,12 @@ export function buildManualNodePositionUpdate({
   openEdgeMenu,
   snapGrid,
 }: ManualNodePositionUpdateInput): ManualNodePositionUpdatePlan | null {
-  const positionedNodes = nodes.map((node) =>
+  const resolvedPosition = snapGrid ? snapPositionToGrid(position, snapGrid) : position;
+  const nextNodes = nodes.map((node) =>
     node.id === deviceId && !isGhostDeviceNode(node)
       ? {
           ...node,
-          position,
+          position: resolvedPosition,
           data: {
             ...node.data,
             pinned: true,
@@ -53,11 +54,10 @@ export function buildManualNodePositionUpdate({
         }
       : node,
   );
-  const moved = positionedNodes.some((node, index) => node !== nodes[index]);
+  const moved = nextNodes.some((node, index) => node !== nodes[index]);
   if (!moved) {
     return null;
   }
-  const nextNodes = snapGrid ? snapNodesToGrid(positionedNodes, snapGrid) : positionedNodes;
 
   const devicesById = new Map(devices.map((device) => [device.id, device]));
 
