@@ -309,7 +309,6 @@ vi.mock('./canvas/useCanvasData', async () => {
         dismissTopologyRecoveryNotice: vi.fn(),
         retryTopologyRefresh: vi.fn(),
         updateNodePosition: vi.fn(),
-        snapCurrentNodePositions: vi.fn(),
       };
     },
   };

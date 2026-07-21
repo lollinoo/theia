@@ -374,21 +374,6 @@ vi.mock('./canvas/useCanvasData', async () => {
         lastSeededNodesRef.current = testState.canonicalNodes;
         params.setNodes(testState.canonicalNodes);
       });
-      const snapCurrentNodePositions = ReactRuntime.useCallback(
-        (grid: [number, number]) => {
-          params.setNodes((currentNodes) =>
-            currentNodes.map((node) => ({
-              ...node,
-              position: {
-                x: Math.round(node.position.x / grid[0]) * grid[0],
-                y: Math.round(node.position.y / grid[1]) * grid[1],
-              },
-            })),
-          );
-        },
-        [params.setNodes],
-      );
-
       testState.canvasDataParams = params;
       return {
         devices: testState.devices,
@@ -406,7 +391,6 @@ vi.mock('./canvas/useCanvasData', async () => {
         dismissTopologyRecoveryNotice: vi.fn(),
         retryTopologyRefresh: vi.fn(),
         updateNodePosition: testState.updateNodePosition,
-        snapCurrentNodePositions,
         renderedMapKey: testState.renderedMapKey,
       };
     },
@@ -587,7 +571,7 @@ describe('Canvas drag state ownership', () => {
     });
   });
 
-  it('never renders enabled snapping with off-grid controlled nodes', () => {
+  it('enables snapping without rewriting existing controlled positions', () => {
     window.localStorage.setItem('theia.canvas.snapToGrid', 'false');
     render(
       <Canvas
@@ -601,19 +585,14 @@ describe('Canvas drag state ownership', () => {
     );
 
     expect(testState.displayedNodes[0]?.position).toEqual({ x: 100, y: 100 });
-    testState.snapRenderHistory = [];
 
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'Snap to grid: Off' }));
     });
 
-    const enabledRenders = testState.snapRenderHistory.filter((render) => render.snapToGrid);
-    expect(enabledRenders.length).toBeGreaterThan(0);
-    expect(
-      enabledRenders.every((render) =>
-        render.positions.every((position) => position.x % 30 === 0 && position.y % 30 === 0),
-      ),
-    ).toBe(true);
+    expect(screen.getByRole('button', { name: 'Snap to grid: On' })).toBeInTheDocument();
+    expect(testState.displayedNodes[0]?.position).toEqual({ x: 100, y: 100 });
+    expect(testState.canvasDataParams?.snapGrid).toEqual([30, 30]);
   });
 
   it('filters ghost measurements while applying real node changes through graph state', () => {

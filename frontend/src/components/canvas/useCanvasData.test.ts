@@ -1151,22 +1151,17 @@ describe('useCanvasData', () => {
     expect(positionMocks.savePositions).not.toHaveBeenCalled();
   });
 
-  it('synchronously normalizes current nodes, rebuilds edges, and persists once on request', async () => {
+  it('loads off-grid saved positions verbatim when snapping is enabled', async () => {
     vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
       canvasBootstrapResponse({
         devices: [mockDevice()],
         positions: {
-          'dev-1': {
-            device_id: 'dev-1',
-            x: 44,
-            y: 46,
-            pinned: true,
-          },
+          'dev-1': { device_id: 'dev-1', x: 44, y: 46, pinned: true },
         },
       }),
     );
 
-    const { result } = renderUseCanvasData(null, null, { snapGrid: null });
+    const { result } = renderUseCanvasData(null, null, { snapGrid: [30, 30] });
 
     await act(async () => {
       await Promise.resolve();
@@ -1174,66 +1169,7 @@ describe('useCanvasData', () => {
     });
 
     expect(result.current.nodes[0]?.position).toEqual({ x: 44, y: 46 });
-    positionMocks.savePositions.mockClear();
-    vi.mocked(buildTopologyEdges).mockClear();
-
-    act(() => {
-      result.current.snapCurrentNodePositions([30, 30]);
-      result.current.snapCurrentNodePositions([30, 30]);
-    });
-
-    expect(result.current.nodes[0]?.position).toEqual({ x: 30, y: 60 });
-    expect(positionMocks.savePositions).toHaveBeenCalledOnce();
-    expect(positionMocks.savePositions).toHaveBeenCalledWith([
-      { device_id: 'dev-1', x: 30, y: 60, pinned: true },
-    ]);
-    expect(buildTopologyEdges).toHaveBeenCalledOnce();
-    expect(vi.mocked(buildTopologyEdges).mock.calls[0]?.[2]?.[0]?.position).toEqual({
-      x: 30,
-      y: 60,
-    });
-  });
-
-  it('normalizes old-map controlled nodes without saving through the active map hook', async () => {
-    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
-      canvasBootstrapResponse({
-        devices: [mockDevice()],
-        positions: {
-          'dev-1': {
-            device_id: 'dev-1',
-            x: 44,
-            y: 46,
-            pinned: true,
-          },
-        },
-      }),
-    );
-    const pendingMapLoad = deferred<CanvasTopologyFetchResult>();
-    vi.mocked(fetchCanvasMapTopology).mockReturnValueOnce(pendingMapLoad.promise);
-    const { result, rerender, unmount } = renderUseCanvasData(null, null, { snapGrid: null });
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    positionMocks.savePositions.mockClear();
-
-    rerender({
-      currentSnapshot: null,
-      currentMapId: 'map-1',
-      currentMapName: 'Core Map',
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(fetchCanvasMapTopology).toHaveBeenCalledWith('map-1', undefined);
-    act(() => {
-      result.current.snapCurrentNodePositions([30, 30]);
-    });
-
-    expect(result.current.nodes[0]?.position).toEqual({ x: 30, y: 60 });
     expect(positionMocks.savePositions).not.toHaveBeenCalled();
-    unmount();
   });
 
   it('fits the view after switching maps even when the target map already has saved positions', async () => {

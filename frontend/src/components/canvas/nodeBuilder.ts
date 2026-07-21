@@ -95,9 +95,13 @@ export function buildTopologyNodes(
           ? saved
           : computed;
     const explicitlyPlaced = hasUsablePosition(explicit);
-    const resolvedPosition = snapGrid
-      ? snapPositionToGrid(position ?? { x: 0, y: 0 }, snapGrid)
-      : (position ?? { x: 0, y: 0 });
+    const computedPlacement =
+      !hasUsablePosition(current) && !hasUsablePosition(saved) && hasUsablePosition(computed);
+    const unresolvedPosition = position ?? { x: 0, y: 0 };
+    const resolvedPosition =
+      snapGrid && (explicitlyPlaced || computedPlacement)
+        ? snapPositionToGrid(unresolvedPosition, snapGrid)
+        : unresolvedPosition;
     const selfLinks = selfLinksByDeviceId.get(device.id);
 
     const runtimeDevice = pendingSnapshot?.devices[device.id];

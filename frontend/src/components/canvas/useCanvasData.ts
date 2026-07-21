@@ -17,11 +17,10 @@ import {
 } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
-import { type LinkEdgeData, type LinkRouteCommit, type LinkRouteEditToken } from '../linkSemantics';
+import { type LinkRouteCommit, type LinkRouteEditToken } from '../linkSemantics';
 import { applyAlertStatusPatch } from './alertStatusPatch';
 import { updateCanvasDiagnosticsState } from './canvasDiagnostics';
-import { snapNodesToGrid } from './canvasGrid';
-import { buildPositionPayload, topologyFitViewPadding, viewportSize } from './canvasHelpers';
+import { topologyFitViewPadding, viewportSize } from './canvasHelpers';
 import {
   type CanvasMeasurementTrigger,
   measureCanvasAsyncWork,
@@ -35,7 +34,6 @@ import {
   recordCanvasTopologyLoadSucceeded,
 } from './canvasTopologyDiagnostics';
 import { canvasMapKey, loadCanvasTopologySource } from './canvasTopologySource';
-import { buildTopologyEdges } from './edgeBuilder';
 import {
   buildIncrementalLayoutInputs,
   computeIncrementalLayoutPositions,
@@ -127,7 +125,6 @@ interface UseCanvasDataReturn {
   dismissTopologyRecoveryNotice: () => void;
   retryTopologyRefresh: () => void;
   updateNodePosition: (deviceId: string, position: { x: number; y: number }) => void;
-  snapCurrentNodePositions: (grid: SnapGrid) => void;
 }
 
 interface RuntimeSummary {
@@ -272,42 +269,6 @@ export function useCanvasData({
   useEffect(() => {
     onTopologyAreasChange?.(topologyAreas);
   }, [topologyAreas, onTopologyAreasChange]);
-
-  const snapCurrentNodePositions = useCallback(
-    (grid: SnapGrid) => {
-      const currentNodes = nodesRef.current;
-      const normalizedNodes = snapNodesToGrid(currentNodes, grid);
-      if (normalizedNodes === currentNodes) {
-        return;
-      }
-
-      const ownerMapKey = nodesOwnerMapKeyRef.current;
-      nodesRef.current = normalizedNodes;
-      setNodes(normalizedNodes);
-      currentNodePositionsByMapRef.current.set(
-        ownerMapKey,
-        nodePositionsToPositionMap(normalizedNodes),
-      );
-      const devicesById = new Map(devicesRef.current.map((device) => [device.id, device]));
-      setEdges((currentEdges) => {
-        const existingEdgeData = new Map<string, LinkEdgeData>(
-          currentEdges.map((edge) => [edge.id, edge.data ?? {}]),
-        );
-        return buildTopologyEdges(
-          topologyLinksRef.current,
-          devicesById,
-          normalizedNodes,
-          existingEdgeData,
-          openEdgeMenu,
-          alertsRef.current,
-        );
-      });
-      if (ownerMapKey === activeMapKeyRef.current) {
-        void savePositions(buildPositionPayload(normalizedNodes));
-      }
-    },
-    [openEdgeMenu, savePositions, setEdges, setNodes],
-  );
 
   const loadTopology = useCallback(
     async (
@@ -1015,6 +976,5 @@ export function useCanvasData({
     dismissTopologyRecoveryNotice,
     retryTopologyRefresh,
     updateNodePosition,
-    snapCurrentNodePositions,
   };
 }

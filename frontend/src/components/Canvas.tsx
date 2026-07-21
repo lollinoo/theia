@@ -506,7 +506,6 @@ export default function Canvas({
     dismissTopologyRecoveryNotice,
     retryTopologyRefresh,
     updateNodePosition,
-    snapCurrentNodePositions,
   } = useCanvasData({
     mapId,
     mapName,
@@ -533,12 +532,6 @@ export default function Canvas({
     onLinksChange,
     onTopologyAreasChange,
   });
-  const handleToggleSnapToGrid = useCallback(() => {
-    if (!snapToGrid) {
-      snapCurrentNodePositions(canvasSnapGrid);
-    }
-    toggleSnapToGrid();
-  }, [snapCurrentNodePositions, snapToGrid, toggleSnapToGrid]);
 
   useEffect(() => {
     setEdges((currentEdges) => setLinkRouteAvailability(currentEdges, editMode, onLinkRouteCommit));
@@ -916,7 +909,7 @@ export default function Canvas({
           onCreateLink={() => setPanelContent({ type: 'create-link' })}
           onAlerts={() => setPanelContent({ type: 'alerts' })}
           onToggleEditMode={() => setEditMode((m) => !m)}
-          onToggleSnapToGrid={handleToggleSnapToGrid}
+          onToggleSnapToGrid={toggleSnapToGrid}
           editMode={editMode}
           snapToGrid={snapToGrid}
           alertCount={runtimeSummary.alertCount}

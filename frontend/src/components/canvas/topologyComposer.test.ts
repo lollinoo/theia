@@ -137,6 +137,7 @@ function buildSubject(options: {
   snapshot?: SnapshotPayload | null;
   alerts?: AlertDTO[];
   snapGrid?: SnapGrid | null;
+  savedPositions?: Map<string, { x: number; y: number; pinned?: boolean }>;
 }) {
   const devices = [
     mockDevice(),
@@ -160,7 +161,7 @@ function buildSubject(options: {
     devices,
     links,
     runtimeState,
-    savedPositions: new Map(),
+    savedPositions: options.savedPositions ?? new Map(),
     computedPositions: new Map([
       ['dev-1', { x: 100, y: 120 }],
       ['dev-2', { x: 320, y: 120 }],
@@ -240,6 +241,21 @@ describe('composeCanvasTopology', () => {
     expect(nodes.map((node) => node.position)).toEqual([
       { x: 90, y: 120 },
       { x: 330, y: 120 },
+    ]);
+  });
+
+  it('preserves saved positions when snapping is enabled', () => {
+    const { nodes } = buildSubject({
+      snapGrid: [30, 30],
+      savedPositions: new Map([
+        ['dev-1', { x: 101, y: 121, pinned: true }],
+        ['dev-2', { x: 319, y: 119, pinned: true }],
+      ]),
+    });
+
+    expect(nodes.map((node) => node.position)).toEqual([
+      { x: 101, y: 121 },
+      { x: 319, y: 119 },
     ]);
   });
 

@@ -340,7 +340,7 @@ describe('buildTopologyNodes', () => {
     expect(nodes[1].position).toEqual({ x: 50, y: 60 });
   });
 
-  it('snaps saved, current, computed, and explicit resolved positions when a grid is enabled', () => {
+  it('preserves saved and current positions while snapping new placements when enabled', () => {
     const devices = [
       mockDevice({ id: 'saved' }),
       mockDevice({ id: 'current' }),
@@ -366,8 +366,8 @@ describe('buildTopologyNodes', () => {
 
     const nodesById = new Map(buildNodes([30, 30]).map((node) => [node.id, node]));
 
-    expect(nodesById.get('saved')?.position).toEqual({ x: 30, y: 60 });
-    expect(nodesById.get('current')?.position).toEqual({ x: 60, y: -30 });
+    expect(nodesById.get('saved')?.position).toEqual({ x: 44, y: 46 });
+    expect(nodesById.get('current')?.position).toEqual({ x: 74, y: -16 });
     expect(nodesById.get('computed')?.position).toEqual({ x: 90, y: 120 });
     expect(nodesById.get('explicit')?.position).toEqual({ x: 150, y: 150 });
   });
