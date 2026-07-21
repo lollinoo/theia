@@ -75,6 +75,7 @@ function LinkEdgeInner({
   const latestPointerPointRef = useRef<LinkWaypoint | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const keyboardCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const edgeHitTargetRef = useRef<SVGPathElement | null>(null);
   const suppressNextClickRef = useRef(false);
   const draftBadgePresentationRef = useRef<ReturnType<typeof resolveLinkBadgePresentation>>(null);
   const hasFrozenBadgePresentationRef = useRef(false);
@@ -591,6 +592,7 @@ function LinkEdgeInner({
       setSelectedWaypointIndex(null);
       setDraftRoute(null);
       setDraftIsAutomatic(true);
+      edgeHitTargetRef.current?.focus({ preventScroll: true });
     }
     scheduleKeyboardCommit(nextRoute, routeEditToken);
   };
@@ -681,10 +683,13 @@ function LinkEdgeInner({
 
       {/* biome-ignore lint/a11y/noStaticElementInteractions: This transparent SVG path is a pointer-only edge hit target, not a keyboard command. */}
       <path
+        ref={edgeHitTargetRef}
         d={edgePath}
         fill="none"
         stroke="transparent"
         strokeWidth={18}
+        tabIndex={-1}
+        aria-label={`Link ${id}`}
         className="cursor-pointer"
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}

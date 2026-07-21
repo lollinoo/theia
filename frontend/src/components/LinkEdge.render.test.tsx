@@ -224,7 +224,8 @@ describe('LinkEdge render', () => {
 
     expect(hitTarget).not.toBeNull();
     expect(hitTarget).not.toHaveAttribute('role', 'button');
-    expect(hitTarget).not.toHaveAttribute('tabindex');
+    expect(hitTarget).toHaveAttribute('tabindex', '-1');
+    expect(hitTarget).toHaveAttribute('aria-label', 'Link edge-1');
   });
 
   it('renders the transparent hit path above every painted edge path', () => {
@@ -860,6 +861,31 @@ describe('LinkEdge render', () => {
     });
     expect(onRouteCommit).toHaveBeenCalledOnce();
     expect(onRouteCommit).toHaveBeenCalledWith('edge-1', null, MAP_A_EDIT_TOKEN);
+  });
+
+  it('moves focus to the stable edge target after deleting the final waypoint', () => {
+    vi.useFakeTimers();
+    const { container } = renderEdge(
+      { selected: true },
+      {
+        routeEditable: true,
+        onRouteCommit: vi.fn(),
+        route: { version: 1, waypoints: [{ x: 170, y: 90 }] },
+      },
+    );
+    const handle = screen.getByRole('button', {
+      name: 'Move waypoint 1 for link edge-1',
+    });
+    const hitTarget = container.querySelector('path.cursor-pointer');
+    expect(hitTarget).not.toBeNull();
+
+    act(() => {
+      handle.focus();
+      fireEvent.keyDown(handle, { key: 'Delete' });
+    });
+
+    expect(hitTarget).toHaveFocus();
+    expect(screen.queryByRole('button', { name: /Move waypoint/ })).not.toBeInTheDocument();
   });
 
   it('hides waypoint controls unless the edge is selected, enabled, and persistable', () => {
