@@ -33,6 +33,25 @@ type DeviceEndpointPrimaryHealth = DeviceMetricsDTO['primary_health'];
 type DeviceEndpointReachability = DeviceMetricsDTO['reachability'];
 type DeviceEndpointReachabilityEvidence = DeviceMetricsDTO['network_reachable'];
 
+/** Identifies one mounted saved-map generation, including A-to-B-to-A transitions. */
+export interface LinkRouteOwnerToken {
+  readonly mapId: string;
+  readonly generation: number;
+}
+
+/** Grants one edge action authority within a specific saved-map generation. */
+export interface LinkRouteEditToken {
+  readonly owner: LinkRouteOwnerToken;
+  readonly actionEpoch: number;
+}
+
+/** Commits a route only for the edge action and map generation that created it. */
+export type LinkRouteCommit = (
+  edgeId: string,
+  route: LinkRoute | null,
+  editToken: LinkRouteEditToken,
+) => void;
+
 interface DeviceEndpointRuntimeState {
   health?: DeviceEndpointHealth;
   primaryHealth?: DeviceEndpointPrimaryHealth;
@@ -57,7 +76,8 @@ export interface LinkEdgeData {
   onContextMenu?: (event: MouseEvent | ReactMouseEvent<SVGPathElement>, edgeID: string) => void;
   route?: LinkRoute;
   routeEditable?: boolean;
-  onRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+  routeEditToken?: LinkRouteEditToken;
+  onRouteCommit?: LinkRouteCommit;
   metrics?: LinkMetricsDTO | null;
   throughputLabel?: string;
   utilization?: number | null;

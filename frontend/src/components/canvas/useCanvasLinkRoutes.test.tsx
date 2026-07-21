@@ -117,6 +117,103 @@ describe('useCanvasLinkRoutes', () => {
     expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenCalledWith('map-a', 'link-b', SECOND_ROUTE);
   });
 
+  it('rejects a delayed map A edit after ownership moves to map B', async () => {
+    const { result, rerender } = renderHook(
+      ({ mapId }) => useLinkRouteHarness(mapId, [mockEdge('link-a', ORIGINAL_ROUTE)]),
+      { initialProps: { mapId: 'map-a' as string | null } },
+    );
+    const staleToken = result.current.getLinkRouteEditToken('link-a');
+
+    rerender({ mapId: 'map-b' });
+    await act(async () => {
+      result.current.commitOwnedLinkRoute('link-a', FIRST_ROUTE, staleToken);
+      await flushAsyncWork();
+    });
+
+    expect(apiMocks.saveCanvasMapLinkRoute).not.toHaveBeenCalled();
+    expect(apiMocks.deleteCanvasMapLinkRoute).not.toHaveBeenCalled();
+  });
+
+  it('rejects a delayed edit from an older map A generation after A to B to A', async () => {
+    const { result, rerender } = renderHook(
+      ({ mapId }) => useLinkRouteHarness(mapId, [mockEdge('link-a', ORIGINAL_ROUTE)]),
+      { initialProps: { mapId: 'map-a' as string | null } },
+    );
+    const staleToken = result.current.getLinkRouteEditToken('link-a');
+
+    rerender({ mapId: 'map-b' });
+    rerender({ mapId: 'map-a' });
+    await act(async () => {
+      result.current.commitOwnedLinkRoute('link-a', FIRST_ROUTE, staleToken);
+      await flushAsyncWork();
+    });
+
+    expect(apiMocks.saveCanvasMapLinkRoute).not.toHaveBeenCalled();
+    expect(apiMocks.deleteCanvasMapLinkRoute).not.toHaveBeenCalled();
+  });
+
+  it('invalidates an older edit token before reset enqueues its DELETE', async () => {
+    apiMocks.deleteCanvasMapLinkRoute.mockResolvedValueOnce(undefined);
+    const { result } = renderHook(() =>
+      useLinkRouteHarness('map-a', [mockEdge('link-a', ORIGINAL_ROUTE)]),
+    );
+    const staleToken = result.current.getLinkRouteEditToken('link-a');
+
+    await act(async () => {
+      result.current.resetLinkRoute('link-a');
+      result.current.commitOwnedLinkRoute('link-a', FIRST_ROUTE, staleToken);
+      await flushAsyncWork();
+    });
+
+    expect(apiMocks.deleteCanvasMapLinkRoute).toHaveBeenCalledOnce();
+    expect(apiMocks.saveCanvasMapLinkRoute).not.toHaveBeenCalled();
+    expect(result.current.edges[0]?.data).not.toHaveProperty('route');
+  });
+
+  it('accepts a newer valid edit after reset invalidates an older token', async () => {
+    apiMocks.deleteCanvasMapLinkRoute.mockResolvedValueOnce(undefined);
+    apiMocks.saveCanvasMapLinkRoute.mockImplementation(async (_mapId, _edgeId, route) => route);
+    const { result } = renderHook(() =>
+      useLinkRouteHarness('map-a', [mockEdge('link-a', ORIGINAL_ROUTE)]),
+    );
+    const staleToken = result.current.getLinkRouteEditToken('link-a');
+
+    await act(async () => {
+      result.current.resetLinkRoute('link-a');
+      await flushAsyncWork();
+    });
+    const currentToken = result.current.getLinkRouteEditToken('link-a');
+    await act(async () => {
+      result.current.commitOwnedLinkRoute('link-a', FIRST_ROUTE, staleToken);
+      result.current.commitOwnedLinkRoute('link-a', SECOND_ROUTE, currentToken);
+      await flushAsyncWork();
+    });
+
+    expect(apiMocks.deleteCanvasMapLinkRoute).toHaveBeenCalledOnce();
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenCalledOnce();
+    expect(apiMocks.saveCanvasMapLinkRoute).toHaveBeenCalledWith('map-a', 'link-a', SECOND_ROUTE);
+  });
+
+  it('rotates edge action authority when an external route replaces canonical data', () => {
+    const { result } = renderHook(() =>
+      useLinkRouteHarness('map-a', [mockEdge('link-a', ORIGINAL_ROUTE)]),
+    );
+    const originalToken = result.current.getLinkRouteEditToken('link-a');
+    const initialEdge = mockEdge('link-a', ORIGINAL_ROUTE);
+    initialEdge.data = { ...initialEdge.data, routeEditToken: originalToken };
+
+    expect(result.current.reconcileLinkRouteEdges([initialEdge])).toEqual([initialEdge]);
+
+    const externalEdge = mockEdge('link-a', SECOND_ROUTE);
+    externalEdge.data = { ...externalEdge.data, routeEditToken: originalToken };
+    const reconciled = result.current.reconcileLinkRouteEdges([externalEdge]);
+    const currentToken = result.current.getLinkRouteEditToken('link-a');
+
+    expect(currentToken).not.toBe(originalToken);
+    expect(reconciled[0]?.data?.routeEditToken).toBe(currentToken);
+    expect(reconciled[0]?.data?.route).toEqual(SECOND_ROUTE);
+  });
+
   it('serializes one link and replaces an unsent intermediate route with the latest route', async () => {
     const firstSave = deferred<LinkRoute>();
     const latestSave = deferred<LinkRoute>();

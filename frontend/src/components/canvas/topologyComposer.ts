@@ -4,11 +4,11 @@
  */
 import type { SnapGrid } from '@xyflow/react';
 
-import { copyLinkRoute, type Link, type LinkRoute, type LinkRouteMap } from '../../types/api';
+import { copyLinkRoute, type Link, type LinkRouteMap } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
-import { type LinkEdgeData } from '../linkSemantics';
+import { type LinkEdgeData, type LinkRouteCommit, type LinkRouteEditToken } from '../linkSemantics';
 import { buildTopologyEdges } from './edgeBuilder';
 import { buildTopologyNodes } from './nodeBuilder';
 import type { RuntimeState } from './runtimeAdapters';
@@ -17,7 +17,8 @@ interface ComposeCanvasTopologyInput {
   devices: Parameters<typeof buildTopologyNodes>[0];
   links: Link[];
   linkRoutes?: LinkRouteMap;
-  onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+  onLinkRouteCommit?: LinkRouteCommit;
+  getLinkRouteEditToken?: (edgeId: string) => LinkRouteEditToken | undefined;
   runtimeState: RuntimeState;
   savedPositions: Map<string, { x: number; y: number; pinned?: boolean }>;
   computedPositions: Map<string, { x: number; y: number }>;
@@ -46,7 +47,8 @@ function buildRuntimeEdgeData(
   links: Link[],
   linkRoutes: LinkRouteMap,
   editMode: boolean,
-  onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void,
+  onLinkRouteCommit?: LinkRouteCommit,
+  getLinkRouteEditToken?: (edgeId: string) => LinkRouteEditToken | undefined,
 ): Map<string, LinkEdgeData> {
   const edgeDataById = new Map<string, LinkEdgeData>();
 
@@ -81,6 +83,7 @@ function buildRuntimeEdgeData(
       ...edgeDataById.get(link.id),
       route: route === undefined ? undefined : copyLinkRoute(route),
       routeEditable: editMode && onLinkRouteCommit !== undefined,
+      routeEditToken: getLinkRouteEditToken?.(link.id),
       onRouteCommit: onLinkRouteCommit,
     });
   }
@@ -99,6 +102,7 @@ export function composeCanvasTopology({
   links,
   linkRoutes = emptyLinkRoutes,
   onLinkRouteCommit,
+  getLinkRouteEditToken,
   runtimeState,
   savedPositions,
   computedPositions,
@@ -154,7 +158,14 @@ export function composeCanvasTopology({
     links,
     runtimeDevicesById,
     nodes,
-    buildRuntimeEdgeData(runtimeState, links, linkRoutes, editMode, onLinkRouteCommit),
+    buildRuntimeEdgeData(
+      runtimeState,
+      links,
+      linkRoutes,
+      editMode,
+      onLinkRouteCommit,
+      getLinkRouteEditToken,
+    ),
     openEdgeMenu,
     alerts,
   );

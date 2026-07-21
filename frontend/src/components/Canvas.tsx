@@ -22,7 +22,7 @@ import { removeDeviceFromCanvasMap } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useWinboxFlow } from '../hooks/useWinboxFlow';
-import type { Area, CanvasMap, Device, Link, LinkRoute } from '../types/api';
+import type { Area, CanvasMap, Device, Link } from '../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
 import { resolveGrafanaDashboardUrl } from '../utils/grafanaDashboard';
 import { CanvasChromeControls } from './canvas/CanvasChromeControls';
@@ -69,7 +69,7 @@ import { minimapColorForDevice } from './deviceVisualState';
 import { FloatingConnectionLine } from './FloatingConnectionLine';
 import LinkEdge, { type LinkEdgeType } from './LinkEdge';
 import { LinkLabelLayer } from './LinkLabelLayer';
-import { resolveLinkBadgeScale } from './linkSemantics';
+import { type LinkRouteCommit, resolveLinkBadgeScale } from './linkSemantics';
 import SearchOverlay from './SearchOverlay';
 import { ShortcutHelp } from './ShortcutHelp';
 import { SidePanel } from './SidePanel';
@@ -138,13 +138,18 @@ function setEdgeInteractionMode(
 function setLinkRouteAvailability(
   edges: LinkEdgeType[],
   editMode: boolean,
-  onRouteCommit: ((edgeId: string, route: LinkRoute | null) => void) | undefined,
+  onRouteCommit: LinkRouteCommit | undefined,
 ): LinkEdgeType[] {
-  const routeEditable = editMode && onRouteCommit !== undefined;
   let nextEdges: LinkEdgeType[] | null = null;
 
   edges.forEach((edge, edgeIndex) => {
-    if (edge.data?.routeEditable === routeEditable && edge.data?.onRouteCommit === onRouteCommit) {
+    const routeEditable =
+      editMode && onRouteCommit !== undefined && edge.data?.routeEditToken !== undefined;
+    const edgeRouteCommit = routeEditable ? onRouteCommit : undefined;
+    if (
+      edge.data?.routeEditable === routeEditable &&
+      edge.data?.onRouteCommit === edgeRouteCommit
+    ) {
       return;
     }
 
@@ -154,7 +159,7 @@ function setLinkRouteAvailability(
       data: {
         ...(edge.data ?? {}),
         routeEditable,
-        onRouteCommit,
+        onRouteCommit: edgeRouteCommit,
       },
     };
   });
@@ -231,13 +236,25 @@ export default function Canvas({
     edgeIndexByIdRef,
   } = useCanvasGraphState({ snapToGrid, snapGrid: canvasSnapGrid });
   const {
-    commitLinkRoute,
+    commitOwnedLinkRoute,
+    getLinkRouteEditToken,
+    routeOwnerToken,
     resetLinkRoute,
     reconcileLinkRouteEdges,
     linkRouteError,
     dismissLinkRouteError,
   } = useCanvasLinkRoutes({ mapId, setEdges, edgeIndexByIdRef });
-  const onLinkRouteCommit = mapId === null ? undefined : commitLinkRoute;
+  const onLinkRouteCommit = useMemo<LinkRouteCommit | undefined>(() => {
+    if (routeOwnerToken === null) {
+      return undefined;
+    }
+    return (edgeId, route, editToken) => {
+      if (editToken.owner !== routeOwnerToken) {
+        return;
+      }
+      commitOwnedLinkRoute(edgeId, route, editToken);
+    };
+  }, [commitOwnedLinkRoute, routeOwnerToken]);
   const { diagnosticsVisible, closeDiagnostics } = useCanvasDiagnosticsToggle();
   const { canvasInteractionActive, beginCanvasInteraction, endCanvasInteraction } =
     useCanvasInteractionState({ onInteractionActiveChange });
@@ -499,6 +516,7 @@ export default function Canvas({
     prometheusStatus,
     editMode,
     onLinkRouteCommit,
+    getLinkRouteEditToken,
     reconcileLinkRouteEdges,
     openDeviceMenu,
     openEdgeMenu,

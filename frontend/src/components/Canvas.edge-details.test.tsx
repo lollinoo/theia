@@ -5,9 +5,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Device, Link, LinkRoute } from '../types/api';
+import type { Device, Link } from '../types/api';
 import Canvas from './Canvas';
 import type { LinkEdgeType } from './LinkEdge';
+import type { LinkRouteCommit, LinkRouteEditToken } from './linkSemantics';
 
 const defaultCanvasProps = {
   mapId: null,
@@ -73,7 +74,8 @@ const testState = vi.hoisted(() => ({
     },
   ] satisfies Device[],
   canvasDataParams: null as {
-    onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+    onLinkRouteCommit?: LinkRouteCommit;
+    getLinkRouteEditToken?: (edgeId: string) => LinkRouteEditToken | undefined;
   } | null,
 }));
 
@@ -119,10 +121,15 @@ vi.mock('@xyflow/react', async () => {
               <button
                 type="button"
                 onClick={() =>
-                  routeEdge.data?.onRouteCommit?.(routeEdge.id, {
-                    version: 1,
-                    waypoints: [{ x: 90, y: 45 }],
-                  })
+                  routeEdge.data?.routeEditToken &&
+                  routeEdge.data?.onRouteCommit?.(
+                    routeEdge.id,
+                    {
+                      version: 1,
+                      waypoints: [{ x: 90, y: 45 }],
+                    },
+                    routeEdge.data.routeEditToken,
+                  )
                 }
               >
                 Commit route gesture
@@ -252,7 +259,8 @@ vi.mock('./canvas/useCanvasData', async () => {
   return {
     useCanvasData: (params: {
       editMode: boolean;
-      onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+      onLinkRouteCommit?: LinkRouteCommit;
+      getLinkRouteEditToken?: (edgeId: string) => LinkRouteEditToken | undefined;
       setEdges: React.Dispatch<React.SetStateAction<LinkEdgeType[]>>;
     }) => {
       const seededEdgesRef = ReactRuntime.useRef(false);
@@ -270,11 +278,17 @@ vi.mock('./canvas/useCanvasData', async () => {
               link: testState.link,
               route: { version: 1, waypoints: [{ x: 20, y: 30 }] },
               routeEditable: params.editMode && params.onLinkRouteCommit !== undefined,
+              routeEditToken: params.getLinkRouteEditToken?.(testState.link.id),
               onRouteCommit: params.onLinkRouteCommit,
             },
           } as LinkEdgeType,
         ]);
-      }, [params.editMode, params.onLinkRouteCommit, params.setEdges]);
+      }, [
+        params.editMode,
+        params.getLinkRouteEditToken,
+        params.onLinkRouteCommit,
+        params.setEdges,
+      ]);
 
       testState.canvasDataParams = params;
       return {
@@ -382,7 +396,7 @@ describe('Canvas link details edge clicks', () => {
     });
   });
 
-  it('exposes one stable route commit only while a persisted map ID owns the canvas', () => {
+  it('binds a distinct route commit callback to every persisted map generation', () => {
     const props = {
       ...defaultCanvasProps,
       snapshot: null,
@@ -400,7 +414,13 @@ describe('Canvas link details edge clicks', () => {
     expect(savedMapCommit).toEqual(expect.any(Function));
 
     rerender(<Canvas {...props} mapId="map-b" />);
-    expect(testState.canvasDataParams?.onLinkRouteCommit).toBe(savedMapCommit);
+    const mapBCommit = testState.canvasDataParams?.onLinkRouteCommit;
+    expect(mapBCommit).toEqual(expect.any(Function));
+    expect(mapBCommit).not.toBe(savedMapCommit);
+
+    rerender(<Canvas {...props} mapId="map-a" />);
+    expect(testState.canvasDataParams?.onLinkRouteCommit).not.toBe(savedMapCommit);
+    expect(testState.canvasDataParams?.onLinkRouteCommit).not.toBe(mapBCommit);
   });
 
   it('enables route gestures on existing saved-map edges only while Edit Mode is active', async () => {

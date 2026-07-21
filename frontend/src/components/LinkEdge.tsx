@@ -27,7 +27,12 @@ import {
   nudgeRouteWaypoint,
   removeRouteWaypoint,
 } from './linkRouteEditing';
-import { type LinkEdgeData, resolveEdgeTone, resolveLinkBadgePresentation } from './linkSemantics';
+import {
+  type LinkEdgeData,
+  type LinkRouteEditToken,
+  resolveEdgeTone,
+  resolveLinkBadgePresentation,
+} from './linkSemantics';
 
 /** Describes the link edge type contract used by the UI component boundary. */
 export type LinkEdgeType = Edge<LinkEdgeData>;
@@ -44,6 +49,7 @@ interface RoutePointerGesture {
   waypointIndex: number | null;
   dragging: boolean;
   captureTarget: RoutePointerTarget | null;
+  editToken: LinkRouteEditToken;
 }
 
 function LinkEdgeInner({
@@ -72,9 +78,14 @@ function LinkEdgeInner({
   const suppressNextClickRef = useRef(false);
   const draftBadgePresentationRef = useRef<ReturnType<typeof resolveLinkBadgePresentation>>(null);
   const hasFrozenBadgePresentationRef = useRef(false);
+  const routeEditToken = data?.routeEditToken;
+  const previousRouteEditTokenRef = useRef(routeEditToken);
   const activeRoute = draftRoute ?? data?.route ?? null;
   const renderedRoute = draftIsAutomatic ? null : activeRoute;
-  const routeEditable = data?.routeEditable === true && typeof data.onRouteCommit === 'function';
+  const routeEditable =
+    data?.routeEditable === true &&
+    routeEditToken !== undefined &&
+    typeof data.onRouteCommit === 'function';
   const canEditRoute = selected === true && routeEditable;
   const interactionMode = data?.interactionMode ?? 'idle';
   const isInteractive = interactionMode === 'interactive';
@@ -332,6 +343,7 @@ function LinkEdgeInner({
       waypointIndex: null,
       dragging: false,
       captureTarget: null,
+      editToken: routeEditToken!,
     };
   };
 
@@ -438,7 +450,7 @@ function LinkEdgeInner({
     }
     const nextRoute = flushPointerPoint();
     if (nextRoute) {
-      data?.onRouteCommit?.(id, nextRoute);
+      data?.onRouteCommit?.(id, nextRoute, gesture.editToken);
     }
     pointerGestureRef.current = null;
     latestPointerPointRef.current = null;
@@ -471,6 +483,7 @@ function LinkEdgeInner({
       waypointIndex,
       dragging: false,
       captureTarget: event.currentTarget,
+      editToken: routeEditToken!,
     };
     setSelectedWaypointIndex(waypointIndex);
     capturePointer(event.currentTarget, event.pointerId);
@@ -523,18 +536,18 @@ function LinkEdgeInner({
     }
     clearKeyboardCommitTimer();
     setSelectedWaypointIndex(insertion.insertIndex);
-    data?.onRouteCommit?.(id, nextRoute);
+    data?.onRouteCommit?.(id, nextRoute, routeEditToken!);
     draftRouteRef.current = null;
     clearFrozenBadgePresentation();
     setDraftRoute(null);
     setDraftIsAutomatic(false);
   };
 
-  const scheduleKeyboardCommit = (nextRoute: LinkRoute | null) => {
+  const scheduleKeyboardCommit = (nextRoute: LinkRoute | null, editToken: LinkRouteEditToken) => {
     clearKeyboardCommitTimer();
     keyboardCommitTimerRef.current = window.setTimeout(() => {
       keyboardCommitTimerRef.current = null;
-      data?.onRouteCommit?.(id, nextRoute);
+      data?.onRouteCommit?.(id, nextRoute, editToken);
       draftRouteRef.current = null;
       clearFrozenBadgePresentation();
       setDraftRoute(null);
@@ -543,6 +556,9 @@ function LinkEdgeInner({
   };
 
   const handleWaypointNudge = (waypointIndex: number, dx: number, dy: number) => {
+    if (routeEditToken === undefined) {
+      return;
+    }
     const currentRoute = draftRouteRef.current ?? renderedRoute;
     if (!currentRoute) {
       return;
@@ -553,10 +569,13 @@ function LinkEdgeInner({
     setSelectedWaypointIndex(waypointIndex);
     setDraftIsAutomatic(false);
     setDraftRoute(nextRoute);
-    scheduleKeyboardCommit(nextRoute);
+    scheduleKeyboardCommit(nextRoute, routeEditToken);
   };
 
   const handleWaypointRemove = (waypointIndex: number) => {
+    if (routeEditToken === undefined) {
+      return;
+    }
     const currentRoute = draftRouteRef.current ?? renderedRoute;
     if (!currentRoute) {
       return;
@@ -573,8 +592,29 @@ function LinkEdgeInner({
       setDraftRoute(null);
       setDraftIsAutomatic(true);
     }
-    scheduleKeyboardCommit(nextRoute);
+    scheduleKeyboardCommit(nextRoute, routeEditToken);
   };
+
+  useLayoutEffect(() => {
+    if (previousRouteEditTokenRef.current === routeEditToken) {
+      return;
+    }
+    previousRouteEditTokenRef.current = routeEditToken;
+    const gesture = pointerGestureRef.current;
+    pointerGestureRef.current = null;
+    if (gesture !== null) {
+      releasePointer(gesture);
+    }
+    clearAnimationFrame();
+    clearKeyboardCommitTimer();
+    latestPointerPointRef.current = null;
+    draftRouteRef.current = null;
+    suppressNextClickRef.current = false;
+    clearFrozenBadgePresentation();
+    setDraftRoute(null);
+    setDraftIsAutomatic(false);
+    setSelectedWaypointIndex(null);
+  }, [routeEditToken]);
 
   useLayoutEffect(() => {
     if (registeredBadgePresentation === null || registeredBadgePresentation.items.length === 0) {
@@ -729,6 +769,7 @@ const LinkEdge = memo(LinkEdgeInner, (prev, next) => {
     prev.data?.parallelIndex === next.data?.parallelIndex &&
     prev.data?.route === next.data?.route &&
     prev.data?.routeEditable === next.data?.routeEditable &&
+    prev.data?.routeEditToken === next.data?.routeEditToken &&
     prev.data?.onRouteCommit === next.data?.onRouteCommit &&
     prev.source === next.source &&
     prev.target === next.target &&

@@ -14,6 +14,16 @@ const flowState = vi.hoisted(() => ({
   screenToFlowPosition: vi.fn((position: { x: number; y: number }) => position),
 }));
 
+const MAP_A_OWNER = { mapId: 'map-a', generation: 1 } as const;
+const MAP_B_OWNER = { mapId: 'map-b', generation: 2 } as const;
+const MAP_A_REVISIT_OWNER = { mapId: 'map-a', generation: 3 } as const;
+const MAP_A_EDIT_TOKEN = { owner: MAP_A_OWNER, actionEpoch: 0 } as const;
+const MAP_B_EDIT_TOKEN = { owner: MAP_B_OWNER, actionEpoch: 0 } as const;
+const MAP_A_REVISIT_EDIT_TOKEN = {
+  owner: MAP_A_REVISIT_OWNER,
+  actionEpoch: 0,
+} as const;
+
 vi.mock('@xyflow/react', async () => {
   const { useSyncExternalStore } = await import('react');
 
@@ -90,6 +100,7 @@ function EdgeFixture({
               targetDeviceStatus: 'up',
               sourceIfStatus: 'up',
               targetIfStatus: 'up',
+              routeEditToken: MAP_A_EDIT_TOKEN,
               ...dataOverrides,
             },
             ...overrides,
@@ -315,10 +326,14 @@ describe('LinkEdge render', () => {
     });
 
     expect(onRouteCommit).toHaveBeenCalledTimes(1);
-    expect(onRouteCommit).toHaveBeenCalledWith('edge-1', {
-      version: 1,
-      waypoints: [{ x: 144, y: 35 }],
-    });
+    expect(onRouteCommit).toHaveBeenCalledWith(
+      'edge-1',
+      {
+        version: 1,
+        waypoints: [{ x: 144, y: 35 }],
+      },
+      MAP_A_EDIT_TOKEN,
+    );
     expect(capture.releasePointerCapture).toHaveBeenCalledWith(11);
   });
 
@@ -489,10 +504,14 @@ describe('LinkEdge render', () => {
     act(() => {
       fireEvent.pointerUp(handle, { pointerId: 42, clientX: 188, clientY: 108 });
     });
-    expect(onRouteCommit).toHaveBeenCalledWith('edge-1', {
-      version: 1,
-      waypoints: [{ x: 180, y: 100 }],
-    });
+    expect(onRouteCommit).toHaveBeenCalledWith(
+      'edge-1',
+      {
+        version: 1,
+        waypoints: [{ x: 180, y: 100 }],
+      },
+      MAP_A_EDIT_TOKEN,
+    );
     expect(flowState.screenToFlowPosition.mock.calls).not.toHaveLength(0);
     for (const call of flowState.screenToFlowPosition.mock.calls) {
       expect(call[1]).toEqual({ snapToGrid: false });
@@ -538,10 +557,14 @@ describe('LinkEdge render', () => {
     });
 
     expect(onRouteCommit).toHaveBeenCalledTimes(1);
-    expect(onRouteCommit).toHaveBeenCalledWith('edge-1', {
-      version: 1,
-      waypoints: [{ x: 190, y: 115 }],
-    });
+    expect(onRouteCommit).toHaveBeenCalledWith(
+      'edge-1',
+      {
+        version: 1,
+        waypoints: [{ x: 190, y: 115 }],
+      },
+      MAP_A_EDIT_TOKEN,
+    );
     expect(capture.setPointerCapture).toHaveBeenCalledWith(12);
     expect(capture.releasePointerCapture).toHaveBeenCalledWith(12);
   });
@@ -653,6 +676,164 @@ describe('LinkEdge render', () => {
     expect(onRouteCommit).toHaveBeenCalledOnce();
   });
 
+  it('discards a pending keyboard draft when route ownership changes from map A to map B', () => {
+    vi.useFakeTimers();
+    const onRouteCommit = vi.fn();
+    const route = { version: 1 as const, waypoints: [{ x: 170, y: 90 }] };
+    const { rerender } = renderEdge(
+      { selected: true },
+      { routeEditable: true, route, routeEditToken: MAP_A_EDIT_TOKEN, onRouteCommit },
+    );
+    const handle = screen.getByRole('button', { name: 'Move waypoint 1 for link edge-1' });
+
+    act(() => {
+      fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    });
+    expect(handle).toHaveStyle({
+      transform: 'translate(-50%, -50%) translate(171px, 90px)',
+    });
+
+    rerender(
+      <EdgeFixture
+        overrides={{ selected: true }}
+        dataOverrides={{
+          routeEditable: true,
+          route,
+          routeEditToken: MAP_B_EDIT_TOKEN,
+          onRouteCommit,
+        }}
+      />,
+    );
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+
+    expect(onRouteCommit).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Move waypoint 1/ })).toHaveStyle({
+      transform: 'translate(-50%, -50%) translate(170px, 90px)',
+    });
+  });
+
+  it('does not revive an old map A keyboard edit after switching through B to a new A owner', () => {
+    vi.useFakeTimers();
+    const onRouteCommit = vi.fn();
+    const route = { version: 1 as const, waypoints: [{ x: 170, y: 90 }] };
+    const { rerender } = renderEdge(
+      { selected: true },
+      { routeEditable: true, route, routeEditToken: MAP_A_EDIT_TOKEN, onRouteCommit },
+    );
+
+    act(() => {
+      fireEvent.keyDown(screen.getByRole('button', { name: /Move waypoint 1/ }), {
+        key: 'ArrowRight',
+      });
+    });
+    rerender(
+      <EdgeFixture
+        overrides={{ selected: true }}
+        dataOverrides={{
+          routeEditable: true,
+          route,
+          routeEditToken: MAP_B_EDIT_TOKEN,
+          onRouteCommit,
+        }}
+      />,
+    );
+    rerender(
+      <EdgeFixture
+        overrides={{ selected: true }}
+        dataOverrides={{
+          routeEditable: true,
+          route,
+          routeEditToken: MAP_A_REVISIT_EDIT_TOKEN,
+          onRouteCommit,
+        }}
+      />,
+    );
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+
+    expect(onRouteCommit).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Move waypoint 1/ })).toHaveStyle({
+      transform: 'translate(-50%, -50%) translate(170px, 90px)',
+    });
+  });
+
+  it('keeps reset automatic authoritative over an older pending keyboard edit', () => {
+    vi.useFakeTimers();
+    const onRouteCommit = vi.fn();
+    const route = { version: 1 as const, waypoints: [{ x: 170, y: 90 }] };
+    const resetToken = { owner: MAP_A_OWNER, actionEpoch: 1 } as const;
+    const { rerender } = renderEdge(
+      { selected: true },
+      { routeEditable: true, route, routeEditToken: MAP_A_EDIT_TOKEN, onRouteCommit },
+    );
+    const manualPath = screen.getByTestId('edge-1').getAttribute('d');
+
+    act(() => {
+      fireEvent.keyDown(screen.getByRole('button', { name: /Move waypoint 1/ }), {
+        key: 'ArrowRight',
+      });
+      onRouteCommit('edge-1', null, resetToken);
+    });
+    rerender(
+      <EdgeFixture
+        overrides={{ selected: true }}
+        dataOverrides={{ routeEditable: true, routeEditToken: resetToken, onRouteCommit }}
+      />,
+    );
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+
+    expect(onRouteCommit).toHaveBeenCalledOnce();
+    expect(onRouteCommit).toHaveBeenCalledWith('edge-1', null, resetToken);
+    expect(screen.queryByRole('button', { name: /Move waypoint/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId('edge-1')).not.toHaveAttribute('d', manualPath);
+  });
+
+  it('allows a newer keyboard edit after an older action token is invalidated', () => {
+    vi.useFakeTimers();
+    const onRouteCommit = vi.fn();
+    const route = { version: 1 as const, waypoints: [{ x: 170, y: 90 }] };
+    const newerToken = { owner: MAP_A_OWNER, actionEpoch: 1 } as const;
+    const { rerender } = renderEdge(
+      { selected: true },
+      { routeEditable: true, route, routeEditToken: MAP_A_EDIT_TOKEN, onRouteCommit },
+    );
+
+    act(() => {
+      fireEvent.keyDown(screen.getByRole('button', { name: /Move waypoint 1/ }), {
+        key: 'ArrowRight',
+      });
+    });
+    rerender(
+      <EdgeFixture
+        overrides={{ selected: true }}
+        dataOverrides={{
+          routeEditable: true,
+          route,
+          routeEditToken: newerToken,
+          onRouteCommit,
+        }}
+      />,
+    );
+    act(() => {
+      fireEvent.keyDown(screen.getByRole('button', { name: /Move waypoint 1/ }), {
+        key: 'ArrowDown',
+      });
+      vi.advanceTimersByTime(180);
+    });
+
+    expect(onRouteCommit).toHaveBeenCalledOnce();
+    expect(onRouteCommit).toHaveBeenCalledWith(
+      'edge-1',
+      { version: 1, waypoints: [{ x: 170, y: 91 }] },
+      newerToken,
+    );
+  });
+
   it('commits automatic routing after deleting the final waypoint', () => {
     vi.useFakeTimers();
     const onRouteCommit = vi.fn();
@@ -678,7 +859,7 @@ describe('LinkEdge render', () => {
       vi.advanceTimersByTime(1);
     });
     expect(onRouteCommit).toHaveBeenCalledOnce();
-    expect(onRouteCommit).toHaveBeenCalledWith('edge-1', null);
+    expect(onRouteCommit).toHaveBeenCalledWith('edge-1', null, MAP_A_EDIT_TOKEN);
   });
 
   it('hides waypoint controls unless the edge is selected, enabled, and persistable', () => {

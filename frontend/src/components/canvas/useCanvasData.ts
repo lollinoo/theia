@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createLink, fetchGrafanaDashboardConfig, fetchSettings } from '../../api/client';
 import { publishCanvasRuntimeBootstrap } from '../../hooks/canvasRuntimeBootstrap';
 import { type PositionState, usePositions } from '../../hooks/usePositions';
-import type { Area, Device, GrafanaDashboardConfig, Link, LinkRoute } from '../../types/api';
+import type { Area, Device, GrafanaDashboardConfig, Link } from '../../types/api';
 import {
   type AlertDTO,
   isPrometheusUnavailable,
@@ -17,7 +17,7 @@ import {
 } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
-import { type LinkEdgeData } from '../linkSemantics';
+import { type LinkEdgeData, type LinkRouteCommit, type LinkRouteEditToken } from '../linkSemantics';
 import { applyAlertStatusPatch } from './alertStatusPatch';
 import { updateCanvasDiagnosticsState } from './canvasDiagnostics';
 import { snapNodesToGrid } from './canvasGrid';
@@ -92,7 +92,8 @@ interface UseCanvasDataParams {
   editMode: boolean;
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void;
   openEdgeMenu: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void;
-  onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+  onLinkRouteCommit?: LinkRouteCommit;
+  getLinkRouteEditToken?: (edgeId: string) => LinkRouteEditToken | undefined;
   reconcileLinkRouteEdges?: (edges: LinkEdgeType[]) => LinkEdgeType[];
   openSelfLinkDetails?: (link: Link) => void;
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
@@ -164,6 +165,7 @@ export function useCanvasData({
   openDeviceMenu,
   openEdgeMenu,
   onLinkRouteCommit,
+  getLinkRouteEditToken,
   reconcileLinkRouteEdges,
   openSelfLinkDetails,
   reactFlow,
@@ -514,6 +516,7 @@ export function useCanvasData({
               links: fetchedLinks,
               linkRoutes: fetchedLinkRoutes,
               onLinkRouteCommit,
+              getLinkRouteEditToken,
               runtimeState,
               savedPositions: effectivePositions,
               computedPositions,
@@ -722,6 +725,7 @@ export function useCanvasData({
       openEdgeMenu,
       openSelfLinkDetails,
       onLinkRouteCommit,
+      getLinkRouteEditToken,
       reconcileLinkRouteEdges,
       reactFlow,
       getCanvasClientRect,

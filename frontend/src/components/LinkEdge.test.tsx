@@ -171,6 +171,7 @@ describe('LinkEdge', () => {
 
     expect(content).toContain('prev.data?.route === next.data?.route');
     expect(content).toContain('prev.data?.routeEditable === next.data?.routeEditable');
+    expect(content).toContain('prev.data?.routeEditToken === next.data?.routeEditToken');
     expect(content).toContain('prev.data?.onRouteCommit === next.data?.onRouteCommit');
   });
 

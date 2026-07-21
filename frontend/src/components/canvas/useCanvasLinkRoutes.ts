@@ -7,6 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { deleteCanvasMapLinkRoute, saveCanvasMapLinkRoute } from '../../api/client';
 import { copyLinkRoute, type LinkRoute } from '../../types/api';
 import type { LinkEdgeType } from '../LinkEdge';
+import type { LinkRouteEditToken, LinkRouteOwnerToken } from '../linkSemantics';
 
 /** Configures link route persistence against the canonical canvas edge state. */
 export interface UseCanvasLinkRoutesOptions {
@@ -18,6 +19,13 @@ export interface UseCanvasLinkRoutesOptions {
 /** Exposes stable route mutations and recoverable persistence feedback. */
 export interface UseCanvasLinkRoutesResult {
   commitLinkRoute: (edgeId: string, route: LinkRoute | null) => void;
+  commitOwnedLinkRoute: (
+    edgeId: string,
+    route: LinkRoute | null,
+    editToken: LinkRouteEditToken | undefined,
+  ) => void;
+  getLinkRouteEditToken: (edgeId: string) => LinkRouteEditToken | undefined;
+  routeOwnerToken: LinkRouteOwnerToken | null;
   resetLinkRoute: (edgeId: string) => void;
   reconcileLinkRouteEdges: (edges: LinkEdgeType[]) => LinkEdgeType[];
   linkRouteError: string | null;
@@ -27,18 +35,14 @@ export interface UseCanvasLinkRoutesResult {
 interface LinkRouteOwner {
   mapId: string | null;
   generation: number;
+  ownerToken: LinkRouteOwnerToken | null;
   mounted: boolean;
-}
-
-interface LinkRouteMutationOwner {
-  mapId: string;
-  generation: number;
 }
 
 interface PendingLinkRoute {
   route: LinkRoute | null;
   sequence: number;
-  owner: LinkRouteMutationOwner;
+  owner: LinkRouteOwnerToken;
   authorityEpoch: number;
 }
 
@@ -55,9 +59,14 @@ interface LinkRouteQueue {
   overlayActive: boolean;
   overlayRoute: LinkRoute | null;
   overlaySequence: number;
-  overlayOwner: LinkRouteMutationOwner | null;
+  overlayOwner: LinkRouteOwnerToken | null;
   authorityEpoch: number;
   invalidated: boolean;
+}
+
+interface AuthoritativeLinkRoute {
+  owner: LinkRouteOwnerToken;
+  route: LinkRoute | null;
 }
 
 const linkRouteSaveError =
@@ -87,17 +96,13 @@ function linkRoutesEqual(
   });
 }
 
-function hasOwner(owner: LinkRouteOwner, mutationOwner: LinkRouteMutationOwner): boolean {
-  return (
-    owner.mounted &&
-    owner.mapId === mutationOwner.mapId &&
-    owner.generation === mutationOwner.generation
-  );
+function hasOwner(owner: LinkRouteOwner, mutationOwner: LinkRouteOwnerToken): boolean {
+  return owner.mounted && owner.ownerToken === mutationOwner;
 }
 
 function hasOverlayOwner(
   queue: LinkRouteQueue,
-  overlayOwner: LinkRouteMutationOwner,
+  overlayOwner: LinkRouteOwnerToken,
   authorityEpoch: number,
   sequence: number,
 ): boolean {
@@ -106,9 +111,27 @@ function hasOverlayOwner(
     queue.authorityEpoch === authorityEpoch &&
     queue.overlayActive &&
     queue.overlaySequence === sequence &&
-    queue.overlayOwner?.mapId === overlayOwner.mapId &&
-    queue.overlayOwner.generation === overlayOwner.generation
+    queue.overlayOwner === overlayOwner
   );
+}
+
+function clearRouteEditOwnership(edges: LinkEdgeType[]): LinkEdgeType[] {
+  let nextEdges: LinkEdgeType[] | null = null;
+  edges.forEach((edge, edgeIndex) => {
+    if (
+      edge.data?.routeEditToken === undefined &&
+      edge.data?.routeEditable !== true &&
+      edge.data?.onRouteCommit === undefined
+    ) {
+      return;
+    }
+    const data = { ...(edge.data ?? {}), routeEditable: false };
+    delete data.routeEditToken;
+    delete data.onRouteCommit;
+    nextEdges ??= edges.slice();
+    nextEdges[edgeIndex] = { ...edge, data };
+  });
+  return nextEdges ?? edges;
 }
 
 /** Coordinates optimistic route edits with ordered writes to the owning saved map. */
@@ -118,21 +141,36 @@ export function useCanvasLinkRoutes({
   edgeIndexByIdRef,
 }: UseCanvasLinkRoutesOptions): UseCanvasLinkRoutesResult {
   const [linkRouteError, setLinkRouteError] = useState<string | null>(null);
-  const ownerRef = useRef<LinkRouteOwner>({ mapId, generation: 0, mounted: true });
+  const ownerRef = useRef<LinkRouteOwner>({
+    mapId,
+    generation: 0,
+    ownerToken: mapId === null ? null : { mapId, generation: 0 },
+    mounted: true,
+  });
   const queuesRef = useRef(new Map<string, LinkRouteQueue>());
+  const editTokensRef = useRef(new Map<string, LinkRouteEditToken>());
+  const authoritativeRoutesRef = useRef(new Map<string, AuthoritativeLinkRoute>());
+  const committedOwnerTokenRef = useRef(ownerRef.current.ownerToken);
 
-  useLayoutEffect(() => {
-    const owner = ownerRef.current;
-    if (owner.mapId === mapId) {
-      return;
-    }
+  if (ownerRef.current.mapId !== mapId) {
+    const generation = ownerRef.current.generation + 1;
     ownerRef.current = {
       mapId,
-      generation: owner.generation + 1,
+      generation,
+      ownerToken: mapId === null ? null : { mapId, generation },
       mounted: true,
     };
+  }
+  const routeOwnerToken = ownerRef.current.ownerToken;
+
+  useLayoutEffect(() => {
+    if (committedOwnerTokenRef.current === routeOwnerToken) {
+      return;
+    }
+    committedOwnerTokenRef.current = routeOwnerToken;
     setLinkRouteError(null);
-  }, [mapId]);
+    setEdges((currentEdges) => clearRouteEditOwnership(currentEdges));
+  }, [routeOwnerToken, setEdges]);
 
   useEffect(() => {
     ownerRef.current.mounted = true;
@@ -140,15 +178,57 @@ export function useCanvasLinkRoutes({
       ownerRef.current = {
         ...ownerRef.current,
         generation: ownerRef.current.generation + 1,
+        ownerToken: null,
         mounted: false,
       };
     };
   }, []);
 
+  const getLinkRouteEditToken = useCallback((edgeId: string): LinkRouteEditToken | undefined => {
+    const ownerToken = ownerRef.current.ownerToken;
+    if (!ownerRef.current.mounted || ownerToken === null) {
+      return undefined;
+    }
+    const key = queueKey(ownerToken.mapId, edgeId);
+    const existing = editTokensRef.current.get(key);
+    if (existing?.owner === ownerToken) {
+      return existing;
+    }
+    const nextToken: LinkRouteEditToken = {
+      owner: ownerToken,
+      actionEpoch: existing === undefined ? 0 : existing.actionEpoch + 1,
+    };
+    editTokensRef.current.set(key, nextToken);
+    return nextToken;
+  }, []);
+
+  const rotateLinkRouteEditToken = useCallback(
+    (edgeId: string): LinkRouteEditToken | undefined => {
+      const current = getLinkRouteEditToken(edgeId);
+      if (current === undefined) {
+        return undefined;
+      }
+      const nextToken: LinkRouteEditToken = {
+        owner: current.owner,
+        actionEpoch: current.actionEpoch + 1,
+      };
+      editTokensRef.current.set(queueKey(current.owner.mapId, edgeId), nextToken);
+      return nextToken;
+    },
+    [getLinkRouteEditToken],
+  );
+
+  const ownsEditToken = useCallback((edgeId: string, editToken: LinkRouteEditToken): boolean => {
+    return (
+      hasOwner(ownerRef.current, editToken.owner) &&
+      editTokensRef.current.get(queueKey(editToken.owner.mapId, edgeId)) === editToken
+    );
+  }, []);
+
   const patchEdgeRoute = useCallback(
     (
       queue: LinkRouteQueue,
-      mutationOwner: LinkRouteMutationOwner,
+      mutationOwner: LinkRouteOwnerToken,
       route: LinkRoute | null,
       canApply: () => boolean = () => true,
       initializeConfirmed = false,
@@ -177,6 +257,10 @@ export function useCanvasLinkRoutes({
           delete data.route;
         } else {
           data.route = copyLinkRoute(route);
+        }
+        const editToken = editTokensRef.current.get(queue.key);
+        if (editToken?.owner === mutationOwner) {
+          data.routeEditToken = editToken;
         }
 
         const nextEdges = currentEdges.slice();
@@ -302,19 +386,19 @@ export function useCanvasLinkRoutes({
     [patchEdgeRoute],
   );
 
-  const commitLinkRoute = useCallback(
-    (edgeId: string, route: LinkRoute | null) => {
-      const owner = ownerRef.current;
-      if (!owner.mounted || owner.mapId === null) {
+  const enqueueLinkRoute = useCallback(
+    (edgeId: string, route: LinkRoute | null, editToken: LinkRouteEditToken) => {
+      if (!ownsEditToken(edgeId, editToken)) {
         return;
       }
 
-      const key = queueKey(owner.mapId, edgeId);
+      const mutationOwner = editToken.owner;
+      const key = queueKey(mutationOwner.mapId, edgeId);
       let queue = queuesRef.current.get(key);
       if (queue === undefined) {
         queue = {
           key,
-          mapId: owner.mapId,
+          mapId: mutationOwner.mapId,
           edgeId,
           running: false,
           pendingLatest: null,
@@ -341,7 +425,6 @@ export function useCanvasLinkRoutes({
       const nextRoute = copyOptionalRoute(route);
       const sequence = queue.latestSequence + 1;
       queue.latestSequence = sequence;
-      const mutationOwner = { mapId: owner.mapId, generation: owner.generation };
       const mutationEpoch = queue.authorityEpoch;
       queue.pendingLatest = {
         route: nextRoute,
@@ -365,86 +448,151 @@ export function useCanvasLinkRoutes({
       );
       drainQueue(queue);
     },
-    [drainQueue, patchEdgeRoute],
+    [drainQueue, ownsEditToken, patchEdgeRoute],
+  );
+
+  const commitLinkRoute = useCallback(
+    (edgeId: string, route: LinkRoute | null) => {
+      const editToken = getLinkRouteEditToken(edgeId);
+      if (editToken !== undefined) {
+        enqueueLinkRoute(edgeId, route, editToken);
+      }
+    },
+    [enqueueLinkRoute, getLinkRouteEditToken],
+  );
+
+  const commitOwnedLinkRoute = useCallback(
+    (edgeId: string, route: LinkRoute | null, editToken: LinkRouteEditToken | undefined) => {
+      if (editToken === undefined || !ownsEditToken(edgeId, editToken)) {
+        return;
+      }
+      enqueueLinkRoute(edgeId, route, editToken);
+    },
+    [enqueueLinkRoute, ownsEditToken],
   );
 
   const resetLinkRoute = useCallback(
     (edgeId: string) => {
-      commitLinkRoute(edgeId, null);
+      const ownerToken = ownerRef.current.ownerToken;
+      if (ownerToken === null) {
+        return;
+      }
+      const queue = queuesRef.current.get(queueKey(ownerToken.mapId, edgeId));
+      if (queue !== undefined) {
+        queue.authorityEpoch += 1;
+        queue.pendingLatest = null;
+      }
+      const editToken = rotateLinkRouteEditToken(edgeId);
+      if (editToken !== undefined) {
+        enqueueLinkRoute(edgeId, null, editToken);
+      }
     },
-    [commitLinkRoute],
+    [enqueueLinkRoute, rotateLinkRouteEditToken],
   );
 
-  const reconcileLinkRouteEdges = useCallback((edges: LinkEdgeType[]): LinkEdgeType[] => {
-    const owner = ownerRef.current;
-    if (!owner.mounted || owner.mapId === null) {
-      return edges;
-    }
-    const ownerMapId = owner.mapId;
-    const currentEdgeIds = new Set(edges.map((edge) => edge.id));
-
-    let reconciledEdges: LinkEdgeType[] | null = null;
-    edges.forEach((edge, edgeIndex) => {
-      const queue = queuesRef.current.get(queueKey(ownerMapId, edge.id));
-      if (queue === undefined) {
-        return;
+  const reconcileLinkRouteEdges = useCallback(
+    (edges: LinkEdgeType[]): LinkEdgeType[] => {
+      const owner = ownerRef.current;
+      if (!owner.mounted || owner.mapId === null || owner.ownerToken === null) {
+        return edges;
       }
+      const ownerMapId = owner.mapId;
+      const currentEdgeIds = new Set(edges.map((edge) => edge.id));
 
-      const fetchedRoute = copyOptionalRoute(edge.data?.route);
-      const queueIsIdle = !queue.running && queue.pendingLatest === null;
-      if (!queue.overlayActive) {
-        if (queueIsIdle) {
-          queue.confirmed = fetchedRoute;
-          queue.confirmedInitialized = true;
-          queuesRef.current.delete(queue.key);
+      let reconciledEdges: LinkEdgeType[] | null = null;
+      edges.forEach((edge, edgeIndex) => {
+        const key = queueKey(ownerMapId, edge.id);
+        const queue = queuesRef.current.get(key);
+        const fetchedRoute = copyOptionalRoute(edge.data?.route);
+        const previousAuthoritativeRoute = authoritativeRoutesRef.current.get(key);
+        let actionTokenRotated = false;
+        if (
+          previousAuthoritativeRoute?.owner === owner.ownerToken &&
+          !linkRoutesEqual(previousAuthoritativeRoute.route, fetchedRoute) &&
+          queue?.overlayActive !== true
+        ) {
+          actionTokenRotated = rotateLinkRouteEditToken(edge.id) !== undefined;
         }
-        return;
-      }
-
-      if (linkRoutesEqual(fetchedRoute, queue.overlayRoute)) {
-        if (queueIsIdle) {
-          queue.confirmed = copyOptionalRoute(fetchedRoute);
-          queue.confirmedInitialized = true;
-          queue.overlayActive = false;
-          queuesRef.current.delete(queue.key);
+        authoritativeRoutesRef.current.set(key, {
+          owner: owner.ownerToken!,
+          route: copyOptionalRoute(fetchedRoute),
+        });
+        if (actionTokenRotated) {
+          const data = {
+            ...(edge.data ?? {}),
+            routeEditToken: getLinkRouteEditToken(edge.id),
+          };
+          reconciledEdges ??= edges.slice();
+          reconciledEdges[edgeIndex] = { ...edge, data };
         }
-        return;
+        if (queue === undefined) {
+          return;
+        }
+
+        const queueIsIdle = !queue.running && queue.pendingLatest === null;
+        if (!queue.overlayActive) {
+          if (queueIsIdle) {
+            queue.confirmed = fetchedRoute;
+            queue.confirmedInitialized = true;
+            queuesRef.current.delete(queue.key);
+          }
+          return;
+        }
+
+        if (linkRoutesEqual(fetchedRoute, queue.overlayRoute)) {
+          if (queueIsIdle) {
+            queue.confirmed = copyOptionalRoute(fetchedRoute);
+            queue.confirmedInitialized = true;
+            queue.overlayActive = false;
+            queuesRef.current.delete(queue.key);
+          }
+          return;
+        }
+
+        const data = { ...(edge.data ?? {}) };
+        queue.overlayOwner = owner.ownerToken;
+        const editToken = getLinkRouteEditToken(edge.id);
+        if (editToken !== undefined) {
+          data.routeEditToken = editToken;
+        }
+        if (queue.overlayRoute === null) {
+          delete data.route;
+        } else {
+          data.route = copyLinkRoute(queue.overlayRoute);
+        }
+        reconciledEdges ??= edges.slice();
+        reconciledEdges[edgeIndex] = { ...edge, data };
+      });
+
+      for (const [key, queue] of queuesRef.current) {
+        if (queue.mapId !== ownerMapId || currentEdgeIds.has(queue.edgeId)) {
+          continue;
+        }
+        if (!queue.running) {
+          queuesRef.current.delete(key);
+          editTokensRef.current.delete(key);
+          authoritativeRoutesRef.current.delete(key);
+          continue;
+        }
+        if (!queue.invalidated) {
+          queue.authorityEpoch += 1;
+        }
+        queue.invalidated = true;
+        queue.pendingLatest = null;
+        queue.confirmed = null;
+        queue.confirmedInitialized = false;
+        queue.overlayActive = false;
+        queue.overlayRoute = null;
+        queue.overlaySequence = 0;
+        queue.overlayOwner = null;
+        editTokensRef.current.delete(key);
+        authoritativeRoutesRef.current.delete(key);
       }
 
-      const data = { ...(edge.data ?? {}) };
-      queue.overlayOwner = { mapId: ownerMapId, generation: owner.generation };
-      if (queue.overlayRoute === null) {
-        delete data.route;
-      } else {
-        data.route = copyLinkRoute(queue.overlayRoute);
-      }
-      reconciledEdges ??= edges.slice();
-      reconciledEdges[edgeIndex] = { ...edge, data };
-    });
-
-    for (const [key, queue] of queuesRef.current) {
-      if (queue.mapId !== ownerMapId || currentEdgeIds.has(queue.edgeId)) {
-        continue;
-      }
-      if (!queue.running) {
-        queuesRef.current.delete(key);
-        continue;
-      }
-      if (!queue.invalidated) {
-        queue.authorityEpoch += 1;
-      }
-      queue.invalidated = true;
-      queue.pendingLatest = null;
-      queue.confirmed = null;
-      queue.confirmedInitialized = false;
-      queue.overlayActive = false;
-      queue.overlayRoute = null;
-      queue.overlaySequence = 0;
-      queue.overlayOwner = null;
-    }
-
-    return reconciledEdges ?? edges;
-  }, []);
+      return reconciledEdges ?? edges;
+    },
+    [getLinkRouteEditToken, rotateLinkRouteEditToken],
+  );
 
   const dismissLinkRouteError = useCallback(() => {
     setLinkRouteError(null);
@@ -452,6 +600,9 @@ export function useCanvasLinkRoutes({
 
   return {
     commitLinkRoute,
+    commitOwnedLinkRoute,
+    getLinkRouteEditToken,
+    routeOwnerToken,
     resetLinkRoute,
     reconcileLinkRouteEdges,
     linkRouteError,
