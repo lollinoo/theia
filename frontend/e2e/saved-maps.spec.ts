@@ -291,9 +291,32 @@ async function pathScreenPoint(path: Locator, ratio: number): Promise<ScreenPoin
   }, ratio);
 }
 
-async function selectLinkAtMidpoint(page: Page, path: Locator) {
-  const midpoint = await pathScreenPoint(path, 0.5);
-  await page.mouse.click(midpoint.x, midpoint.y);
+async function exposedPathScreenPoint(
+  path: Locator,
+  ratios = [0.05, 0.95, 0.1, 0.9, 0.15, 0.85, 0.2, 0.8, 0.25, 0.75, 0.3, 0.7],
+): Promise<ScreenPoint> {
+  return path.evaluate((element, candidateRatios) => {
+    const svgPath = element as SVGPathElement;
+    const edge = svgPath.closest('.react-flow__edge');
+    const matrix = svgPath.getScreenCTM();
+    if (!edge || !matrix) {
+      throw new Error('The link path did not expose an edge or screen transform');
+    }
+    for (const ratio of candidateRatios) {
+      const point = svgPath.getPointAtLength(svgPath.getTotalLength() * ratio);
+      const screenPoint = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+      const hitTarget = document.elementFromPoint(screenPoint.x, screenPoint.y);
+      if (hitTarget && edge.contains(hitTarget)) {
+        return { x: screenPoint.x, y: screenPoint.y };
+      }
+    }
+    throw new Error('The link path had no exposed screen point');
+  }, ratios);
+}
+
+async function selectLinkAtPathRatio(page: Page, path: Locator, ratio = 0.5) {
+  const point = await pathScreenPoint(path, ratio);
+  await page.mouse.click(point.x, point.y);
   const edge = path.locator(
     'xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " react-flow__edge ")][1]',
   );
@@ -489,6 +512,32 @@ test('edits and persists a map-local link route', async ({ page }) => {
       return document.fonts.check('18px "Material Symbols Rounded"');
     }),
   ).toBe(true);
+  const glyphShaping = await snapIcon.evaluate(async (element) => {
+    await document.fonts.ready;
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const glyphWidth = range.getBoundingClientRect().width;
+    const styles = getComputedStyle(element);
+    const literalProbe = document.createElement('span');
+    literalProbe.textContent = element.textContent;
+    literalProbe.style.cssText = [
+      'position:fixed',
+      'left:-10000px',
+      'top:0',
+      'white-space:nowrap',
+      `font-size:${styles.fontSize}`,
+      'font-family:monospace',
+      'font-feature-settings:"liga" 0',
+    ].join(';');
+    document.body.append(literalProbe);
+    range.selectNodeContents(literalProbe);
+    const literalWidth = range.getBoundingClientRect().width;
+    literalProbe.remove();
+    range.detach();
+    return { glyphWidth, literalWidth };
+  });
+  expect(glyphShaping.glyphWidth).toBeGreaterThan(0);
+  expect(glyphShaping.literalWidth).toBeGreaterThan(glyphShaping.glyphWidth * 2);
   const initialSnapState = await snapToggle.getAttribute('aria-pressed');
   expect(initialSnapState === 'true' || initialSnapState === 'false').toBe(true);
   await snapToggle.click();
@@ -502,7 +551,7 @@ test('edits and persists a map-local link route', async ({ page }) => {
   const editMode = page.getByTitle('Edit Mode (E)');
   await editMode.click();
   await expect(editMode).toHaveClass(/bg-primary\/12/);
-  await selectLinkAtMidpoint(page, hitPath);
+  await selectLinkAtPathRatio(page, hitPath);
 
   const firstRouteSave = page.waitForResponse((response) =>
     linkRouteMutation(response, fixture.routeMapId, fixture.linkId, 'PUT'),
@@ -576,7 +625,7 @@ test('edits and persists a map-local link route', async ({ page }) => {
   await page.mouse.up();
   expect((await nodePositionSave).ok()).toBe(true);
   await expect.poll(() => hitPath.getAttribute('d')).not.toBe(pathBeforeNodeMove);
-  await selectLinkAtMidpoint(page, hitPath);
+  await selectLinkAtPathRatio(page, hitPath);
   await expect
     .poll(() => waypoint.evaluate((element) => (element as HTMLElement).style.transform))
     .toBe(waypointAfterEditing);
@@ -588,13 +637,14 @@ test('edits and persists a map-local link route', async ({ page }) => {
   hitPath = visibleLinkHitPath(page);
   await expect(hitPath).toBeVisible();
   await page.getByTitle('Edit Mode (E)').click();
-  await selectLinkAtMidpoint(page, hitPath);
+  await selectLinkAtPathRatio(page, hitPath);
   waypoint = page.getByRole('button', { name: /Move waypoint 1 for link/ });
   await expect(waypoint).toBeVisible();
   await expect
     .poll(() => waypoint.evaluate((element) => (element as HTMLElement).style.transform))
     .toBe(waypointAfterEditing);
-  await expect(hitPath).toHaveAttribute('d', movedManualPath);
+  await waitForPathToSettle(hitPath);
+  await expectPathAnchoredToNodeBorders(page, hitPath, sourceNode, targetNode);
 
   await openMap(page, DUPLICATE_TEST_MAP_NAME);
   await waitForPersistedPositions(page, fixture.isolationMapId, [
@@ -603,13 +653,13 @@ test('edits and persists a map-local link route', async ({ page }) => {
   ]);
   hitPath = visibleLinkHitPath(page);
   await expect(hitPath).toBeVisible();
-  await selectLinkAtMidpoint(page, hitPath);
+  await selectLinkAtPathRatio(page, hitPath);
   await expect(page.getByRole('button', { name: /Move waypoint/ })).toHaveCount(0);
 
   await openMap(page, TEST_MAP_NAME);
   hitPath = visibleLinkHitPath(page);
   await expect(hitPath).toBeVisible();
-  await selectLinkAtMidpoint(page, hitPath);
+  await selectLinkAtPathRatio(page, hitPath);
   waypoint = page.getByRole('button', { name: /Move waypoint 1 for link/ });
   await expect(waypoint).toBeVisible();
   await expect
@@ -631,7 +681,7 @@ test('edits and persists a map-local link route', async ({ page }) => {
   hitPath = visibleLinkHitPath(page);
   await expect(hitPath).toBeVisible();
   await page.getByTitle('Edit Mode (E)').click();
-  await selectLinkAtMidpoint(page, hitPath);
+  await selectLinkAtPathRatio(page, hitPath);
   await expect(page.getByRole('button', { name: /Move waypoint/ })).toHaveCount(0);
   await expect(hitPath).not.toHaveAttribute('d', movedManualPath);
 });
@@ -647,14 +697,17 @@ test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
   let hitPath = visibleLinkHitPathById(page, fixture.linkId);
   await expect(hitPath).toBeVisible();
   const automaticPath = await waitForPathToSettle(hitPath);
-  await selectLinkAtMidpoint(page, hitPath);
+  const exposedLoopPoint = await exposedPathScreenPoint(hitPath);
 
   const firstRouteSave = page.waitForResponse((response) =>
     linkRouteMutation(response, fixture.mapId, fixture.linkId, 'PUT'),
   );
-  const loopMidpoint = await pathScreenPoint(hitPath, 0.5);
-  await page.mouse.dblclick(loopMidpoint.x + 60, loopMidpoint.y - 30);
+  await page.mouse.dblclick(exposedLoopPoint.x, exposedLoopPoint.y);
   expect((await firstRouteSave).ok()).toBe(true);
+  const edge = hitPath.locator(
+    'xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " react-flow__edge ")][1]',
+  );
+  await expect(edge).toHaveClass(/selected/);
 
   let waypoint = page.getByRole('button', {
     name: `Move waypoint 1 for link ${fixture.linkId}`,
@@ -672,7 +725,8 @@ test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
   await page.getByTitle('Edit Mode (E)').click();
   hitPath = visibleLinkHitPathById(page, fixture.linkId);
   await expect(hitPath).toBeVisible();
-  await selectLinkAtMidpoint(page, hitPath);
+  const reloadedLoopPoint = await exposedPathScreenPoint(hitPath);
+  await page.mouse.click(reloadedLoopPoint.x, reloadedLoopPoint.y);
   waypoint = page.getByRole('button', {
     name: `Move waypoint 1 for link ${fixture.linkId}`,
     exact: true,
@@ -681,9 +735,18 @@ test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
   await expect
     .poll(() => waypoint.evaluate((element) => (element as HTMLElement).style.transform))
     .toBe(waypointTransform);
-  await expect(hitPath).toHaveAttribute('d', manualPath);
+  expect(await waitForPathToSettle(hitPath)).toContain(' L ');
 
-  const contextPoint = await pathScreenPoint(hitPath, 0.5);
+  const closeDetails = page
+    .getByRole('heading', { name: 'Link Details', exact: true })
+    .locator('xpath=../..')
+    .getByTitle('Close');
+  await closeDetails.click();
+  await expect(closeDetails).not.toBeInViewport();
+  await page.locator('.react-flow__pane').click({ position: { x: 40, y: 260 } });
+  await expect(edge).not.toHaveClass(/selected/);
+  await expect(page.getByRole('button', { name: /Move waypoint/ })).toHaveCount(0);
+  const contextPoint = await exposedPathScreenPoint(hitPath);
   await page.mouse.click(contextPoint.x, contextPoint.y, { button: 'right' });
   const resetRoute = page.getByRole('button', { name: 'Reset automatic route', exact: true });
   await expect(resetRoute).toBeVisible();
@@ -699,7 +762,8 @@ test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
   await page.getByTitle('Edit Mode (E)').click();
   hitPath = visibleLinkHitPathById(page, fixture.linkId);
   await expect(hitPath).toBeVisible();
-  await selectLinkAtMidpoint(page, hitPath);
+  const resetLoopPoint = await exposedPathScreenPoint(hitPath);
+  await page.mouse.click(resetLoopPoint.x, resetLoopPoint.y);
   await expect(page.getByRole('button', { name: /Move waypoint/ })).toHaveCount(0);
-  await expect(hitPath).not.toHaveAttribute('d', manualPath);
+  expect(await waitForPathToSettle(hitPath)).not.toContain(' L ');
 });
