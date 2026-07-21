@@ -7,6 +7,7 @@ import { computeForceLayout } from '../../hooks/useAutoLayout';
 import type { Device } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
+import { buildEditableLinkPath } from '../editableLinkGeometry';
 import { projectAreaTopology } from './areaProjection';
 import {
   aggregateCanvasMetricSamples,
@@ -56,6 +57,7 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'runtimePatch',
   'incrementalLayout',
   'newNodePlacement',
+  'editableLinkGeometry',
   'computeForceLayout',
 ] as const satisfies CanvasMetricName[];
 
@@ -117,6 +119,16 @@ const noopEdgeMenu = (() => undefined) as unknown as (
   edgeId: string,
 ) => void;
 const noopGhostClick = () => undefined;
+
+const editableLinkBenchmarkRoute = {
+  version: 1 as const,
+  waypoints: Array.from({ length: 16 }, (_, index) => ({
+    x: 320 + index * 88,
+    y: index % 2 === 0 ? 96 : 544,
+  })),
+};
+const editableLinkBenchmarkSourceRect = { x: 32, y: 260, width: 240, height: 120 };
+const editableLinkBenchmarkTargetRect = { x: 1_720, y: 260, width: 240, height: 120 };
 
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -563,6 +575,17 @@ function benchmarkOperations(
       viewport: { x: 0, y: 0, width: 1440, height: 900 },
       nodeSize: { width: 370, height: 140 },
       obstacles: placementObstacles,
+    }),
+  );
+
+  measureLocalMetric(samples, scenarioName, 'editableLinkGeometry', () =>
+    buildEditableLinkPath({
+      sourceRect: editableLinkBenchmarkSourceRect,
+      targetRect: editableLinkBenchmarkTargetRect,
+      fallbackSource: { x: 272, y: 320 },
+      fallbackTarget: { x: 1_720, y: 320 },
+      route: editableLinkBenchmarkRoute,
+      parallelIndex: 0,
     }),
   );
 

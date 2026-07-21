@@ -20,6 +20,7 @@ describe('canvasPerfBenchmark', () => {
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('composeCanvasTopologyCached');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('renderProjection');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('newNodePlacement');
+    expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('editableLinkGeometry');
 
     const result = runCanvasPerfBenchmark({
       iterations: 1,
@@ -36,7 +37,20 @@ describe('canvasPerfBenchmark', () => {
     expect(result.scenarios.small.metrics.composeCanvasTopologyCached.count).toBe(1);
     expect(result.scenarios.small.metrics.renderProjection.count).toBe(1);
     expect(result.scenarios.small.metrics.newNodePlacement.count).toBe(1);
+    expect(result.scenarios.small.metrics.editableLinkGeometry.count).toBe(1);
   });
+
+  it('keeps worst-case editable link geometry within the stress budget', () => {
+    const result = runCanvasPerfBenchmark({
+      warmupIterations: 3,
+      scenarioNames: ['stress'],
+    });
+
+    const metric = result.scenarios.stress.metrics.editableLinkGeometry;
+    expect(metric).toBeDefined();
+    expect(metric.count).toBe(5);
+    expect(metric.p95Ms).toBeLessThan(8);
+  }, 60_000);
 
   it('produces aggregate metrics for every official scenario and benchmarked function', () => {
     const result = runCanvasPerfBenchmark({

@@ -17,6 +17,7 @@ export type CanvasMetricName =
   | 'runtimePatch'
   | 'incrementalLayout'
   | 'newNodePlacement'
+  | 'editableLinkGeometry'
   | 'computeForceLayout'
   | 'deviceCardRender'
   | 'frameTime'
