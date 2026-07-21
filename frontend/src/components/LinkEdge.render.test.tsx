@@ -216,6 +216,15 @@ describe('LinkEdge render', () => {
     expect(hitTarget).not.toHaveAttribute('tabindex');
   });
 
+  it('renders the transparent hit path above every painted edge path', () => {
+    const { container } = renderEdge({ selected: true });
+    const paths = [...container.querySelectorAll('path')];
+    const hitTarget = container.querySelector('path.cursor-pointer');
+
+    expect(hitTarget).not.toBeNull();
+    expect(paths.at(-1)).toBe(hitTarget);
+  });
+
   it('preserves the existing edge click below the four-pixel route-drag threshold', () => {
     const onClick = vi.fn();
     const onRouteCommit = vi.fn();

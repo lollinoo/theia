@@ -610,6 +610,35 @@ function LinkEdgeInner({
 
   return (
     <>
+      {(isActive || isConnected) && (
+        <BaseEdge
+          id={`${id}-halo`}
+          path={edgePath}
+          style={{
+            stroke: haloColor,
+            strokeOpacity: isConnected ? 0.22 : 0.18,
+            strokeWidth: strokeWidth + 4,
+            transition: isInteractive
+              ? 'none'
+              : 'stroke-width 120ms ease, stroke-opacity 120ms ease',
+          }}
+        />
+      )}
+
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        style={{
+          stroke: tone.color,
+          strokeOpacity,
+          strokeWidth,
+          strokeDasharray: isMuted ? '10 12' : undefined,
+          transition: isInteractive
+            ? 'none'
+            : 'stroke-width 120ms ease, stroke-opacity 120ms ease, stroke 120ms ease',
+        }}
+      />
+
       {/* biome-ignore lint/a11y/noStaticElementInteractions: This transparent SVG path is a pointer-only edge hit target, not a keyboard command. */}
       <path
         d={edgePath}
@@ -642,35 +671,6 @@ function LinkEdgeInner({
           event.preventDefault();
           event.stopPropagation();
           data.onContextMenu(event, id);
-        }}
-      />
-
-      {(isActive || isConnected) && (
-        <BaseEdge
-          id={`${id}-halo`}
-          path={edgePath}
-          style={{
-            stroke: haloColor,
-            strokeOpacity: isConnected ? 0.22 : 0.18,
-            strokeWidth: strokeWidth + 4,
-            transition: isInteractive
-              ? 'none'
-              : 'stroke-width 120ms ease, stroke-opacity 120ms ease',
-          }}
-        />
-      )}
-
-      <BaseEdge
-        id={id}
-        path={edgePath}
-        style={{
-          stroke: tone.color,
-          strokeOpacity,
-          strokeWidth,
-          strokeDasharray: isMuted ? '10 12' : undefined,
-          transition: isInteractive
-            ? 'none'
-            : 'stroke-width 120ms ease, stroke-opacity 120ms ease, stroke 120ms ease',
         }}
       />
 

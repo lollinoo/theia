@@ -509,6 +509,7 @@ test('edits and persists a map-local link route', async ({ page }) => {
   await page.mouse.up();
   expect((await nodePositionSave).ok()).toBe(true);
   await expect.poll(() => hitPath.getAttribute('d')).not.toBe(pathBeforeNodeMove);
+  await selectLinkAtMidpoint(page, hitPath);
   await expect
     .poll(() => waypoint.evaluate((element) => (element as HTMLElement).style.transform))
     .toBe(waypointAfterEditing);
