@@ -54,6 +54,8 @@ interface LinkRouteQueue {
   latestSequence: number;
   overlayActive: boolean;
   overlayRoute: LinkRoute | null;
+  overlaySequence: number;
+  overlayOwner: LinkRouteMutationOwner | null;
   authorityEpoch: number;
   invalidated: boolean;
 }
@@ -90,6 +92,22 @@ function hasOwner(owner: LinkRouteOwner, mutationOwner: LinkRouteMutationOwner):
     owner.mounted &&
     owner.mapId === mutationOwner.mapId &&
     owner.generation === mutationOwner.generation
+  );
+}
+
+function hasOverlayOwner(
+  queue: LinkRouteQueue,
+  overlayOwner: LinkRouteMutationOwner,
+  authorityEpoch: number,
+  sequence: number,
+): boolean {
+  return (
+    !queue.invalidated &&
+    queue.authorityEpoch === authorityEpoch &&
+    queue.overlayActive &&
+    queue.overlaySequence === sequence &&
+    queue.overlayOwner?.mapId === overlayOwner.mapId &&
+    queue.overlayOwner.generation === overlayOwner.generation
   );
 }
 
@@ -187,59 +205,84 @@ export function useCanvasLinkRoutes({
       void request
         .then(
           (savedRoute) => {
-            if (queue.invalidated || mutation.authorityEpoch !== queue.authorityEpoch) {
+            if (
+              queuesRef.current.get(queue.key) !== queue ||
+              queue.invalidated ||
+              mutation.authorityEpoch !== queue.authorityEpoch
+            ) {
               return;
             }
             queue.confirmed = copyOptionalRoute(savedRoute);
             queue.confirmedSequence = mutation.sequence;
             queue.confirmedInitialized = true;
             if (queue.latestSequence === mutation.sequence) {
+              const overlayOwner =
+                queue.overlaySequence === mutation.sequence && queue.overlayOwner !== null
+                  ? queue.overlayOwner
+                  : mutation.owner;
               queue.overlayRoute = copyOptionalRoute(savedRoute);
               queue.overlayActive = true;
-              if (hasOwner(ownerRef.current, mutation.owner)) {
+              queue.overlaySequence = mutation.sequence;
+              queue.overlayOwner = overlayOwner;
+              if (hasOwner(ownerRef.current, overlayOwner)) {
                 patchEdgeRoute(
                   queue,
-                  mutation.owner,
+                  overlayOwner,
                   queue.overlayRoute,
                   () =>
-                    !queue.invalidated &&
-                    mutation.authorityEpoch === queue.authorityEpoch &&
-                    queue.latestSequence === mutation.sequence,
+                    queuesRef.current.get(queue.key) === queue &&
+                    queue.latestSequence === mutation.sequence &&
+                    hasOverlayOwner(
+                      queue,
+                      overlayOwner,
+                      mutation.authorityEpoch,
+                      mutation.sequence,
+                    ),
                 );
               }
             }
           },
           () => {
-            if (queue.invalidated || mutation.authorityEpoch !== queue.authorityEpoch) {
+            if (
+              queuesRef.current.get(queue.key) !== queue ||
+              queue.invalidated ||
+              mutation.authorityEpoch !== queue.authorityEpoch
+            ) {
               return;
             }
             const isLatestMutation = queue.latestSequence === mutation.sequence;
             const hasNoNewerConfirmation = queue.confirmedSequence < mutation.sequence;
-            if (!isLatestMutation || !hasNoNewerConfirmation) {
+            const rollbackOwner =
+              queue.overlayActive &&
+              queue.overlaySequence === mutation.sequence &&
+              queue.overlayOwner !== null
+                ? queue.overlayOwner
+                : null;
+            if (!isLatestMutation || !hasNoNewerConfirmation || rollbackOwner === null) {
               return;
             }
 
             queue.overlayRoute = copyOptionalRoute(queue.confirmed);
             queue.overlayActive = true;
-            if (!hasOwner(ownerRef.current, mutation.owner)) {
+            if (!hasOwner(ownerRef.current, rollbackOwner)) {
               return;
             }
             patchEdgeRoute(
               queue,
-              mutation.owner,
+              rollbackOwner,
               queue.confirmed,
               () =>
-                !queue.invalidated &&
-                mutation.authorityEpoch === queue.authorityEpoch &&
+                queuesRef.current.get(queue.key) === queue &&
                 queue.latestSequence === mutation.sequence &&
-                queue.confirmedSequence < mutation.sequence,
+                queue.confirmedSequence < mutation.sequence &&
+                hasOverlayOwner(queue, rollbackOwner, mutation.authorityEpoch, mutation.sequence),
             );
             setLinkRouteError((currentError) =>
-              hasOwner(ownerRef.current, mutation.owner) &&
-              !queue.invalidated &&
-              mutation.authorityEpoch === queue.authorityEpoch &&
+              hasOwner(ownerRef.current, rollbackOwner) &&
+              queuesRef.current.get(queue.key) === queue &&
               queue.latestSequence === mutation.sequence &&
-              queue.confirmedSequence < mutation.sequence
+              queue.confirmedSequence < mutation.sequence &&
+              hasOverlayOwner(queue, rollbackOwner, mutation.authorityEpoch, mutation.sequence)
                 ? linkRouteSaveError
                 : currentError,
             );
@@ -281,6 +324,8 @@ export function useCanvasLinkRoutes({
           latestSequence: 0,
           overlayActive: false,
           overlayRoute: null,
+          overlaySequence: 0,
+          overlayOwner: null,
           authorityEpoch: 0,
           invalidated: false,
         };
@@ -306,6 +351,8 @@ export function useCanvasLinkRoutes({
       };
       queue.overlayRoute = copyOptionalRoute(nextRoute);
       queue.overlayActive = true;
+      queue.overlaySequence = sequence;
+      queue.overlayOwner = mutationOwner;
       patchEdgeRoute(
         queue,
         mutationOwner,
@@ -365,6 +412,7 @@ export function useCanvasLinkRoutes({
       }
 
       const data = { ...(edge.data ?? {}) };
+      queue.overlayOwner = { mapId: ownerMapId, generation: owner.generation };
       if (queue.overlayRoute === null) {
         delete data.route;
       } else {
@@ -391,6 +439,8 @@ export function useCanvasLinkRoutes({
       queue.confirmedInitialized = false;
       queue.overlayActive = false;
       queue.overlayRoute = null;
+      queue.overlaySequence = 0;
+      queue.overlayOwner = null;
     }
 
     return reconciledEdges ?? edges;

@@ -491,6 +491,42 @@ describe('useCanvasLinkRoutes', () => {
     expect(result.current.linkRouteError).toBeNull();
   });
 
+  it('rolls back an overlay reclaimed after A to B to A when its original save fails', async () => {
+    const oldGenerationSave = deferred<LinkRoute>();
+    apiMocks.saveCanvasMapLinkRoute.mockReturnValueOnce(oldGenerationSave.promise);
+    const { result, rerender } = renderHook(
+      ({ mapId }) => useLinkRouteHarness(mapId, [mockEdge('link-a', ORIGINAL_ROUTE)]),
+      { initialProps: { mapId: 'map-a' as string | null } },
+    );
+
+    await act(async () => {
+      result.current.commitLinkRoute('link-a', FIRST_ROUTE);
+      await flushAsyncWork();
+    });
+
+    rerender({ mapId: 'map-b' });
+    act(() => {
+      result.current.replaceEdges([mockEdge('link-a', THIRD_ROUTE)]);
+    });
+
+    rerender({ mapId: 'map-a' });
+    const refreshedMapAEdges = [mockEdge('link-a', ORIGINAL_ROUTE)];
+    const reclaimedMapAEdges = result.current.reconcileLinkRouteEdges(refreshedMapAEdges);
+    expect(reclaimedMapAEdges[0]?.data?.route).toEqual(FIRST_ROUTE);
+    act(() => {
+      result.current.replaceEdges(reclaimedMapAEdges);
+    });
+
+    await act(async () => {
+      oldGenerationSave.reject(new Error('old-generation route save failed'));
+      await oldGenerationSave.promise.catch(() => undefined);
+      await flushAsyncWork();
+    });
+
+    expect(result.current.edges[0]?.data?.route).toEqual(ORIGINAL_ROUTE);
+    expect(result.current.linkRouteError).toMatch(/couldn't save.*restored/i);
+  });
+
   it('retains an old-map failure rollback for reconciliation when that map is revisited', async () => {
     const oldMapSave = deferred<LinkRoute>();
     apiMocks.saveCanvasMapLinkRoute.mockReturnValueOnce(oldMapSave.promise);
