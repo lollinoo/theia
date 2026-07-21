@@ -87,6 +87,12 @@ export interface RunCanvasPerfBenchmarkOptions {
   scenarioNames?: CanvasPerfScenarioName[];
 }
 
+/** Configures the isolated worst-case editable link geometry benchmark. */
+export interface RunEditableLinkGeometryBenchmarkOptions {
+  iterations?: number;
+  warmupIterations?: number;
+}
+
 const defaultIterationsByScenario: Record<CanvasPerfScenarioName, number> = {
   small: 50,
   medium: 30,
@@ -154,6 +160,48 @@ function measureLocalMetric<T>(
       timestamp: Date.now(),
     });
   }
+}
+
+function benchmarkEditableLinkGeometry(
+  samples: CanvasMetricSample[],
+  scenarioName: CanvasPerfScenarioName,
+): void {
+  measureLocalMetric(samples, scenarioName, 'editableLinkGeometry', () =>
+    buildEditableLinkPath({
+      sourceRect: editableLinkBenchmarkSourceRect,
+      targetRect: editableLinkBenchmarkTargetRect,
+      fallbackSource: { x: 272, y: 320 },
+      fallbackTarget: { x: 1_720, y: 320 },
+      route: editableLinkBenchmarkRoute,
+      parallelIndex: 0,
+    }),
+  );
+}
+
+/** Measures maximum-size editable link geometry without running unrelated graph benchmarks. */
+export function runEditableLinkGeometryBenchmark(
+  options: RunEditableLinkGeometryBenchmarkOptions = {},
+): CanvasMetricAggregate {
+  const scenarioName = 'stress';
+  const measuredSamples: CanvasMetricSample[] = [];
+  const warmupSamples: CanvasMetricSample[] = [];
+  const warmupIterations = options.warmupIterations ?? 3;
+  const iterations = options.iterations ?? defaultIterationsByScenario.stress;
+
+  for (let index = 0; index < warmupIterations; index += 1) {
+    benchmarkEditableLinkGeometry(warmupSamples, scenarioName);
+  }
+
+  for (let index = 0; index < iterations; index += 1) {
+    benchmarkEditableLinkGeometry(measuredSamples, scenarioName);
+  }
+
+  const metric =
+    aggregateCanvasMetricSamples(measuredSamples)[`${scenarioName}:editableLinkGeometry`];
+  if (!metric) {
+    throw new Error('Editable link geometry benchmark requires at least one measured iteration.');
+  }
+  return metric;
 }
 
 function legacyPositionEntries(
@@ -578,16 +626,7 @@ function benchmarkOperations(
     }),
   );
 
-  measureLocalMetric(samples, scenarioName, 'editableLinkGeometry', () =>
-    buildEditableLinkPath({
-      sourceRect: editableLinkBenchmarkSourceRect,
-      targetRect: editableLinkBenchmarkTargetRect,
-      fallbackSource: { x: 272, y: 320 },
-      fallbackTarget: { x: 1_720, y: 320 },
-      route: editableLinkBenchmarkRoute,
-      parallelIndex: 0,
-    }),
-  );
+  benchmarkEditableLinkGeometry(samples, scenarioName);
 
   const { layoutNodes, layoutEdges } = buildLayoutInputs(scenario);
   measureLocalMetric(samples, scenarioName, 'computeForceLayout', () =>

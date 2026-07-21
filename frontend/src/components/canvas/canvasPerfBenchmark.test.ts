@@ -3,7 +3,11 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { CANVAS_PERF_BENCHMARK_METRICS, runCanvasPerfBenchmark } from './canvasPerfBenchmark';
+import {
+  CANVAS_PERF_BENCHMARK_METRICS,
+  runCanvasPerfBenchmark,
+  runEditableLinkGeometryBenchmark,
+} from './canvasPerfBenchmark';
 import { CANVAS_PERF_SCENARIOS, type CanvasPerfScenarioName } from './canvasPerfScenarios';
 
 describe('canvasPerfBenchmark', () => {
@@ -41,16 +45,13 @@ describe('canvasPerfBenchmark', () => {
   });
 
   it('keeps worst-case editable link geometry within the stress budget', () => {
-    const result = runCanvasPerfBenchmark({
+    const metric = runEditableLinkGeometryBenchmark({
       warmupIterations: 3,
-      scenarioNames: ['stress'],
     });
 
-    const metric = result.scenarios.stress.metrics.editableLinkGeometry;
-    expect(metric).toBeDefined();
     expect(metric.count).toBe(5);
     expect(metric.p95Ms).toBeLessThan(8);
-  }, 60_000);
+  });
 
   it('produces aggregate metrics for every official scenario and benchmarked function', () => {
     const result = runCanvasPerfBenchmark({
