@@ -463,7 +463,7 @@ describe('composeCanvasTopology saved routes', () => {
   it.each([
     { editMode: false, expectedEditable: false },
     { editMode: true, expectedEditable: true },
-  ])('attaches only the matching saved route with editability $expectedEditable', ({
+  ])('attaches an isolated matching saved route with editability $expectedEditable', ({
     editMode,
     expectedEditable,
   }) => {
@@ -512,8 +512,12 @@ describe('composeCanvasTopology saved routes', () => {
     });
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]?.data.route).toBe(route);
+    expect(edges[0]?.data.route).toEqual(route);
+    expect(edges[0]?.data.route).not.toBe(route);
     expect(edges[0]?.data.routeEditable).toBe(expectedEditable);
     expect(edges[0]?.data.onRouteCommit).toBe(onLinkRouteCommit);
+
+    edges[0]!.data.route!.waypoints[0]!.x = 999;
+    expect(route.waypoints[0]?.x).toBe(12.5);
   });
 });

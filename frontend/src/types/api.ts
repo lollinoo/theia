@@ -171,6 +171,21 @@ export type LinkRoute = LinkRouteV1;
 /** LinkRouteMap indexes saved map-local routes by canonical link ID. */
 export type LinkRouteMap = Record<string, LinkRoute>;
 
+/** Copies one link route so mutable edge interactions cannot alias source waypoint storage. */
+export function copyLinkRoute(route: LinkRoute): LinkRoute {
+  return {
+    version: route.version,
+    waypoints: route.waypoints.map((waypoint) => ({ x: waypoint.x, y: waypoint.y })),
+  };
+}
+
+/** Copies a link route map and every nested waypoint for topology ownership isolation. */
+export function copyLinkRouteMap(linkRoutes: LinkRouteMap | undefined): LinkRouteMap {
+  return Object.fromEntries(
+    Object.entries(linkRoutes ?? {}).map(([linkId, route]) => [linkId, copyLinkRoute(route)]),
+  );
+}
+
 /** CanvasTopologyCapabilities advertises optional server features for topology clients. */
 export interface CanvasTopologyCapabilities {
   supports_topology_delta: boolean;

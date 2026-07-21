@@ -138,6 +138,31 @@ describe('canvasTopologySource', () => {
     );
   });
 
+  it('isolates loaded link routes from reusable bootstrap topology data', async () => {
+    const cachedTopology = canvasTopologyResponse({
+      link_routes: {
+        'link-1': { version: 1, waypoints: [{ x: 12.5, y: -8 }] },
+      },
+    });
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce({ topology: cachedTopology });
+
+    const result = await loadCanvasTopologySource({
+      mapId: null,
+      fetchPositions: vi.fn(async () => new Map<string, PositionState>()),
+      etag: null,
+      includeRuntimeBootstrap: true,
+    });
+
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') {
+      throw new Error('expected loaded topology');
+    }
+
+    result.linkRoutes['link-1']!.waypoints[0]!.x = 999;
+
+    expect(cachedTopology.link_routes?.['link-1']?.waypoints[0]?.x).toBe(12.5);
+  });
+
   it('loads saved map bootstrap topology with the full runtime cursor', async () => {
     const runtimeSnapshot = { devices: {}, links: {} } as SnapshotPayload;
     vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce({

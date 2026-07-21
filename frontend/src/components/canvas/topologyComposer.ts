@@ -4,7 +4,7 @@
  */
 import type { SnapGrid } from '@xyflow/react';
 
-import type { Link, LinkRoute, LinkRouteMap } from '../../types/api';
+import { copyLinkRoute, type Link, type LinkRoute, type LinkRouteMap } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
@@ -76,9 +76,10 @@ function buildRuntimeEdgeData(
   }
 
   for (const link of links) {
+    const route = linkRoutes[link.id];
     edgeDataById.set(link.id, {
       ...edgeDataById.get(link.id),
-      route: linkRoutes[link.id],
+      route: route === undefined ? undefined : copyLinkRoute(route),
       routeEditable: editMode && onLinkRouteCommit !== undefined,
       onRouteCommit: onLinkRouteCommit,
     });
