@@ -49,6 +49,15 @@ export function Toolbar({
   const modifier = isMac ? '⌘' : 'Ctrl';
 
   const snapLabel = `Snap to grid: ${snapToGrid ? 'On' : 'Off'}`;
+  const snapAction: ToolbarAction = {
+    id: 'snap-to-grid',
+    label: snapLabel,
+    ariaLabel: snapLabel,
+    onClick: onToggleSnapToGrid,
+    active: snapToGrid,
+    pressed: snapToGrid,
+    icon: <MaterialIcon name="grid_4x4" />,
+  };
   const buttons: ToolbarAction[] = [
     {
       id: 'edit-mode',
@@ -57,15 +66,7 @@ export function Toolbar({
       active: editMode,
       icon: <MaterialIcon name="edit" />,
     },
-    {
-      id: 'snap-to-grid',
-      label: snapLabel,
-      ariaLabel: snapLabel,
-      onClick: onToggleSnapToGrid,
-      active: snapToGrid,
-      pressed: snapToGrid,
-      icon: <MaterialIcon name="grid_4x4" />,
-    },
+    ...(editMode ? [snapAction] : []),
     {
       id: 'search',
       label: `Search (${modifier}+K)`,

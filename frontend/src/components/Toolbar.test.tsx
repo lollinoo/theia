@@ -33,6 +33,7 @@ function SnapPreferenceToolbarHarness() {
   return (
     <Toolbar
       {...defaultProps}
+      editMode
       snapToGrid={snapToGrid}
       onToggleSnapToGrid={() => setSnapToGrid((current) => !current)}
     />
@@ -52,7 +53,7 @@ describe('Toolbar (COMP-04)', () => {
   });
 
   it('renders icons for canvas actions without a global settings shortcut', () => {
-    render(<Toolbar {...defaultProps} />);
+    render(<Toolbar {...defaultProps} editMode />);
     fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
 
     expect(screen.getByTestId('material-icon-edit')).toBeInTheDocument();
@@ -64,8 +65,16 @@ describe('Toolbar (COMP-04)', () => {
     expect(screen.queryByTestId('material-icon-settings')).not.toBeInTheDocument();
   });
 
+  it('does not expose snap to grid outside edit mode', () => {
+    render(<Toolbar {...defaultProps} editMode={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
+
+    expect(screen.queryByRole('button', { name: /Snap to grid/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('material-icon-grid_4x4')).not.toBeInTheDocument();
+  });
+
   it('exposes the enabled snap action as an active pressed toggle', () => {
-    render(<Toolbar {...defaultProps} snapToGrid />);
+    render(<Toolbar {...defaultProps} editMode snapToGrid />);
     fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
 
     const toggle = screen.getByRole('button', { name: 'Snap to grid: On' });
@@ -77,7 +86,7 @@ describe('Toolbar (COMP-04)', () => {
   });
 
   it('exposes the disabled snap action as an unpressed toggle', () => {
-    render(<Toolbar {...defaultProps} snapToGrid={false} />);
+    render(<Toolbar {...defaultProps} editMode snapToGrid={false} />);
     fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
 
     const toggle = screen.getByRole('button', { name: 'Snap to grid: Off' });
@@ -89,7 +98,7 @@ describe('Toolbar (COMP-04)', () => {
 
   it('calls the snap preference callback', () => {
     const onToggleSnapToGrid = vi.fn();
-    render(<Toolbar {...defaultProps} onToggleSnapToGrid={onToggleSnapToGrid} />);
+    render(<Toolbar {...defaultProps} editMode onToggleSnapToGrid={onToggleSnapToGrid} />);
     fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Snap to grid: On' }));
