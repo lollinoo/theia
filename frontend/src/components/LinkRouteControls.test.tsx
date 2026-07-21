@@ -64,6 +64,7 @@ describe('LinkRouteControls', () => {
     expect(first).toHaveStyle({
       transform: 'translate(-50%, -50%) translate(20px, 30px)',
     });
+    expect(first.style.translate).toBe('none');
     expect(first.firstElementChild).toHaveClass('h-2.5', 'w-2.5');
     expect(first).toHaveAttribute('aria-pressed', 'false');
     expect(second).toHaveAttribute('aria-pressed', 'true');

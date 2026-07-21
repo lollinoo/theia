@@ -89,6 +89,9 @@ export function LinkRouteControls({
             type="button"
             className="nodrag nopan pointer-events-auto absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
             style={{
+              // Tailwind 4 emits translate utilities as an independent property; neutralize it
+              // so the required inline transform centers the hit target exactly once.
+              translate: 'none',
               transform: `translate(-50%, -50%) translate(${point.x}px, ${point.y}px)`,
             }}
             aria-label={`Move waypoint ${index + 1} for link ${edgeId}`}
