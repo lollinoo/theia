@@ -153,9 +153,25 @@ describe('LinkEdge', () => {
 
     expect(content).toContain('useInternalNode<DeviceNode>(source)');
     expect(content).toContain('useInternalNode<DeviceNode>(target)');
-    expect(content).toContain('buildFloatingEdgePath({');
+    expect(content).toContain('buildEditableLinkPath({');
     expect(content).not.toContain('useNodes(');
     expect(content).not.toContain('getNodes(');
+  });
+
+  it('uses the stable React Flow coordinate API without a viewport-store subscription', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+
+    expect(content).toContain('useReactFlow');
+    expect(content).toContain('screenToFlowPosition');
+    expect(content).not.toContain('useStore');
+  });
+
+  it('keeps route editing inputs in the custom edge memo boundary', () => {
+    const content = readFileSync(LINK_EDGE_PATH, 'utf-8');
+
+    expect(content).toContain('prev.data?.route === next.data?.route');
+    expect(content).toContain('prev.data?.routeEditable === next.data?.routeEditable');
+    expect(content).toContain('prev.data?.onRouteCommit === next.data?.onRouteCommit');
   });
 
   it('keeps the main stroke bound to semantic tone and only uses halo color for emphasis', () => {
