@@ -291,11 +291,11 @@ function LinkEdgeInner({
   };
 
   const handleEdgePointerDown = (event: ReactPointerEvent<SVGPathElement>) => {
+    suppressNextClickRef.current = false;
     if (!canEditRoute || event.button !== 0 || pointerGestureRef.current !== null) {
       return;
     }
 
-    suppressNextClickRef.current = false;
     pointerGestureRef.current = {
       pointerId: event.pointerId,
       originClient: { x: event.clientX, y: event.clientY },

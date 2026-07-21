@@ -272,6 +272,53 @@ describe('LinkEdge render', () => {
     expect(capture.releasePointerCapture).toHaveBeenCalledWith(11);
   });
 
+  it('preserves the next edge click when selection changes after a waypoint drag', () => {
+    const onClick = vi.fn();
+    const onRouteCommit = vi.fn();
+    const view = render(
+      <EdgeFixture
+        overrides={{ selected: true }}
+        dataOverrides={{ routeEditable: true, onRouteCommit }}
+        onClick={onClick}
+      />,
+    );
+    const hitTarget = view.container.querySelector('path.cursor-pointer') as SVGPathElement;
+    mockPointerCapture(hitTarget);
+
+    act(() => {
+      fireEvent.pointerDown(hitTarget, { pointerId: 21, clientX: 150, clientY: 30 });
+      fireEvent.pointerMove(hitTarget, { pointerId: 21, clientX: 154, clientY: 30 });
+      fireEvent.pointerUp(hitTarget, { pointerId: 21, clientX: 154, clientY: 30 });
+    });
+    expect(onRouteCommit).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <EdgeFixture
+        overrides={{ selected: false }}
+        dataOverrides={{ routeEditable: true, onRouteCommit }}
+        onClick={onClick}
+      />,
+    );
+    const unselectedHitTarget = view.container.querySelector(
+      'path.cursor-pointer',
+    ) as SVGPathElement;
+    act(() => {
+      fireEvent.pointerDown(unselectedHitTarget, {
+        pointerId: 22,
+        clientX: 150,
+        clientY: 30,
+      });
+      fireEvent.pointerUp(unselectedHitTarget, {
+        pointerId: 22,
+        clientX: 150,
+        clientY: 30,
+      });
+      fireEvent.click(unselectedHitTarget);
+    });
+
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
   it('coalesces existing-handle movement into a local path and commits once on pointer-up', () => {
     const frames = installAnimationFrameQueue();
     const onRouteCommit = vi.fn();
