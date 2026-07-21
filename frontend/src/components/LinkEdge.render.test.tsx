@@ -238,6 +238,28 @@ describe('LinkEdge render', () => {
     expect(screen.queryByRole('button', { name: /Move waypoint/ })).not.toBeInTheDocument();
   });
 
+  it('clears a pending press that leaves the edge before the drag threshold', () => {
+    const onRouteCommit = vi.fn();
+    const { container } = renderEdge({ selected: true }, { routeEditable: true, onRouteCommit });
+    const hitTarget = container.querySelector('path.cursor-pointer') as SVGPathElement;
+    mockPointerCapture(hitTarget);
+
+    act(() => {
+      fireEvent.pointerDown(hitTarget, { pointerId: 31, clientX: 150, clientY: 30 });
+      fireEvent.pointerLeave(hitTarget, { pointerId: 31, clientX: 152, clientY: 30 });
+      fireEvent.pointerDown(hitTarget, { pointerId: 31, clientX: 200, clientY: 57 });
+      fireEvent.pointerMove(hitTarget, { pointerId: 31, clientX: 204, clientY: 57 });
+    });
+
+    expect(flowState.screenToFlowPosition).toHaveBeenNthCalledWith(1, { x: 200, y: 57 });
+    expect(flowState.screenToFlowPosition).toHaveBeenNthCalledWith(2, { x: 204, y: 57 });
+
+    act(() => {
+      fireEvent.pointerUp(hitTarget, { pointerId: 31, clientX: 204, clientY: 57 });
+    });
+    expect(onRouteCommit).toHaveBeenCalledOnce();
+  });
+
   it('inserts, selects, and drags one waypoint when movement reaches four pixels', () => {
     const onRouteCommit = vi.fn();
     flowState.screenToFlowPosition.mockImplementation(({ x, y }) => ({ x: x - 10, y: y + 5 }));
@@ -319,6 +341,70 @@ describe('LinkEdge render', () => {
     expect(onClick).toHaveBeenCalledOnce();
   });
 
+  it('selects an off-center waypoint press without moving or committing it', () => {
+    const onRouteCommit = vi.fn();
+    renderEdge(
+      { selected: true },
+      {
+        routeEditable: true,
+        onRouteCommit,
+        route: { version: 1, waypoints: [{ x: 170, y: 90 }] },
+      },
+    );
+    const initialPath = screen.getByTestId('edge-1').getAttribute('d');
+    const handle = screen.getByRole('button', {
+      name: 'Move waypoint 1 for link edge-1',
+    });
+    const capture = mockPointerCapture(handle);
+
+    act(() => {
+      fireEvent.pointerDown(handle, { pointerId: 41, clientX: 178, clientY: 98 });
+      fireEvent.pointerUp(handle, { pointerId: 41, clientX: 178, clientY: 98 });
+    });
+
+    expect(onRouteCommit).not.toHaveBeenCalled();
+    expect(screen.getByTestId('edge-1').getAttribute('d')).toBe(initialPath);
+    expect(handle).toHaveStyle({
+      transform: 'translate(-50%, -50%) translate(170px, 90px)',
+    });
+    expect(capture.releasePointerCapture).toHaveBeenCalledWith(41);
+  });
+
+  it('preserves the waypoint grab offset when a handle drag crosses the threshold', () => {
+    const frames = installAnimationFrameQueue();
+    const onRouteCommit = vi.fn();
+    renderEdge(
+      { selected: true },
+      {
+        routeEditable: true,
+        onRouteCommit,
+        route: { version: 1, waypoints: [{ x: 170, y: 90 }] },
+      },
+    );
+    const handle = screen.getByRole('button', {
+      name: 'Move waypoint 1 for link edge-1',
+    });
+    mockPointerCapture(handle);
+
+    act(() => {
+      fireEvent.pointerDown(handle, { pointerId: 42, clientX: 178, clientY: 98 });
+      fireEvent.pointerMove(handle, { pointerId: 42, clientX: 188, clientY: 108 });
+    });
+    frames.flush();
+
+    expect(handle).toHaveStyle({
+      transform: 'translate(-50%, -50%) translate(180px, 100px)',
+    });
+
+    act(() => {
+      fireEvent.pointerUp(handle, { pointerId: 42, clientX: 188, clientY: 108 });
+    });
+    expect(onRouteCommit).toHaveBeenCalledWith('edge-1', {
+      version: 1,
+      waypoints: [{ x: 180, y: 100 }],
+    });
+  });
+
   it('coalesces existing-handle movement into a local path and commits once on pointer-up', () => {
     const frames = installAnimationFrameQueue();
     const onRouteCommit = vi.fn();
@@ -384,6 +470,42 @@ describe('LinkEdge render', () => {
     expect(route.waypoints).toHaveLength(1);
     expect(route.waypoints[0]?.x).toBeCloseTo(200, 3);
     expect(route.waypoints[0]?.y).toBeCloseTo(57, 3);
+  });
+
+  it('cancels a stale keyboard commit when double-click immediately commits the combined route', () => {
+    vi.useFakeTimers();
+    const onRouteCommit = vi.fn();
+    const { container } = renderEdge(
+      { selected: true },
+      {
+        routeEditable: true,
+        onRouteCommit,
+        route: { version: 1, waypoints: [{ x: 170, y: 90 }] },
+      },
+    );
+    const handle = screen.getByRole('button', {
+      name: 'Move waypoint 1 for link edge-1',
+    });
+    const hitTarget = container.querySelector('path.cursor-pointer') as SVGPathElement;
+
+    act(() => {
+      fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    });
+    expect(onRouteCommit).not.toHaveBeenCalled();
+
+    act(() => {
+      fireEvent.doubleClick(hitTarget, { clientX: 200, clientY: 57 });
+    });
+    expect(onRouteCommit).toHaveBeenCalledOnce();
+    expect(onRouteCommit.mock.calls[0]?.[1]).toMatchObject({
+      version: 1,
+      waypoints: expect.arrayContaining([{ x: 171, y: 90 }]),
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+    expect(onRouteCommit).toHaveBeenCalledOnce();
   });
 
   it('commits automatic routing after deleting the final waypoint', () => {

@@ -37,6 +37,7 @@ const LINK_ROUTE_KEYBOARD_COMMIT_DELAY_MS = 180;
 type RoutePointerTarget = SVGPathElement | HTMLButtonElement;
 
 interface RoutePointerGesture {
+  kind: 'path' | 'waypoint';
   pointerId: number;
   originClient: LinkWaypoint;
   baseRoute: LinkRoute | null;
@@ -297,6 +298,7 @@ function LinkEdgeInner({
     }
 
     pointerGestureRef.current = {
+      kind: 'path',
       pointerId: event.pointerId,
       originClient: { x: event.clientX, y: event.clientY },
       baseRoute: renderedRoute,
@@ -362,6 +364,37 @@ function LinkEdgeInner({
     queuePointerPoint(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
   };
 
+  const handleEdgePointerLeave = (event: ReactPointerEvent<SVGPathElement>) => {
+    const gesture = pointerGestureRef.current;
+    if (gesture?.pointerId === event.pointerId && !gesture.dragging) {
+      pointerGestureRef.current = null;
+      latestPointerPointRef.current = null;
+    }
+  };
+
+  const waypointPointForClientPosition = (
+    gesture: RoutePointerGesture,
+    clientX: number,
+    clientY: number,
+  ): LinkWaypoint => {
+    const waypoint =
+      gesture.waypointIndex === null
+        ? undefined
+        : gesture.baseRoute?.waypoints[gesture.waypointIndex];
+    const currentPoint = screenToFlowPosition({ x: clientX, y: clientY });
+    if (!waypoint) {
+      return currentPoint;
+    }
+    const originPoint = screenToFlowPosition({
+      x: gesture.originClient.x,
+      y: gesture.originClient.y,
+    });
+    return {
+      x: waypoint.x + currentPoint.x - originPoint.x,
+      y: waypoint.y + currentPoint.y - originPoint.y,
+    };
+  };
+
   const finishPointerGesture = (
     event: ReactPointerEvent<RoutePointerTarget>,
     includeEventPoint: boolean,
@@ -372,6 +405,7 @@ function LinkEdgeInner({
     }
 
     if (!gesture.dragging) {
+      releasePointer(gesture);
       pointerGestureRef.current = null;
       latestPointerPointRef.current = null;
       return;
@@ -380,10 +414,10 @@ function LinkEdgeInner({
     event.preventDefault();
     event.stopPropagation();
     if (includeEventPoint) {
-      latestPointerPointRef.current = screenToFlowPosition({
-        x: event.clientX,
-        y: event.clientY,
-      });
+      latestPointerPointRef.current =
+        gesture.kind === 'waypoint'
+          ? waypointPointForClientPosition(gesture, event.clientX, event.clientY)
+          : screenToFlowPosition({ x: event.clientX, y: event.clientY });
     }
     const nextRoute = flushPointerPoint();
     if (nextRoute) {
@@ -402,21 +436,23 @@ function LinkEdgeInner({
     event: ReactPointerEvent<HTMLButtonElement>,
     waypointIndex: number,
   ) => {
-    if (!canEditRoute || !renderedRoute || event.button !== 0) {
+    if (
+      !canEditRoute ||
+      !renderedRoute ||
+      event.button !== 0 ||
+      pointerGestureRef.current !== null
+    ) {
       return;
     }
 
-    clearKeyboardCommitTimer();
-    clearAnimationFrame();
-    freezeBadgePresentation();
-    draftRouteRef.current = renderedRoute;
     latestPointerPointRef.current = null;
     pointerGestureRef.current = {
+      kind: 'waypoint',
       pointerId: event.pointerId,
       originClient: { x: event.clientX, y: event.clientY },
       baseRoute: renderedRoute,
       waypointIndex,
-      dragging: true,
+      dragging: false,
       captureTarget: event.currentTarget,
     };
     setSelectedWaypointIndex(waypointIndex);
@@ -430,14 +466,28 @@ function LinkEdgeInner({
   ) => {
     const gesture = pointerGestureRef.current;
     if (
-      !gesture?.dragging ||
+      !gesture ||
       gesture.pointerId !== event.pointerId ||
       gesture.waypointIndex !== waypointIndex
     ) {
       return;
     }
+    if (!gesture.dragging) {
+      const clientDistance = Math.hypot(
+        event.clientX - gesture.originClient.x,
+        event.clientY - gesture.originClient.y,
+      );
+      if (clientDistance < LINK_ROUTE_DRAG_THRESHOLD_PX) {
+        return;
+      }
+      clearKeyboardCommitTimer();
+      clearAnimationFrame();
+      freezeBadgePresentation();
+      draftRouteRef.current = gesture.baseRoute;
+      gesture.dragging = true;
+    }
     event.preventDefault();
-    queuePointerPoint(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+    queuePointerPoint(waypointPointForClientPosition(gesture, event.clientX, event.clientY));
   };
 
   const handleEdgeDoubleClick = (event: ReactMouseEvent<SVGPathElement>) => {
@@ -454,8 +504,13 @@ function LinkEdgeInner({
     if (nextRoute === renderedRoute) {
       return;
     }
+    clearKeyboardCommitTimer();
     setSelectedWaypointIndex(insertion.insertIndex);
     data?.onRouteCommit?.(id, nextRoute);
+    draftRouteRef.current = null;
+    clearFrozenBadgePresentation();
+    setDraftRoute(null);
+    setDraftIsAutomatic(false);
   };
 
   const scheduleKeyboardCommit = (nextRoute: LinkRoute | null) => {
@@ -558,6 +613,7 @@ function LinkEdgeInner({
         onDoubleClick={handleEdgeDoubleClick}
         onPointerDown={handleEdgePointerDown}
         onPointerMove={handleEdgePointerMove}
+        onPointerLeave={handleEdgePointerLeave}
         onPointerUp={(event) => finishPointerGesture(event, true)}
         onPointerCancel={(event) => finishPointerGesture(event, false)}
         onContextMenu={(event) => {
