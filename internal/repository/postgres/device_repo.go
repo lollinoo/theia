@@ -27,7 +27,7 @@ type DeviceRepo struct {
 	repairPending atomic.Bool
 }
 
-type deviceCreateAppend func(tx *Tx, now time.Time) error
+type deviceCreateTransactionHook func(tx *Tx, now time.Time) error
 
 // NewDeviceRepo creates a new PostgreSQL-backed device repository.
 // The onChange channel, if non-nil, receives a non-blocking signal after
@@ -94,13 +94,14 @@ func (r *DeviceRepo) publishChange(kind domain.ChangeKind, deviceID uuid.UUID) {
 // Create inserts a new device and its interfaces into the database.
 func (r *DeviceRepo) Create(device *domain.Device) error {
 	return withWriteRetry(func() error {
-		return r.createOnceWithAppend(device, nil, true)
+		return r.createOnceWithAppend(device, nil, nil, true)
 	})
 }
 
 func (r *DeviceRepo) createOnceWithAppend(
 	device *domain.Device,
-	appendToTransaction deviceCreateAppend,
+	beforeInsert deviceCreateTransactionHook,
+	appendToTransaction deviceCreateTransactionHook,
 	publish bool,
 ) error {
 	now := time.Now().UTC()
@@ -150,6 +151,11 @@ func (r *DeviceRepo) createOnceWithAppend(
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if beforeInsert != nil {
+		if err := beforeInsert(tx, now); err != nil {
+			return err
+		}
+	}
 
 	_, err = tx.Exec(
 		`INSERT INTO devices (id, hostname, ip, snmp_credentials_json, device_type, status,

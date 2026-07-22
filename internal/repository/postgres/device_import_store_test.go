@@ -3,14 +3,17 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lollinoo/theia/internal/domain"
 )
 
@@ -65,11 +68,12 @@ func TestDeviceImportStoreCreatesDeviceAndMapMembershipAtomically(t *testing.T) 
 	areaID := uuid.New()
 	insertDeviceImportTestMap(t, db, mapID)
 	insertDeviceImportTestArea(t, db, mapID, areaID)
+	insertDeviceImportTestGlobalArea(t, db, areaID)
 
 	devices := NewDeviceRepo(db, testKeyring, nil)
 	store := NewDeviceImportStore(devices)
 	device := newDeviceImportTestDevice("router-atomic.example.net")
-	device.AreaIDs = nil
+	device.AreaIDs = []uuid.UUID{areaID}
 
 	if err := store.CreateDeviceInMap(context.Background(), device, domain.DeviceImportPlacement{
 		MapID:  mapID,
@@ -128,6 +132,9 @@ func TestDeviceImportStoreCreatesDeviceAndMapMembershipAtomically(t *testing.T) 
 	if got := importTestCount(t, db,
 		`SELECT COUNT(*) FROM device_areas WHERE device_id = $1`, device.ID.String()); got != 0 {
 		t.Fatalf("global device area count = %d, want 0", got)
+	}
+	if len(device.AreaIDs) != 1 || device.AreaIDs[0] != areaID {
+		t.Fatalf("caller AreaIDs mutated to %#v, want [%s]", device.AreaIDs, areaID)
 	}
 	if got := importTestCount(t, db,
 		`SELECT COUNT(*) FROM device_positions WHERE device_id = $1`, device.ID.String()); got != 0 {
@@ -210,57 +217,55 @@ func TestDeviceImportStoreExistingAddressReturnsConflict(t *testing.T) {
 	}
 }
 
-func TestDeviceImportStoreConcurrentSameAddressAllowsOneCreate(t *testing.T) {
+func TestDeviceImportStoreConcurrentVirtualPrimaryAddressAllowsOneCreate(t *testing.T) {
 	db := newTestDB(t)
 	mapID := uuid.New()
 	insertDeviceImportTestMap(t, db, mapID)
-	const advisoryLockKey int64 = 340031
-	installDeviceImportInsertPause(t, db, advisoryLockKey)
+	advisoryLockKey := deviceImportTestAddressLockKey("race.example.net")
 	release := holdDeviceImportAdvisoryLock(t, db, advisoryLockKey)
 
 	store := NewDeviceImportStore(NewDeviceRepo(db, testKeyring, nil))
 	first := newDeviceImportTestDevice("race.example.net")
 	second := newDeviceImportTestDevice(" RACE.EXAMPLE.NET ")
-	start := make(chan struct{})
-	results := make(chan error, 2)
-	for _, device := range []*domain.Device{first, second} {
-		device := device
-		go func() {
-			<-start
-			results <- store.CreateDeviceInMap(context.Background(), device, domain.DeviceImportPlacement{MapID: mapID})
-		}()
-	}
-	close(start)
+	first.DeviceType = domain.DeviceTypeVirtual
+	first.Status = domain.DeviceStatusUnknown
+	second.DeviceType = domain.DeviceTypeVirtual
+	second.Status = domain.DeviceStatusUnknown
+	results := startConcurrentDeviceImports(store, mapID, first, second)
 	waitForDeviceImportAdvisoryWaiters(t, db, advisoryLockKey, 2)
 	release()
 
-	firstErr := waitForDeviceImportResult(t, results)
-	secondErr := waitForDeviceImportResult(t, results)
-	errorsSeen := []error{firstErr, secondErr}
-	successes := 0
-	conflicts := 0
-	for _, err := range errorsSeen {
-		switch {
-		case err == nil:
-			successes++
-		case err == domain.ErrDeviceImportAddressConflict:
-			conflicts++
-		default:
-			t.Fatalf("concurrent CreateDeviceInMap error = %v", err)
-		}
-	}
-	if successes != 1 || conflicts != 1 {
-		t.Fatalf("concurrent results = %#v, want one success and one conflict", errorsSeen)
-	}
-	if got := importTestCount(t, db, `SELECT COUNT(*) FROM devices`); got != 1 {
-		t.Fatalf("device count = %d, want 1", got)
-	}
-	if got := importTestCount(t, db, `SELECT COUNT(*) FROM device_addresses`); got != 1 {
-		t.Fatalf("address count = %d, want 1", got)
-	}
-	if got := importTestCount(t, db, `SELECT COUNT(*) FROM canvas_map_devices WHERE map_id = $1`, mapID.String()); got != 1 {
-		t.Fatalf("map membership count = %d, want 1", got)
-	}
+	assertOneSuccessfulDeviceImport(t, db, mapID, "race.example.net", results)
+}
+
+func TestDeviceImportStoreConcurrentSecondaryAddressAllowsOneCreate(t *testing.T) {
+	db := newTestDB(t)
+	mapID := uuid.New()
+	insertDeviceImportTestMap(t, db, mapID)
+	const sharedAddress = "shared-secondary.example.net"
+	advisoryLockKey := deviceImportTestAddressLockKey(sharedAddress)
+	release := holdDeviceImportAdvisoryLock(t, db, advisoryLockKey)
+
+	store := NewDeviceImportStore(NewDeviceRepo(db, testKeyring, nil))
+	first := newDeviceImportTestDevice("secondary-a-primary.example.net")
+	first.Addresses = append(first.Addresses, domain.DeviceAddress{
+		Address:  sharedAddress,
+		Label:    "Shared management",
+		Role:     domain.DeviceAddressRoleManagement,
+		Priority: 10,
+	})
+	second := newDeviceImportTestDevice("secondary-b-primary.example.net")
+	second.Addresses = append(second.Addresses, domain.DeviceAddress{
+		Address:  " SHARED-SECONDARY.EXAMPLE.NET ",
+		Label:    "Shared backup",
+		Role:     domain.DeviceAddressRoleBackup,
+		Priority: 20,
+	})
+	results := startConcurrentDeviceImports(store, mapID, first, second)
+	waitForDeviceImportAdvisoryWaiters(t, db, advisoryLockKey, 2)
+	release()
+
+	assertOneSuccessfulDeviceImport(t, db, mapID, sharedAddress, results)
 }
 
 func TestDeviceImportStoreDestinationRemovedDuringTransaction(t *testing.T) {
@@ -407,13 +412,61 @@ func TestDeviceImportStoreForcedPostDeviceFailureRollsBack(t *testing.T) {
 		device,
 		domain.DeviceImportPlacement{MapID: mapID},
 	)
-	if err != domain.ErrDeviceImportStoreUnavailable {
-		t.Fatalf("CreateDeviceInMap error = %v, want exact store-unavailable sentinel", err)
+	if errors.Is(err, domain.ErrDeviceImportStoreUnavailable) {
+		t.Fatalf("CreateDeviceInMap error = %v, must preserve target-local failure", err)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "P0001" || pgErr.Message != "forced map membership failure" {
+		t.Fatalf("CreateDeviceInMap error = %v, want wrapped P0001 membership failure", err)
 	}
 	assertDeviceImportTargetAbsent(t, db, device.ID)
 	if got := importTestCount(t, db, `SELECT COUNT(*) FROM canvas_maps WHERE id = $1`, mapID.String()); got != 1 {
 		t.Fatalf("destination map count = %d, want 1", got)
 	}
+}
+
+func TestDeviceImportStoreClassifiesOnlySystemicFailuresAsUnavailable(t *testing.T) {
+	systemic := []struct {
+		name string
+		err  error
+	}{
+		{name: "context cancelled", err: context.Canceled},
+		{name: "context deadline", err: context.DeadlineExceeded},
+		{name: "database driver bad connection", err: driver.ErrBadConn},
+		{name: "database sql connection done", err: sql.ErrConnDone},
+		{name: "pgx connection closed", err: pgconn.ErrConnClosed},
+		{name: "postgres connection exception", err: &pgconn.PgError{Code: "08006", Message: "connection failure"}},
+	}
+	for _, test := range systemic {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyDeviceImportStoreError(test.err); got != domain.ErrDeviceImportStoreUnavailable {
+				t.Fatalf("classifyDeviceImportStoreError(%v) = %v, want exact unavailable sentinel", test.err, got)
+			}
+		})
+	}
+
+	t.Run("target local postgres error", func(t *testing.T) {
+		want := &pgconn.PgError{Code: "P0001", Message: "target failure"}
+		got := classifyDeviceImportStoreError(want)
+		if errors.Is(got, domain.ErrDeviceImportStoreUnavailable) {
+			t.Fatalf("classifyDeviceImportStoreError() = %v, must not report unavailable", got)
+		}
+		var gotPgErr *pgconn.PgError
+		if !errors.As(got, &gotPgErr) || gotPgErr != want {
+			t.Fatalf("classifyDeviceImportStoreError() = %v, want wrapped original PostgreSQL error", got)
+		}
+	})
+
+	t.Run("unrecognized target error", func(t *testing.T) {
+		want := errors.New("target-local persistence failure")
+		got := classifyDeviceImportStoreError(want)
+		if errors.Is(got, domain.ErrDeviceImportStoreUnavailable) {
+			t.Fatalf("classifyDeviceImportStoreError() = %v, must not report unavailable", got)
+		}
+		if !errors.Is(got, want) {
+			t.Fatalf("classifyDeviceImportStoreError() = %v, want wrapped original error", got)
+		}
+	})
 }
 
 func TestDeviceImportStorePublishesOnlyAfterBatchCompletion(t *testing.T) {
@@ -501,6 +554,18 @@ func insertDeviceImportTestArea(t *testing.T, db *sql.DB, mapID, areaID uuid.UUI
 	}
 }
 
+func insertDeviceImportTestGlobalArea(t *testing.T, db *sql.DB, areaID uuid.UUID) {
+	t.Helper()
+	if _, err := db.Exec(
+		`INSERT INTO areas (id, name, description, color, created_at, updated_at)
+		 VALUES ($1, $2, '', '#654321', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		areaID.String(),
+		"Global "+areaID.String()[len(areaID.String())-8:],
+	); err != nil {
+		t.Fatalf("insert import test global area: %v", err)
+	}
+}
+
 func importTestCount(t *testing.T, db *sql.DB, query string, args ...any) int {
 	t.Helper()
 	var count int
@@ -580,6 +645,84 @@ func holdDeviceImportAdvisoryLock(t *testing.T, db *sql.DB, advisoryLockKey int6
 	return release
 }
 
+func deviceImportTestAddressLockKey(address string) int64 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(domain.NormalizeDeviceAddressValue(address)))
+	return int64(hasher.Sum64())
+}
+
+type deviceImportAttemptResult struct {
+	device *domain.Device
+	err    error
+}
+
+func startConcurrentDeviceImports(
+	store *DeviceImportStore,
+	mapID uuid.UUID,
+	devices ...*domain.Device,
+) <-chan deviceImportAttemptResult {
+	start := make(chan struct{})
+	results := make(chan deviceImportAttemptResult, len(devices))
+	for _, device := range devices {
+		device := device
+		go func() {
+			<-start
+			results <- deviceImportAttemptResult{
+				device: device,
+				err: store.CreateDeviceInMap(
+					context.Background(),
+					device,
+					domain.DeviceImportPlacement{MapID: mapID},
+				),
+			}
+		}()
+	}
+	close(start)
+	return results
+}
+
+func assertOneSuccessfulDeviceImport(
+	t *testing.T,
+	db *sql.DB,
+	mapID uuid.UUID,
+	conflictingAddress string,
+	results <-chan deviceImportAttemptResult,
+) {
+	t.Helper()
+	var successful, conflicting *domain.Device
+	for range 2 {
+		var result deviceImportAttemptResult
+		select {
+		case result = <-results:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for concurrent device import")
+		}
+		switch result.err {
+		case nil:
+			successful = result.device
+		case domain.ErrDeviceImportAddressConflict:
+			conflicting = result.device
+		default:
+			t.Fatalf("concurrent CreateDeviceInMap error = %v", result.err)
+		}
+	}
+	if successful == nil || conflicting == nil {
+		t.Fatalf("concurrent results success=%v conflict=%v, want exactly one of each", successful, conflicting)
+	}
+	assertDeviceImportTargetAbsent(t, db, conflicting.ID)
+	if got := importTestCount(t, db, `SELECT COUNT(*) FROM devices WHERE id = $1`, successful.ID.String()); got != 1 {
+		t.Fatalf("successful device count = %d, want 1", got)
+	}
+	if got := importTestCount(t, db,
+		`SELECT COUNT(*) FROM device_addresses WHERE normalized_address = $1`,
+		domain.NormalizeDeviceAddressValue(conflictingAddress)); got != 1 {
+		t.Fatalf("conflicting canonical address count = %d, want 1", got)
+	}
+	if got := importTestCount(t, db, `SELECT COUNT(*) FROM canvas_map_devices WHERE map_id = $1`, mapID.String()); got != 1 {
+		t.Fatalf("map membership count = %d, want 1", got)
+	}
+}
+
 func waitForDeviceImportAdvisoryWaiters(
 	t *testing.T,
 	db *sql.DB,
@@ -587,6 +730,7 @@ func waitForDeviceImportAdvisoryWaiters(
 	want int,
 ) {
 	t.Helper()
+	classID, objectID := deviceImportAdvisoryLockParts(advisoryLockKey)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var count int
@@ -595,9 +739,10 @@ func waitForDeviceImportAdvisoryWaiters(
 			 FROM pg_locks
 			 WHERE locktype = 'advisory'
 			   AND granted = FALSE
-			   AND classid = 0
-			   AND objid = $1::oid`,
-			advisoryLockKey,
+			   AND classid = $1::oid
+			   AND objid = $2::oid`,
+			classID,
+			objectID,
 		).Scan(&count); err != nil {
 			t.Fatalf("query import advisory waiters: %v", err)
 		}
@@ -611,6 +756,7 @@ func waitForDeviceImportAdvisoryWaiters(
 
 func waitForDeviceImportAdvisoryWaiterPID(t *testing.T, db *sql.DB, advisoryLockKey int64) int {
 	t.Helper()
+	classID, objectID := deviceImportAdvisoryLockParts(advisoryLockKey)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var pid int
@@ -619,11 +765,12 @@ func waitForDeviceImportAdvisoryWaiterPID(t *testing.T, db *sql.DB, advisoryLock
 			 FROM pg_locks
 			 WHERE locktype = 'advisory'
 			   AND granted = FALSE
-			   AND classid = 0
-			   AND objid = $1::oid
+			   AND classid = $1::oid
+			   AND objid = $2::oid
 			 ORDER BY pid
 			 LIMIT 1`,
-			advisoryLockKey,
+			classID,
+			objectID,
 		).Scan(&pid)
 		if err == nil {
 			return pid
@@ -635,6 +782,11 @@ func waitForDeviceImportAdvisoryWaiterPID(t *testing.T, db *sql.DB, advisoryLock
 	}
 	t.Fatal("timed out waiting for device import advisory waiter pid")
 	return 0
+}
+
+func deviceImportAdvisoryLockParts(advisoryLockKey int64) (int64, int64) {
+	bits := uint64(advisoryLockKey)
+	return int64(uint32(bits >> 32)), int64(uint32(bits))
 }
 
 func installDeviceImportFailureTrigger(

@@ -199,6 +199,39 @@ func TestDeviceRepoDatabaseRejectsPhysicalVirtualDuplicateIP(t *testing.T) {
 	}
 }
 
+func TestDeviceRepoCreateAllowsDuplicateVirtualAddress(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+	first := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "virtual-duplicate-first",
+		IP:         "virtual-duplicate.example.net",
+		DeviceType: domain.DeviceTypeVirtual,
+		Status:     domain.DeviceStatusUnknown,
+		Tags:       map[string]string{},
+	}
+	second := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "virtual-duplicate-second",
+		IP:         " VIRTUAL-DUPLICATE.EXAMPLE.NET ",
+		DeviceType: domain.DeviceTypeVirtual,
+		Status:     domain.DeviceStatusUnknown,
+		Tags:       map[string]string{},
+	}
+
+	if err := repo.Create(first); err != nil {
+		t.Fatalf("Create first virtual device failed: %v", err)
+	}
+	if err := repo.Create(second); err != nil {
+		t.Fatalf("Create second virtual device failed: %v", err)
+	}
+	if got := importTestCount(t, db,
+		`SELECT COUNT(*) FROM device_addresses WHERE normalized_address = $1`,
+		"virtual-duplicate.example.net"); got != 2 {
+		t.Fatalf("manual virtual address count = %d, want 2", got)
+	}
+}
+
 func TestDeviceRepoCreatePublishes(t *testing.T) {
 	db := newTestDB(t)
 	onChange := make(chan struct{}, 2)
