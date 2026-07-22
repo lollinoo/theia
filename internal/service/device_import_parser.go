@@ -197,7 +197,7 @@ func canonicalImportTarget(rawTarget string, mode DeviceImportMode) (string, *ui
 	if (mode == DeviceImportModePrometheus || mode == DeviceImportModePrometheusFallback) && len(rawTarget) > 255 {
 		return host, port, "Prometheus target exceeds 255 characters"
 	}
-	if mode == DeviceImportModeSNMP && port != nil && *port != 161 {
+	if (mode == DeviceImportModeSNMP || mode == DeviceImportModePrometheusFallback) && port != nil && *port != 161 {
 		return host, port, "direct SNMP target port must be 161"
 	}
 	return host, port, ""
