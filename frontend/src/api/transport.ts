@@ -121,3 +121,31 @@ export async function requestJSONWithBody(
 
   return payload;
 }
+
+/** Sends a same-origin multipart POST without overriding the browser-generated boundary. */
+export async function requestMultipartJSON(path: string, body: FormData): Promise<unknown> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: headersWithCsrf({ Accept: 'application/json' }),
+    body,
+  });
+
+  const payload = (await response.json().catch(() => null)) as ErrorPayload | unknown;
+  if (!response.ok) {
+    const errorMessage = errorMessageFromPayload(payload, response.statusText);
+
+    if (response.status === 400 || response.status === 409) {
+      throw new ValidationError(errorMessage);
+    }
+    if (response.status === 413) {
+      throw new ValidationError('Import files are limited to 2 MiB and 5,000 targets');
+    }
+    if (response.status === 500) {
+      throw serverErrorFromMessage(errorMessage);
+    }
+
+    throw new Error(`${path} failed: ${response.status} ${errorMessage}`);
+  }
+
+  return payload;
+}
