@@ -3,7 +3,13 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
+	"hash/fnv"
+	"io"
+	"net"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,7 +43,7 @@ func (s *DeviceImportStore) ExistingCanonicalAddresses(
 	}
 	existing, err := s.existingCanonicalAddresses(ctx, addresses)
 	if err != nil {
-		return nil, domain.ErrDeviceImportStoreUnavailable
+		return nil, classifyDeviceImportStoreError(err)
 	}
 	return existing, nil
 }
@@ -93,12 +99,13 @@ func (s *DeviceImportStore) CreateDeviceInMap(
 	if ctx.Err() != nil || s == nil || s.devices == nil || device == nil {
 		return domain.ErrDeviceImportStoreUnavailable
 	}
+	persistenceDevice := cloneDeviceForImportPersistence(device)
 
 	err := withWriteRetry(func() error {
 		if ctx.Err() != nil {
 			return domain.ErrDeviceImportStoreUnavailable
 		}
-		existing, err := s.existingCanonicalAddresses(ctx, domain.DeviceAddressValues(*device))
+		existing, err := s.existingCanonicalAddresses(ctx, domain.DeviceAddressValues(*persistenceDevice))
 		if err != nil {
 			return err
 		}
@@ -107,14 +114,112 @@ func (s *DeviceImportStore) CreateDeviceInMap(
 		}
 
 		return s.devices.createOnceWithAppend(
-			device,
+			persistenceDevice,
+			func(tx *Tx, _ time.Time) error {
+				return lockAndCheckDeviceImportAddresses(
+					ctx,
+					tx,
+					domain.DeviceAddressValues(*persistenceDevice),
+				)
+			},
 			func(tx *Tx, now time.Time) error {
-				return appendImportedDevicePlacement(ctx, tx, device.ID, placement, now)
+				return appendImportedDevicePlacement(ctx, tx, persistenceDevice.ID, placement, now)
 			},
 			false,
 		)
 	})
 	return classifyDeviceImportStoreError(err)
+}
+
+func lockAndCheckDeviceImportAddresses(ctx context.Context, tx *Tx, addresses []string) error {
+	canonical := canonicalDeviceImportAddresses(addresses)
+	lockKeys := make([]int64, 0, len(canonical))
+	seenLockKeys := make(map[int64]struct{}, len(canonical))
+	for _, address := range canonical {
+		key := deviceImportAddressLockKey(address)
+		if _, exists := seenLockKeys[key]; exists {
+			continue
+		}
+		seenLockKeys[key] = struct{}{}
+		lockKeys = append(lockKeys, key)
+	}
+	// A global numeric order prevents overlapping multi-address imports from deadlocking.
+	sort.Slice(lockKeys, func(i, j int) bool { return lockKeys[i] < lockKeys[j] })
+	for _, lockKey := range lockKeys {
+		if _, err := tx.ExecContext(
+			ctx,
+			`SELECT pg_advisory_xact_lock(?)`,
+			lockKey,
+		); err != nil {
+			return err
+		}
+	}
+	if len(canonical) == 0 {
+		return nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(canonical)), ",")
+	args := make([]any, len(canonical))
+	for i := range canonical {
+		args[i] = canonical[i]
+	}
+	var exists bool
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT EXISTS (
+			SELECT 1
+			FROM device_addresses
+			WHERE normalized_address IN (`+placeholders+`)
+		)`,
+		args...,
+	).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return domain.ErrDeviceImportAddressConflict
+	}
+	return nil
+}
+
+func deviceImportAddressLockKey(address string) int64 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(address))
+	return int64(hasher.Sum64())
+}
+
+func cloneDeviceForImportPersistence(device *domain.Device) *domain.Device {
+	cloned := *device
+	cloned.AreaIDs = nil
+	cloned.ProbePorts = append([]int(nil), device.ProbePorts...)
+	cloned.Interfaces = append([]domain.Interface(nil), device.Interfaces...)
+	cloned.Addresses = append([]domain.DeviceAddress(nil), device.Addresses...)
+	for i := range cloned.Addresses {
+		cloned.Addresses[i].ProbePorts = append([]int(nil), device.Addresses[i].ProbePorts...)
+	}
+	if device.Tags != nil {
+		cloned.Tags = make(map[string]string, len(device.Tags))
+		for key, value := range device.Tags {
+			cloned.Tags[key] = value
+		}
+	}
+	cloned.SNMPCredentials = deepCopySNMPCredentials(device.SNMPCredentials)
+	if device.PollingEnabled != nil {
+		value := *device.PollingEnabled
+		cloned.PollingEnabled = &value
+	}
+	if device.PollIntervalOverride != nil {
+		value := *device.PollIntervalOverride
+		cloned.PollIntervalOverride = &value
+	}
+	if device.Notes != nil {
+		value := *device.Notes
+		cloned.Notes = &value
+	}
+	if device.LastTopologyDiscoveryAt != nil {
+		value := *device.LastTopologyDiscoveryAt
+		cloned.LastTopologyDiscoveryAt = &value
+	}
+	return &cloned
 }
 
 // PublishCreatedDevices emits one batch invalidation followed by one created event per committed ID.
@@ -223,6 +328,7 @@ func canonicalDeviceImportAddresses(addresses []string) []string {
 		seen[normalized] = struct{}{}
 		canonical = append(canonical, normalized)
 	}
+	sort.Strings(canonical)
 	return canonical
 }
 
@@ -242,8 +348,39 @@ func classifyDeviceImportStoreError(err error) error {
 	if isDeviceImportAddressConstraint(err) {
 		return domain.ErrDeviceImportAddressConflict
 	}
-	// The domain boundary deliberately never exposes driver, encryption, or transaction details.
-	return domain.ErrDeviceImportStoreUnavailable
+	if isDeviceImportStoreUnavailableError(err) {
+		return domain.ErrDeviceImportStoreUnavailable
+	}
+	return fmt.Errorf("persisting imported device: %w", err)
+}
+
+func isDeviceImportStoreUnavailableError(err error) bool {
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, driver.ErrBadConn) ||
+		errors.Is(err, sql.ErrConnDone) ||
+		errors.Is(err, pgconn.ErrConnClosed) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	var connectErr *pgconn.ConnectError
+	if errors.As(err, &connectErr) {
+		return true
+	}
+	var networkErr *net.OpError
+	if errors.As(err, &networkErr) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return strings.HasPrefix(pgErr.Code, "08") ||
+			pgErr.Code == "57P01" ||
+			pgErr.Code == "57P02" ||
+			pgErr.Code == "57P03"
+	}
+	return false
 }
 
 func isDeviceImportAddressConstraint(err error) bool {
