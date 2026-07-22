@@ -114,6 +114,31 @@ func TestDeviceImportServicePreviewResolvesSNMPProfileWithoutExposingOrUsingCred
 	assertJSONOmitsDeviceImportSecrets(t, preview)
 }
 
+func TestDeviceImportServicePreviewConfigurationEncodesOptionalIDsAsNull(t *testing.T) {
+	h := newDeviceImportServiceHarness(t)
+	request := h.request(DeviceImportModePrometheus, []byte("- targets: [\"router.example.net\"]\n"))
+	request.AreaID = nil
+
+	preview, err := h.importer.Preview(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	encoded, err := json.Marshal(preview.Configuration)
+	if err != nil {
+		t.Fatalf("json.Marshal(configuration): %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("json.Unmarshal(configuration): %v", err)
+	}
+	for _, field := range []string{"snmp_profile_id", "area_id"} {
+		value, present := fields[field]
+		if !present || string(value) != "null" {
+			t.Fatalf("configuration %s = %s (present=%t), want explicit null: %s", field, value, present, encoded)
+		}
+	}
+}
+
 func TestDeviceImportServiceCommitBuildsApprovedDeviceFieldsForEveryMode(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -228,6 +253,47 @@ func TestDeviceImportServiceCommitBuildsApprovedDeviceFieldsForEveryMode(t *test
 	}
 }
 
+func TestDeviceImportServiceCommitDeepCopiesSNMPv3Credentials(t *testing.T) {
+	h := newDeviceImportServiceHarness(t)
+	profileCredentials := &domain.SNMPv3Credentials{
+		Username:      "import-user",
+		AuthProtocol:  "SHA",
+		AuthPassword:  deviceImportTestSecret,
+		PrivProtocol:  "AES",
+		PrivPassword:  "private-" + deviceImportTestSecret,
+		SecurityLevel: "authPriv",
+	}
+	wantCredentials := *profileCredentials
+	h.profiles.profile.Credentials = domain.SNMPCredentials{
+		Version: domain.SNMPVersionV3,
+		V3:      profileCredentials,
+	}
+	var receivedCredentials *domain.SNMPv3Credentials
+	h.store.createFunc = func(device *domain.Device, _ domain.DeviceImportPlacement) error {
+		receivedCredentials = device.SNMPCredentials.V3
+		return nil
+	}
+	uploaded := []byte("- targets: [\"router.example.net\"]\n")
+	request := h.request(DeviceImportModeSNMP, uploaded)
+	request.SNMPProfileID = &h.profileID
+	request.ExpectedFileDigest = deviceImportDigest(uploaded)
+
+	if _, err := h.importer.Commit(context.Background(), request); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	if receivedCredentials == nil || *receivedCredentials != wantCredentials {
+		t.Fatalf("created SNMPv3 credentials = %#v, want %#v", receivedCredentials, wantCredentials)
+	}
+	if receivedCredentials == profileCredentials {
+		t.Fatal("created SNMPv3 credentials alias profile credentials")
+	}
+	profileCredentials.AuthPassword = "mutated"
+	profileCredentials.PrivPassword = "mutated"
+	if *receivedCredentials != wantCredentials {
+		t.Fatalf("created SNMPv3 credentials changed with profile: %#v", receivedCredentials)
+	}
+}
+
 func TestDeviceImportServiceRejectsInvalidConfigurationBeforeAnyWrite(t *testing.T) {
 	validFile := []byte("- targets: [\"router.example.net\"]\n")
 	tests := []struct {
@@ -310,16 +376,16 @@ func TestDeviceImportServiceCommitDetectsChangedConfigurationBeforeFirstWrite(t 
 		mutate func(*deviceImportServiceHarness)
 	}{
 		{name: "map disappeared", mode: DeviceImportModePrometheus, mutate: func(h *deviceImportServiceHarness) {
-			h.maps.getErr = errors.New("map disappeared " + deviceImportTestSecret)
+			h.maps.getErr = errors.New("canvas map not found")
 		}},
 		{name: "map membership disappeared", mode: DeviceImportModePrometheus, mutate: func(h *deviceImportServiceHarness) {
-			h.maps.membershipErr = errors.New("membership disappeared " + deviceImportTestSecret)
+			h.maps.membershipErr = errors.New("canvas map not found: " + h.mapID.String())
 		}},
 		{name: "selected area disappeared", mode: DeviceImportModePrometheus, mutate: func(h *deviceImportServiceHarness) {
 			h.maps.membership.Areas = nil
 		}},
 		{name: "selected profile disappeared", mode: DeviceImportModeSNMP, mutate: func(h *deviceImportServiceHarness) {
-			h.profiles.getErr = errors.New("profile disappeared " + deviceImportTestSecret)
+			h.profiles.getErr = errors.New("snmp profile not found")
 		}},
 	}
 
@@ -511,7 +577,7 @@ func TestDeviceImportServiceCommitReturnsPartialResultWithSystemicError(t *testi
 			}
 			wantStatuses := []DeviceImportTargetStatus{
 				DeviceImportTargetStatusCreated,
-				DeviceImportTargetStatusFailed,
+				DeviceImportTargetStatusNotProcessed,
 				DeviceImportTargetStatusNotProcessed,
 				DeviceImportTargetStatusNotProcessed,
 			}
@@ -526,7 +592,7 @@ func TestDeviceImportServiceCommitReturnsPartialResultWithSystemicError(t *testi
 			if !result.Incomplete {
 				t.Fatal("systemic abort did not set Incomplete")
 			}
-			if got := result.Summary; got.Total != 4 || got.Created != 1 || got.Failed != 1 || got.NotProcessed != 2 || got.Skipped != 0 {
+			if got := result.Summary; got.Total != 4 || got.Created != 1 || got.Failed != 0 || got.NotProcessed != 3 || got.Skipped != 0 {
 				t.Fatalf("summary = %#v", got)
 			}
 			if h.store.createCalls != 2 || len(h.store.created) != 1 {
@@ -544,6 +610,192 @@ func TestDeviceImportServiceCommitReturnsPartialResultWithSystemicError(t *testi
 			assertDeviceImportAudit(t, h.audit.logs[0], request, result.Summary)
 		})
 	}
+}
+
+func TestDeviceImportServiceCommitDetachesPostCommitWorkFromCanceledRequest(t *testing.T) {
+	h := newDeviceImportServiceHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	h.store.createFunc = func(_ *domain.Device, _ domain.DeviceImportPlacement) error {
+		cancel()
+		return nil
+	}
+	uploaded := []byte("- targets: [\"created.example.net\", \"not-processed.example.net\"]\n")
+	request := h.request(DeviceImportModeSNMP, uploaded)
+	request.SNMPProfileID = &h.profileID
+	request.ExpectedFileDigest = deviceImportDigest(uploaded)
+
+	result, err := h.importer.Commit(ctx, request)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Commit() error = %v, want context canceled", err)
+	}
+	wantStatuses := []DeviceImportTargetStatus{
+		DeviceImportTargetStatusCreated,
+		DeviceImportTargetStatusNotProcessed,
+	}
+	for index, want := range wantStatuses {
+		if result.Results[index].Status != want {
+			t.Fatalf("result[%d] status = %q, want %q", index, result.Results[index].Status, want)
+		}
+	}
+	if len(h.reprobeContextErrs) != 1 || h.reprobeContextErrs[0] != nil {
+		t.Fatalf("reprobe context errors = %#v, want [nil]", h.reprobeContextErrs)
+	}
+	if len(h.audit.contextErrs) != 1 || h.audit.contextErrs[0] != nil {
+		t.Fatalf("audit context errors = %#v, want [nil]", h.audit.contextErrs)
+	}
+}
+
+func TestDeviceImportServiceValidationPreservesKnownSystemicErrors(t *testing.T) {
+	validFile := []byte("- targets: [\"router.example.net\"]\n")
+	tests := []struct {
+		name      string
+		mode      DeviceImportMode
+		wantError error
+		mutate    func(*deviceImportServiceHarness)
+	}{
+		{
+			name:      "map store unavailable",
+			mode:      DeviceImportModePrometheus,
+			wantError: domain.ErrDeviceImportStoreUnavailable,
+			mutate: func(h *deviceImportServiceHarness) {
+				h.maps.getErr = fmt.Errorf("%s: %w", deviceImportTestSecret, domain.ErrDeviceImportStoreUnavailable)
+			},
+		},
+		{
+			name:      "unexpected map dependency failure",
+			mode:      DeviceImportModePrometheus,
+			wantError: domain.ErrDeviceImportStoreUnavailable,
+			mutate: func(h *deviceImportServiceHarness) {
+				h.maps.getErr = errors.New("unexpected map failure " + deviceImportTestSecret)
+			},
+		},
+		{
+			name:      "membership context cancelled",
+			mode:      DeviceImportModePrometheus,
+			wantError: context.Canceled,
+			mutate: func(h *deviceImportServiceHarness) {
+				h.maps.membershipErr = fmt.Errorf("%s: %w", deviceImportTestSecret, context.Canceled)
+			},
+		},
+		{
+			name:      "profile deadline exceeded",
+			mode:      DeviceImportModeSNMP,
+			wantError: context.DeadlineExceeded,
+			mutate: func(h *deviceImportServiceHarness) {
+				h.profiles.getErr = fmt.Errorf("%s: %w", deviceImportTestSecret, context.DeadlineExceeded)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		for _, operation := range []string{"preview", "commit"} {
+			t.Run(tt.name+" "+operation, func(t *testing.T) {
+				h := newDeviceImportServiceHarness(t)
+				logs := captureDeviceImportLogs(t)
+				tt.mutate(h)
+				request := h.request(tt.mode, validFile)
+				if tt.mode != DeviceImportModePrometheus {
+					request.SNMPProfileID = &h.profileID
+				}
+				var err error
+				if operation == "preview" {
+					_, err = h.importer.Preview(context.Background(), request)
+				} else {
+					request.ExpectedFileDigest = deviceImportDigest(validFile)
+					_, err = h.importer.Commit(context.Background(), request)
+				}
+				if !errors.Is(err, tt.wantError) {
+					t.Fatalf("%s error = %v, want %v", operation, err, tt.wantError)
+				}
+				if err != nil && strings.Contains(err.Error(), deviceImportTestSecret) {
+					t.Fatalf("%s leaked dependency error text: %v", operation, err)
+				}
+				if strings.Contains(logs.String(), deviceImportTestSecret) {
+					t.Fatalf("%s leaked dependency error text in logs: %s", operation, logs.String())
+				}
+				if h.store.createCalls != 0 || h.store.publishCalls != 0 || len(h.audit.logs) != 0 {
+					t.Fatalf("%s systemic validation side effects: create=%d publish=%d audit=%d",
+						operation, h.store.createCalls, h.store.publishCalls, len(h.audit.logs))
+				}
+			})
+		}
+	}
+}
+
+func TestDeviceImportServiceRequiresStoreDuringGlobalValidation(t *testing.T) {
+	malformed := []byte("- targets: [unterminated\n")
+	for _, operation := range []string{"preview", "commit"} {
+		t.Run(operation, func(t *testing.T) {
+			h := newDeviceImportServiceHarness(t)
+			h.importer.store = nil
+			request := h.request(DeviceImportModePrometheus, malformed)
+			var err error
+			if operation == "preview" {
+				_, err = h.importer.Preview(context.Background(), request)
+			} else {
+				request.ExpectedFileDigest = deviceImportDigest(malformed)
+				_, err = h.importer.Commit(context.Background(), request)
+			}
+			if !errors.Is(err, domain.ErrDeviceImportStoreUnavailable) {
+				t.Fatalf("%s error = %v, want store unavailable", operation, err)
+			}
+			if h.maps.getCalls != 0 || h.store.createCalls != 0 || h.store.publishCalls != 0 || len(h.audit.logs) != 0 {
+				t.Fatalf("%s nil-store dependency calls: map=%d create=%d publish=%d audit=%d",
+					operation, h.maps.getCalls, h.store.createCalls, h.store.publishCalls, len(h.audit.logs))
+			}
+		})
+	}
+}
+
+func TestDeviceImportServiceSanitizesGlobalParserAndLookupErrors(t *testing.T) {
+	t.Run("preview bulk lookup", func(t *testing.T) {
+		h := newDeviceImportServiceHarness(t)
+		h.store.existingErr = errors.New("lookup failed " + deviceImportTestSecret)
+		_, err := h.importer.Preview(
+			context.Background(),
+			h.request(DeviceImportModePrometheus, []byte("- targets: [\"router.example.net\"]\n")),
+		)
+		if !errors.Is(err, domain.ErrDeviceImportStoreUnavailable) {
+			t.Fatalf("Preview() error = %v, want store unavailable", err)
+		}
+		if strings.Contains(err.Error(), deviceImportTestSecret) {
+			t.Fatalf("Preview() leaked lookup error: %v", err)
+		}
+	})
+
+	malformedWithMarker := []byte("- targets: [\"router.example.net\"]\n  labels: *" + deviceImportTestSecret + "\n")
+	for _, operation := range []string{"preview", "commit"} {
+		t.Run(operation+" parser", func(t *testing.T) {
+			h := newDeviceImportServiceHarness(t)
+			request := h.request(DeviceImportModePrometheus, malformedWithMarker)
+			var err error
+			if operation == "preview" {
+				_, err = h.importer.Preview(context.Background(), request)
+			} else {
+				request.ExpectedFileDigest = deviceImportDigest(malformedWithMarker)
+				_, err = h.importer.Commit(context.Background(), request)
+			}
+			if err == nil {
+				t.Fatalf("%s parser error = nil", operation)
+			}
+			if strings.Contains(err.Error(), deviceImportTestSecret) {
+				t.Fatalf("%s leaked YAML marker: %v", operation, err)
+			}
+			if h.store.createCalls != 0 || h.store.publishCalls != 0 || len(h.audit.logs) != 0 {
+				t.Fatalf("%s parser side effects: create=%d publish=%d audit=%d",
+					operation, h.store.createCalls, h.store.publishCalls, len(h.audit.logs))
+			}
+		})
+	}
+
+	t.Run("limit sentinel remains typed", func(t *testing.T) {
+		h := newDeviceImportServiceHarness(t)
+		oversized := make([]byte, DeviceImportMaxFileBytes+1)
+		_, err := h.importer.Preview(context.Background(), h.request(DeviceImportModePrometheus, oversized))
+		if !errors.Is(err, ErrDeviceImportLimitExceeded) {
+			t.Fatalf("Preview() error = %v, want limit sentinel", err)
+		}
+	})
 }
 
 func TestDeviceImportServicePostCommitFailuresDoNotChangeCreatedResultsOrLeakSecrets(t *testing.T) {
@@ -624,19 +876,20 @@ func assertDeviceImportAudit(
 }
 
 type deviceImportServiceHarness struct {
-	importer       *DeviceImportService
-	store          *fakeDeviceImportStore
-	maps           *fakeDeviceImportMapRepository
-	profiles       *fakeDeviceImportProfileRepository
-	audit          *fakeDeviceImportAuditRepository
-	mapID          uuid.UUID
-	areaID         uuid.UUID
-	profileID      uuid.UUID
-	actorID        uuid.UUID
-	topologyNotify chan struct{}
-	reprobeCalls   int
-	reprobeIDs     []uuid.UUID
-	reprobeErr     error
+	importer           *DeviceImportService
+	store              *fakeDeviceImportStore
+	maps               *fakeDeviceImportMapRepository
+	profiles           *fakeDeviceImportProfileRepository
+	audit              *fakeDeviceImportAuditRepository
+	mapID              uuid.UUID
+	areaID             uuid.UUID
+	profileID          uuid.UUID
+	actorID            uuid.UUID
+	topologyNotify     chan struct{}
+	reprobeCalls       int
+	reprobeIDs         []uuid.UUID
+	reprobeContextErrs []error
+	reprobeErr         error
 }
 
 func newDeviceImportServiceHarness(t *testing.T) *deviceImportServiceHarness {
@@ -673,9 +926,10 @@ func newDeviceImportServiceHarness(t *testing.T) *deviceImportServiceHarness {
 		h.topologyNotify,
 	)
 	h.importer = NewDeviceImportService(h.store, devices, h.maps, h.profiles, h.audit)
-	h.importer.reprobeDevice = func(_ context.Context, id uuid.UUID) error {
+	h.importer.reprobeDevice = func(ctx context.Context, id uuid.UUID) error {
 		h.reprobeCalls++
 		h.reprobeIDs = append(h.reprobeIDs, id)
+		h.reprobeContextErrs = append(h.reprobeContextErrs, ctx.Err())
 		return h.reprobeErr
 	}
 	return h
@@ -848,11 +1102,13 @@ func (r *fakeDeviceImportProfileRepository) Delete(uuid.UUID) error {
 }
 
 type fakeDeviceImportAuditRepository struct {
-	logs      []domain.AuditLog
-	appendErr error
+	logs        []domain.AuditLog
+	contextErrs []error
+	appendErr   error
 }
 
-func (r *fakeDeviceImportAuditRepository) AppendAuditLog(_ context.Context, entry *domain.AuditLog) error {
+func (r *fakeDeviceImportAuditRepository) AppendAuditLog(ctx context.Context, entry *domain.AuditLog) error {
+	r.contextErrs = append(r.contextErrs, ctx.Err())
 	if entry != nil {
 		r.logs = append(r.logs, *entry)
 	}

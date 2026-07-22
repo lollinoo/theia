@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,7 @@ var (
 	ErrDeviceImportDigestMismatch = errors.New("device import digest mismatch")
 	// ErrDeviceImportConfigurationChanged reports that a previewed destination or profile no longer exists.
 	ErrDeviceImportConfigurationChanged = errors.New("device import configuration changed")
+	errDeviceImportInvalidFile          = errors.New("invalid device import file")
 )
 
 // DeviceImportRequest carries one stateless preview or commit operation.
@@ -193,7 +195,7 @@ func (s *DeviceImportService) Preview(
 	preview.Configuration = validated.configuration
 	parsed, err := ParsePrometheusFileSD(request.FileBytes, request.MetricsMode)
 	if err != nil {
-		return preview, err
+		return preview, sanitizeDeviceImportParserError(err)
 	}
 	preview.Diagnostics = importDiagnostics(parsed.Diagnostics)
 	preview.Summary.InvalidGroups = len(preview.Diagnostics)
@@ -210,7 +212,12 @@ func (s *DeviceImportService) Preview(
 	}
 	existing, err := s.store.ExistingCanonicalAddresses(ctx, candidates)
 	if err != nil {
-		return preview, err
+		return preview, s.sanitizeDeviceImportDependencyError(
+			err,
+			"existing-address lookup",
+			preview.FileDigest,
+			preview.Configuration,
+		)
 	}
 
 	for _, target := range parsed.Targets {
@@ -267,7 +274,7 @@ func (s *DeviceImportService) Commit(
 	result.Configuration = validated.configuration
 	parsed, err := ParsePrometheusFileSD(request.FileBytes, request.MetricsMode)
 	if err != nil {
-		return result, err
+		return result, sanitizeDeviceImportParserError(err)
 	}
 	result.Diagnostics = importDiagnostics(parsed.Diagnostics)
 	result.Summary.Total = len(parsed.Targets)
@@ -335,25 +342,25 @@ func (s *DeviceImportService) Commit(
 				row.Message = deviceImportExistingMessage
 				result.Summary.Skipped++
 			case errors.Is(buildErr, domain.ErrDeviceImportDestinationChanged):
-				row.Status = DeviceImportTargetStatusFailed
-				row.Message = deviceImportFailedMessage
-				result.Summary.Failed++
+				row.Status = DeviceImportTargetStatusNotProcessed
+				row.Message = deviceImportNotProcessedMessage
+				result.Summary.NotProcessed++
 				result.Incomplete = true
 				abortErr = ErrDeviceImportConfigurationChanged
 				s.logTargetFailure(result.FileDigest, result.Configuration, target)
 			case errors.Is(buildErr, domain.ErrDeviceImportStoreUnavailable):
-				row.Status = DeviceImportTargetStatusFailed
-				row.Message = deviceImportFailedMessage
-				result.Summary.Failed++
+				row.Status = DeviceImportTargetStatusNotProcessed
+				row.Message = deviceImportNotProcessedMessage
+				result.Summary.NotProcessed++
 				result.Incomplete = true
 				abortErr = domain.ErrDeviceImportStoreUnavailable
 				s.logTargetFailure(result.FileDigest, result.Configuration, target)
 			case errors.Is(buildErr, context.Canceled), errors.Is(buildErr, context.DeadlineExceeded):
-				row.Status = DeviceImportTargetStatusFailed
-				row.Message = deviceImportFailedMessage
-				result.Summary.Failed++
+				row.Status = DeviceImportTargetStatusNotProcessed
+				row.Message = deviceImportNotProcessedMessage
+				result.Summary.NotProcessed++
 				result.Incomplete = true
-				abortErr = buildErr
+				abortErr = exactDeviceImportContextError(buildErr)
 				s.logTargetFailure(result.FileDigest, result.Configuration, target)
 			default:
 				row.Status = DeviceImportTargetStatusFailed
@@ -394,12 +401,21 @@ func (s *DeviceImportService) validateRequest(
 	if request.AreaID != nil && *request.AreaID == uuid.Nil {
 		return validated, invalidDeviceImportConfiguration("selected area is invalid")
 	}
-	if s == nil || s.devices == nil || s.maps == nil {
+	if s == nil || s.store == nil || s.devices == nil || s.maps == nil || (usesSNMP && s.profiles == nil) {
 		return validated, domain.ErrDeviceImportStoreUnavailable
 	}
 
 	canvasMap, err := s.maps.GetByID(request.MapID)
-	if err != nil || canvasMap.ID != request.MapID {
+	if err != nil {
+		return validated, s.validateDeviceImportDependencyError(
+			err,
+			commit,
+			"destination map",
+			"canvas map not found",
+			request,
+		)
+	}
+	if canvasMap.ID != request.MapID {
 		return validated, changedOrInvalidDeviceImportConfiguration(commit, "destination map is unavailable")
 	}
 	if err := ctx.Err(); err != nil {
@@ -407,7 +423,13 @@ func (s *DeviceImportService) validateRequest(
 	}
 	membership, err := s.maps.GetMembership(request.MapID)
 	if err != nil {
-		return validated, changedOrInvalidDeviceImportConfiguration(commit, "destination map membership is unavailable")
+		return validated, s.validateDeviceImportDependencyError(
+			err,
+			commit,
+			"destination map membership",
+			"canvas map not found",
+			request,
+		)
 	}
 	if request.AreaID != nil && !deviceImportMembershipContainsArea(membership, *request.AreaID) {
 		return validated, changedOrInvalidDeviceImportConfiguration(commit, "selected area is unavailable in the destination map")
@@ -417,11 +439,17 @@ func (s *DeviceImportService) validateRequest(
 		if err := ctx.Err(); err != nil {
 			return validated, err
 		}
-		if s.profiles == nil {
-			return validated, changedOrInvalidDeviceImportConfiguration(commit, "selected SNMP Profile is unavailable")
-		}
 		profile, err := s.profiles.GetByID(*request.SNMPProfileID)
-		if err != nil || profile == nil || profile.ID != *request.SNMPProfileID {
+		if err != nil {
+			return validated, s.validateDeviceImportDependencyError(
+				err,
+				commit,
+				"selected SNMP Profile",
+				"snmp profile not found",
+				request,
+			)
+		}
+		if profile == nil || profile.ID != *request.SNMPProfileID {
 			return validated, changedOrInvalidDeviceImportConfiguration(commit, "selected SNMP Profile is unavailable")
 		}
 		validated.credentials = cloneDeviceImportCredentials(profile.Credentials)
@@ -657,6 +685,87 @@ func changedOrInvalidDeviceImportConfiguration(commit bool, message string) erro
 		return fmt.Errorf("%w: %s", ErrDeviceImportConfigurationChanged, message)
 	}
 	return invalidDeviceImportConfiguration(message)
+}
+
+func sanitizeDeviceImportParserError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrDeviceImportLimitExceeded) {
+		return ErrDeviceImportLimitExceeded
+	}
+	if contextErr := exactDeviceImportContextError(err); contextErr != nil {
+		return contextErr
+	}
+	return errDeviceImportInvalidFile
+}
+
+func (s *DeviceImportService) validateDeviceImportDependencyError(
+	err error,
+	commit bool,
+	stage string,
+	notFoundPhrase string,
+	request DeviceImportRequest,
+) error {
+	if err == nil {
+		return nil
+	}
+	if systemicErr := knownDeviceImportSystemicError(err); systemicErr != nil {
+		return systemicErr
+	}
+	if notFoundPhrase != "" && strings.Contains(strings.ToLower(err.Error()), notFoundPhrase) {
+		return changedOrInvalidDeviceImportConfiguration(commit, stage+" is unavailable")
+	}
+	return s.sanitizeDeviceImportDependencyError(
+		err,
+		stage,
+		computeDeviceImportDigest(request.FileBytes),
+		normalizeDeviceImportConfiguration(request),
+	)
+}
+
+func (s *DeviceImportService) sanitizeDeviceImportDependencyError(
+	err error,
+	stage string,
+	digest string,
+	configuration DeviceImportConfiguration,
+) error {
+	if err == nil {
+		return nil
+	}
+	if systemicErr := knownDeviceImportSystemicError(err); systemicErr != nil {
+		return systemicErr
+	}
+	logging.Errorf(
+		"device import dependency failed reference=%s stage=%s digest=%s mode=%s map_id=%s",
+		uuid.NewString(),
+		stage,
+		digest,
+		configuration.MetricsMode,
+		configuration.MapID,
+	)
+	return domain.ErrDeviceImportStoreUnavailable
+}
+
+func knownDeviceImportSystemicError(err error) error {
+	if contextErr := exactDeviceImportContextError(err); contextErr != nil {
+		return contextErr
+	}
+	if errors.Is(err, domain.ErrDeviceImportStoreUnavailable) {
+		return domain.ErrDeviceImportStoreUnavailable
+	}
+	return nil
+}
+
+func exactDeviceImportContextError(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return context.Canceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
 }
 
 func deviceImportModeIsValid(mode DeviceImportMode) bool {
