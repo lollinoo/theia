@@ -405,9 +405,33 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
 }));
 
 vi.mock('./components/AdminDashboard', () => ({
-  AdminDashboard: (props: { visible?: boolean }) => {
+  AdminDashboard: (props: { visible?: boolean; onOpenMap?: (map: CanvasMap) => void }) => {
     adminDashboardPropsMock(props);
-    return <div data-testid="admin-dashboard">Admin</div>;
+    return (
+      <div data-testid="admin-dashboard">
+        Admin
+        <button
+          type="button"
+          onClick={() =>
+            props.onOpenMap?.({
+              id: 'import-map',
+              name: 'Imported Nodes',
+              description: '',
+              source_area_id: null,
+              filter: {},
+              is_default: false,
+              device_count: 1,
+              link_count: 0,
+              position_count: 0,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-02T00:00:00Z',
+            })
+          }
+        >
+          Open imported destination map
+        </button>
+      </div>
+    );
   },
 }));
 
@@ -574,11 +598,38 @@ describe('App', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Admin' }));
     await waitFor(() => {
-      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({ visible: true });
+      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({
+        visible: true,
+        onOpenMap: expect.any(Function),
+      });
     });
     await clickButton('Dashboard');
     await waitFor(() => {
-      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({ visible: false });
+      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({
+        visible: false,
+        onOpenMap: expect.any(Function),
+      });
+    });
+  });
+
+  it('opens the imported destination map on canvas and requests fit view', async () => {
+    hasPermissionMock.mockImplementation(
+      (permission: string) => permission === 'admin:dashboard:read',
+    );
+
+    await renderApp();
+    await clickButton('Admin');
+    expect(screen.getByTestId('canvas')).toHaveTextContent('fit:0');
+
+    await clickButton('Open imported destination map');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('canvas')).toHaveTextContent('map:import-map:Imported Nodes');
+      expect(screen.getByTestId('canvas')).toHaveTextContent('fit:1');
+    });
+    expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({
+      visible: false,
+      onOpenMap: expect.any(Function),
     });
   });
 

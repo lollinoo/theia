@@ -18,9 +18,11 @@ import {
   updateAdminRolePermissions,
   updateAdminUser,
 } from '../api/client';
+import type { CanvasMap } from '../types/api';
 import { AdminDashboard } from './AdminDashboard';
 
 const settingsPanelPropsMock = vi.hoisted(() => vi.fn());
+const deviceImportPanelPropsMock = vi.hoisted(() => vi.fn());
 const authState = vi.hoisted(() => ({ permissions: new Set<string>() }));
 
 vi.mock('../api/client', () => ({
@@ -43,6 +45,40 @@ vi.mock('./SettingsPanel', () => ({
   SettingsPanel: (props: { onSettingsChange?: (changed?: { timezone?: string }) => void }) => {
     settingsPanelPropsMock(props);
     return <div data-testid="global-settings-panel">Global settings</div>;
+  },
+}));
+
+vi.mock('./DeviceImportPanel', () => ({
+  DeviceImportPanel: (props: {
+    canReadCredentials: boolean;
+    onOpenMap?: (map: CanvasMap) => void;
+  }) => {
+    deviceImportPanelPropsMock(props);
+    return (
+      <div data-testid="device-import-panel">
+        Node import panel
+        <button
+          type="button"
+          onClick={() =>
+            props.onOpenMap?.({
+              id: 'import-map',
+              name: 'Imported Nodes',
+              description: '',
+              source_area_id: null,
+              filter: {},
+              is_default: false,
+              device_count: 1,
+              link_count: 0,
+              position_count: 0,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-02T00:00:00Z',
+            })
+          }
+        >
+          Test open imported map
+        </button>
+      </div>
+    );
   },
 }));
 
@@ -110,6 +146,7 @@ describe('AdminDashboard', () => {
     vi.mocked(removeAdminUserRole).mockReset();
     vi.mocked(createAdminPasswordReset).mockReset();
     settingsPanelPropsMock.mockClear();
+    deviceImportPanelPropsMock.mockClear();
     grantPermissions(
       'admin:dashboard:read',
       'users:read',
@@ -462,6 +499,59 @@ describe('AdminDashboard', () => {
     expect(fetchAdminPermissions).not.toHaveBeenCalled();
     expect(fetchAdminAuditLogs).not.toHaveBeenCalled();
     expect(screen.queryByRole('tab', { name: 'Users' })).not.toBeInTheDocument();
+  });
+
+  it('shows Node Import only when every baseline permission is granted', async () => {
+    const baselinePermissions = [
+      'admin:dashboard:read',
+      'devices:read',
+      'devices:create',
+      'topology:read',
+      'topology:update',
+    ];
+    grantPermissions(...baselinePermissions);
+
+    const { rerender } = render(<AdminDashboard />);
+    expect(await screen.findByRole('tab', { name: 'Node Import' })).toBeVisible();
+
+    for (const missingPermission of baselinePermissions) {
+      grantPermissions(
+        ...baselinePermissions.filter((permission) => permission !== missingPermission),
+      );
+      await act(async () => {
+        rerender(<AdminDashboard />);
+      });
+      expect(screen.queryByRole('tab', { name: 'Node Import' })).not.toBeInTheDocument();
+
+      grantPermissions(...baselinePermissions);
+      await act(async () => {
+        rerender(<AdminDashboard />);
+      });
+      expect(screen.getByRole('tab', { name: 'Node Import' })).toBeVisible();
+    }
+  });
+
+  it('passes credentials capability and destination-map navigation to Node Import', async () => {
+    grantPermissions(
+      'admin:dashboard:read',
+      'devices:read',
+      'devices:create',
+      'topology:read',
+      'topology:update',
+      'credentials:read',
+    );
+    const onOpenMap = vi.fn();
+    render(<AdminDashboard onOpenMap={onOpenMap} />);
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Node Import' }));
+    expect(screen.getByTestId('device-import-panel')).toBeVisible();
+    expect(deviceImportPanelPropsMock).toHaveBeenLastCalledWith({
+      canReadCredentials: true,
+      onOpenMap,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test open imported map' }));
+    expect(onOpenMap).toHaveBeenCalledWith(expect.objectContaining({ id: 'import-map' }));
   });
 
   it('exposes global settings inside admin only when the user can read and update settings', async () => {

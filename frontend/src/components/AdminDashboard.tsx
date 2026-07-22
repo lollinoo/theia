@@ -23,16 +23,19 @@ import {
   updateAdminUser,
 } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
+import type { CanvasMap } from '../types/api';
+import { DeviceImportPanel } from './DeviceImportPanel';
 import { MaterialIcon } from './MaterialIcon';
 import { SettingsPanel } from './SettingsPanel';
 
-type AdminTab = 'overview' | 'users' | 'roles' | 'audit' | 'settings';
+type AdminTab = 'overview' | 'users' | 'roles' | 'audit' | 'settings' | 'node-import';
 
 const overviewTab = { id: 'overview', label: 'Overview' } as const;
 const usersTab = { id: 'users', label: 'Users' } as const;
 const rolesTab = { id: 'roles', label: 'Roles' } as const;
 const auditTab = { id: 'audit', label: 'Audit Logs' } as const;
 const settingsTab = { id: 'settings', label: 'Settings' } as const;
+const nodeImportTab = { id: 'node-import', label: 'Node Import' } as const;
 
 const emptyDashboard: AdminDashboardResponse = {
   stats: {
@@ -145,10 +148,11 @@ function auditResourceLabel(log: AdminAuditLog, usersById: Map<string, AuthUser>
 
 interface AdminDashboardProps {
   visible?: boolean;
+  onOpenMap?: (map: CanvasMap) => void;
 }
 
 /** Renders the AdminDashboard component within the UI component boundary. */
-export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
+export function AdminDashboard({ visible = true, onOpenMap }: AdminDashboardProps = {}) {
   const { hasPermission } = useAuth();
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [dashboard, setDashboard] = useState<AdminDashboardResponse>(emptyDashboard);
@@ -189,6 +193,13 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
   const canReadAuditLogs = hasPermission('audit_logs:read');
   const canReadSettings = hasPermission('settings:read');
   const canManageSettings = canReadSettings && hasPermission('settings:update');
+  const canReadCredentials = hasPermission('credentials:read');
+  const canImportNodes =
+    hasPermission('admin:dashboard:read') &&
+    hasPermission('devices:read') &&
+    hasPermission('devices:create') &&
+    hasPermission('topology:read') &&
+    hasPermission('topology:update');
 
   const visibleTabs = useMemo(() => {
     const nextTabs: Array<{ id: AdminTab; label: string }> = [overviewTab];
@@ -204,8 +215,11 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
     if (canManageSettings) {
       nextTabs.push(settingsTab);
     }
+    if (canImportNodes) {
+      nextTabs.push(nodeImportTab);
+    }
     return nextTabs;
-  }, [canManageSettings, canReadAuditLogs, canReadRoles, canReadUsers]);
+  }, [canImportNodes, canManageSettings, canReadAuditLogs, canReadRoles, canReadUsers]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -534,7 +548,9 @@ export function AdminDashboard({ visible = true }: AdminDashboardProps = {}) {
           </div>
         )}
 
-        {loading ? (
+        {activeTab === 'node-import' && canImportNodes ? (
+          <DeviceImportPanel canReadCredentials={canReadCredentials} onOpenMap={onOpenMap} />
+        ) : loading ? (
           <div className="rounded-lg border border-outline-subtle bg-surface p-6 text-sm text-on-bg-secondary">
             Loading admin data
           </div>

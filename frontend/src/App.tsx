@@ -601,7 +601,7 @@ function App() {
             {...viewLayerStateProps(activeView === 'admin')}
             className={viewLayerClass(activeView === 'admin', 'overflow-y-auto')}
           >
-            <AdminDashboard visible={activeView === 'admin'} />
+            <AdminDashboard visible={activeView === 'admin'} onOpenMap={handleOpenMap} />
           </div>
         )}
         {canOpenUserSettings && (
