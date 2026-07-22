@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -223,9 +224,13 @@ func readDeviceImportMultipart(reader *multipart.Reader, commit bool) (decodedDe
 		}
 		seen[name] = struct{}{}
 		if name == "file" {
+			if !deviceImportPartHasFilename(part) {
+				part.Close()
+				return fields, newDeviceImportRequestError(http.StatusBadRequest, "file must be a multipart file field")
+			}
 			fields.fileBytes, err = readDeviceImportFilePart(part)
 		} else {
-			if part.FileName() != "" {
+			if deviceImportPartHasFilename(part) {
 				part.Close()
 				return fields, newDeviceImportRequestError(http.StatusBadRequest, "invalid multipart text field")
 			}
@@ -266,13 +271,22 @@ func deviceImportFieldAllowed(name string, commit bool) bool {
 	}
 }
 
+func deviceImportPartHasFilename(part *multipart.Part) bool {
+	_, parameters, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
+	if err != nil {
+		return false
+	}
+	_, present := parameters["filename"]
+	return present
+}
+
 func readDeviceImportFilePart(part io.Reader) ([]byte, error) {
 	content, err := io.ReadAll(io.LimitReader(part, int64(service.DeviceImportMaxFileBytes)+1))
 	if err != nil {
 		if isRequestBodyTooLarge(err) {
 			return nil, newDeviceImportRequestError(http.StatusRequestEntityTooLarge, "device import upload is too large")
 		}
-		return nil, err
+		return nil, newDeviceImportRequestError(http.StatusBadRequest, "invalid multipart form data")
 	}
 	if len(content) > service.DeviceImportMaxFileBytes {
 		return nil, newDeviceImportRequestError(http.StatusRequestEntityTooLarge, "device import file is too large")
@@ -286,7 +300,7 @@ func readDeviceImportTextPart(part io.Reader) (string, error) {
 		if isRequestBodyTooLarge(err) {
 			return "", newDeviceImportRequestError(http.StatusRequestEntityTooLarge, "device import upload is too large")
 		}
-		return "", err
+		return "", newDeviceImportRequestError(http.StatusBadRequest, "invalid multipart form data")
 	}
 	if len(content) > deviceImportTextFieldMaxBytes {
 		return "", newDeviceImportRequestError(http.StatusBadRequest, "multipart text field is too large")
