@@ -224,6 +224,63 @@ func TestCanonicalImportTargetEnforcesDirectSNMPPortRules(t *testing.T) {
 	}
 }
 
+func TestCanonicalImportTargetEnforcesFallbackSNMPPortRules(t *testing.T) {
+	tests := []struct {
+		name      string
+		target    string
+		wantValid bool
+	}{
+		{name: "omitted port", target: "router.example", wantValid: true},
+		{name: "SNMP port", target: "router.example:161", wantValid: true},
+		{name: "different port", target: "router.example:162", wantValid: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := []byte("- targets: [\"" + tt.target + "\"]\n")
+			got, err := ParsePrometheusFileSD(input, DeviceImportModePrometheusFallback)
+			if err != nil {
+				t.Fatalf("ParsePrometheusFileSD() error = %v", err)
+			}
+			isValid := got.Targets[0].ValidationError == ""
+			if isValid != tt.wantValid {
+				t.Errorf("fallback target %q valid = %v, want %v (error %q)",
+					tt.target, isValid, tt.wantValid, got.Targets[0].ValidationError)
+			}
+		})
+	}
+}
+
+func TestCanonicalImportTargetFallbackInvalidPortDoesNotOwnDuplicate(t *testing.T) {
+	input := []byte(`
+- targets:
+    - edge.example:9100
+    - EDGE.EXAMPLE:161
+    - edge.example
+`)
+
+	got, err := ParsePrometheusFileSD(input, DeviceImportModePrometheusFallback)
+	if err != nil {
+		t.Fatalf("ParsePrometheusFileSD() error = %v", err)
+	}
+	if len(got.Targets) != 3 {
+		t.Fatalf("target count = %d, want 3", len(got.Targets))
+	}
+	if got.Targets[0].ValidationError == "" {
+		t.Fatal("first target ValidationError is empty, want invalid fallback SNMP port")
+	}
+	if got.Targets[0].DuplicateOf != nil {
+		t.Errorf("invalid fallback target DuplicateOf = %#v, want nil", got.Targets[0].DuplicateOf)
+	}
+	if got.Targets[1].ValidationError != "" || got.Targets[1].DuplicateOf != nil {
+		t.Errorf("first valid fallback target = %#v, want valid non-duplicate", got.Targets[1])
+	}
+	want := DeviceImportTargetLocation{GroupIndex: 0, ItemIndex: 1}
+	if got.Targets[2].DuplicateOf == nil || *got.Targets[2].DuplicateOf != want {
+		t.Errorf("last fallback target DuplicateOf = %#v, want %#v", got.Targets[2].DuplicateOf, want)
+	}
+}
+
 func TestParseDeviceImportTargetsReportsInvalidItems(t *testing.T) {
 	input := []byte(`
 - targets:
