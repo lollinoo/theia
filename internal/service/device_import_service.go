@@ -17,11 +17,12 @@ import (
 var (
 	// ErrDeviceImportInvalidConfiguration reports options that could not form a valid preview.
 	ErrDeviceImportInvalidConfiguration = errors.New("invalid device import configuration")
+	// ErrDeviceImportInvalidFile reports malformed uploaded content without exposing parser details.
+	ErrDeviceImportInvalidFile = errors.New("invalid device import file")
 	// ErrDeviceImportDigestMismatch reports that commit did not receive the previewed file bytes.
 	ErrDeviceImportDigestMismatch = errors.New("device import digest mismatch")
 	// ErrDeviceImportConfigurationChanged reports that a previewed destination or profile no longer exists.
 	ErrDeviceImportConfigurationChanged = errors.New("device import configuration changed")
-	errDeviceImportInvalidFile          = errors.New("invalid device import file")
 )
 
 // DeviceImportRequest carries one stateless preview or commit operation.
@@ -697,7 +698,7 @@ func sanitizeDeviceImportParserError(err error) error {
 	if contextErr := exactDeviceImportContextError(err); contextErr != nil {
 		return contextErr
 	}
-	return errDeviceImportInvalidFile
+	return ErrDeviceImportInvalidFile
 }
 
 func (s *DeviceImportService) validateDeviceImportDependencyError(

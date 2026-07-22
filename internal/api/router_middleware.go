@@ -11,10 +11,11 @@ import (
 // routerMiddlewareSet keeps the normal JSON chain separate from routes that cannot use it.
 // WebSocket upgrades, binary downloads, and restore uploads each need different body/response handling.
 type routerMiddlewareSet struct {
-	normal          http.Handler
-	binaryDownload  http.Handler
-	restoreUpload   http.Handler
-	publicByHandler map[routeHandlerKey]http.Handler
+	normal             http.Handler
+	binaryDownload     http.Handler
+	restoreUpload      http.Handler
+	deviceImportUpload http.Handler
+	publicByHandler    map[routeHandlerKey]http.Handler
 }
 
 // buildRouterMiddlewareSet assembles reusable middleware chains after handlers have been constructed.
@@ -34,6 +35,13 @@ func buildRouterMiddlewareSet(
 		normal:         applyMiddleware(mux, routerOpts.security, routerOpts.auth, true, 1<<20),
 		binaryDownload: applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, 0),
 		restoreUpload:  applyMiddleware(mux, routerOpts.security, routerOpts.auth, false, restoreLimit+restoreMultipartEnvelopeOverheadBytes),
+		deviceImportUpload: applyMiddleware(
+			mux,
+			routerOpts.security,
+			routerOpts.auth,
+			true,
+			int64(service.DeviceImportMaxFileBytes)+deviceImportMultipartEnvelopeOverheadBytes,
+		),
 		publicByHandler: map[routeHandlerKey]http.Handler{
 			routeHandlerAuth:                  applyPublicMiddleware(routeHandlers[routeHandlerAuth], routerOpts.security, true, 16<<10),
 			routeHandlerBridgeConnectorLaunch: applyPublicMiddleware(routeHandlers[routeHandlerBridgeConnectorLaunch], routerOpts.security, true, 16<<10),
@@ -70,6 +78,9 @@ func (middleware routerMiddlewareSet) serveRouteProfile(
 		return true
 	case routeMiddlewareRestoreUpload:
 		middleware.restoreUpload.ServeHTTP(w, r)
+		return true
+	case routeMiddlewareDeviceImportUpload:
+		middleware.deviceImportUpload.ServeHTTP(w, r)
 		return true
 	default:
 		return false
