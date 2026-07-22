@@ -3,7 +3,12 @@
  */
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DeviceImportCommitResult, DeviceImportPreview } from '../api/deviceImport';
+import {
+  type DeviceImportCommitResult,
+  type DeviceImportConfiguration,
+  DeviceImportPartialCommitError,
+  type DeviceImportPreview,
+} from '../api/deviceImport';
 import type { Area, CanvasMap, SNMPProfile } from '../types/api';
 import { DeviceImportPanel } from './DeviceImportPanel';
 
@@ -19,14 +24,18 @@ const commitDeviceImportMock = vi.hoisted(() =>
   >(),
 );
 
-vi.mock('../api/client', () => ({
-  fetchCanvasMaps: () => fetchCanvasMapsMock(),
-  fetchCanvasMapAreas: (mapId: string) => fetchCanvasMapAreasMock(mapId),
-  fetchSNMPProfiles: () => fetchSNMPProfilesMock(),
-  previewDeviceImport: (configuration: unknown) => previewDeviceImportMock(configuration),
-  commitDeviceImport: (configuration: unknown, expectedFileDigest: string) =>
-    commitDeviceImportMock(configuration, expectedFileDigest),
-}));
+vi.mock('../api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api/client')>();
+  return {
+    ...actual,
+    fetchCanvasMaps: () => fetchCanvasMapsMock(),
+    fetchCanvasMapAreas: (mapId: string) => fetchCanvasMapAreasMock(mapId),
+    fetchSNMPProfiles: () => fetchSNMPProfilesMock(),
+    previewDeviceImport: (configuration: unknown) => previewDeviceImportMock(configuration),
+    commitDeviceImport: (configuration: unknown, expectedFileDigest: string) =>
+      commitDeviceImportMock(configuration, expectedFileDigest),
+  };
+});
 
 const primaryMap: CanvasMap = {
   id: 'map-primary',
@@ -285,6 +294,21 @@ describe('DeviceImportPanel', () => {
     expect(fetchSNMPProfilesMock).not.toHaveBeenCalled();
   });
 
+  it('invalidates an SNMP configuration when credentials read is revoked', async () => {
+    const rendered = await renderPanel();
+    await chooseFile();
+    await click(screen.getByRole('radio', { name: 'SNMP' }));
+    await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[0].id);
+    expect(screen.getByRole('button', { name: 'Preview import' })).toBeEnabled();
+
+    await act(async () => {
+      rendered.rerender(<DeviceImportPanel canReadCredentials={false} />);
+    });
+
+    expect(screen.getByRole('radio', { name: 'SNMP' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Preview import' })).toBeDisabled();
+  });
+
   it('requires a file and accessible saved map, leaving map empty when no primary map is available', async () => {
     fetchCanvasMapsMock.mockResolvedValue([secondaryMap]);
     await renderPanel();
@@ -419,8 +443,11 @@ describe('DeviceImportPanel', () => {
     expect(screen.getByText(/No ready targets can be committed/i)).toBeVisible();
   });
 
-  it('commits the same File and digest, keeps mixed incomplete rows, opens the map, and resets', async () => {
+  it('keeps partial error rows, uses the same File and digest, opens the map, and resets', async () => {
     const onOpenMap = vi.fn();
+    commitDeviceImportMock.mockRejectedValueOnce(
+      new DeviceImportPartialCommitError('device import store unavailable', commitFixture()),
+    );
     await renderPanel({ onOpenMap });
     const file = await chooseFile();
     await change(screen.getByRole('combobox', { name: 'Map area (optional)' }), primaryArea.id);
@@ -430,13 +457,14 @@ describe('DeviceImportPanel', () => {
     expect(commitDeviceImportMock).toHaveBeenCalledTimes(1);
     const [configuration, digest] = commitDeviceImportMock.mock.calls[0];
     expect(configuration).toMatchObject({
-      file,
       metrics_mode: 'prometheus',
       map_id: primaryMap.id,
       area_id: primaryArea.id,
     });
+    expect((configuration as DeviceImportConfiguration).file).toBe(file);
     expect(digest).toBe('sha256:preview-digest');
 
+    expect(await screen.findByRole('alert')).toHaveTextContent('device import store unavailable');
     expect(await screen.findByText(/Import incomplete/i)).toBeVisible();
     const rows = screen.getAllByTestId('device-import-result-row');
     expect(rows.map((row) => within(row).getByTestId('result-status').textContent)).toEqual([

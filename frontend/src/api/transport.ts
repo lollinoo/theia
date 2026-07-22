@@ -9,6 +9,18 @@ export type ErrorPayload = {
   error?: string;
 };
 
+const multipartJSONErrorPayloads = new WeakMap<Error, unknown>();
+
+function retainMultipartJSONErrorPayload<T extends Error>(error: T, payload: unknown): T {
+  multipartJSONErrorPayloads.set(error, payload);
+  return error;
+}
+
+/** Returns the decoded response body retained for a multipart request error. */
+export function multipartJSONErrorPayload(error: unknown): unknown | undefined {
+  return error instanceof Error ? multipartJSONErrorPayloads.get(error) : undefined;
+}
+
 // csrfTokenFromCookie extracts the CSRF cookie without throwing during SSR or malformed encoding.
 function csrfTokenFromCookie(): string | null {
   if (typeof document === 'undefined') {
@@ -135,16 +147,22 @@ export async function requestMultipartJSON(path: string, body: FormData): Promis
     const errorMessage = errorMessageFromPayload(payload, response.statusText);
 
     if (response.status === 400 || response.status === 409) {
-      throw new ValidationError(errorMessage);
+      throw retainMultipartJSONErrorPayload(new ValidationError(errorMessage), payload);
     }
     if (response.status === 413) {
-      throw new ValidationError('Import files are limited to 2 MiB and 5,000 targets');
+      throw retainMultipartJSONErrorPayload(
+        new ValidationError('Import files are limited to 2 MiB and 5,000 targets'),
+        payload,
+      );
     }
     if (response.status === 500) {
-      throw serverErrorFromMessage(errorMessage);
+      throw retainMultipartJSONErrorPayload(serverErrorFromMessage(errorMessage), payload);
     }
 
-    throw new Error(`${path} failed: ${response.status} ${errorMessage}`);
+    throw retainMultipartJSONErrorPayload(
+      new Error(`${path} failed: ${response.status} ${errorMessage}`),
+      payload,
+    );
   }
 
   return payload;

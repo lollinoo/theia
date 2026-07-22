@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDocumentCookie } from '../test/documentCookie';
 import {
   commitDeviceImport,
+  DeviceImportPartialCommitError,
   parseDeviceImportCommitResult,
   parseDeviceImportPreview,
   previewDeviceImport,
@@ -191,6 +192,76 @@ describe('device import client', () => {
     expect(form.get('file')).toBe(file);
     expect(form.get('snmp_profile_id')).toBe('33333333-3333-3333-3333-333333333333');
     expect(form.get('expected_file_digest')).toBe('sha256:preview');
+  });
+
+  it.each([
+    {
+      status: 409,
+      statusText: 'Conflict',
+      backendError: 'the uploaded file changed after preview',
+      expectedMessage: 'the uploaded file changed after preview',
+    },
+    {
+      status: 500,
+      statusText: 'Internal Server Error',
+      backendError: 'device import failed (ref: import-abc123)',
+      expectedMessage: 'Something went wrong (ref: import-abc123)',
+    },
+    {
+      status: 503,
+      statusText: 'Service Unavailable',
+      backendError: 'device import store unavailable',
+      expectedMessage:
+        '/api/v1/admin/device-imports/commit failed: 503 device import store unavailable',
+    },
+  ])('preserves ordered partial commit results from an HTTP $status response', async ({
+    status,
+    statusText,
+    backendError,
+    expectedMessage,
+  }) => {
+    const file = new File(['- targets: ["router.example.net:161"]\n'], 'targets.yml');
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse(
+        {
+          ...validCommitPayload(),
+          error: backendError,
+        },
+        { ok: false, status, statusText },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    let caught: unknown;
+    try {
+      await commitDeviceImport(
+        {
+          file,
+          metrics_mode: 'snmp',
+          map_id: '11111111-1111-1111-1111-111111111111',
+          snmp_profile_id: '33333333-3333-3333-3333-333333333333',
+        },
+        'sha256:preview',
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(DeviceImportPartialCommitError);
+    expect(caught).toMatchObject({
+      message: expectedMessage,
+      result: {
+        incomplete: true,
+        summary: {
+          created: 1,
+          skipped: 1,
+          not_processed: 1,
+        },
+      },
+    });
+    expect(
+      (caught as DeviceImportPartialCommitError).result.results.map((row) => row.status),
+    ).toEqual(['created', 'skipped_existing', 'not_processed']);
   });
 
   it('preserves target and diagnostic order while dropping unapproved response fields', () => {

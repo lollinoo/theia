@@ -16,6 +16,7 @@ import {
   type DeviceImportConfiguration,
   type DeviceImportDiagnostic,
   type DeviceImportMetricsMode,
+  DeviceImportPartialCommitError,
   type DeviceImportPreview,
   type DeviceImportPreviewTarget,
   type DeviceImportResult,
@@ -347,7 +348,7 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
   }, [mapId]);
 
   const configuration = useMemo<DeviceImportConfiguration | null>(() => {
-    if (!file || !mapId || (requiresSNMPProfile && !snmpProfileId)) {
+    if (!file || !mapId || (requiresSNMPProfile && (!canReadCredentials || !snmpProfileId))) {
       return null;
     }
     return {
@@ -357,7 +358,7 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
       ...(areaId ? { area_id: areaId } : {}),
       ...(requiresSNMPProfile ? { snmp_profile_id: snmpProfileId } : {}),
     };
-  }, [areaId, file, mapId, metricsMode, requiresSNMPProfile, snmpProfileId]);
+  }, [areaId, canReadCredentials, file, mapId, metricsMode, requiresSNMPProfile, snmpProfileId]);
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     invalidateOutcome();
@@ -426,6 +427,9 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
       }
     } catch (commitError) {
       if (revision === configurationRevision.current) {
+        if (commitError instanceof DeviceImportPartialCommitError) {
+          setResult(commitError.result);
+        }
         setError(errorMessage(commitError, 'Failed to commit node import'));
       }
     } finally {
@@ -668,7 +672,7 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
             </button>
             <button
               type="button"
-              disabled={preview.summary.ready < 1 || pendingAction !== null}
+              disabled={!configuration || preview.summary.ready < 1 || pendingAction !== null}
               onClick={() => void handleCommit()}
               className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-60"
             >
