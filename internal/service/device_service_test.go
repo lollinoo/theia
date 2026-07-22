@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -672,6 +673,249 @@ func (s schedulerDeviceSource) GetDevices() ([]domain.Device, error) {
 }
 
 // --- Tests ---
+
+func TestDeviceServiceBuildDeviceDraft(t *testing.T) {
+	t.Run("applies AddDevice defaults and normalizes input", func(t *testing.T) {
+		deviceRepo := newMockDeviceRepo()
+		linkRepo := newMockLinkRepo()
+		settingsRepo := newMockSettingsRepo()
+		if err := settingsRepo.Set(domain.SettingPollingInterval, "75"); err != nil {
+			t.Fatalf("Set polling interval: %v", err)
+		}
+		if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeBootstrapOnce)); err != nil {
+			t.Fatalf("Set topology discovery mode: %v", err)
+		}
+
+		discoverCalls := 0
+		scheduler := &recordingBootstrapScheduler{}
+		svc := NewDeviceService(
+			deviceRepo,
+			linkRepo,
+			settingsRepo,
+			func(string, domain.SNMPCredentials, domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+				discoverCalls++
+				return nil, fmt.Errorf("draft construction must not probe")
+			},
+			nil,
+			WithBootstrapScheduler(scheduler),
+		)
+
+		notes := "  Core router in rack A  "
+		areaID := uuid.New()
+		draft, err := svc.BuildDeviceDraft(DeviceDraftInput{
+			IP:       "10.20.0.1",
+			Hostname: "edge-router",
+			Vendor:   "mikrotik",
+			AreaIDs:  []uuid.UUID{areaID},
+			ProbePorts: []int{
+				443,
+				22,
+				443,
+			},
+			Addresses: []domain.DeviceAddress{
+				{
+					Address:  " 198.51.100.20 ",
+					Label:    " backup ",
+					Role:     domain.DeviceAddressRole(" BACKUP "),
+					Priority: 10,
+				},
+				{
+					Address: "198.51.100.20",
+					Role:    domain.DeviceAddressRoleBackup,
+				},
+			},
+			Notes: &notes,
+		})
+		if err != nil {
+			t.Fatalf("BuildDeviceDraft failed: %v", err)
+		}
+
+		if draft.ID == uuid.Nil {
+			t.Fatal("draft ID is nil")
+		}
+		if draft.Hostname != "edge-router" || draft.IP != "10.20.0.1" {
+			t.Fatalf("draft identity = (%q, %q), want (edge-router, 10.20.0.1)", draft.Hostname, draft.IP)
+		}
+		if draft.Notes == nil || *draft.Notes != "Core router in rack A" {
+			t.Fatalf("draft notes = %#v, want normalized notes", draft.Notes)
+		}
+		if draft.DeviceType != domain.DeviceTypeUnknown {
+			t.Fatalf("device type = %q, want unknown", draft.DeviceType)
+		}
+		if draft.PollClass != domain.PollClassStandard {
+			t.Fatalf("poll class = %q, want standard", draft.PollClass)
+		}
+		if draft.PollIntervalOverride == nil || *draft.PollIntervalOverride != 75 {
+			t.Fatalf("poll interval override = %#v, want 75", draft.PollIntervalOverride)
+		}
+		if draft.PollingEnabled == nil || !*draft.PollingEnabled {
+			t.Fatalf("polling enabled = %#v, want true", draft.PollingEnabled)
+		}
+		if draft.Status != domain.DeviceStatusProbing || !draft.Managed {
+			t.Fatalf("status/managed = (%q, %t), want (probing, true)", draft.Status, draft.Managed)
+		}
+		if draft.Tags == nil || len(draft.Tags) != 0 {
+			t.Fatalf("tags = %#v, want non-nil empty map", draft.Tags)
+		}
+		if draft.MetricsSource != domain.MetricsSourcePrometheus {
+			t.Fatalf("metrics source = %q, want prometheus", draft.MetricsSource)
+		}
+		if draft.PrometheusLabelName != "instance" || draft.PrometheusLabelValue != "10.20.0.1" {
+			t.Fatalf(
+				"Prometheus labels = (%q, %q), want (instance, 10.20.0.1)",
+				draft.PrometheusLabelName,
+				draft.PrometheusLabelValue,
+			)
+		}
+		if draft.TopologyDiscoveryMode != domain.TopologyDiscoveryModeInherit {
+			t.Fatalf("topology discovery mode = %q, want inherit", draft.TopologyDiscoveryMode)
+		}
+		if draft.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+			t.Fatalf("topology bootstrap state = %q, want pending", draft.TopologyBootstrapState)
+		}
+		if len(draft.AreaIDs) != 1 || draft.AreaIDs[0] != areaID {
+			t.Fatalf("area IDs = %#v, want [%s]", draft.AreaIDs, areaID)
+		}
+		if !reflect.DeepEqual(draft.ProbePorts, []int{443, 22}) {
+			t.Fatalf("probe ports = %#v, want [443 22]", draft.ProbePorts)
+		}
+		if len(draft.Addresses) != 2 {
+			t.Fatalf("addresses = %#v, want normalized primary and backup", draft.Addresses)
+		}
+		if draft.Addresses[0].DeviceID != draft.ID || !draft.Addresses[0].IsPrimary {
+			t.Fatalf("primary address = %#v, want draft-owned primary", draft.Addresses[0])
+		}
+		if got := domain.BackupAddress(*draft); got != "198.51.100.20" {
+			t.Fatalf("backup address = %q, want 198.51.100.20", got)
+		}
+
+		svc.WaitForProbes()
+		if got := len(deviceRepo.devices); got != 0 {
+			t.Fatalf("repository rows = %d, want 0", got)
+		}
+		if deviceRepo.findIPConflictCalls != 0 {
+			t.Fatalf("conflict lookups = %d, want 0", deviceRepo.findIPConflictCalls)
+		}
+		if discoverCalls != 0 {
+			t.Fatalf("probe calls = %d, want 0", discoverCalls)
+		}
+		if got := len(scheduler.devices); got != 0 {
+			t.Fatalf("bootstrap schedules = %d, want 0", got)
+		}
+	})
+
+	t.Run("preserves explicit labels and SNMP credentials without a hostname", func(t *testing.T) {
+		deviceRepo := newMockDeviceRepo()
+		creds := domain.SNMPCredentials{
+			Version: domain.SNMPVersionV3,
+			V3: &domain.SNMPv3Credentials{
+				Username:      "theia-import",
+				AuthProtocol:  "SHA",
+				AuthPassword:  "auth-secret",
+				PrivProtocol:  "AES",
+				PrivPassword:  "priv-secret",
+				SecurityLevel: "authPriv",
+			},
+		}
+		svc := NewDeviceService(deviceRepo, newMockLinkRepo(), newMockSettingsRepo(), nil, nil)
+
+		draft, err := svc.BuildDeviceDraft(DeviceDraftInput{
+			IP:                   "192.0.2.40",
+			Hostname:             "",
+			DeviceType:           domain.DeviceTypeRouter,
+			SNMPCredentials:      creds,
+			MetricsSource:        domain.MetricsSourceSNMP,
+			PrometheusLabelName:  "  imported_target  ",
+			PrometheusLabelValue: "  edge/site-a  ",
+		})
+		if err != nil {
+			t.Fatalf("BuildDeviceDraft failed: %v", err)
+		}
+		if draft.Hostname != "" {
+			t.Fatalf("hostname = %q, want empty pure-SNMP hostname", draft.Hostname)
+		}
+		if draft.MetricsSource != domain.MetricsSourceSNMP {
+			t.Fatalf("metrics source = %q, want snmp", draft.MetricsSource)
+		}
+		if draft.PrometheusLabelName != "  imported_target  " || draft.PrometheusLabelValue != "  edge/site-a  " {
+			t.Fatalf(
+				"Prometheus labels = (%q, %q), want exact input values",
+				draft.PrometheusLabelName,
+				draft.PrometheusLabelValue,
+			)
+		}
+		if !reflect.DeepEqual(draft.SNMPCredentials, creds) {
+			t.Fatalf("SNMP credentials = %#v, want %#v", draft.SNMPCredentials, creds)
+		}
+	})
+
+	t.Run("keeps virtual AddDevice behavior", func(t *testing.T) {
+		deviceRepo := newMockDeviceRepo()
+		discoverCalls := 0
+		svc := NewDeviceService(
+			deviceRepo,
+			newMockLinkRepo(),
+			newMockSettingsRepo(),
+			func(string, domain.SNMPCredentials, domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+				discoverCalls++
+				return nil, fmt.Errorf("virtual devices must not probe")
+			},
+			nil,
+		)
+
+		input := DeviceDraftInput{
+			IP:            "203.0.113.50",
+			DeviceType:    domain.DeviceTypeVirtual,
+			MetricsSource: domain.MetricsSourceSNMP,
+		}
+		draft, err := svc.BuildDeviceDraft(input)
+		if err != nil {
+			t.Fatalf("BuildDeviceDraft failed: %v", err)
+		}
+		if draft.Status != domain.DeviceStatusUnknown {
+			t.Fatalf("draft status = %q, want unknown", draft.Status)
+		}
+		if draft.MetricsSource != domain.MetricsSourceNone {
+			t.Fatalf("draft metrics source = %q, want none", draft.MetricsSource)
+		}
+		if draft.PollClass != domain.PollClassLow || draft.PollIntervalOverride != nil {
+			t.Fatalf(
+				"draft polling defaults = (%q, %#v), want (low, nil)",
+				draft.PollClass,
+				draft.PollIntervalOverride,
+			)
+		}
+
+		created, err := svc.AddDevice(
+			context.Background(),
+			input.IP,
+			input.Hostname,
+			input.DeviceType,
+			input.SNMPCredentials,
+			input.Tags,
+			input.Vendor,
+			input.MetricsSource,
+			input.PrometheusLabelName,
+			input.PrometheusLabelValue,
+			input.TopologyDiscoveryMode,
+			input.AreaIDs,
+		)
+		if err != nil {
+			t.Fatalf("AddDevice failed: %v", err)
+		}
+		svc.WaitForProbes()
+
+		if created.Status != draft.Status || created.MetricsSource != draft.MetricsSource || created.PollClass != draft.PollClass {
+			t.Fatalf("AddDevice virtual defaults differ from draft: created=%#v draft=%#v", created, draft)
+		}
+		if discoverCalls != 0 {
+			t.Fatalf("virtual probe calls = %d, want 0", discoverCalls)
+		}
+		if got := len(deviceRepo.devices); got != 1 {
+			t.Fatalf("repository rows after AddDevice = %d, want 1", got)
+		}
+	})
+}
 
 func TestAddDevice_CreatesWithStatusProbing(t *testing.T) {
 	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{
