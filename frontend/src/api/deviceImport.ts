@@ -1,6 +1,6 @@
 /** Typed, label-blind client for one-time Prometheus file-SD node imports. */
 import { ValidationError } from './errors';
-import { requestMultipartJSON } from './transport';
+import { multipartJSONErrorPayload, requestMultipartJSON } from './transport';
 
 export type DeviceImportMetricsMode = 'prometheus' | 'prometheus_snmp_fallback' | 'snmp';
 
@@ -89,6 +89,17 @@ export interface DeviceImportCommitResult {
   results: DeviceImportResult[];
   diagnostics: DeviceImportDiagnostic[];
   incomplete: boolean;
+}
+
+/** Carries authoritative per-target outcomes returned with a non-success commit response. */
+export class DeviceImportPartialCommitError extends Error {
+  public readonly result: DeviceImportCommitResult;
+
+  public constructor(message: string, result: DeviceImportCommitResult) {
+    super(message);
+    this.name = 'DeviceImportPartialCommitError';
+    this.result = result;
+  }
 }
 
 const previewStatuses = new Set<DeviceImportPreviewStatus>([
@@ -325,9 +336,28 @@ export async function commitDeviceImport(
   configuration: DeviceImportConfiguration,
   expectedFileDigest: string,
 ): Promise<DeviceImportCommitResult> {
-  const payload = await requestMultipartJSON(
-    '/api/v1/admin/device-imports/commit',
-    deviceImportFormData(configuration, expectedFileDigest),
-  );
-  return parseDeviceImportCommitResult(payload);
+  try {
+    const payload = await requestMultipartJSON(
+      '/api/v1/admin/device-imports/commit',
+      deviceImportFormData(configuration, expectedFileDigest),
+    );
+    return parseDeviceImportCommitResult(payload);
+  } catch (requestError) {
+    const payload = multipartJSONErrorPayload(requestError);
+    if (payload !== undefined) {
+      try {
+        const partialResult = parseDeviceImportCommitResult(payload);
+        if (partialResult.incomplete || partialResult.results.length > 0) {
+          const message =
+            requestError instanceof Error ? requestError.message : 'Failed to commit node import';
+          throw new DeviceImportPartialCommitError(message, partialResult);
+        }
+      } catch (parseError) {
+        if (parseError instanceof DeviceImportPartialCommitError) {
+          throw parseError;
+        }
+      }
+    }
+    throw requestError;
+  }
 }
