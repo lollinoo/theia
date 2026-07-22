@@ -27,6 +27,8 @@ type DeviceRepo struct {
 	repairPending atomic.Bool
 }
 
+type deviceCreateAppend func(tx *Tx, now time.Time) error
+
 // NewDeviceRepo creates a new PostgreSQL-backed device repository.
 // The onChange channel, if non-nil, receives a non-blocking signal after
 // every successful Create, Update, or Delete operation.
@@ -92,11 +94,15 @@ func (r *DeviceRepo) publishChange(kind domain.ChangeKind, deviceID uuid.UUID) {
 // Create inserts a new device and its interfaces into the database.
 func (r *DeviceRepo) Create(device *domain.Device) error {
 	return withWriteRetry(func() error {
-		return r.createOnce(device)
+		return r.createOnceWithAppend(device, nil, true)
 	})
 }
 
-func (r *DeviceRepo) createOnce(device *domain.Device) error {
+func (r *DeviceRepo) createOnceWithAppend(
+	device *domain.Device,
+	appendToTransaction deviceCreateAppend,
+	publish bool,
+) error {
 	now := time.Now().UTC()
 	device.CreatedAt = now
 	device.UpdatedAt = now
@@ -207,12 +213,19 @@ func (r *DeviceRepo) createOnce(device *domain.Device) error {
 			return fmt.Errorf("inserting interface %s: %w", iface.IfName, err)
 		}
 	}
+	if appendToTransaction != nil {
+		if err := appendToTransaction(tx, now); err != nil {
+			return err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	r.notify()
-	r.publishChange(domain.ChangeKindCreated, device.ID)
+	if publish {
+		r.notify()
+		r.publishChange(domain.ChangeKindCreated, device.ID)
+	}
 	return nil
 }
 
