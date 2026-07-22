@@ -20,6 +20,7 @@ type routerOptions struct {
 	security           SecurityConfig
 	auth               authProvider
 	bridgeService      *service.BridgeService
+	deviceImport       deviceImportProvider
 	auditLogs          domain.AuditLogRepository
 	runtimeEnvironment string
 }
@@ -48,6 +49,13 @@ func WithBridgeService(bridgeService *service.BridgeService) RouterOption {
 	}
 }
 
+// WithDeviceImportService configures the Admin Area one-time node import endpoints.
+func WithDeviceImportService(importer *service.DeviceImportService) RouterOption {
+	return func(options *routerOptions) {
+		options.deviceImport = importer
+	}
+}
+
 // WithAuditLogRepository configures audit logging for backup routes.
 func WithAuditLogRepository(auditLogs domain.AuditLogRepository) RouterOption {
 	return func(options *routerOptions) {
@@ -66,6 +74,13 @@ func WithRuntimeEnvironment(environment string) RouterOption {
 func withAuthProvider(auth authProvider) RouterOption {
 	return func(options *routerOptions) {
 		options.auth = auth
+	}
+}
+
+// withDeviceImportProvider injects the narrow import seam for HTTP tests.
+func withDeviceImportProvider(importer deviceImportProvider) RouterOption {
+	return func(options *routerOptions) {
+		options.deviceImport = importer
 	}
 }
 

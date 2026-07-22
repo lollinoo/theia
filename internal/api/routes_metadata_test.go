@@ -5,6 +5,8 @@ package api
 import (
 	"net/http"
 	"testing"
+
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 func TestProtectedPermissionRegistryIsDerivedFromAPIRouteSpecs(t *testing.T) {
@@ -60,6 +62,8 @@ func TestPublicAndSpecialMiddlewareRoutesAreDeclaredInRouteMetadata(t *testing.T
 		{name: "instance backup download", method: http.MethodGet, path: "/api/v1/instance-backups/backup-1/download", auth: routeAuthProtected, profile: routeMiddlewareBinaryDownload},
 		{name: "bridge download", method: http.MethodGet, path: "/api/v1/bridge/download/linux/amd64", auth: routeAuthProtected, profile: routeMiddlewareBinaryDownload},
 		{name: "restore upload", method: http.MethodPost, path: "/api/v1/instance-backups/restore", auth: routeAuthProtected, profile: routeMiddlewareRestoreUpload},
+		{name: "device import preview", method: http.MethodPost, path: "/api/v1/admin/device-imports/preview", auth: routeAuthProtected, profile: routeMiddlewareDeviceImportUpload},
+		{name: "device import commit", method: http.MethodPost, path: "/api/v1/admin/device-imports/commit", auth: routeAuthProtected, profile: routeMiddlewareDeviceImportUpload},
 		{name: "bridge connector launch", method: http.MethodPost, path: "/api/v1/bridge/connector/launch", auth: routeAuthPublic, profile: routeMiddlewarePublicJSONSmallBody},
 		{name: "health", method: http.MethodGet, path: "/api/v1/health", auth: routeAuthProtected, profile: routeMiddlewareNormalJSON},
 		{name: "prometheus health", method: http.MethodGet, path: "/api/v1/prometheus/health", auth: routeAuthProtected, profile: routeMiddlewareNormalJSON},
@@ -79,6 +83,50 @@ func TestPublicAndSpecialMiddlewareRoutesAreDeclaredInRouteMetadata(t *testing.T
 				t.Fatalf("middlewareProfile = %v, want %v", spec.middlewareProfile, tt.profile)
 			}
 		})
+	}
+}
+
+func TestDeviceImportRoutesAreExactPostOnlyAndPrecedeBroadAdminPatterns(t *testing.T) {
+	paths := []string{
+		"/api/v1/admin/device-imports/preview",
+		"/api/v1/admin/device-imports/commit",
+	}
+	for _, path := range paths {
+		spec, ok := apiRouteMetadata.match(http.MethodPost, path)
+		if !ok {
+			t.Fatalf("POST route %s is missing", path)
+		}
+		if spec.handlerKey != routeHandlerDeviceImport || spec.serveMuxPattern != path {
+			t.Fatalf("route %s = %#v", path, spec)
+		}
+		if got := spec.methodPolicies[http.MethodPost]; len(got) != 1 || got[0] != domain.PermissionAdminDashboard {
+			t.Fatalf("route %s static permissions = %#v", path, got)
+		}
+		for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+			if _, matched := apiRouteMetadata.match(method, path); matched {
+				t.Fatalf("%s unexpectedly matched %s", method, path)
+			}
+		}
+	}
+
+	firstBroadAdmin := len(apiRouteSpecs)
+	for index, spec := range apiRouteSpecs {
+		if spec.serveMuxPattern == "/api/v1/admin/" {
+			firstBroadAdmin = index
+			break
+		}
+	}
+	for _, path := range paths {
+		found := -1
+		for index, spec := range apiRouteSpecs {
+			if spec.pattern == path {
+				found = index
+				break
+			}
+		}
+		if found < 0 || found >= firstBroadAdmin {
+			t.Fatalf("route %s index=%d, broad admin index=%d", path, found, firstBroadAdmin)
+		}
 	}
 }
 

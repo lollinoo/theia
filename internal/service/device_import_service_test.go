@@ -778,6 +778,9 @@ func TestDeviceImportServiceSanitizesGlobalParserAndLookupErrors(t *testing.T) {
 			if err == nil {
 				t.Fatalf("%s parser error = nil", operation)
 			}
+			if !errors.Is(err, ErrDeviceImportInvalidFile) {
+				t.Fatalf("%s parser error = %v, want invalid-file sentinel", operation, err)
+			}
 			if strings.Contains(err.Error(), deviceImportTestSecret) {
 				t.Fatalf("%s leaked YAML marker: %v", operation, err)
 			}
