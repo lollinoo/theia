@@ -62,71 +62,31 @@ func (m *deviceMutationService) AddDevice(
 	if err := m.parent.lifecycleErr(); err != nil {
 		return nil, err
 	}
-	if tags == nil {
-		tags = map[string]string{}
-	}
-	if deviceType == "" {
-		deviceType = domain.DeviceTypeUnknown
-	}
-	if metricsSource == "" {
-		metricsSource = domain.MetricsSourcePrometheus
-	}
-	if prometheusLabelName == "" {
-		prometheusLabelName = "instance"
-	}
-	if prometheusLabelValue == "" {
-		prometheusLabelValue = ip
-	}
 
-	if deviceType == domain.DeviceTypeVirtual {
-		metricsSource = domain.MetricsSourceNone
-	}
-
-	var normalizedNotes *string
+	var deviceNotes *string
 	if len(notes) > 0 {
-		normalizedNotes = domain.NormalizeDeviceNotes(notes[0])
+		deviceNotes = notes[0]
 	}
 
-	initialStatus := domain.DeviceStatusProbing
-	if deviceType == domain.DeviceTypeVirtual {
-		initialStatus = domain.DeviceStatusUnknown
-	}
-	pollingEnabled := true
-	pollIntervalOverride := initialPollIntervalOverride(m.settingsRepo, deviceType)
-	normalizedProbePorts, err := domain.NormalizeProbePorts(probePorts)
+	device, err := m.parent.BuildDeviceDraft(DeviceDraftInput{
+		IP:                    ip,
+		Hostname:              hostname,
+		DeviceType:            deviceType,
+		SNMPCredentials:       creds,
+		Tags:                  tags,
+		Vendor:                vendor,
+		MetricsSource:         metricsSource,
+		PrometheusLabelName:   prometheusLabelName,
+		PrometheusLabelValue:  prometheusLabelValue,
+		TopologyDiscoveryMode: topologyDiscoveryMode,
+		AreaIDs:               areaIDs,
+		ProbePorts:            probePorts,
+		Addresses:             addresses,
+		Notes:                 deviceNotes,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	device := &domain.Device{
-		ID:                     uuid.New(),
-		Hostname:               hostname,
-		IP:                     ip,
-		Notes:                  normalizedNotes,
-		SNMPCredentials:        creds,
-		DeviceType:             deviceType,
-		PollClass:              domain.ClassifyPollClass(deviceType),
-		PollIntervalOverride:   pollIntervalOverride,
-		PollingEnabled:         &pollingEnabled,
-		Status:                 initialStatus,
-		Vendor:                 vendor,
-		Managed:                true,
-		Tags:                   tags,
-		MetricsSource:          metricsSource,
-		PrometheusLabelName:    prometheusLabelName,
-		PrometheusLabelValue:   prometheusLabelValue,
-		TopologyDiscoveryMode:  topologyDiscoveryMode,
-		TopologyBootstrapState: domain.TopologyBootstrapStateIdle,
-		AreaIDs:                areaIDs,
-		ProbePorts:             normalizedProbePorts,
-		Addresses:              append([]domain.DeviceAddress(nil), addresses...),
-	}
-	domain.NormalizeDeviceAddresses(device)
-	device.TopologyDiscoveryMode = domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
-	if domain.ResolveTopologyDiscoveryMode(device, m.parent.defaultTopologyDiscoveryMode()) == domain.TopologyDiscoveryModeBootstrapOnce {
-		device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
-	}
-	domain.NormalizeVirtualDevice(device)
 	if err := m.ensureNoDeviceAddressConflicts(*device, uuid.Nil); err != nil {
 		return nil, err
 	}
@@ -135,7 +95,7 @@ func (m *deviceMutationService) AddDevice(
 		return nil, fmt.Errorf("creating device: %w", err)
 	}
 
-	if deviceType == domain.DeviceTypeVirtual {
+	if device.DeviceType == domain.DeviceTypeVirtual {
 		m.parent.populateEffectiveTopologyDiscoveryMode(device)
 		return device, nil
 	}

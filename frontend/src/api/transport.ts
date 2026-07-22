@@ -9,6 +9,18 @@ export type ErrorPayload = {
   error?: string;
 };
 
+const multipartJSONErrorPayloads = new WeakMap<Error, unknown>();
+
+function retainMultipartJSONErrorPayload<T extends Error>(error: T, payload: unknown): T {
+  multipartJSONErrorPayloads.set(error, payload);
+  return error;
+}
+
+/** Returns the decoded response body retained for a multipart request error. */
+export function multipartJSONErrorPayload(error: unknown): unknown | undefined {
+  return error instanceof Error ? multipartJSONErrorPayloads.get(error) : undefined;
+}
+
 // csrfTokenFromCookie extracts the CSRF cookie without throwing during SSR or malformed encoding.
 function csrfTokenFromCookie(): string | null {
   if (typeof document === 'undefined') {
@@ -117,6 +129,40 @@ export async function requestJSONWithBody(
     }
 
     throw new Error(`${path} failed: ${response.status} ${errorMessage}`);
+  }
+
+  return payload;
+}
+
+/** Sends a same-origin multipart POST without overriding the browser-generated boundary. */
+export async function requestMultipartJSON(path: string, body: FormData): Promise<unknown> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: headersWithCsrf({ Accept: 'application/json' }),
+    body,
+  });
+
+  const payload = (await response.json().catch(() => null)) as ErrorPayload | unknown;
+  if (!response.ok) {
+    const errorMessage = errorMessageFromPayload(payload, response.statusText);
+
+    if (response.status === 400 || response.status === 409) {
+      throw retainMultipartJSONErrorPayload(new ValidationError(errorMessage), payload);
+    }
+    if (response.status === 413) {
+      throw retainMultipartJSONErrorPayload(
+        new ValidationError('Import files are limited to 2 MiB and 5,000 targets'),
+        payload,
+      );
+    }
+    if (response.status === 500) {
+      throw retainMultipartJSONErrorPayload(serverErrorFromMessage(errorMessage), payload);
+    }
+
+    throw retainMultipartJSONErrorPayload(
+      new Error(`${path} failed: ${response.status} ${errorMessage}`),
+      payload,
+    );
   }
 
   return payload;

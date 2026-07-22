@@ -28,6 +28,7 @@ const (
 	routeMiddlewarePublicJSONSmallBody
 	routeMiddlewareBinaryDownload
 	routeMiddlewareRestoreUpload
+	routeMiddlewareDeviceImportUpload
 	routeMiddlewareWebSocketUpgrade
 )
 
@@ -57,6 +58,7 @@ const (
 	routeHandlerCredentialProfileItem       routeHandlerKey = "credentialProfileItem"
 	routeHandlerDeviceCollection            routeHandlerKey = "deviceCollection"
 	routeHandlerDeviceBatch                 routeHandlerKey = "deviceBatch"
+	routeHandlerDeviceImport                routeHandlerKey = "deviceImport"
 	routeHandlerDeviceItem                  routeHandlerKey = "deviceItem"
 	routeHandlerDeviceOrphans               routeHandlerKey = "deviceOrphans"
 	routeHandlerGrafanaDeviceOverride       routeHandlerKey = "grafanaDeviceOverride"
@@ -586,6 +588,8 @@ var apiRouteSpecs = []apiRouteSpec{
 	protectedRoute("bridge launch request", "/api/v1/bridge/launch-requests/{deviceID}", "/api/v1/bridge/launch-requests/", routeHandlerBridgeLaunchRequest, routeMiddlewareNormalJSON, postPolicy(domain.PermissionBridgeTokenCreate)),
 	protectedRoute("bridge token", "/api/v1/bridge/token/{deviceID}", "/api/v1/bridge/token/", routeHandlerBridgeToken, routeMiddlewareNormalJSON, postPolicy(domain.PermissionBridgeTokenCreate)),
 
+	protectedRoute("device import preview", "/api/v1/admin/device-imports/preview", "/api/v1/admin/device-imports/preview", routeHandlerDeviceImport, routeMiddlewareDeviceImportUpload, postPolicy(domain.PermissionAdminDashboard)),
+	protectedRoute("device import commit", "/api/v1/admin/device-imports/commit", "/api/v1/admin/device-imports/commit", routeHandlerDeviceImport, routeMiddlewareDeviceImportUpload, postPolicy(domain.PermissionAdminDashboard)),
 	protectedRoute("admin dashboard", "/api/v1/admin/dashboard", "/api/v1/admin/", routeHandlerAdmin, routeMiddlewareNormalJSON, readPolicy(domain.PermissionAdminDashboard)),
 	protectedRoute("admin users", "/api/v1/admin/users", "/api/v1/admin/", routeHandlerAdmin, routeMiddlewareNormalJSON, policy(
 		methodPolicy(http.MethodGet, domain.PermissionUsersRead),

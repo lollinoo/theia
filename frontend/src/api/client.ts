@@ -10,6 +10,7 @@ export * from './backup';
 export * from './canvas';
 export * from './credentials';
 export * from './device';
+export * from './deviceImport';
 export { ServerError, ValidationError } from './errors';
 export * from './grafana';
 export * from './instanceBackup';

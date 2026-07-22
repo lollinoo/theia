@@ -199,6 +199,86 @@ func TestDeviceRepoDatabaseRejectsPhysicalVirtualDuplicateIP(t *testing.T) {
 	}
 }
 
+func TestDeviceRepoCreateAllowsDuplicateVirtualAddress(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+	first := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "virtual-duplicate-first",
+		IP:         "virtual-duplicate.example.net",
+		DeviceType: domain.DeviceTypeVirtual,
+		Status:     domain.DeviceStatusUnknown,
+		Tags:       map[string]string{},
+	}
+	second := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "virtual-duplicate-second",
+		IP:         " VIRTUAL-DUPLICATE.EXAMPLE.NET ",
+		DeviceType: domain.DeviceTypeVirtual,
+		Status:     domain.DeviceStatusUnknown,
+		Tags:       map[string]string{},
+	}
+
+	if err := repo.Create(first); err != nil {
+		t.Fatalf("Create first virtual device failed: %v", err)
+	}
+	if err := repo.Create(second); err != nil {
+		t.Fatalf("Create second virtual device failed: %v", err)
+	}
+	if got := importTestCount(t, db,
+		`SELECT COUNT(*) FROM device_addresses WHERE normalized_address = $1`,
+		"virtual-duplicate.example.net"); got != 2 {
+		t.Fatalf("manual virtual address count = %d, want 2", got)
+	}
+}
+
+func TestDeviceRepoCreatePublishes(t *testing.T) {
+	db := newTestDB(t)
+	onChange := make(chan struct{}, 2)
+	repo := NewDeviceRepo(db, testKeyring, onChange)
+	changes := repo.SubscribeDeviceChanges(2)
+	device := &domain.Device{
+		ID:         uuid.New(),
+		Hostname:   "create-publish",
+		IP:         "10.0.0.200",
+		DeviceType: domain.DeviceTypeRouter,
+		Managed:    true,
+		Status:     domain.DeviceStatusUp,
+		Tags:       map[string]string{},
+		SNMPCredentials: domain.SNMPCredentials{
+			Version: domain.SNMPVersionV2c,
+			V2c:     &domain.SNMPv2cCredentials{Community: "public"},
+		},
+	}
+
+	if err := repo.Create(device); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	select {
+	case <-onChange:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Create cache invalidation")
+	}
+	select {
+	case <-onChange:
+		t.Fatal("Create emitted more than one cache invalidation")
+	default:
+	}
+	select {
+	case event := <-changes:
+		if event.Kind != domain.ChangeKindCreated || event.DeviceID != device.ID {
+			t.Fatalf("Create event = %#v, want created event for %s", event, device.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Create device event")
+	}
+	select {
+	case event := <-changes:
+		t.Fatalf("Create emitted extra event %#v", event)
+	default:
+	}
+}
+
 func TestDeviceRepoGetByIDsForTopologySkipsSNMPDecryption(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewDeviceRepo(db, testKeyring, nil)
