@@ -40,7 +40,7 @@ func buildRouterMiddlewareSet(
 			routerOpts.security,
 			routerOpts.auth,
 			true,
-			int64(service.DeviceImportMaxFileBytes)+deviceImportMultipartEnvelopeOverheadBytes,
+			deviceImportMaxRequestBytes,
 		),
 		publicByHandler: map[routeHandlerKey]http.Handler{
 			routeHandlerAuth:                  applyPublicMiddleware(routeHandlers[routeHandlerAuth], routerOpts.security, true, 16<<10),

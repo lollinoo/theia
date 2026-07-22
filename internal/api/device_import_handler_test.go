@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
@@ -352,6 +353,8 @@ func TestDeviceImportHandlerMapsSafeServiceErrors(t *testing.T) {
 		{name: "digest mismatch", operation: "commit", err: service.ErrDeviceImportDigestMismatch, wantStatus: http.StatusConflict, wantText: "device import digest mismatch"},
 		{name: "configuration changed", operation: "commit", err: service.ErrDeviceImportConfigurationChanged, wantStatus: http.StatusConflict, wantText: "device import configuration changed"},
 		{name: "store unavailable", operation: "preview", err: fmt.Errorf("%w: %s", domain.ErrDeviceImportStoreUnavailable, deviceImportHandlerSecret), wantStatus: http.StatusServiceUnavailable, wantText: "device import store unavailable"},
+		{name: "context canceled", operation: "preview", err: context.Canceled, wantStatus: http.StatusInternalServerError, wantText: "internal error, ref:"},
+		{name: "context deadline", operation: "commit", err: context.DeadlineExceeded, wantStatus: http.StatusInternalServerError, wantText: "internal error, ref:"},
 		{name: "unknown", operation: "preview", err: errors.New("database " + deviceImportHandlerSecret), wantStatus: http.StatusInternalServerError, wantText: "internal error, ref:"},
 	}
 
@@ -527,6 +530,52 @@ func TestRouterDeviceImportUploadProfileBoundsWholeMultipartEnvelope(t *testing.
 			t.Fatalf("status=%d calls=%d body=%s", response.Code, provider.previewCalls, response.Body.String())
 		}
 	})
+}
+
+func TestRouterDeviceImportRejectsChunkedMultipartEpilogueBeforeProvider(t *testing.T) {
+	for _, operation := range []string{"preview", "commit"} {
+		t.Run(operation, func(t *testing.T) {
+			auth := newFakeAPIAuthProvider()
+			auth.setSession(testSessionToken, testCSRFToken, testAPIUser("admin", false, deviceImportTestPermissions()...))
+			provider := &fakeDeviceImportProvider{}
+			router := newDeviceImportAuthTestRouter(auth, provider)
+			parts := []deviceImportMultipartPart{
+				{name: "file", value: []byte("- targets: [\"router.example.net\"]\n"), fileName: "targets.yml"},
+				{name: "metrics_mode", value: []byte(service.DeviceImportModePrometheus)},
+				{name: "map_id", value: []byte(uuid.NewString())},
+			}
+			if operation == "commit" {
+				parts = appendParts(parts, deviceImportMultipartPart{name: "expected_file_digest", value: []byte("sha256:expected")})
+			}
+			request := newDeviceImportMultipartRequest(t, http.MethodPost, "/api/v1/admin/device-imports/"+operation, parts)
+			encoded, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatalf("read encoded multipart: %v", err)
+			}
+			epilogue := bytes.Repeat(
+				[]byte("e"),
+				service.DeviceImportMaxFileBytes+int(deviceImportMultipartEnvelopeOverheadBytes)+1,
+			)
+			request.Body = io.NopCloser(bytes.NewReader(append(encoded, epilogue...)))
+			request.ContentLength = -1
+			request.TransferEncoding = []string{"chunked"}
+			addSessionCookie(request, testSessionToken)
+			addCSRFCookieAndHeader(request, testCSRFToken)
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			if response.Code != http.StatusRequestEntityTooLarge || provider.previewCalls != 0 || provider.commitCalls != 0 {
+				t.Fatalf(
+					"status=%d preview=%d commit=%d body=%s",
+					response.Code,
+					provider.previewCalls,
+					provider.commitCalls,
+					response.Body.String(),
+				)
+			}
+		})
+	}
 }
 
 func newDeviceImportMultipartRequest(
