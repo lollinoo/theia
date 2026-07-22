@@ -759,6 +759,17 @@ func (s *DeviceService) ReprobeDevice(ctx context.Context, id uuid.UUID) error {
 	return s.discovery.ReprobeDevice(ctx, id)
 }
 
+// NotifyTopologyChanged emits one non-blocking topology invalidation signal.
+func (s *DeviceService) NotifyTopologyChanged() {
+	if s == nil || s.TopologyNotify == nil {
+		return
+	}
+	select {
+	case s.TopologyNotify <- struct{}{}:
+	default:
+	}
+}
+
 func (s *DeviceService) RunTopologyDiscoveryNow(ctx context.Context, id uuid.UUID) error {
 	return s.discovery.RunTopologyDiscoveryNow(ctx, id)
 }
