@@ -20,6 +20,7 @@ import (
 const (
 	deviceImportMultipartEnvelopeOverheadBytes int64 = 64 << 10
 	deviceImportTextFieldMaxBytes                    = 256
+	deviceImportMaxRequestBytes                      = int64(service.DeviceImportMaxFileBytes) + deviceImportMultipartEnvelopeOverheadBytes
 )
 
 var deviceImportBaselinePermissions = []string{
@@ -78,6 +79,8 @@ func (h *DeviceImportHandler) handle(w http.ResponseWriter, r *http.Request, com
 	if !ok {
 		return
 	}
+	// Keep the handler safe even if it is mounted without the dedicated router profile.
+	r.Body = http.MaxBytesReader(w, r.Body, deviceImportMaxRequestBytes)
 	request, err := decodeDeviceImportRequest(r, actor, commit)
 	if err != nil {
 		writeDeviceImportDecodeError(w, err)
@@ -150,6 +153,9 @@ func decodeDeviceImportRequest(
 	}
 	fields, err := readDeviceImportMultipart(reader, commit)
 	if err != nil {
+		return request, err
+	}
+	if err := drainDeviceImportRequestBody(r.Body); err != nil {
 		return request, err
 	}
 	mode, ok := parseDeviceImportMode(fields.metricsMode)
@@ -306,6 +312,16 @@ func readDeviceImportTextPart(part io.Reader) (string, error) {
 		return "", newDeviceImportRequestError(http.StatusBadRequest, "multipart text field is too large")
 	}
 	return strings.TrimSpace(string(content)), nil
+}
+
+func drainDeviceImportRequestBody(body io.Reader) error {
+	if _, err := io.Copy(io.Discard, body); err != nil {
+		if isRequestBodyTooLarge(err) {
+			return newDeviceImportRequestError(http.StatusRequestEntityTooLarge, "device import upload is too large")
+		}
+		return newDeviceImportRequestError(http.StatusBadRequest, "invalid multipart form data")
+	}
+	return nil
 }
 
 func setDecodedDeviceImportField(fields *decodedDeviceImportFields, name, value string) {
