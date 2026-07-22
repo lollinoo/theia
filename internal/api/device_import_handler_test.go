@@ -63,9 +63,10 @@ func (a *recordingDeviceImportAuth) RequirePermission(
 }
 
 type deviceImportMultipartPart struct {
-	name     string
-	value    []byte
-	fileName string
+	name      string
+	value     []byte
+	fileName  string
+	forceText bool
 }
 
 func TestDeviceImportHandlerPreviewMapsBoundedMultipartRequest(t *testing.T) {
@@ -175,6 +176,8 @@ func TestDeviceImportHandlerRejectsMalformedOrUnboundedMultipartBeforeProvider(t
 		{name: "method", operation: "preview", method: http.MethodGet, parts: validParts, wantStatus: http.StatusMethodNotAllowed},
 		{name: "malformed", operation: "preview", method: http.MethodPost, plainBody: "not multipart", wantStatus: http.StatusBadRequest},
 		{name: "missing file", operation: "preview", method: http.MethodPost, parts: validParts[1:], wantStatus: http.StatusBadRequest},
+		{name: "file sent as text field", operation: "preview", method: http.MethodPost, parts: replaceDeviceImportPartKind(validParts, "file", true, ""), wantStatus: http.StatusBadRequest},
+		{name: "map sent as file field", operation: "preview", method: http.MethodPost, parts: replaceDeviceImportPartKind(validParts, "map_id", false, "map.txt"), wantStatus: http.StatusBadRequest},
 		{name: "unknown field", operation: "preview", method: http.MethodPost, parts: appendParts(validParts, deviceImportMultipartPart{name: "labels", value: []byte(deviceImportHandlerSecret)}), wantStatus: http.StatusBadRequest},
 		{name: "duplicate file", operation: "preview", method: http.MethodPost, parts: appendParts(validParts, validParts[0]), wantStatus: http.StatusBadRequest},
 		{name: "duplicate mode", operation: "preview", method: http.MethodPost, parts: appendParts(validParts, validParts[1]), wantStatus: http.StatusBadRequest},
@@ -221,6 +224,36 @@ func TestDeviceImportHandlerRejectsMalformedOrUnboundedMultipartBeforeProvider(t
 				t.Fatalf("response leaked multipart value: %s", response.Body.String())
 			}
 		})
+	}
+}
+
+func TestDeviceImportHandlerRejectsTruncatedMultipartAsBadRequest(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	filePart, err := writer.CreateFormFile("file", "targets.yml")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := filePart.Write([]byte("- targets: [\"router.example.net\"]\n")); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := writer.WriteField("metrics_mode", string(service.DeviceImportModePrometheus)); err != nil {
+		t.Fatalf("WriteField(metrics_mode): %v", err)
+	}
+	if err := writer.WriteField("map_id", uuid.NewString()); err != nil {
+		t.Fatalf("WriteField(map_id): %v", err)
+	}
+	// Deliberately omit writer.Close so the terminating boundary is absent.
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/device-imports/preview", bytes.NewReader(body.Bytes()))
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	provider := &fakeDeviceImportProvider{}
+	_, auth := authorizeDeviceImportRequest(request)
+	response := httptest.NewRecorder()
+
+	NewDeviceImportHandler(provider, auth).HandlePreview(response, request)
+
+	if response.Code != http.StatusBadRequest || provider.previewCalls != 0 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, provider.previewCalls, response.Body.String())
 	}
 }
 
@@ -506,7 +539,7 @@ func newDeviceImportMultipartRequest(
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	for _, part := range parts {
-		if part.fileName != "" || part.name == "file" {
+		if !part.forceText && (part.fileName != "" || part.name == "file") {
 			filePart, err := writer.CreateFormFile(part.name, part.fileName)
 			if err != nil {
 				t.Fatalf("CreateFormFile(%s): %v", part.name, err)
@@ -607,6 +640,23 @@ func replaceDeviceImportPart(
 		}
 	}
 	return append(result, deviceImportMultipartPart{name: name, value: value})
+}
+
+func replaceDeviceImportPartKind(
+	parts []deviceImportMultipartPart,
+	name string,
+	forceText bool,
+	fileName string,
+) []deviceImportMultipartPart {
+	result := append([]deviceImportMultipartPart(nil), parts...)
+	for index := range result {
+		if result[index].name == name {
+			result[index].forceText = forceText
+			result[index].fileName = fileName
+			return result
+		}
+	}
+	return result
 }
 
 func withoutString(values []string, omitted string) []string {
