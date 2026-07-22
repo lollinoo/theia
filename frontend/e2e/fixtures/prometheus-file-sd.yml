@@ -1,0 +1,5 @@
+- targets: ['192.0.2.241:9100']
+  labels:
+    identity: 'MUST_NOT_BE_IMPORTED'
+    vendor: 'MUST_NOT_BE_IMPORTED'
+    arbitrary: 'MUST_NOT_BE_IMPORTED'
