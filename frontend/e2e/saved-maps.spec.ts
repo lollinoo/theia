@@ -778,6 +778,7 @@ test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
   await page.getByTitle('Edit Mode (E)').click();
   hitPath = visibleLinkHitPathById(page, fixture.linkId);
   await expect(hitPath).toBeVisible();
+  await waitForPathToSettle(hitPath);
   const reloadedLoopPoint = await exposedPathScreenPoint(hitPath);
   await page.mouse.click(reloadedLoopPoint.x, reloadedLoopPoint.y);
   waypoint = page.getByRole('button', {
@@ -815,6 +816,7 @@ test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
   await page.getByTitle('Edit Mode (E)').click();
   hitPath = visibleLinkHitPathById(page, fixture.linkId);
   await expect(hitPath).toBeVisible();
+  await waitForPathToSettle(hitPath);
   const resetLoopPoint = await exposedPathScreenPoint(hitPath);
   await page.mouse.click(resetLoopPoint.x, resetLoopPoint.y);
   await expect(page.getByRole('button', { name: /Move waypoint/ })).toHaveCount(0);
