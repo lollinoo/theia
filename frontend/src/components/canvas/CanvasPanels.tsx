@@ -2,7 +2,6 @@
  * Defines canvas panels behavior for the topology canvas.
  * Documents how canonical topology data is projected into the interactive view layer.
  */
-import type { ReactFlowInstance } from '@xyflow/react';
 import { useRef, useState } from 'react';
 
 import {
@@ -29,8 +28,6 @@ import {
 } from '../deviceVisualState';
 import { LinkCreatePanel } from '../LinkCreatePanel';
 import { LinkDetailsPanel } from '../LinkDetailsPanel';
-import type { LinkEdgeType } from '../LinkEdge';
-import { viewportSize } from './canvasHelpers';
 import {
   DeviceInterfaceStatsPanelRoute,
   LinkInterfaceStatsPanelRoute,
@@ -68,10 +65,10 @@ interface CanvasPanelsProps {
   devices: Device[];
   topologyLinks: Link[];
   topologyAreas?: Area[];
-  loadTopology: (silent?: boolean, pos?: { x: number; y: number }) => Promise<void>;
+  loadTopology: (silent?: boolean) => Promise<void>;
+  requestNewNodePlacement: (deviceId: string) => Promise<void>;
   setDevices: React.Dispatch<React.SetStateAction<Device[]>>;
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
-  reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
   runtimeState: RuntimeState;
   mapId?: string | null;
   mapName?: string;
@@ -90,9 +87,9 @@ export function CanvasPanels({
   topologyLinks,
   topologyAreas = [],
   loadTopology,
+  requestNewNodePlacement,
   setDevices,
   setNodes,
-  reactFlow,
   runtimeState,
   mapId = null,
   mapName = 'Default',
@@ -217,14 +214,9 @@ export function CanvasPanels({
           areas={topologyAreas}
           devices={devices}
           mapContext={mapId ? { mapId } : undefined}
-          onDeviceAdded={() => {
-            const { width, height } = viewportSize();
-            const center = reactFlow.screenToFlowPosition({
-              x: width / 2,
-              y: height / 2,
-            });
+          onDeviceAdded={(deviceId) => {
             setPanelContent(null);
-            void loadTopology(true, center);
+            void requestNewNodePlacement(deviceId);
           }}
         />
       )}

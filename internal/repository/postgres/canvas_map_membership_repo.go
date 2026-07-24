@@ -263,6 +263,9 @@ func (r *CanvasMapRepo) ReplaceMembership(id uuid.UUID, membership domain.Canvas
 	if err := pruneCanvasMapPositionsForMembership(tx, id, membership.Devices); err != nil {
 		return err
 	}
+	if err := pruneCanvasMapLinkRoutesForMembership(tx, id); err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec(
 		`UPDATE canvas_maps
@@ -589,6 +592,9 @@ func (r *CanvasMapRepo) RemoveDevice(id uuid.UUID, deviceID uuid.UUID) error {
 	); err != nil {
 		return fmt.Errorf("removing canvas map links for device %s: %w", deviceID, err)
 	}
+	if err := pruneCanvasMapLinkRoutesForMembership(tx, id); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(
 		`UPDATE canvas_maps SET updated_at = ? WHERE id = ?`,
 		time.Now().UTC(),
@@ -611,22 +617,35 @@ func (r *CanvasMapRepo) RemoveLink(id uuid.UUID, linkID uuid.UUID) error {
 	if linkID == uuid.Nil {
 		return fmt.Errorf("link id is required")
 	}
-	if err := ensureCanvasMapExists(r.db, id); err != nil {
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("starting canvas map link removal transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := ensureCanvasMapExists(tx, id); err != nil {
 		return err
 	}
-	if _, err := r.db.Exec(
+	if _, err := tx.Exec(
 		`DELETE FROM canvas_map_links WHERE map_id = ? AND link_id = ?`,
 		id.String(),
 		linkID.String(),
 	); err != nil {
 		return fmt.Errorf("removing canvas map link membership %s: %w", linkID, err)
 	}
-	if _, err := r.db.Exec(
+	if err := pruneCanvasMapLinkRoutesForMembership(tx, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
 		`UPDATE canvas_maps SET updated_at = ? WHERE id = ?`,
 		time.Now().UTC(),
 		id.String(),
 	); err != nil {
 		return fmt.Errorf("touching canvas map after link removal %s: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing canvas map link removal: %w", err)
 	}
 	return nil
 }

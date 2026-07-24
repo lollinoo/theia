@@ -100,26 +100,31 @@ func NewRouter(
 			opt(&routerOpts)
 		}
 	}
+	var canvasMapLinkRouteRepo domain.CanvasMapLinkRouteRepository
+	if db != nil {
+		canvasMapLinkRouteRepo = postgres.NewCanvasMapLinkRouteRepo(db)
+	}
 	deps := routerDependencies{
-		db:                    db,
-		deviceService:         deviceService,
-		linkRepo:              linkRepo,
-		positionRepo:          positionRepo,
-		canvasMapRepo:         canvasMapRepo,
-		canvasMapPositionRepo: canvasMapPositionRepo,
-		settingsRepo:          settingsRepo,
-		snmpProfileRepo:       snmpProfileRepo,
-		credentialProfileRepo: credentialProfileRepo,
-		areaRepo:              areaRepo,
-		backupService:         backupService,
-		vendorRegistry:        vendorRegistry,
-		vendorConfigRepo:      vendorConfigRepo,
-		poller:                poller,
-		instanceBackupService: instanceBackupService,
-		restoreRestarter:      restoreRestarter,
-		bridgeBinariesDir:     bridgeBinariesDir,
-		runtimeStateFunc:      runtimeStateFunc,
-		wsHandler:             wsHandler,
+		db:                     db,
+		deviceService:          deviceService,
+		linkRepo:               linkRepo,
+		positionRepo:           positionRepo,
+		canvasMapRepo:          canvasMapRepo,
+		canvasMapPositionRepo:  canvasMapPositionRepo,
+		canvasMapLinkRouteRepo: canvasMapLinkRouteRepo,
+		settingsRepo:           settingsRepo,
+		snmpProfileRepo:        snmpProfileRepo,
+		credentialProfileRepo:  credentialProfileRepo,
+		areaRepo:               areaRepo,
+		backupService:          backupService,
+		vendorRegistry:         vendorRegistry,
+		vendorConfigRepo:       vendorConfigRepo,
+		poller:                 poller,
+		instanceBackupService:  instanceBackupService,
+		restoreRestarter:       restoreRestarter,
+		bridgeBinariesDir:      bridgeBinariesDir,
+		runtimeStateFunc:       runtimeStateFunc,
+		wsHandler:              wsHandler,
 	}
 
 	mux := http.NewServeMux()

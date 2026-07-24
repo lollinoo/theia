@@ -23,6 +23,8 @@ interface CanvasContextMenusProps {
   setDeviceMenu: Dispatch<SetStateAction<CanvasDeviceMenu | null>>;
   setEdgeMenu: Dispatch<SetStateAction<CanvasEdgeMenu | null>>;
   setPanelContent: Dispatch<SetStateAction<CanvasPanelContent | null>>;
+  editMode: boolean;
+  resetLinkRoute: (edgeId: string) => void;
 }
 
 /** Renders the CanvasContextMenus component within the topology canvas. */
@@ -39,6 +41,8 @@ export function CanvasContextMenus({
   setDeviceMenu,
   setEdgeMenu,
   setPanelContent,
+  editMode,
+  resetLinkRoute,
 }: CanvasContextMenusProps) {
   return (
     <>
@@ -134,6 +138,17 @@ export function CanvasContextMenus({
                     setEdgeMenu(null);
                   },
                 },
+                ...(editMode && me?.data?.route !== undefined
+                  ? [
+                      {
+                        label: 'Reset automatic route',
+                        separator: true,
+                        onClick: () => {
+                          resetLinkRoute(me.id);
+                        },
+                      },
+                    ]
+                  : []),
               ]}
             />
           );

@@ -768,6 +768,9 @@ func migrateCanvasMapMemberships(db *sql.DB) error {
 		if err := pruneCanvasMapPositionsForMembership(tx, canvasMap.id, membership.Devices); err != nil {
 			return err
 		}
+		if err := pruneCanvasMapLinkRoutesForMembership(tx, canvasMap.id); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(
 			`UPDATE canvas_maps
 			 SET membership_materialized = ?, updated_at = ?
