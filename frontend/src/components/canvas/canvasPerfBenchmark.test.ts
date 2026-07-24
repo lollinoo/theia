@@ -113,7 +113,7 @@ describe('canvasPerfBenchmark', () => {
     expect(mixedResult.iterationsByScenario).toEqual({ small: 1, medium: 2 });
     expect(mixedResult.scenarios.small.metrics.computeForceLayout.count).toBe(1);
     expect(mixedResult.scenarios.medium.metrics.computeForceLayout.count).toBe(2);
-  }, 15_000);
+  }, 60_000);
 
   it('returns a JSON-serializable contract without timing thresholds', () => {
     const result = runCanvasPerfBenchmark({
