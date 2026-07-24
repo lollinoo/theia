@@ -183,24 +183,25 @@ describe('instance backup client', () => {
     );
   });
 
-  it.each([
-    502, 503, 504,
-  ])('maps confirmed restore gateway status %d to an unknown outcome', async (status) => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        mockResponse(null, {
-          ok: false,
-          status,
-          statusText: 'Gateway unavailable',
-        }),
-      ),
-    );
+  it.each([502, 503, 504])(
+    'maps confirmed restore gateway status %d to an unknown outcome',
+    async (status) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          mockResponse(null, {
+            ok: false,
+            status,
+            statusText: 'Gateway unavailable',
+          }),
+        ),
+      );
 
-    await expect(
-      restoreInstanceBackup(new File(['archive'], 'backup.tar.gz'), false),
-    ).rejects.toMatchObject({ name: 'RestoreOutcomeUnknownError' });
-  });
+      await expect(
+        restoreInstanceBackup(new File(['archive'], 'backup.tar.gz'), false),
+      ).rejects.toMatchObject({ name: 'RestoreOutcomeUnknownError' });
+    },
+  );
 
   it('maps a confirmed restore transport interruption to an unknown outcome', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));

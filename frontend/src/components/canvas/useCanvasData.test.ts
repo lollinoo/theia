@@ -489,68 +489,69 @@ describe('useCanvasData', () => {
   it.each([
     { label: 'default canvas', mapId: null },
     { label: 'saved map', mapId: 'map-1' },
-  ])('ignores protocol-v2 stream recovery events on $label without structural fetches or notices', async ({
-    mapId,
-  }) => {
-    const onTopologyAreasChange = vi.fn();
-    const bootstrap = canvasBootstrapResponse({
-      runtime_stream_id: 'runtime-stream-1',
-      runtime_version: 7,
-      runtime_identity: 'rt-sha256:initial',
-      runtime_snapshot: mockSnapshot(),
-    });
-    if (mapId === null) {
-      vi.mocked(fetchCanvasBootstrap).mockResolvedValue(bootstrap);
-    } else {
-      vi.mocked(fetchCanvasMapBootstrap).mockResolvedValue(bootstrap);
-    }
-    const { result } = renderUseCanvasData(null, null, {
-      mapId,
-      mapName: mapId === null ? 'Default' : 'Saved Map',
-      onTopologyAreasChange,
-    });
-
-    await act(async () => {
-      for (let turn = 0; turn < 6; turn += 1) {
-        await Promise.resolve();
+  ])(
+    'ignores protocol-v2 stream recovery events on $label without structural fetches or notices',
+    async ({ mapId }) => {
+      const onTopologyAreasChange = vi.fn();
+      const bootstrap = canvasBootstrapResponse({
+        runtime_stream_id: 'runtime-stream-1',
+        runtime_version: 7,
+        runtime_identity: 'rt-sha256:initial',
+        runtime_snapshot: mockSnapshot(),
+      });
+      if (mapId === null) {
+        vi.mocked(fetchCanvasBootstrap).mockResolvedValue(bootstrap);
+      } else {
+        vi.mocked(fetchCanvasMapBootstrap).mockResolvedValue(bootstrap);
       }
-    });
+      const { result } = renderUseCanvasData(null, null, {
+        mapId,
+        mapName: mapId === null ? 'Default' : 'Saved Map',
+        onTopologyAreasChange,
+      });
 
-    vi.mocked(fetchCanvasBootstrap).mockClear();
-    vi.mocked(fetchCanvasMapBootstrap).mockClear();
-    vi.mocked(fetchCanvasTopology).mockClear();
-    vi.mocked(fetchCanvasMapTopology).mockClear();
-    vi.mocked(fetchDevices).mockClear();
-    vi.mocked(fetchLinks).mockClear();
-    vi.mocked(fetchSettings).mockClear();
-    vi.mocked(fetchGrafanaDashboardConfig).mockClear();
-    positionMocks.fetchPositions.mockClear();
-    positionMocks.savePositions.mockClear();
-    onTopologyAreasChange.mockClear();
+      await act(async () => {
+        for (let turn = 0; turn < 6; turn += 1) {
+          await Promise.resolve();
+        }
+      });
 
-    await act(async () => {
-      window.dispatchEvent(
-        new CustomEvent('backend-resync-required', { detail: { strategy: 'stream' } }),
-      );
-      await vi.advanceTimersByTimeAsync(250);
-      for (let turn = 0; turn < 6; turn += 1) {
-        await Promise.resolve();
-      }
-    });
+      vi.mocked(fetchCanvasBootstrap).mockClear();
+      vi.mocked(fetchCanvasMapBootstrap).mockClear();
+      vi.mocked(fetchCanvasTopology).mockClear();
+      vi.mocked(fetchCanvasMapTopology).mockClear();
+      vi.mocked(fetchDevices).mockClear();
+      vi.mocked(fetchLinks).mockClear();
+      vi.mocked(fetchSettings).mockClear();
+      vi.mocked(fetchGrafanaDashboardConfig).mockClear();
+      positionMocks.fetchPositions.mockClear();
+      positionMocks.savePositions.mockClear();
+      onTopologyAreasChange.mockClear();
 
-    expect(fetchCanvasBootstrap).not.toHaveBeenCalled();
-    expect(fetchCanvasMapBootstrap).not.toHaveBeenCalled();
-    expect(fetchCanvasTopology).not.toHaveBeenCalled();
-    expect(fetchCanvasMapTopology).not.toHaveBeenCalled();
-    expect(fetchDevices).not.toHaveBeenCalled();
-    expect(fetchLinks).not.toHaveBeenCalled();
-    expect(positionMocks.fetchPositions).not.toHaveBeenCalled();
-    expect(positionMocks.savePositions).not.toHaveBeenCalled();
-    expect(fetchSettings).not.toHaveBeenCalled();
-    expect(fetchGrafanaDashboardConfig).not.toHaveBeenCalled();
-    expect(onTopologyAreasChange).not.toHaveBeenCalled();
-    expect(result.current.topologyRecoveryNotice).toBeNull();
-  });
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('backend-resync-required', { detail: { strategy: 'stream' } }),
+        );
+        await vi.advanceTimersByTimeAsync(250);
+        for (let turn = 0; turn < 6; turn += 1) {
+          await Promise.resolve();
+        }
+      });
+
+      expect(fetchCanvasBootstrap).not.toHaveBeenCalled();
+      expect(fetchCanvasMapBootstrap).not.toHaveBeenCalled();
+      expect(fetchCanvasTopology).not.toHaveBeenCalled();
+      expect(fetchCanvasMapTopology).not.toHaveBeenCalled();
+      expect(fetchDevices).not.toHaveBeenCalled();
+      expect(fetchLinks).not.toHaveBeenCalled();
+      expect(positionMocks.fetchPositions).not.toHaveBeenCalled();
+      expect(positionMocks.savePositions).not.toHaveBeenCalled();
+      expect(fetchSettings).not.toHaveBeenCalled();
+      expect(fetchGrafanaDashboardConfig).not.toHaveBeenCalled();
+      expect(onTopologyAreasChange).not.toHaveBeenCalled();
+      expect(result.current.topologyRecoveryNotice).toBeNull();
+    },
+  );
 
   it('continues to revalidate structure for topology changes and reconnects', async () => {
     vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());

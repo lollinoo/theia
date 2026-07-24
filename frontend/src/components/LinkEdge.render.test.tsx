@@ -421,36 +421,36 @@ describe('LinkEdge render', () => {
     expect(onClick).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    'leave',
-    'cancel',
-  ] as const)('abandons an active path draft on pointer %s and preserves the next edge click', (interruption) => {
-    const onClick = vi.fn();
-    const onRouteCommit = vi.fn();
-    const { container } = renderEdge(
-      { selected: true },
-      { routeEditable: true, onRouteCommit },
-      onClick,
-    );
-    const hitTarget = container.querySelector('path.cursor-pointer') as SVGPathElement;
-    const capture = mockPointerCapture(hitTarget);
+  it.each(['leave', 'cancel'] as const)(
+    'abandons an active path draft on pointer %s and preserves the next edge click',
+    (interruption) => {
+      const onClick = vi.fn();
+      const onRouteCommit = vi.fn();
+      const { container } = renderEdge(
+        { selected: true },
+        { routeEditable: true, onRouteCommit },
+        onClick,
+      );
+      const hitTarget = container.querySelector('path.cursor-pointer') as SVGPathElement;
+      const capture = mockPointerCapture(hitTarget);
 
-    act(() => {
-      fireEvent.pointerDown(hitTarget, { pointerId: 33, clientX: 150, clientY: 30 });
-      fireEvent.pointerMove(hitTarget, { pointerId: 33, clientX: 160, clientY: 40 });
-      if (interruption === 'leave') {
-        fireEvent.pointerLeave(hitTarget, { pointerId: 33, clientX: 160, clientY: 40 });
-      } else {
-        fireEvent.pointerCancel(hitTarget, { pointerId: 33, clientX: 160, clientY: 40 });
-      }
-      fireEvent.click(hitTarget);
-    });
+      act(() => {
+        fireEvent.pointerDown(hitTarget, { pointerId: 33, clientX: 150, clientY: 30 });
+        fireEvent.pointerMove(hitTarget, { pointerId: 33, clientX: 160, clientY: 40 });
+        if (interruption === 'leave') {
+          fireEvent.pointerLeave(hitTarget, { pointerId: 33, clientX: 160, clientY: 40 });
+        } else {
+          fireEvent.pointerCancel(hitTarget, { pointerId: 33, clientX: 160, clientY: 40 });
+        }
+        fireEvent.click(hitTarget);
+      });
 
-    expect(onRouteCommit).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: /Move waypoint/ })).not.toBeInTheDocument();
-    expect(capture.releasePointerCapture).toHaveBeenCalledWith(33);
-    expect(onClick).toHaveBeenCalledOnce();
-  });
+      expect(onRouteCommit).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: /Move waypoint/ })).not.toBeInTheDocument();
+      expect(capture.releasePointerCapture).toHaveBeenCalledWith(33);
+      expect(onClick).toHaveBeenCalledOnce();
+    },
+  );
 
   it('selects an off-center waypoint press without moving or committing it', () => {
     const onRouteCommit = vi.fn();
@@ -575,52 +575,52 @@ describe('LinkEdge render', () => {
     expect(capture.releasePointerCapture).toHaveBeenCalledWith(12);
   });
 
-  it.each([
-    'lost capture',
-    'cancel',
-  ] as const)('abandons an existing waypoint draft on pointer %s without committing', (interruption) => {
-    const frames = installAnimationFrameQueue();
-    const onRouteCommit = vi.fn();
-    renderEdge(
-      { selected: true },
-      {
-        routeEditable: true,
-        onRouteCommit,
-        route: { version: 1, waypoints: [{ x: 170, y: 90 }] },
-      },
-    );
-    const initialPath = screen.getByTestId('edge-1').getAttribute('d');
-    const handle = screen.getByRole('button', {
-      name: 'Move waypoint 1 for link edge-1',
-    });
-    const capture = mockPointerCapture(handle);
+  it.each(['lost capture', 'cancel'] as const)(
+    'abandons an existing waypoint draft on pointer %s without committing',
+    (interruption) => {
+      const frames = installAnimationFrameQueue();
+      const onRouteCommit = vi.fn();
+      renderEdge(
+        { selected: true },
+        {
+          routeEditable: true,
+          onRouteCommit,
+          route: { version: 1, waypoints: [{ x: 170, y: 90 }] },
+        },
+      );
+      const initialPath = screen.getByTestId('edge-1').getAttribute('d');
+      const handle = screen.getByRole('button', {
+        name: 'Move waypoint 1 for link edge-1',
+      });
+      const capture = mockPointerCapture(handle);
 
-    act(() => {
-      fireEvent.pointerDown(handle, { pointerId: 34, clientX: 170, clientY: 90 });
-      fireEvent.pointerMove(handle, { pointerId: 34, clientX: 190, clientY: 110 });
-    });
-    frames.flush();
-    expect(handle).toHaveStyle({
-      transform: 'translate(-50%, -50%) translate(190px, 110px)',
-    });
+      act(() => {
+        fireEvent.pointerDown(handle, { pointerId: 34, clientX: 170, clientY: 90 });
+        fireEvent.pointerMove(handle, { pointerId: 34, clientX: 190, clientY: 110 });
+      });
+      frames.flush();
+      expect(handle).toHaveStyle({
+        transform: 'translate(-50%, -50%) translate(190px, 110px)',
+      });
 
-    if (interruption === 'lost capture') {
-      capture.hasPointerCapture.mockReturnValue(false);
-    }
-    act(() => {
       if (interruption === 'lost capture') {
-        fireEvent.lostPointerCapture(handle, { pointerId: 34 });
-      } else {
-        fireEvent.pointerCancel(handle, { pointerId: 34, clientX: 190, clientY: 110 });
+        capture.hasPointerCapture.mockReturnValue(false);
       }
-    });
+      act(() => {
+        if (interruption === 'lost capture') {
+          fireEvent.lostPointerCapture(handle, { pointerId: 34 });
+        } else {
+          fireEvent.pointerCancel(handle, { pointerId: 34, clientX: 190, clientY: 110 });
+        }
+      });
 
-    expect(onRouteCommit).not.toHaveBeenCalled();
-    expect(screen.getByTestId('edge-1').getAttribute('d')).toBe(initialPath);
-    expect(screen.getByRole('button', { name: /Move waypoint 1/ })).toHaveStyle({
-      transform: 'translate(-50%, -50%) translate(170px, 90px)',
-    });
-  });
+      expect(onRouteCommit).not.toHaveBeenCalled();
+      expect(screen.getByTestId('edge-1').getAttribute('d')).toBe(initialPath);
+      expect(screen.getByRole('button', { name: /Move waypoint 1/ })).toHaveStyle({
+        transform: 'translate(-50%, -50%) translate(170px, 90px)',
+      });
+    },
+  );
 
   it('double-clicks a selected editable path to insert and commit a stationary waypoint', () => {
     const onRouteCommit = vi.fn();

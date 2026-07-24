@@ -193,60 +193,52 @@ describe('runtime recovery transitions', () => {
     ).toMatchObject({ phase: 'stream', generation: 1 });
   });
 
-  it.each([
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    Number.NEGATIVE_INFINITY,
-    -1,
-  ])('does not begin recovery with invalid time %s', (now) => {
-    const idle = createRuntimeRecoveryState();
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
+    'does not begin recovery with invalid time %s',
+    (now) => {
+      const idle = createRuntimeRecoveryState();
 
-    expect(
-      beginRuntimeRecovery(idle, {
-        now,
+      expect(
+        beginRuntimeRecovery(idle, {
+          now,
+          reason: 'runtime_gap',
+          targetVersion: 8,
+        }),
+      ).toBe(idle);
+    },
+  );
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 999, -1])(
+    'does not mutate active recovery with invalid or retrograde time %s',
+    (now) => {
+      const stream = beginRuntimeRecovery(createRuntimeRecoveryState(), {
+        now: 1_000,
         reason: 'runtime_gap',
         targetVersion: 8,
-      }),
-    ).toBe(idle);
-  });
+      });
 
-  it.each([
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    Number.NEGATIVE_INFINITY,
-    999,
-    -1,
-  ])('does not mutate active recovery with invalid or retrograde time %s', (now) => {
-    const stream = beginRuntimeRecovery(createRuntimeRecoveryState(), {
-      now: 1_000,
-      reason: 'runtime_gap',
-      targetVersion: 8,
-    });
+      expect(
+        beginRuntimeRecovery(stream, {
+          now,
+          reason: 'server_marker',
+          targetVersion: 12,
+        }),
+      ).toBe(stream);
+    },
+  );
 
-    expect(
-      beginRuntimeRecovery(stream, {
-        now,
-        reason: 'server_marker',
-        targetVersion: 12,
-      }),
-    ).toBe(stream);
-  });
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 999, -1])(
+    'does not advance the deadline with invalid or retrograde time %s',
+    (now) => {
+      const stream = beginRuntimeRecovery(createRuntimeRecoveryState(), {
+        now: 1_000,
+        reason: 'runtime_gap',
+        targetVersion: 8,
+      });
 
-  it.each([
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    Number.NEGATIVE_INFINITY,
-    999,
-    -1,
-  ])('does not advance the deadline with invalid or retrograde time %s', (now) => {
-    const stream = beginRuntimeRecovery(createRuntimeRecoveryState(), {
-      now: 1_000,
-      reason: 'runtime_gap',
-      targetVersion: 8,
-    });
-
-    expect(advanceRuntimeRecoveryDeadline(stream, now)).toBe(stream);
-  });
+      expect(advanceRuntimeRecoveryDeadline(stream, now)).toBe(stream);
+    },
+  );
 
   it.each([
     Number.NaN,
@@ -346,18 +338,18 @@ describe('classifyRuntimeReplay', () => {
     expect(classifyRuntimeReplay(cursor, replay)).toEqual({ kind: 'reject', reason });
   });
 
-  it.each([
-    [{ streamId: '', version: 10 }],
-    [{ streamId: 'runtime-stream-1', version: 10.5 }],
-  ])('rejects an invalid locally applied cursor before classifying a replay', (invalidCursor) => {
-    expect(
-      classifyRuntimeReplay(invalidCursor, {
-        runtime_stream_id: 'runtime-stream-1',
-        from_version: 7,
-        version: 12,
-      }),
-    ).toEqual({ kind: 'reject', reason: 'invalid_cursor' });
-  });
+  it.each([[{ streamId: '', version: 10 }], [{ streamId: 'runtime-stream-1', version: 10.5 }]])(
+    'rejects an invalid locally applied cursor before classifying a replay',
+    (invalidCursor) => {
+      expect(
+        classifyRuntimeReplay(invalidCursor, {
+          runtime_stream_id: 'runtime-stream-1',
+          from_version: 7,
+          version: 12,
+        }),
+      ).toEqual({ kind: 'reject', reason: 'invalid_cursor' });
+    },
+  );
 });
 
 describe('runtime ready barrier', () => {
@@ -382,21 +374,24 @@ describe('runtime ready barrier', () => {
   it.each([
     ['version', { streamId: 'runtime-stream-1', version: 13 }, 'version_mismatch'],
     ['stream', { streamId: 'runtime-stream-2', version: 12 }, 'wrong_stream'],
-  ])('rejects a mismatched ready %s without advancing the applied cursor', (_label, ready, reason) => {
-    const state = beginRuntimeRecovery(createRuntimeRecoveryState(), {
-      now: 1_000,
-      reason: 'server_marker',
-      targetVersion: 12,
-    });
-    const cursor = { streamId: 'runtime-stream-1', version: 12 };
+  ])(
+    'rejects a mismatched ready %s without advancing the applied cursor',
+    (_label, ready, reason) => {
+      const state = beginRuntimeRecovery(createRuntimeRecoveryState(), {
+        now: 1_000,
+        reason: 'server_marker',
+        targetVersion: 12,
+      });
+      const cursor = { streamId: 'runtime-stream-1', version: 12 };
 
-    expect(applyRuntimeRecoveryReady(state, cursor, ready)).toEqual({
-      kind: 'reject',
-      reason,
-      state,
-      cursor,
-    });
-  });
+      expect(applyRuntimeRecoveryReady(state, cursor, ready)).toEqual({
+        kind: 'reject',
+        reason,
+        state,
+        cursor,
+      });
+    },
+  );
 
   it('rejects matching ready after recovery has failed', () => {
     const state = {
