@@ -15,18 +15,19 @@ describe('canvasPerfScenarios', () => {
     ['medium', 100, 180],
     ['large', 300, 600],
     ['stress', 700, 1500],
-  ] satisfies Array<
-    [CanvasPerfScenarioName, number, number]
-  >)('generates exact cardinality for %s', (scenarioName, deviceCount, linkCount) => {
-    const scenario = generateCanvasPerfScenario(scenarioName);
+  ] satisfies Array<[CanvasPerfScenarioName, number, number]>)(
+    'generates exact cardinality for %s',
+    (scenarioName, deviceCount, linkCount) => {
+      const scenario = generateCanvasPerfScenario(scenarioName);
 
-    expect(CANVAS_PERF_SCENARIOS[scenarioName]).toEqual({ deviceCount, linkCount });
-    expect(scenario.devices).toHaveLength(deviceCount);
-    expect(scenario.links).toHaveLength(linkCount);
-    expect(Object.keys(scenario.runtimeSnapshot.devices).length).toBeGreaterThan(0);
-    expect(Object.keys(scenario.runtimeSnapshot.links).length).toBeGreaterThan(0);
-    expect(scenario.selectedAreaId).toMatch(/^area-/);
-  });
+      expect(CANVAS_PERF_SCENARIOS[scenarioName]).toEqual({ deviceCount, linkCount });
+      expect(scenario.devices).toHaveLength(deviceCount);
+      expect(scenario.links).toHaveLength(linkCount);
+      expect(Object.keys(scenario.runtimeSnapshot.devices).length).toBeGreaterThan(0);
+      expect(Object.keys(scenario.runtimeSnapshot.links).length).toBeGreaterThan(0);
+      expect(scenario.selectedAreaId).toMatch(/^area-/);
+    },
+  );
 
   it('is deterministic for the same seed', () => {
     const first = generateCanvasPerfScenario('medium', { seed: 1234 });

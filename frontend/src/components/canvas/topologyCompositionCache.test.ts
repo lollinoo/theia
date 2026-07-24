@@ -463,61 +463,61 @@ describe('composeCanvasTopology saved routes', () => {
   it.each([
     { editMode: false, expectedEditable: false },
     { editMode: true, expectedEditable: true },
-  ])('attaches an isolated matching saved route with editability $expectedEditable', ({
-    editMode,
-    expectedEditable,
-  }) => {
-    const devices = [
-      mockDevice(),
-      mockDevice({
-        id: 'dev-2',
-        hostname: 'switch-01',
-        ip: '10.0.0.2',
-        sys_name: 'switch-01',
-      }),
-    ];
-    const links = [mockLink()];
-    const route = { version: 1 as const, waypoints: [{ x: 12.5, y: -8 }] };
-    const onLinkRouteCommit = vi.fn();
-    const runtimeState = buildRuntimeState({
-      devices,
-      links,
-      snapshot: null,
-      alerts: [],
-      prometheusStatus: null,
-    });
+  ])(
+    'attaches an isolated matching saved route with editability $expectedEditable',
+    ({ editMode, expectedEditable }) => {
+      const devices = [
+        mockDevice(),
+        mockDevice({
+          id: 'dev-2',
+          hostname: 'switch-01',
+          ip: '10.0.0.2',
+          sys_name: 'switch-01',
+        }),
+      ];
+      const links = [mockLink()];
+      const route = { version: 1 as const, waypoints: [{ x: 12.5, y: -8 }] };
+      const onLinkRouteCommit = vi.fn();
+      const runtimeState = buildRuntimeState({
+        devices,
+        links,
+        snapshot: null,
+        alerts: [],
+        prometheusStatus: null,
+      });
 
-    const { edges } = composeCanvasTopology({
-      devices,
-      links,
-      linkRoutes: {
-        'link-1': route,
-        orphan: { version: 1, waypoints: [{ x: 99, y: 100 }] },
-      },
-      onLinkRouteCommit,
-      runtimeState,
-      savedPositions: new Map(),
-      computedPositions: new Map([
-        ['dev-1', { x: 100, y: 120 }],
-        ['dev-2', { x: 320, y: 120 }],
-      ]),
-      currentPositions: new Map(),
-      explicitPositions: new Map(),
-      editMode,
-      openDeviceMenu: vi.fn(),
-      openEdgeMenu: vi.fn(),
-      placementDeviceIds: new Set(['dev-1', 'dev-2']),
-      alerts: [],
-      snapGrid: null,
-    });
+      const { edges } = composeCanvasTopology({
+        devices,
+        links,
+        linkRoutes: {
+          'link-1': route,
+          orphan: { version: 1, waypoints: [{ x: 99, y: 100 }] },
+        },
+        onLinkRouteCommit,
+        runtimeState,
+        savedPositions: new Map(),
+        computedPositions: new Map([
+          ['dev-1', { x: 100, y: 120 }],
+          ['dev-2', { x: 320, y: 120 }],
+        ]),
+        currentPositions: new Map(),
+        explicitPositions: new Map(),
+        editMode,
+        openDeviceMenu: vi.fn(),
+        openEdgeMenu: vi.fn(),
+        placementDeviceIds: new Set(['dev-1', 'dev-2']),
+        alerts: [],
+        snapGrid: null,
+      });
 
-    expect(edges).toHaveLength(1);
-    expect(edges[0]?.data.route).toEqual(route);
-    expect(edges[0]?.data.route).not.toBe(route);
-    expect(edges[0]?.data.routeEditable).toBe(expectedEditable);
-    expect(edges[0]?.data.onRouteCommit).toBe(onLinkRouteCommit);
+      expect(edges).toHaveLength(1);
+      expect(edges[0]?.data.route).toEqual(route);
+      expect(edges[0]?.data.route).not.toBe(route);
+      expect(edges[0]?.data.routeEditable).toBe(expectedEditable);
+      expect(edges[0]?.data.onRouteCommit).toBe(onLinkRouteCommit);
 
-    edges[0]!.data.route!.waypoints[0]!.x = 999;
-    expect(route.waypoints[0]?.x).toBe(12.5);
-  });
+      edges[0]!.data.route!.waypoints[0]!.x = 999;
+      expect(route.waypoints[0]?.x).toBe(12.5);
+    },
+  );
 });

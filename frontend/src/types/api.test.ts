@@ -308,16 +308,14 @@ describe('parseCanvasTopologyResponse', () => {
     });
   });
 
-  it.each([
-    undefined,
-    null,
-    [],
-    'invalid',
-  ])('defaults absent or malformed link routes to {}', (linkRoutes) => {
-    expect(
-      parseCanvasTopologyResponse(canvasTopologyPayload({ link_routes: linkRoutes })).link_routes,
-    ).toEqual({});
-  });
+  it.each([undefined, null, [], 'invalid'])(
+    'defaults absent or malformed link routes to {}',
+    (linkRoutes) => {
+      expect(
+        parseCanvasTopologyResponse(canvasTopologyPayload({ link_routes: linkRoutes })).link_routes,
+      ).toEqual({});
+    },
+  );
 
   it('parses the versioned canvas read model into frontend topology types', () => {
     const payload = {

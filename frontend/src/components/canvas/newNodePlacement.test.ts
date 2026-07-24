@@ -444,28 +444,27 @@ describe('findNewNodePlacement', () => {
     );
   });
 
-  it.each(
-    COMPLETENESS_FIXTURES,
-  )('returns a contained zero-overlap result for $name when an exhaustive pixel scan finds one', ({
-    input,
-  }) => {
-    const exhaustivePoint = findExhaustiveZeroOverlapPoint(input);
-    expect(exhaustivePoint).not.toBeNull();
-    if (!exhaustivePoint) return;
+  it.each(COMPLETENESS_FIXTURES)(
+    'returns a contained zero-overlap result for $name when an exhaustive pixel scan finds one',
+    ({ input }) => {
+      const exhaustivePoint = findExhaustiveZeroOverlapPoint(input);
+      expect(exhaustivePoint).not.toBeNull();
+      if (!exhaustivePoint) return;
 
-    const result = findNewNodePlacement(input);
-    expect(result).not.toBeNull();
-    if (!result) return;
+      const result = findNewNodePlacement(input);
+      expect(result).not.toBeNull();
+      if (!result) return;
 
-    const placementRect = resultRect(result, input.nodeSize);
-    expect(result.overlapArea).toBe(0);
-    expect(result.overlapCount).toBe(0);
-    expect(['preferred-gap', 'no-gap']).toContain(result.mode);
-    expect(
-      input.obstacles.every((obstacle) => intersectionArea(placementRect, obstacle) === 0),
-    ).toBe(true);
-    expectContained(result, input.viewport, input.nodeSize);
-  });
+      const placementRect = resultRect(result, input.nodeSize);
+      expect(result.overlapArea).toBe(0);
+      expect(result.overlapCount).toBe(0);
+      expect(['preferred-gap', 'no-gap']).toContain(result.mode);
+      expect(
+        input.obstacles.every((obstacle) => intersectionArea(placementRect, obstacle) === 0),
+      ).toBe(true);
+      expectContained(result, input.viewport, input.nodeSize);
+    },
+  );
 
   it('uses least-overlap placement and reports exact collision statistics on a dense map', () => {
     const viewport = { x: 50, y: 20, width: 224, height: 192 };
