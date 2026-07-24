@@ -4,9 +4,14 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Device, Link } from '../../types/api';
+import type { Device, Link, LinkRoute } from '../../types/api';
 import type { LinkEdgeType } from '../LinkEdge';
 import { CanvasContextMenus } from './CanvasContextMenus';
+
+const SAVED_ROUTE: LinkRoute = {
+  version: 1,
+  waypoints: [{ x: 120, y: 80 }],
+};
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -78,6 +83,8 @@ describe('CanvasContextMenus Grafana actions', () => {
         setDeviceMenu={setDeviceMenu}
         setEdgeMenu={vi.fn()}
         setPanelContent={vi.fn()}
+        editMode={false}
+        resetLinkRoute={vi.fn()}
       />,
     );
 
@@ -119,6 +126,8 @@ describe('CanvasContextMenus Grafana actions', () => {
         setDeviceMenu={vi.fn()}
         setEdgeMenu={setEdgeMenu}
         setPanelContent={vi.fn()}
+        editMode={false}
+        resetLinkRoute={vi.fn()}
       />,
     );
 
@@ -132,5 +141,78 @@ describe('CanvasContextMenus Grafana actions', () => {
       'noopener,noreferrer',
     );
     expect(setEdgeMenu).toHaveBeenCalledWith(null);
+  });
+
+  it('resets a saved route from an edit-mode edge menu and closes the menu', () => {
+    const setEdgeMenu = vi.fn();
+    const resetLinkRoute = vi.fn();
+    const link = mockLink();
+    const edge = {
+      id: link.id,
+      source: link.source_device_id,
+      target: link.target_device_id,
+      data: { link, route: SAVED_ROUTE },
+    } as LinkEdgeType;
+
+    render(
+      <CanvasContextMenus
+        deviceMenu={null}
+        edgeMenu={{ edgeID: link.id, x: 20, y: 30 }}
+        devices={[mockDevice(), mockDevice({ id: 'dev-b', hostname: 'router-b' })]}
+        edges={[edge]}
+        bridgeChecked={true}
+        bridgeRunning={true}
+        deviceWinboxState={{}}
+        launchWinbox={vi.fn()}
+        grafanaUrl={() => ''}
+        setDeviceMenu={vi.fn()}
+        setEdgeMenu={setEdgeMenu}
+        setPanelContent={vi.fn()}
+        editMode
+        resetLinkRoute={resetLinkRoute}
+      />,
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reset automatic route' }));
+    });
+
+    expect(resetLinkRoute).toHaveBeenCalledOnce();
+    expect(resetLinkRoute).toHaveBeenCalledWith(link.id);
+    expect(setEdgeMenu).toHaveBeenCalledWith(null);
+  });
+
+  it.each([
+    { label: 'view mode', editMode: false, route: SAVED_ROUTE },
+    { label: 'an automatic edge', editMode: true, route: undefined },
+  ])('hides route reset for $label', ({ editMode, route }) => {
+    const link = mockLink();
+    const edge = {
+      id: link.id,
+      source: link.source_device_id,
+      target: link.target_device_id,
+      data: { link, route },
+    } as LinkEdgeType;
+
+    render(
+      <CanvasContextMenus
+        deviceMenu={null}
+        edgeMenu={{ edgeID: link.id, x: 20, y: 30 }}
+        devices={[mockDevice(), mockDevice({ id: 'dev-b', hostname: 'router-b' })]}
+        edges={[edge]}
+        bridgeChecked={true}
+        bridgeRunning={true}
+        deviceWinboxState={{}}
+        launchWinbox={vi.fn()}
+        grafanaUrl={() => ''}
+        setDeviceMenu={vi.fn()}
+        setEdgeMenu={vi.fn()}
+        setPanelContent={vi.fn()}
+        editMode={editMode}
+        resetLinkRoute={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Reset automatic route' })).not.toBeInTheDocument();
   });
 });

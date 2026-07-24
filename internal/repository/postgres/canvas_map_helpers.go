@@ -3,6 +3,7 @@ package postgres
 // This file defines canvas map helpers persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -153,10 +154,25 @@ type canvasMapQueryRower interface {
 	QueryRow(query string, args ...interface{}) *sql.Row
 }
 
+type canvasMapContextQueryRower interface {
+	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+}
+
 // ensureCanvasMapExists fails with the stable not-found text used by API mapping.
 func ensureCanvasMapExists(queryer canvasMapQueryRower, id uuid.UUID) error {
 	var count int
 	if err := queryer.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, id.String()).Scan(&count); err != nil {
+		return fmt.Errorf("checking canvas map existence: %w", err)
+	}
+	if count == 0 {
+		return fmt.Errorf("canvas map not found: %s", id)
+	}
+	return nil
+}
+
+func ensureCanvasMapExistsContext(ctx context.Context, queryer canvasMapContextQueryRower, id uuid.UUID) error {
+	var count int
+	if err := queryer.QueryRowContext(ctx, `SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, id.String()).Scan(&count); err != nil {
 		return fmt.Errorf("checking canvas map existence: %w", err)
 	}
 	if count == 0 {
@@ -470,6 +486,23 @@ func pruneCanvasMapPositionsForMembership(
 		args...,
 	); err != nil {
 		return fmt.Errorf("pruning non-member canvas map positions for %s: %w", mapID, err)
+	}
+	return nil
+}
+
+// pruneCanvasMapLinkRoutesForMembership removes routes whose links no longer belong to the map.
+func pruneCanvasMapLinkRoutesForMembership(tx *Tx, mapID uuid.UUID) error {
+	if _, err := tx.Exec(
+		`DELETE FROM canvas_map_link_routes
+		 WHERE canvas_map_link_routes.map_id = ?
+		   AND NOT EXISTS (
+			 SELECT 1 FROM canvas_map_links links
+			 WHERE links.map_id = canvas_map_link_routes.map_id
+			   AND links.link_id = canvas_map_link_routes.link_id
+		   )`,
+		mapID.String(),
+	); err != nil {
+		return fmt.Errorf("pruning non-member canvas map link routes for %s: %w", mapID, err)
 	}
 	return nil
 }

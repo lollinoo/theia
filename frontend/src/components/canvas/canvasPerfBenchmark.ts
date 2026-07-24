@@ -7,6 +7,7 @@ import { computeForceLayout } from '../../hooks/useAutoLayout';
 import type { Device } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
+import { buildEditableLinkPath } from '../editableLinkGeometry';
 import { projectAreaTopology } from './areaProjection';
 import {
   aggregateCanvasMetricSamples,
@@ -26,6 +27,7 @@ import {
   buildIncrementalLayoutInputs,
   computeIncrementalLayoutPositions,
 } from './incrementalLayout';
+import { findNewNodePlacement } from './newNodePlacement';
 import { buildTopologyNodes } from './nodeBuilder';
 import { buildRuntimeState } from './runtimeAdapters';
 import {
@@ -54,6 +56,8 @@ export const CANVAS_PERF_BENCHMARK_METRICS = [
   'renderProjection',
   'runtimePatch',
   'incrementalLayout',
+  'newNodePlacement',
+  'editableLinkGeometry',
   'computeForceLayout',
 ] as const satisfies CanvasMetricName[];
 
@@ -81,6 +85,12 @@ export interface RunCanvasPerfBenchmarkOptions {
   warmupIterations?: number;
   iterationsByScenario?: Partial<Record<CanvasPerfScenarioName, number>>;
   scenarioNames?: CanvasPerfScenarioName[];
+}
+
+/** Configures the isolated worst-case editable link geometry benchmark. */
+export interface RunEditableLinkGeometryBenchmarkOptions {
+  iterations?: number;
+  warmupIterations?: number;
 }
 
 const defaultIterationsByScenario: Record<CanvasPerfScenarioName, number> = {
@@ -116,6 +126,16 @@ const noopEdgeMenu = (() => undefined) as unknown as (
 ) => void;
 const noopGhostClick = () => undefined;
 
+const editableLinkBenchmarkRoute = {
+  version: 1 as const,
+  waypoints: Array.from({ length: 16 }, (_, index) => ({
+    x: 320 + index * 88,
+    y: index % 2 === 0 ? 96 : 544,
+  })),
+};
+const editableLinkBenchmarkSourceRect = { x: 32, y: 260, width: 240, height: 120 };
+const editableLinkBenchmarkTargetRect = { x: 1_720, y: 260, width: 240, height: 120 };
+
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
@@ -140,6 +160,48 @@ function measureLocalMetric<T>(
       timestamp: Date.now(),
     });
   }
+}
+
+function benchmarkEditableLinkGeometry(
+  samples: CanvasMetricSample[],
+  scenarioName: CanvasPerfScenarioName,
+): void {
+  measureLocalMetric(samples, scenarioName, 'editableLinkGeometry', () =>
+    buildEditableLinkPath({
+      sourceRect: editableLinkBenchmarkSourceRect,
+      targetRect: editableLinkBenchmarkTargetRect,
+      fallbackSource: { x: 272, y: 320 },
+      fallbackTarget: { x: 1_720, y: 320 },
+      route: editableLinkBenchmarkRoute,
+      parallelIndex: 0,
+    }),
+  );
+}
+
+/** Measures maximum-size editable link geometry without running unrelated graph benchmarks. */
+export function runEditableLinkGeometryBenchmark(
+  options: RunEditableLinkGeometryBenchmarkOptions = {},
+): CanvasMetricAggregate {
+  const scenarioName = 'stress';
+  const measuredSamples: CanvasMetricSample[] = [];
+  const warmupSamples: CanvasMetricSample[] = [];
+  const warmupIterations = options.warmupIterations ?? 3;
+  const iterations = options.iterations ?? defaultIterationsByScenario.stress;
+
+  for (let index = 0; index < warmupIterations; index += 1) {
+    benchmarkEditableLinkGeometry(warmupSamples, scenarioName);
+  }
+
+  for (let index = 0; index < iterations; index += 1) {
+    benchmarkEditableLinkGeometry(measuredSamples, scenarioName);
+  }
+
+  const metric =
+    aggregateCanvasMetricSamples(measuredSamples)[`${scenarioName}:editableLinkGeometry`];
+  if (!metric) {
+    throw new Error('Editable link geometry benchmark requires at least one measured iteration.');
+  }
+  return metric;
 }
 
 function legacyPositionEntries(
@@ -179,7 +241,7 @@ function buildLegacyStructuralCompositionCacheSignature(
     savedPositions: legacyPositionEntries(input.savedPositions),
     computedPositions: legacyPositionEntries(input.computedPositions),
     currentPositions: legacyPositionEntries(input.currentPositions),
-    defaultPosition: input.defaultPosition ?? null,
+    explicitPositions: legacyPositionEntries(input.explicitPositions),
     editMode: input.editMode,
     placementDeviceIds: [...input.placementDeviceIds].sort((left, right) =>
       left.localeCompare(right),
@@ -347,13 +409,17 @@ function benchmarkOperations(
   const devicesById = new Map(runtimeDevices.map((device) => [device.id, device]));
   const currentPositions = new Map(scenario.positions);
   const placementDeviceIds = new Set<string>();
+  const explicitPositions =
+    runtimeDevices[0] === undefined
+      ? new Map<string, { x: number; y: number }>()
+      : new Map([[runtimeDevices[0].id, { x: 120, y: 120 }]]);
 
   const nodes = measureLocalMetric(samples, scenarioName, 'buildTopologyNodes', () =>
     buildTopologyNodes(
       runtimeDevices,
       scenario.positions,
       new Map(),
-      { x: 120, y: 120 },
+      explicitPositions,
       false,
       noopDeviceMenu,
       scenario.runtimeSnapshot,
@@ -385,12 +451,13 @@ function benchmarkOperations(
     savedPositions: scenario.positions,
     computedPositions: new Map<string, { x: number; y: number }>(),
     currentPositions: buildCurrentPositions(nodes),
-    defaultPosition: { x: 120, y: 120 },
+    explicitPositions,
     editMode: false,
     openDeviceMenu: noopDeviceMenu,
     openEdgeMenu: noopEdgeMenu,
     placementDeviceIds,
     alerts: scenario.alerts,
+    snapGrid: null,
   };
 
   measureLocalMetric(samples, scenarioName, 'composeCanvasTopology', () =>
@@ -410,8 +477,9 @@ function benchmarkOperations(
     savedPositions: scenario.positions,
     computedPositions: compositionInput.computedPositions,
     currentPositions: compositionInput.currentPositions,
-    defaultPosition: compositionInput.defaultPosition,
+    explicitPositions: compositionInput.explicitPositions,
     editMode: compositionInput.editMode,
+    snapGrid: compositionInput.snapGrid,
     placementDeviceIds,
     runtimeIdentity: `benchmark:${scenarioName}`,
     runtimeVersion: 1,
@@ -545,6 +613,20 @@ function benchmarkOperations(
       height: 1600,
     });
   });
+
+  const placementObstacles = scenario.devices.map((device) => {
+    const position = scenario.positions.get(device.id) ?? { x: 0, y: 0 };
+    return { x: position.x, y: position.y, width: 370, height: 140 };
+  });
+  measureLocalMetric(samples, scenarioName, 'newNodePlacement', () =>
+    findNewNodePlacement({
+      viewport: { x: 0, y: 0, width: 1440, height: 900 },
+      nodeSize: { width: 370, height: 140 },
+      obstacles: placementObstacles,
+    }),
+  );
+
+  benchmarkEditableLinkGeometry(samples, scenarioName);
 
   const { layoutNodes, layoutEdges } = buildLayoutInputs(scenario);
   measureLocalMetric(samples, scenarioName, 'computeForceLayout', () =>

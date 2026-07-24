@@ -18,6 +18,14 @@ vi.mock('../../api/client', () => ({
   updateDevice: vi.fn().mockResolvedValue({}),
 }));
 
+vi.mock('../AddDevicePanel', () => ({
+  AddDevicePanel: ({ onDeviceAdded }: { onDeviceAdded: (deviceId: string) => void }) => (
+    <button type="button" onClick={() => onDeviceAdded('new-dev')}>
+      Complete mocked add
+    </button>
+  ),
+}));
+
 vi.mock('../DeviceConfigPanel', () => ({
   DeviceConfigPanel: (props: {
     device: Device;
@@ -221,6 +229,40 @@ describe('CanvasPanels', () => {
     vi.clearAllMocks();
   });
 
+  it('closes the add-device panel and requests placement for the exact added device', async () => {
+    const setPanelContent = vi.fn();
+    const loadTopology = vi.fn().mockResolvedValue(undefined);
+    const requestNewNodePlacement = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'addDevice' }}
+        setPanelContent={setPanelContent}
+        devices={[]}
+        topologyLinks={[]}
+        loadTopology={loadTopology}
+        requestNewNodePlacement={requestNewNodePlacement}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        runtimeState={buildRuntimeState({
+          devices: [],
+          links: [],
+          snapshot: null,
+          alerts: [],
+          prometheusStatus: null,
+        })}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Complete mocked add' }));
+    });
+
+    expect(setPanelContent).toHaveBeenCalledWith(null);
+    expect(requestNewNodePlacement).toHaveBeenCalledWith('new-dev');
+    expect(loadTopology).not.toHaveBeenCalled();
+  });
+
   it('forwards WinBox availability updates for the open device config panel', () => {
     const onWinBoxAvailabilityChange = vi.fn();
     const device = mockDevice();
@@ -239,9 +281,9 @@ describe('CanvasPanels', () => {
         devices={[device]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
         onWinBoxAvailabilityChange={onWinBoxAvailabilityChange}
       />,
@@ -273,9 +315,9 @@ describe('CanvasPanels', () => {
         devices={[liveDevice]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
       />,
     );
@@ -300,9 +342,9 @@ describe('CanvasPanels', () => {
         devices={[device]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
         editMode={false}
       />,
@@ -317,9 +359,9 @@ describe('CanvasPanels', () => {
         devices={[device]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
         editMode
       />,
@@ -346,9 +388,9 @@ describe('CanvasPanels', () => {
         devices={[device]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
         mapId="map-1"
         mapName="Backbone"
@@ -391,9 +433,9 @@ describe('CanvasPanels', () => {
           },
         ]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
         mapId="map-1"
         mapName="Backbone"
@@ -421,9 +463,9 @@ describe('CanvasPanels', () => {
         devices={[device]}
         topologyLinks={[]}
         loadTopology={loadTopology}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
         mapId="map-1"
         mapName="Backbone"
@@ -452,9 +494,9 @@ describe('CanvasPanels', () => {
         devices={[]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
       />,
     );
@@ -480,9 +522,9 @@ describe('CanvasPanels', () => {
         devices={[device]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={setNodes}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
         editMode
       />,
@@ -541,9 +583,9 @@ describe('CanvasPanels', () => {
         devices={[sourceDevice, targetDevice]}
         topologyLinks={[mockLink()]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
       />,
     );
@@ -572,9 +614,9 @@ describe('CanvasPanels', () => {
       devices: [sourceDevice, targetDevice],
       topologyLinks: [mockLink()],
       loadTopology: vi.fn().mockResolvedValue(undefined),
+      requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
       setDevices: vi.fn(),
       setNodes: vi.fn(),
-      reactFlow: {} as never,
       runtimeState,
     };
 
@@ -608,9 +650,9 @@ describe('CanvasPanels', () => {
         devices={[liveDevice]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
       />,
     );
@@ -635,9 +677,9 @@ describe('CanvasPanels', () => {
         devices={[device]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
       />,
     );
@@ -670,9 +712,9 @@ describe('CanvasPanels', () => {
       devices: [device],
       topologyLinks: [],
       loadTopology: vi.fn().mockResolvedValue(undefined),
+      requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
       setDevices: vi.fn(),
       setNodes: vi.fn(),
-      reactFlow: {} as never,
       runtimeState,
     };
 
@@ -761,9 +803,9 @@ describe('CanvasPanels', () => {
         devices={[device]}
         topologyLinks={[]}
         loadTopology={loadTopology}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
       />,
     );
@@ -822,9 +864,9 @@ describe('CanvasPanels', () => {
         devices={[sourceDevice, targetDevice]}
         topologyLinks={[mockLink({ target_if_name: 'ether2' })]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
       />,
     );
@@ -851,9 +893,9 @@ describe('CanvasPanels', () => {
           devices: [device],
           topologyLinks: [],
           loadTopology: vi.fn().mockResolvedValue(undefined),
+          requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
           setDevices: vi.fn(),
           setNodes: vi.fn(),
-          reactFlow: {} as never,
           runtimeState,
         } as const)}
       />,
@@ -890,9 +932,9 @@ describe('CanvasPanels', () => {
         devices={[sourceDevice, targetDevice]}
         topologyLinks={[liveLink]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
       />,
     );
@@ -921,9 +963,9 @@ describe('CanvasPanels', () => {
         devices={[liveDevice]}
         topologyLinks={[]}
         loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
         setDevices={vi.fn()}
         setNodes={vi.fn()}
-        reactFlow={{} as never}
         runtimeState={runtimeState}
       />,
     );

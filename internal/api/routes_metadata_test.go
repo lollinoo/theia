@@ -138,3 +138,26 @@ func TestRouteMetadataBuildsServeMuxRegistrations(t *testing.T) {
 		}
 	}
 }
+
+func TestRouteMetadataRestrictsCanvasMapLinkRouteMethods(t *testing.T) {
+	id := "00000000-0000-0000-0000-000000000001"
+	path := "/api/v1/canvas/maps/" + id + "/link-routes/" + id
+	tests := []struct {
+		method string
+		want   bool
+	}{
+		{method: http.MethodPut, want: true},
+		{method: http.MethodDelete, want: true},
+		{method: http.MethodGet, want: false},
+		{method: http.MethodPost, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			_, got := apiRouteMetadata.match(tt.method, path)
+			if got != tt.want {
+				t.Fatalf("route metadata match(%s, %s) = %t, want %t", tt.method, path, got, tt.want)
+			}
+		})
+	}
+}

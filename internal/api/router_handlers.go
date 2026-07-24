@@ -38,6 +38,7 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 		canvasTopologyHandler,
 		deps.deviceService,
 		deps.linkRepo,
+		deps.canvasMapLinkRouteRepo,
 		deps.areaRepo,
 		deps.runtimeStateFunc,
 	)
@@ -160,6 +161,17 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 					writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 				}
 			default:
+				if strings.HasPrefix(action, "link-routes/") {
+					switch r.Method {
+					case http.MethodPut:
+						canvasMapHandler.HandleSaveLinkRoute(w, r)
+					case http.MethodDelete:
+						canvasMapHandler.HandleDeleteLinkRoute(w, r)
+					default:
+						writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+					}
+					return
+				}
 				if strings.HasPrefix(action, "areas/") {
 					switch r.Method {
 					case http.MethodPut:

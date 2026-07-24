@@ -153,6 +153,39 @@ export interface CanvasMap {
   updated_at: string;
 }
 
+/** LinkWaypoint is one saved map-local control point in canvas coordinates. */
+export interface LinkWaypoint {
+  x: number;
+  y: number;
+}
+
+/** LinkRouteV1 is the supported persisted link-route shape. */
+export interface LinkRouteV1 {
+  version: 1;
+  waypoints: LinkWaypoint[];
+}
+
+/** LinkRoute is the versioned saved route union exposed to canvas consumers. */
+export type LinkRoute = LinkRouteV1;
+
+/** LinkRouteMap indexes saved map-local routes by canonical link ID. */
+export type LinkRouteMap = Record<string, LinkRoute>;
+
+/** Copies one link route so mutable edge interactions cannot alias source waypoint storage. */
+export function copyLinkRoute(route: LinkRoute): LinkRoute {
+  return {
+    version: route.version,
+    waypoints: route.waypoints.map((waypoint) => ({ x: waypoint.x, y: waypoint.y })),
+  };
+}
+
+/** Copies a link route map and every nested waypoint for topology ownership isolation. */
+export function copyLinkRouteMap(linkRoutes: LinkRouteMap | undefined): LinkRouteMap {
+  return Object.fromEntries(
+    Object.entries(linkRoutes ?? {}).map(([linkId, route]) => [linkId, copyLinkRoute(route)]),
+  );
+}
+
 /** CanvasTopologyCapabilities advertises optional server features for topology clients. */
 export interface CanvasTopologyCapabilities {
   supports_topology_delta: boolean;
@@ -173,6 +206,7 @@ export interface CanvasTopologyResponse {
   devices: Device[];
   links: Link[];
   positions: Record<string, DevicePosition>;
+  link_routes?: LinkRouteMap;
   areas: Area[];
   capabilities: CanvasTopologyCapabilities;
   settings: {
@@ -584,6 +618,48 @@ function parseCanvasTopologyPositions(payload: unknown): Record<string, DevicePo
   );
 }
 
+// parseCanvasTopologyLinkRoute validates one route without failing sibling entries.
+function parseCanvasTopologyLinkRoute(payload: unknown): LinkRoute | null {
+  if (!isRecord(payload) || payload.version !== 1 || !Array.isArray(payload.waypoints)) {
+    return null;
+  }
+  if (payload.waypoints.length < 1 || payload.waypoints.length > 16) {
+    return null;
+  }
+
+  const waypoints: LinkWaypoint[] = [];
+  for (const waypoint of payload.waypoints) {
+    if (
+      !isRecord(waypoint) ||
+      typeof waypoint.x !== 'number' ||
+      !Number.isFinite(waypoint.x) ||
+      typeof waypoint.y !== 'number' ||
+      !Number.isFinite(waypoint.y)
+    ) {
+      return null;
+    }
+    waypoints.push({ x: waypoint.x, y: waypoint.y });
+  }
+
+  return { version: 1, waypoints };
+}
+
+/** Parses saved link routes independently so one malformed entry cannot break topology loading. */
+export function parseCanvasTopologyLinkRoutes(payload: unknown): LinkRouteMap {
+  if (!isRecord(payload)) {
+    return {};
+  }
+
+  const routes: LinkRouteMap = {};
+  for (const [linkId, routePayload] of Object.entries(payload)) {
+    const route = parseCanvasTopologyLinkRoute(routePayload);
+    if (route !== null) {
+      routes[linkId] = route;
+    }
+  }
+  return routes;
+}
+
 // parseCanvasMapFilter validates saved-map filters without adding missing optional keys.
 function parseCanvasMapFilter(value: unknown): CanvasMapFilter {
   if (value === undefined || value === null) {
@@ -716,6 +792,7 @@ export function parseCanvasTopologyResponse(payload: unknown): CanvasTopologyRes
       data: Array.isArray(payload.links) ? payload.links : [],
     }),
     positions: parseCanvasTopologyPositions(payload.positions),
+    link_routes: parseCanvasTopologyLinkRoutes(payload.link_routes),
     areas: parseAreasResponse({
       data: Array.isArray(payload.areas) ? payload.areas : [],
     }),

@@ -1,6 +1,7 @@
 /**
  * Exercises node builder topology canvas behavior so refactors preserve the documented contract.
  */
+import type { SnapGrid } from '@xyflow/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Device, Link } from '../../types/api';
@@ -91,7 +92,7 @@ describe('buildTopologyNodes', () => {
       [mockDevice()],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       mockSnapshot(),
@@ -120,7 +121,7 @@ describe('buildTopologyNodes', () => {
       ],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       {
@@ -155,7 +156,7 @@ describe('buildTopologyNodes', () => {
       ],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       mockSnapshot(),
@@ -172,7 +173,7 @@ describe('buildTopologyNodes', () => {
       [mockDevice({ status: 'up' })],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       mockSnapshot(),
@@ -193,7 +194,7 @@ describe('buildTopologyNodes', () => {
       [mockDevice({ status: 'up' })],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       mockSnapshot(),
@@ -215,7 +216,7 @@ describe('buildTopologyNodes', () => {
       [mockDevice({ status: 'up' })],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       {
@@ -239,7 +240,7 @@ describe('buildTopologyNodes', () => {
       [mockDevice({ status: 'up', ip: '10.0.0.1', device_type: 'router' })],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([['dev-1', { x: 120, y: 180 }]]),
       false,
       vi.fn(),
       {
@@ -282,7 +283,10 @@ describe('buildTopologyNodes', () => {
       ],
       new Map(),
       new Map(),
-      { x: 120, y: 180 },
+      new Map([
+        ['dev-1', { x: 120, y: 180 }],
+        ['dev-2', { x: 120, y: 180 }],
+      ]),
       false,
       vi.fn(),
       mockSnapshot(),
@@ -320,7 +324,7 @@ describe('buildTopologyNodes', () => {
         ['dev-1', { x: 900, y: 910 }],
         ['dev-2', { x: 320, y: 420 }],
       ]),
-      { x: 50, y: 60 },
+      new Map([['dev-2', { x: 50, y: 60 }]]),
       false,
       vi.fn(),
       null,
@@ -334,5 +338,140 @@ describe('buildTopologyNodes', () => {
     expect(nodes[0].position).toEqual({ x: 25, y: 35 });
     expect(nodes[0].data.pinned).toBe(true);
     expect(nodes[1].position).toEqual({ x: 50, y: 60 });
+  });
+
+  it('preserves saved and current positions while snapping new placements when enabled', () => {
+    const devices = [
+      mockDevice({ id: 'saved' }),
+      mockDevice({ id: 'current' }),
+      mockDevice({ id: 'computed' }),
+      mockDevice({ id: 'explicit' }),
+    ];
+    const buildNodes = (snapGrid: SnapGrid | null) =>
+      buildTopologyNodes(
+        devices,
+        new Map([['saved', { x: 44, y: 46, pinned: true }]]),
+        new Map([['computed', { x: 104, y: 106 }]]),
+        new Map([['explicit', { x: 136, y: 164 }]]),
+        false,
+        vi.fn(),
+        null,
+        [],
+        [],
+        undefined,
+        new Map([['current', { x: 74, y: -16, pinned: true }]]),
+        new Set(['computed']),
+        snapGrid,
+      );
+
+    const nodesById = new Map(buildNodes([30, 30]).map((node) => [node.id, node]));
+
+    expect(nodesById.get('saved')?.position).toEqual({ x: 44, y: 46 });
+    expect(nodesById.get('current')?.position).toEqual({ x: 74, y: -16 });
+    expect(nodesById.get('computed')?.position).toEqual({ x: 90, y: 120 });
+    expect(nodesById.get('explicit')?.position).toEqual({ x: 150, y: 150 });
+  });
+
+  it('preserves exact resolved positions when the grid is disabled', () => {
+    const devices = [
+      mockDevice({ id: 'saved' }),
+      mockDevice({ id: 'current' }),
+      mockDevice({ id: 'computed' }),
+      mockDevice({ id: 'explicit' }),
+    ];
+    const nodes = buildTopologyNodes(
+      devices,
+      new Map([['saved', { x: 44, y: 46, pinned: true }]]),
+      new Map([['computed', { x: 104, y: 106 }]]),
+      new Map([['explicit', { x: 136, y: 164 }]]),
+      false,
+      vi.fn(),
+      null,
+      [],
+      [],
+      undefined,
+      new Map([['current', { x: 74, y: -16, pinned: true }]]),
+      new Set(['computed']),
+      null,
+    );
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+
+    expect(nodesById.get('saved')?.position).toEqual({ x: 44, y: 46 });
+    expect(nodesById.get('current')?.position).toEqual({ x: 74, y: -16 });
+    expect(nodesById.get('computed')?.position).toEqual({ x: 104, y: 106 });
+    expect(nodesById.get('explicit')?.position).toEqual({ x: 136, y: 164 });
+  });
+
+  it('applies only the keyed explicit override ahead of current positions', () => {
+    const explicitPositions = new Map([['dev-new', { x: 450, y: 275 }]]);
+    const currentPositions = new Map([
+      ['dev-old', { x: 10, y: 20, pinned: true }],
+      ['dev-new', { x: 9000, y: 9000, pinned: true }],
+    ]);
+    const nodes = buildTopologyNodes(
+      [
+        mockDevice({ id: 'dev-old' }),
+        mockDevice({
+          id: 'dev-new',
+          hostname: 'router-new',
+          ip: '10.0.0.2',
+          sys_name: 'router-new',
+        }),
+      ],
+      new Map(),
+      new Map(),
+      explicitPositions,
+      false,
+      vi.fn(),
+      null,
+      [],
+      [],
+      undefined,
+      currentPositions,
+      new Set(),
+    );
+
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+    expect(nodesById.get('dev-old')?.position).toEqual({ x: 10, y: 20 });
+    expect(nodesById.get('dev-old')?.data.pinned).toBe(true);
+    expect(nodesById.get('dev-new')?.position).toEqual({ x: 450, y: 275 });
+    expect(nodesById.get('dev-new')?.data.pinned).toBe(false);
+  });
+
+  it('ignores non-finite keyed overrides without changing current or saved priority', () => {
+    const nodes = buildTopologyNodes(
+      [
+        mockDevice({ id: 'dev-current' }),
+        mockDevice({
+          id: 'dev-saved',
+          hostname: 'router-saved',
+          ip: '10.0.0.3',
+          sys_name: 'router-saved',
+        }),
+      ],
+      new Map([
+        ['dev-current', { x: 100, y: 120, pinned: false }],
+        ['dev-saved', { x: 30, y: 40, pinned: true }],
+      ]),
+      new Map(),
+      new Map([
+        ['dev-current', { x: Number.POSITIVE_INFINITY, y: 275 }],
+        ['dev-saved', { x: 450, y: Number.NaN }],
+      ]),
+      false,
+      vi.fn(),
+      null,
+      [],
+      [],
+      undefined,
+      new Map([['dev-current', { x: 10, y: 20, pinned: true }]]),
+      new Set(),
+    );
+
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+    expect(nodesById.get('dev-current')?.position).toEqual({ x: 10, y: 20 });
+    expect(nodesById.get('dev-current')?.data.pinned).toBe(true);
+    expect(nodesById.get('dev-saved')?.position).toEqual({ x: 30, y: 40 });
+    expect(nodesById.get('dev-saved')?.data.pinned).toBe(true);
   });
 });
