@@ -3,7 +3,11 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { CANVAS_PERF_BENCHMARK_METRICS, runCanvasPerfBenchmark } from './canvasPerfBenchmark';
+import {
+  CANVAS_PERF_BENCHMARK_METRICS,
+  runCanvasPerfBenchmark,
+  runEditableLinkGeometryBenchmark,
+} from './canvasPerfBenchmark';
 import { CANVAS_PERF_SCENARIOS, type CanvasPerfScenarioName } from './canvasPerfScenarios';
 
 describe('canvasPerfBenchmark', () => {
@@ -19,6 +23,8 @@ describe('canvasPerfBenchmark', () => {
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('buildCanvasTopologyCompositionCacheKeyLegacy');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('composeCanvasTopologyCached');
     expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('renderProjection');
+    expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('newNodePlacement');
+    expect(CANVAS_PERF_BENCHMARK_METRICS).toContain('editableLinkGeometry');
 
     const result = runCanvasPerfBenchmark({
       iterations: 1,
@@ -34,6 +40,17 @@ describe('canvasPerfBenchmark', () => {
     );
     expect(result.scenarios.small.metrics.composeCanvasTopologyCached.count).toBe(1);
     expect(result.scenarios.small.metrics.renderProjection.count).toBe(1);
+    expect(result.scenarios.small.metrics.newNodePlacement.count).toBe(1);
+    expect(result.scenarios.small.metrics.editableLinkGeometry.count).toBe(1);
+  });
+
+  it('keeps worst-case editable link geometry within the stress budget', () => {
+    const metric = runEditableLinkGeometryBenchmark({
+      warmupIterations: 3,
+    });
+
+    expect(metric.count).toBe(5);
+    expect(metric.p95Ms).toBeLessThan(8);
   });
 
   it('produces aggregate metrics for every official scenario and benchmarked function', () => {

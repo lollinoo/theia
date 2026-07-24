@@ -144,6 +144,50 @@ describe('useCanvasGraphState', () => {
     expect(result.current.nodeIndexByIdRef.current).toEqual(new Map([['node-b', 0]]));
   });
 
+  it('snaps controlled position changes when snapping is enabled', () => {
+    const { result } = renderHook(() =>
+      useCanvasGraphState({ snapToGrid: true, snapGrid: [30, 30] }),
+    );
+
+    act(() => {
+      result.current.setNodes([node('node-a')]);
+    });
+
+    act(() => {
+      result.current.onNodesChange([
+        {
+          id: 'node-a',
+          type: 'position',
+          position: { x: 44, y: 46 },
+        },
+      ]);
+    });
+
+    expect(result.current.nodes[0]?.position).toEqual({ x: 30, y: 60 });
+  });
+
+  it('preserves exact controlled position changes when snapping is disabled', () => {
+    const { result } = renderHook(() =>
+      useCanvasGraphState({ snapToGrid: false, snapGrid: [30, 30] }),
+    );
+
+    act(() => {
+      result.current.setNodes([node('node-a')]);
+    });
+
+    act(() => {
+      result.current.onNodesChange([
+        {
+          id: 'node-a',
+          type: 'position',
+          position: { x: 44, y: 46 },
+        },
+      ]);
+    });
+
+    expect(result.current.nodes[0]?.position).toEqual({ x: 44, y: 46 });
+  });
+
   it('applies edge changes while refreshing the edge index', () => {
     const { result } = renderHook(() => useCanvasGraphState());
 

@@ -17,6 +17,7 @@ import {
   createDevice,
   deleteCanvasMap,
   deleteCanvasMapArea,
+  deleteCanvasMapLinkRoute,
   deleteDevice,
   duplicateCanvasMap,
   fetchAdminAuditLogs,
@@ -54,6 +55,7 @@ import {
   resumeBulkBackupRun,
   revealSNMPProfile,
   runTopologyDiscovery,
+  saveCanvasMapLinkRoute,
   setAdminUserStatus,
   setCanvasMapPrimary,
   startBulkBackupRun,
@@ -1370,6 +1372,53 @@ describe('canvas map client', () => {
     expect(fetch).toHaveBeenCalledWith(
       '/api/v1/canvas/maps/map-1',
       expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('saves a link route through the encoded map-scoped link route endpoint', async () => {
+    const route = { version: 1 as const, waypoints: [{ x: 12.5, y: -8 }] };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse({
+          data: {
+            ...route,
+            updated_at: '2026-07-21T12:00:00Z',
+          },
+        }),
+      ),
+    );
+
+    await expect(saveCanvasMapLinkRoute('map/a', 'link 1', route)).resolves.toEqual(route);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map%2Fa/link-routes/link%201',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify(route),
+      }),
+    );
+  });
+
+  it('deletes a link route through the encoded map-scoped link route endpoint', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        mockResponse(null, {
+          ok: true,
+          status: 204,
+          statusText: 'No Content',
+        }),
+      ),
+    );
+
+    await deleteCanvasMapLinkRoute('map/a', 'link 1');
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map%2Fa/link-routes/link%201',
+      expect.objectContaining({
+        method: 'DELETE',
+        body: undefined,
+      }),
     );
   });
 

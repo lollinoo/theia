@@ -38,6 +38,7 @@ ICON_NAMES=(
   expand_less
   expand_more
   fit_screen
+  grid_4x4
   history
   hub
   info
@@ -70,9 +71,9 @@ ICON_NAMES=(
   zoom_out
 )
 
-# ASCII letters a-z (U+0061-U+007A), underscore (U+005F), and space (U+0020)
-# are required as ligature input glyphs for Material Symbols icon name lookup.
-INPUT_UNICODES="U+0020,U+005F,U+0061-007A"
+# ASCII letters a-z (U+0061-U+007A), digit 4 (U+0034), underscore (U+005F),
+# and space (U+0020) are required as ligature input glyphs for icon name lookup.
+INPUT_UNICODES="U+0020,U+0034,U+005F,U+0061-007A"
 
 # Download the full variable font from Google Fonts (Material Symbols Rounded)
 FULL_FONT="$WORK_DIR/MaterialSymbolsRounded.woff2"

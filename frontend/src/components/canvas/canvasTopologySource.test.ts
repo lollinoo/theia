@@ -92,6 +92,7 @@ describe('canvasTopologySource', () => {
 
   it('loads default bootstrap topology with runtime metadata', async () => {
     const runtimeSnapshot = { devices: {}, links: {} } as SnapshotPayload;
+    const linkRoute = { version: 1 as const, waypoints: [{ x: 12.5, y: -8 }] };
     vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce({
       topology: canvasTopologyResponse({
         positions: {
@@ -101,6 +102,7 @@ describe('canvasTopologySource', () => {
         runtime_version: 7,
         runtime_identity: 'rt-sha256:abc',
         runtime_snapshot: runtimeSnapshot,
+        link_routes: { 'link-1': linkRoute },
       }),
     });
     const fetchPositions = vi.fn(async () => new Map<string, PositionState>());
@@ -129,10 +131,36 @@ describe('canvasTopologySource', () => {
       runtimeIdentity: 'rt-sha256:abc',
       runtimeSnapshot,
       schemaVersion: 1,
+      linkRoutes: { 'link-1': linkRoute },
     });
     expect(result.status === 'ok' ? result.positions : null).toEqual(
       new Map([['dev-1', { x: 10, y: 20, pinned: true }]]),
     );
+  });
+
+  it('isolates loaded link routes from reusable bootstrap topology data', async () => {
+    const cachedTopology = canvasTopologyResponse({
+      link_routes: {
+        'link-1': { version: 1, waypoints: [{ x: 12.5, y: -8 }] },
+      },
+    });
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce({ topology: cachedTopology });
+
+    const result = await loadCanvasTopologySource({
+      mapId: null,
+      fetchPositions: vi.fn(async () => new Map<string, PositionState>()),
+      etag: null,
+      includeRuntimeBootstrap: true,
+    });
+
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') {
+      throw new Error('expected loaded topology');
+    }
+
+    result.linkRoutes['link-1']!.waypoints[0]!.x = 999;
+
+    expect(cachedTopology.link_routes?.['link-1']?.waypoints[0]?.x).toBe(12.5);
   });
 
   it('loads saved map bootstrap topology with the full runtime cursor', async () => {
@@ -210,6 +238,7 @@ describe('canvasTopologySource', () => {
       devices: [testDevice],
       links: [testLink],
       areas: [],
+      linkRoutes: {},
     });
     expect(result.status === 'ok' ? result.positions : null).toBe(savedPositions);
   });

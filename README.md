@@ -129,6 +129,17 @@ For the full setup guide, including production, staging, configuration, keyring 
 > [!IMPORTANT]
 > The Docker Compose stacks use PostgreSQL 18 and dedicated PostgreSQL 18 volumes. An existing PostgreSQL 17 deployment cannot be upgraded safely with only `docker compose pull` and `docker compose up`: migrate the database into the new volume first. Follow the [PostgreSQL 17 to 18 production migration procedure](SETUP.md#migrating-bundled-production-postgresql-17-to-18), which preserves the original PostgreSQL 17 volume for rollback.
 
+## Grafana Dashboards
+
+The optional Grafana dashboards under [`grafana/mikrotik-metrics/`](grafana/mikrotik-metrics/) can run alongside Theia to provide deeper RouterOS telemetry and logs. Grafana and Loki remain operator-managed external services; Theia's Compose stacks do not provision them.
+
+| Dashboard | Datasource | Coverage |
+| --- | --- | --- |
+| [MikroTik Operations - Full](grafana/mikrotik-metrics/mikrotik-graphs.json) | Prometheus | Identity, hardware, uptime, CPU, RAM, environment, physical and PPPoE traffic, Ethernet state, link-down events, capacity, and FCS errors. |
+| [MikroTik Logs - Full](grafana/mikrotik-metrics/mikrotik-logs.json) | Loki | Filtered and severity totals, topic trends, top topics, and detailed RouterOS log exploration. |
+
+In Grafana, use **Dashboards -> New -> Import** for each JSON file, map its Prometheus or Loki datasource variable, and select one Routerboard. Both dashboards use single-select datasource and Routerboard variables. Used with Theia's topology and runtime health, they can help isolate whether an operational symptom originates in Theia, a router or interface, the SNMP/Prometheus telemetry path, or the syslog/Loki path.
+
 ## Bridge Connector
 
 The Bridge Connector lets an authenticated user launch WinBox locally from Theia without exposing raw device passwords to the browser.
@@ -190,6 +201,7 @@ cmd/
 frontend/           React/Vite frontend
 internal/           backend API, services, domain, repositories, workers, collectors
 docker/             Prometheus, SNMP, and lab container assets
+grafana/            optional Grafana dashboard JSON for monitoring and debugging
 scripts/            seed, validation, test, backup, and bridge helper scripts
 vendors/            vendor capability definitions
 docs/               project documentation and planning artifacts

@@ -3,7 +3,7 @@
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
-import type { Link } from '../types/api';
+import type { Link, LinkRoute } from '../types/api';
 import { type AlertStatus, type DeviceMetricsDTO, type LinkMetricsDTO } from '../types/metrics';
 import {
   computeLinkBadgeAnchor,
@@ -33,6 +33,25 @@ type DeviceEndpointPrimaryHealth = DeviceMetricsDTO['primary_health'];
 type DeviceEndpointReachability = DeviceMetricsDTO['reachability'];
 type DeviceEndpointReachabilityEvidence = DeviceMetricsDTO['network_reachable'];
 
+/** Identifies one mounted saved-map generation, including A-to-B-to-A transitions. */
+export interface LinkRouteOwnerToken {
+  readonly mapId: string;
+  readonly generation: number;
+}
+
+/** Grants one edge action authority within a specific saved-map generation. */
+export interface LinkRouteEditToken {
+  readonly owner: LinkRouteOwnerToken;
+  readonly actionEpoch: number;
+}
+
+/** Commits a route only for the edge action and map generation that created it. */
+export type LinkRouteCommit = (
+  edgeId: string,
+  route: LinkRoute | null,
+  editToken: LinkRouteEditToken,
+) => void;
+
 interface DeviceEndpointRuntimeState {
   health?: DeviceEndpointHealth;
   primaryHealth?: DeviceEndpointPrimaryHealth;
@@ -55,6 +74,10 @@ export interface LinkEdgeData {
   manual?: boolean;
   parallelIndex?: number;
   onContextMenu?: (event: MouseEvent | ReactMouseEvent<SVGPathElement>, edgeID: string) => void;
+  route?: LinkRoute;
+  routeEditable?: boolean;
+  routeEditToken?: LinkRouteEditToken;
+  onRouteCommit?: LinkRouteCommit;
   metrics?: LinkMetricsDTO | null;
   throughputLabel?: string;
   utilization?: number | null;

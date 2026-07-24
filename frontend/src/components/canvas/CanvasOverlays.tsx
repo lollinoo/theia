@@ -8,6 +8,8 @@ import type { TopologyRecoveryNotice } from './useCanvasData';
 interface CanvasOverlaysProps {
   editMode: boolean;
   reconnecting: boolean;
+  linkRouteError: string | null;
+  dismissLinkRouteError: () => void;
   topologyRecoveryNotice: TopologyRecoveryNotice | null;
   dismissTopologyRecoveryNotice: () => void;
   retryTopologyRefresh: () => void;
@@ -20,6 +22,8 @@ interface CanvasOverlaysProps {
 export function CanvasOverlays({
   editMode,
   reconnecting,
+  linkRouteError,
+  dismissLinkRouteError,
   topologyRecoveryNotice,
   dismissTopologyRecoveryNotice,
   retryTopologyRefresh,
@@ -60,6 +64,30 @@ export function CanvasOverlays({
             <span className="h-2 w-2 flex-none rounded-full bg-warning" />
             <p className="text-sm text-warning">Prometheus degraded</p>
             <span className="text-xs text-on-bg-secondary">Diagnostics only</span>
+          </div>
+        )}
+        {linkRouteError && (
+          <div
+            role="alert"
+            className="pointer-events-auto flex items-center gap-2.5 rounded-full border border-status-down/35 bg-surface-container-high/95 px-4 py-2.5 shadow-floating backdrop-blur-sm"
+          >
+            <span className="h-2 w-2 flex-none rounded-full bg-status-down" />
+            <p className="text-sm text-status-down">{linkRouteError}</p>
+            <button
+              type="button"
+              onClick={dismissLinkRouteError}
+              className="text-on-bg-secondary hover:text-on-bg"
+              aria-label="Dismiss link route error"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
           </div>
         )}
         {topologyRecoveryNotice && (

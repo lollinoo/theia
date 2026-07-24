@@ -1,7 +1,7 @@
 /**
  * Exercises canvas overlays topology canvas behavior so refactors preserve the documented contract.
  */
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CanvasOverlays } from './CanvasOverlays';
@@ -12,6 +12,8 @@ describe('CanvasOverlays', () => {
       <CanvasOverlays
         editMode={false}
         reconnecting={false}
+        linkRouteError={null}
+        dismissLinkRouteError={vi.fn()}
         topologyRecoveryNotice={null}
         dismissTopologyRecoveryNotice={vi.fn()}
         retryTopologyRefresh={vi.fn()}
@@ -32,6 +34,8 @@ describe('CanvasOverlays', () => {
       <CanvasOverlays
         editMode={false}
         reconnecting={false}
+        linkRouteError={null}
+        dismissLinkRouteError={vi.fn()}
         topologyRecoveryNotice={null}
         dismissTopologyRecoveryNotice={vi.fn()}
         retryTopologyRefresh={vi.fn()}
@@ -49,6 +53,8 @@ describe('CanvasOverlays', () => {
       <CanvasOverlays
         editMode={false}
         reconnecting={false}
+        linkRouteError={null}
+        dismissLinkRouteError={vi.fn()}
         topologyRecoveryNotice={null}
         dismissTopologyRecoveryNotice={vi.fn()}
         retryTopologyRefresh={vi.fn()}
@@ -66,6 +72,8 @@ describe('CanvasOverlays', () => {
       <CanvasOverlays
         editMode={false}
         reconnecting={false}
+        linkRouteError={null}
+        dismissLinkRouteError={vi.fn()}
         topologyRecoveryNotice={{ tone: 'warning', message: 'Delayed', actionLabel: 'Retry' }}
         dismissTopologyRecoveryNotice={dismissTopologyRecoveryNotice}
         retryTopologyRefresh={vi.fn()}
@@ -84,6 +92,8 @@ describe('CanvasOverlays', () => {
       <CanvasOverlays
         editMode={false}
         reconnecting={false}
+        linkRouteError={null}
+        dismissLinkRouteError={vi.fn()}
         topologyRecoveryNotice={null}
         dismissTopologyRecoveryNotice={vi.fn()}
         retryTopologyRefresh={vi.fn()}
@@ -104,6 +114,8 @@ describe('CanvasOverlays', () => {
       <CanvasOverlays
         editMode={false}
         reconnecting
+        linkRouteError={null}
+        dismissLinkRouteError={vi.fn()}
         topologyRecoveryNotice={null}
         dismissTopologyRecoveryNotice={vi.fn()}
         retryTopologyRefresh={vi.fn()}
@@ -117,5 +129,34 @@ describe('CanvasOverlays', () => {
     expect(banner.className).toContain('top-32');
     expect(banner.className).toContain('sm:top-[86px]');
     expect(banner.className).not.toContain('lg:top-4');
+  });
+
+  it('shows a dismissible route failure without hiding edit mode or reconnect feedback', () => {
+    const dismissLinkRouteError = vi.fn();
+    render(
+      <CanvasOverlays
+        editMode
+        reconnecting
+        linkRouteError="Couldn't save link route. The last saved route was restored; try again."
+        dismissLinkRouteError={dismissLinkRouteError}
+        topologyRecoveryNotice={null}
+        dismissTopologyRecoveryNotice={vi.fn()}
+        retryTopologyRefresh={vi.fn()}
+        selectedNodeCount={0}
+        prometheusDiagnosticsVisible={false}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "Couldn't save link route. The last saved route was restored; try again.",
+    );
+    expect(screen.getByText('Edit Mode')).toBeInTheDocument();
+    expect(screen.getByTestId('reconnect-banner')).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss link route error' }));
+    });
+
+    expect(dismissLinkRouteError).toHaveBeenCalledOnce();
   });
 });

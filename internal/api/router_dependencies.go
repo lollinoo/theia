@@ -15,23 +15,24 @@ import (
 // routerDependencies names NewRouter's required collaborators so route assembly
 // can be split without changing the public constructor signature.
 type routerDependencies struct {
-	db                    *sql.DB
-	deviceService         *service.DeviceService
-	linkRepo              domain.LinkRepository
-	positionRepo          domain.PositionRepository
-	canvasMapRepo         domain.CanvasMapRepository
-	canvasMapPositionRepo domain.CanvasMapPositionRepository
-	settingsRepo          domain.AtomicSettingsRepository
-	snmpProfileRepo       domain.SNMPProfileRepository
-	credentialProfileRepo *postgres.CredentialProfileRepo
-	areaRepo              domain.AreaRepository
-	backupService         *service.BackupService
-	vendorRegistry        *vendor.Registry
-	vendorConfigRepo      domain.VendorConfigRepository
-	poller                statusProvider
-	instanceBackupService *service.InstanceBackupService
-	restoreRestarter      func()
-	bridgeBinariesDir     string
-	runtimeStateFunc      ws.RuntimeOverviewStateFunc
-	wsHandler             *ws.Handler
+	db                     *sql.DB
+	deviceService          *service.DeviceService
+	linkRepo               domain.LinkRepository
+	positionRepo           domain.PositionRepository
+	canvasMapRepo          domain.CanvasMapRepository
+	canvasMapPositionRepo  domain.CanvasMapPositionRepository
+	canvasMapLinkRouteRepo domain.CanvasMapLinkRouteRepository
+	settingsRepo           domain.AtomicSettingsRepository
+	snmpProfileRepo        domain.SNMPProfileRepository
+	credentialProfileRepo  *postgres.CredentialProfileRepo
+	areaRepo               domain.AreaRepository
+	backupService          *service.BackupService
+	vendorRegistry         *vendor.Registry
+	vendorConfigRepo       domain.VendorConfigRepository
+	poller                 statusProvider
+	instanceBackupService  *service.InstanceBackupService
+	restoreRestarter       func()
+	bridgeBinariesDir      string
+	runtimeStateFunc       ws.RuntimeOverviewStateFunc
+	wsHandler              *ws.Handler
 }

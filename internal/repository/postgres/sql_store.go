@@ -3,6 +3,7 @@ package postgres
 // This file defines sql store persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
+	"context"
 	"database/sql"
 	"strconv"
 	"strings"
@@ -30,12 +31,24 @@ func (db *DB) Query(query string, args ...interface{}) (*sql.Rows, error) {
 	return db.raw.Query(rebindQuery(query), args...)
 }
 
+func (db *DB) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	return db.raw.QueryContext(ctx, rebindQuery(query), args...)
+}
+
 func (db *DB) QueryRow(query string, args ...interface{}) *sql.Row {
 	return db.raw.QueryRow(rebindQuery(query), args...)
 }
 
 func (db *DB) Begin() (*Tx, error) {
 	tx, err := db.raw.Begin()
+	if err != nil {
+		return nil, err
+	}
+	return &Tx{raw: tx}, nil
+}
+
+func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
+	tx, err := db.raw.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -50,12 +63,20 @@ func (tx *Tx) Exec(query string, args ...interface{}) (sql.Result, error) {
 	return tx.raw.Exec(rebindQuery(query), args...)
 }
 
+func (tx *Tx) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return tx.raw.ExecContext(ctx, rebindQuery(query), args...)
+}
+
 func (tx *Tx) Query(query string, args ...interface{}) (*sql.Rows, error) {
 	return tx.raw.Query(rebindQuery(query), args...)
 }
 
 func (tx *Tx) QueryRow(query string, args ...interface{}) *sql.Row {
 	return tx.raw.QueryRow(rebindQuery(query), args...)
+}
+
+func (tx *Tx) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	return tx.raw.QueryRowContext(ctx, rebindQuery(query), args...)
 }
 
 func (tx *Tx) Prepare(query string) (*sql.Stmt, error) {
