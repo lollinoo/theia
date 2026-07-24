@@ -11,7 +11,14 @@ import {
   fetchLinks,
 } from '../../api/client';
 import type { PositionState } from '../../hooks/usePositions';
-import type { Area, Device, DevicePosition, Link } from '../../types/api';
+import {
+  type Area,
+  copyLinkRouteMap,
+  type Device,
+  type DevicePosition,
+  type Link,
+  type LinkRouteMap,
+} from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
 
 /** Describes the canvas topology source contract used by the topology canvas. */
@@ -20,6 +27,7 @@ export type CanvasTopologySource =
       status: 'ok';
       devices: Device[];
       links: Link[];
+      linkRoutes: LinkRouteMap;
       areas: Area[];
       positions: Map<string, PositionState>;
       etag?: string;
@@ -99,6 +107,7 @@ export async function loadCanvasTopologySource({
         status: 'ok',
         devices: topology.devices,
         links: topology.links,
+        linkRoutes: copyLinkRouteMap(topology.link_routes),
         areas: topology.areas,
         positions: topologyPositionsToPositionMap(Object.values(topology.positions)),
         etag: etagFromTopologyVersion(topology.topology_version),
@@ -127,6 +136,7 @@ export async function loadCanvasTopologySource({
       status: 'ok',
       devices: topology.devices,
       links: topology.links,
+      linkRoutes: copyLinkRouteMap(topology.link_routes),
       areas: topology.areas,
       positions: topologyPositionsToPositionMap(Object.values(topology.positions)),
       etag: result.etag,
@@ -163,6 +173,7 @@ export async function loadCanvasTopologySource({
     status: 'ok',
     devices,
     links,
+    linkRoutes: {},
     areas: [],
     positions,
   };

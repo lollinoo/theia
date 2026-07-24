@@ -85,6 +85,7 @@ describe('node position update planning', () => {
       devices,
       links,
       openEdgeMenu: () => undefined,
+      snapGrid: null,
     });
     const edges = plan?.buildEdges(currentEdges);
 
@@ -108,6 +109,36 @@ describe('node position update planning', () => {
     expect(edges?.[0].data?.metrics).toEqual({ source: 'existing' });
   });
 
+  it('snaps only the moved node while preserving legacy positions when a grid is enabled', () => {
+    const movedNode = node('dev-1', 10, 20);
+    const legacyNode = node('dev-2', 100, 200);
+    const plan = buildManualNodePositionUpdate({
+      deviceId: 'dev-1',
+      position: { x: 321, y: 654 },
+      nodes: [movedNode, legacyNode],
+      devices: [device('dev-1'), device('dev-2')],
+      links: [],
+      openEdgeMenu: () => undefined,
+      snapGrid: [30, 30],
+    });
+
+    expect(plan?.nodes.map((current) => current.position)).toEqual([
+      { x: 330, y: 660 },
+      { x: 100, y: 200 },
+    ]);
+    expect(plan?.nodes[1]).toBe(legacyNode);
+    expect(plan?.positionPayload).toEqual([
+      { device_id: 'dev-1', x: 330, y: 660, pinned: true },
+      { device_id: 'dev-2', x: 100, y: 200, pinned: false },
+    ]);
+    expect(plan?.positionMap).toEqual(
+      new Map([
+        ['dev-1', { x: 330, y: 660, pinned: true }],
+        ['dev-2', { x: 100, y: 200, pinned: false }],
+      ]),
+    );
+  });
+
   it('does not update ghost devices', () => {
     const ghost = {
       ...node('ghost-dev-1', 10, 20),
@@ -126,6 +157,7 @@ describe('node position update planning', () => {
         devices: [device('ghost-dev-1')],
         links: [],
         openEdgeMenu: () => undefined,
+        snapGrid: null,
       }),
     ).toBeNull();
   });

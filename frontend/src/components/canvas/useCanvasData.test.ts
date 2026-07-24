@@ -2,7 +2,7 @@
  * Exercises use canvas data topology canvas behavior so refactors preserve the documented contract.
  */
 import { act, renderHook } from '@testing-library/react';
-import type { ReactFlowInstance } from '@xyflow/react';
+import type { ReactFlowInstance, SnapGrid } from '@xyflow/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,7 +23,7 @@ import {
   resetCanvasRuntimeBootstrap,
 } from '../../hooks/canvasRuntimeBootstrap';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
-import type { Area, Device } from '../../types/api';
+import type { Area, Device, Link, LinkRoute } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
@@ -36,6 +36,7 @@ import {
 import type { CanvasMeasurementRecord } from './canvasInstrumentation';
 import { buildTopologyEdges } from './edgeBuilder';
 import { manualEdgeMigrationMaxAttempts } from './manualEdgeMigration';
+import type { ScreenRect } from './newNodePlacement';
 import { useCanvasData } from './useCanvasData';
 
 vi.mock('../../api/client', () => ({
@@ -49,6 +50,25 @@ vi.mock('../../api/client', () => ({
   fetchSettings: vi.fn(),
   createLink: vi.fn(),
 }));
+
+const manualEdgeMigrationOrchestratorControl = vi.hoisted(() => ({
+  runOverride: null as null | (() => Promise<{ status: 'not-run'; appliedCount: 0 }>),
+}));
+
+vi.mock('./manualEdgeMigrationOrchestrator', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./manualEdgeMigrationOrchestrator')>();
+  return {
+    ...actual,
+    runDefaultMapManualEdgeMigrationForTopologyLoad: (
+      options: Parameters<typeof actual.runDefaultMapManualEdgeMigrationForTopologyLoad>[0],
+    ) => {
+      const override = manualEdgeMigrationOrchestratorControl.runOverride;
+      return override
+        ? override()
+        : actual.runDefaultMapManualEdgeMigrationForTopologyLoad(options);
+    },
+  };
+});
 
 const positionMocks = vi.hoisted(() => {
   const fetchPositions = vi.fn();
@@ -119,6 +139,22 @@ function mockArea(overrides: Partial<Area> = {}): Area {
   };
 }
 
+function mockLink(overrides: Partial<Link> = {}): Link {
+  return {
+    id: 'link-1',
+    source_device_id: 'dev-1',
+    source_if_name: 'ether1',
+    target_device_id: 'dev-2',
+    target_if_name: 'ether2',
+    discovery_protocol: 'lldp',
+    source_if_speed: 1_000_000_000,
+    source_if_oper_status: 'up',
+    target_if_speed: 1_000_000_000,
+    target_if_oper_status: 'up',
+    ...overrides,
+  };
+}
+
 function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   return {
     devices: {
@@ -155,17 +191,49 @@ function renderUseCanvasData(
     mapName?: string;
     onDevicesChange?: (devices: Device[]) => void;
     onTopologyAreasChange?: (areas: Area[]) => void;
+    getCanvasClientRect?: () => ScreenRect | null;
+    snapGrid?: SnapGrid | null;
+    editMode?: boolean;
+    onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+    reconcileLinkRouteEdges?: (edges: LinkEdgeType[]) => LinkEdgeType[];
   } = {},
 ) {
+  const canvasRect = { x: 100, y: 60, width: 1000, height: 700 };
+  const getCanvasClientRect = options.getCanvasClientRect ?? vi.fn(() => canvasRect);
+  const viewport = { x: -250, y: 90, zoom: 0.5 };
+  let nodesForGeometry: DeviceNode[] = [];
   const reactFlow = {
     fitView: vi.fn(),
+    getViewport: vi.fn(() => viewport),
+    getNodes: vi.fn(() => nodesForGeometry),
+    flowToScreenPosition: vi.fn(({ x, y }) => ({
+      x: canvasRect.x + viewport.x + x * viewport.zoom,
+      y: canvasRect.y + viewport.y + y * viewport.zoom,
+    })),
+    screenToFlowPosition: vi.fn(({ x, y }) => ({
+      x: (x - canvasRect.x - viewport.x) / viewport.zoom,
+      y: (y - canvasRect.y - viewport.y) / viewport.zoom,
+    })),
   } as unknown as ReactFlowInstance<DeviceNode, LinkEdgeType>;
   const openDeviceMenu = vi.fn();
   const openEdgeMenu = vi.fn();
 
+  interface RenderProps {
+    currentSnapshot: SnapshotPayload | null;
+    currentMapId?: string | null;
+    currentMapName?: string;
+    currentSnapGrid?: SnapGrid | null;
+  }
+
   const rendered = renderHook(
-    ({ currentSnapshot, currentMapId = null, currentMapName = 'Default' }) => {
+    ({
+      currentSnapshot,
+      currentMapId = null,
+      currentMapName = 'Default',
+      currentSnapGrid = options.snapGrid ?? null,
+    }: RenderProps) => {
       const [nodes, setNodes] = useState<DeviceNode[]>([]);
+      nodesForGeometry = nodes;
       const [edges, setEdges] = useState<LinkEdgeType[]>([]);
 
       const hook = useCanvasData({
@@ -174,13 +242,17 @@ function renderUseCanvasData(
         snapshot: currentSnapshot,
         reconnecting: false,
         prometheusStatus,
-        editMode: false,
+        editMode: options.editMode ?? false,
         openDeviceMenu,
         openEdgeMenu,
+        onLinkRouteCommit: options.onLinkRouteCommit,
+        reconcileLinkRouteEdges: options.reconcileLinkRouteEdges,
         reactFlow,
+        getCanvasClientRect,
         nodes,
         setNodes,
         setEdges,
+        snapGrid: currentSnapGrid,
         onDevicesChange: options.onDevicesChange,
         onTopologyAreasChange: options.onTopologyAreasChange,
       });
@@ -197,13 +269,17 @@ function renderUseCanvasData(
         currentSnapshot: snapshot,
         currentMapId: options.mapId ?? null,
         currentMapName: options.mapName ?? 'Default',
-      },
+        currentSnapGrid: options.snapGrid ?? null,
+      } as RenderProps,
     },
   );
 
   return {
     ...rendered,
     reactFlow,
+    canvasRect,
+    viewport,
+    getCanvasClientRect,
   };
 }
 
@@ -278,6 +354,7 @@ function deferred<T>() {
 describe('useCanvasData', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    manualEdgeMigrationOrchestratorControl.runOverride = null;
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-13T12:00:00Z'));
     positionMocks.usePositions.mockImplementation((_mapId: string | null) => ({
@@ -310,6 +387,7 @@ describe('useCanvasData', () => {
   });
 
   afterEach(() => {
+    manualEdgeMigrationOrchestratorControl.runOverride = null;
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -342,6 +420,70 @@ describe('useCanvasData', () => {
     expect(positionMocks.usePositions).toHaveBeenCalledWith('map-1');
     expect(fetchCanvasMapBootstrap).toHaveBeenCalledWith('map-1', { force: false });
     expect(fetchCanvasBootstrap).not.toHaveBeenCalled();
+  });
+
+  it('threads loaded saved routes and the commit callback into edge composition', async () => {
+    const link = mockLink();
+    const route = { version: 1 as const, waypoints: [{ x: 12.5, y: -8 }] };
+    const onLinkRouteCommit = vi.fn();
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        links: [link],
+        link_routes: { 'link-1': route },
+      }),
+    );
+
+    renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Core Map',
+      editMode: true,
+      onLinkRouteCommit,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const edgeBuildCalls = vi.mocked(buildTopologyEdges).mock.calls;
+    const edgeDataById = edgeBuildCalls[edgeBuildCalls.length - 1]?.[3];
+    expect(edgeDataById?.get('link-1')).toMatchObject({
+      route,
+      routeEditable: true,
+      onRouteCommit: onLinkRouteCommit,
+    });
+  });
+
+  it('reconciles composed refresh edges before replacing canonical edge state', async () => {
+    const staleEdge = {
+      id: 'link-1',
+      source: 'dev-1',
+      target: 'dev-2',
+      data: { route: { version: 1 as const, waypoints: [{ x: 10, y: 20 }] } },
+    } as LinkEdgeType;
+    const reconciledEdge = {
+      ...staleEdge,
+      data: { route: { version: 1 as const, waypoints: [{ x: 70, y: 80 }] } },
+    } as LinkEdgeType;
+    const reconcileLinkRouteEdges = vi.fn(() => [reconciledEdge]);
+    vi.mocked(buildTopologyEdges).mockReturnValueOnce([staleEdge]);
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({ links: [mockLink()] }),
+    );
+
+    const { result } = renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Core Map',
+      reconcileLinkRouteEdges,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(reconcileLinkRouteEdges).toHaveBeenCalledWith([staleEdge]);
+    expect(result.current.edges).toEqual([reconciledEdge]);
   });
 
   it.each([
@@ -1009,6 +1151,27 @@ describe('useCanvasData', () => {
     expect(positionMocks.savePositions).not.toHaveBeenCalled();
   });
 
+  it('loads off-grid saved positions verbatim when snapping is enabled', async () => {
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [mockDevice()],
+        positions: {
+          'dev-1': { device_id: 'dev-1', x: 44, y: 46, pinned: true },
+        },
+      }),
+    );
+
+    const { result } = renderUseCanvasData(null, null, { snapGrid: [30, 30] });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes[0]?.position).toEqual({ x: 44, y: 46 });
+    expect(positionMocks.savePositions).not.toHaveBeenCalled();
+  });
+
   it('fits the view after switching maps even when the target map already has saved positions', async () => {
     vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
       canvasBootstrapResponse({
@@ -1353,9 +1516,11 @@ describe('useCanvasData', () => {
         openDeviceMenu,
         openEdgeMenu,
         reactFlow,
+        getCanvasClientRect: () => null,
         nodes,
         setNodes,
         setEdges,
+        snapGrid: null,
       });
     });
 
@@ -1467,9 +1632,11 @@ describe('useCanvasData', () => {
         openDeviceMenu,
         openEdgeMenu,
         reactFlow,
+        getCanvasClientRect: () => null,
         nodes,
         setNodes,
         setEdges,
+        snapGrid: null,
       });
     });
 
@@ -1893,7 +2060,6 @@ describe('useCanvasData', () => {
 
   it('preserves an unsaved in-memory node position across silent refreshes', async () => {
     vi.mocked(fetchDevices)
-      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([mockDevice()])
       .mockResolvedValueOnce([mockDevice()]);
 
@@ -1905,7 +2071,12 @@ describe('useCanvasData', () => {
     });
 
     await act(async () => {
-      await result.current.loadTopology(true, { x: 400, y: 500 });
+      result.current.setNodesForTest((currentNodes) =>
+        currentNodes.map((node) => ({
+          ...node,
+          position: { x: 400, y: 500 },
+        })),
+      );
     });
 
     expect(result.current.nodes).toHaveLength(1);
@@ -2640,6 +2811,731 @@ describe('useCanvasData', () => {
       tone: 'success',
       message: 'Topology refreshed after backend resync',
     });
+  });
+
+  it('places an added device inside the active canvas without moving existing nodes or fitting', async () => {
+    const newDevice = mockDevice({
+      id: 'dev-new',
+      hostname: 'router-new',
+      ip: '10.0.0.99',
+      sys_name: 'router-new',
+    });
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [mockDevice()],
+        topology_version: 'topo-before-new-device',
+      }),
+    );
+    const { result, reactFlow, canvasRect, viewport } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const existingPosition = result.current.nodes.find((node) => node.id === 'dev-1')?.position;
+    const fitViewCallCount = vi.mocked(reactFlow.fitView).mock.calls.length;
+    positionMocks.savePositions.mockClear();
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice(), newDevice],
+        topology_version: 'topo-with-new-device',
+      }),
+    );
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement('dev-new');
+    });
+
+    const addedNode = result.current.nodes.find((node) => node.id === 'dev-new');
+    expect(addedNode).toBeDefined();
+    if (!addedNode) return;
+
+    const screenTopLeft = reactFlow.flowToScreenPosition(addedNode.position);
+    const screenBounds = {
+      ...screenTopLeft,
+      width: 370 * viewport.zoom,
+      height: 140 * viewport.zoom,
+    };
+    expect(screenBounds.x).toBeGreaterThanOrEqual(canvasRect.x + 16);
+    expect(screenBounds.y).toBeGreaterThanOrEqual(canvasRect.y + 16);
+    expect(screenBounds.x + screenBounds.width).toBeLessThanOrEqual(
+      canvasRect.x + canvasRect.width - 16,
+    );
+    expect(screenBounds.y + screenBounds.height).toBeLessThanOrEqual(
+      canvasRect.y + canvasRect.height - 16,
+    );
+    expect(result.current.nodes.find((node) => node.id === 'dev-1')?.position).toEqual(
+      existingPosition,
+    );
+    expect(positionMocks.savePositions).toHaveBeenCalledTimes(1);
+    expect(positionMocks.savePositions).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          device_id: 'dev-new',
+          x: addedNode.position.x,
+          y: addedNode.position.y,
+        }),
+      ]),
+    );
+    expect(fetchCanvasTopology).toHaveBeenLastCalledWith(undefined);
+    expect(reactFlow.fitView).toHaveBeenCalledTimes(fitViewCallCount);
+  });
+
+  it('overrides a pending target already present far outside the active viewport', async () => {
+    const targetDevice = mockDevice({
+      id: 'dev-target',
+      hostname: 'router-target',
+      ip: '10.0.0.50',
+      sys_name: 'router-target',
+    });
+    vi.mocked(fetchDevices).mockResolvedValueOnce([mockDevice(), targetDevice]);
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      result.current.setNodesForTest((currentNodes) =>
+        currentNodes.map((node) =>
+          node.id === targetDevice.id ? { ...node, position: { x: 9000, y: 9000 } } : node,
+        ),
+      );
+    });
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice(), targetDevice],
+        topology_version: 'topo-target-present',
+      }),
+    );
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement(targetDevice.id);
+    });
+
+    expect(result.current.nodes.find((node) => node.id === targetDevice.id)?.position).not.toEqual({
+      x: 9000,
+      y: 9000,
+    });
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies pending explicit placement when topology identity is unchanged', async () => {
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      result.current.setNodesForTest((currentNodes) =>
+        currentNodes.map((node) => ({ ...node, position: { x: 7000, y: 7000 } })),
+      );
+    });
+    vi.mocked(computeForceLayout).mockClear();
+    positionMocks.savePositions.mockClear();
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice()],
+        topology_version: 'topo-same-identity',
+      }),
+    );
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement('dev-1');
+    });
+
+    expect(computeForceLayout).not.toHaveBeenCalled();
+    expect(result.current.nodes[0].position).not.toEqual({ x: 7000, y: 7000 });
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+    expect(positionMocks.savePositions).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ device_id: 'dev-1' })]),
+    );
+  });
+
+  it('retains placement intent across a not-modified fast path', async () => {
+    const newDevice = mockDevice({
+      id: 'dev-fast-path',
+      hostname: 'router-fast-path',
+      ip: '10.0.0.51',
+      sys_name: 'router-fast-path',
+    });
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce({
+      status: 'not-modified',
+      etag: '"topo-before-device-visible"',
+    });
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement(newDevice.id);
+    });
+
+    expect(result.current.nodes.find((node) => node.id === newDevice.id)).toBeUndefined();
+    expect(reactFlow.screenToFlowPosition).not.toHaveBeenCalled();
+
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice(), newDevice],
+        topology_version: 'topo-fast-path-recovered',
+      }),
+    );
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(result.current.nodes.find((node) => node.id === newDevice.id)).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains placement intent while the target is absent from topology', async () => {
+    const newDevice = mockDevice({
+      id: 'dev-late',
+      hostname: 'router-late',
+      ip: '10.0.0.52',
+      sys_name: 'router-late',
+    });
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice()],
+        topology_version: 'topo-target-absent',
+      }),
+    );
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement(newDevice.id);
+    });
+
+    expect(result.current.nodes.find((node) => node.id === newDevice.id)).toBeUndefined();
+    expect(reactFlow.screenToFlowPosition).not.toHaveBeenCalled();
+
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice(), newDevice],
+        topology_version: 'topo-target-arrived',
+      }),
+    );
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(result.current.nodes.find((node) => node.id === newDevice.id)).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains placement intent after a failed topology load', async () => {
+    const newDevice = mockDevice({
+      id: 'dev-after-failure',
+      hostname: 'router-after-failure',
+      ip: '10.0.0.53',
+      sys_name: 'router-after-failure',
+    });
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    vi.mocked(fetchCanvasTopology).mockRejectedValueOnce(new Error('topology unavailable'));
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement(newDevice.id);
+    });
+
+    expect(result.current.error).toBe('topology unavailable');
+    expect(reactFlow.screenToFlowPosition).not.toHaveBeenCalled();
+
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice(), newDevice],
+        topology_version: 'topo-after-failure',
+      }),
+    );
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.nodes.find((node) => node.id === newDevice.id)).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries pending placement without an ETag after post-fetch application failure', async () => {
+    const newDevice = mockDevice({
+      id: 'dev-after-application-failure',
+      hostname: 'router-after-application-failure',
+      ip: '10.0.0.59',
+      sys_name: 'router-after-application-failure',
+    });
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [mockDevice()],
+        topology_version: 'topo-before-application-failure',
+      }),
+    );
+    const getCanvasClientRect = vi.fn((): ScreenRect | null => ({
+      x: 100,
+      y: 60,
+      width: 1000,
+      height: 700,
+    }));
+    const { result, reactFlow } = renderUseCanvasData(null, null, { getCanvasClientRect });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const failedApplicationResponse = {
+      ...canvasTopologyOkResponse({
+        devices: [mockDevice(), newDevice],
+        topology_version: 'topo-placement-application-failed',
+      }),
+      etag: '"topo-placement-application-failed"',
+    };
+    const recoveredResponse = {
+      ...canvasTopologyOkResponse({
+        devices: [mockDevice(), newDevice],
+        topology_version: 'topo-placement-application-recovered',
+      }),
+      etag: '"topo-placement-application-recovered"',
+    };
+    getCanvasClientRect.mockImplementationOnce(() => {
+      throw new Error('canvas geometry unavailable');
+    });
+    vi.mocked(fetchCanvasTopology)
+      .mockResolvedValueOnce(failedApplicationResponse)
+      .mockImplementationOnce((etag?: string) => {
+        if (etag === failedApplicationResponse.etag) {
+          return Promise.resolve({
+            status: 'not-modified' as const,
+            etag,
+          });
+        }
+        return Promise.resolve(recoveredResponse);
+      });
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement(newDevice.id);
+    });
+
+    expect(result.current.error).toBe('canvas geometry unavailable');
+    expect(result.current.nodes.find((node) => node.id === newDevice.id)).toBeUndefined();
+    expect(reactFlow.screenToFlowPosition).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect.soft(fetchCanvasTopology).toHaveBeenNthCalledWith(1, undefined);
+    expect.soft(fetchCanvasTopology).toHaveBeenNthCalledWith(2, undefined);
+    expect.soft(result.current.nodes.find((node) => node.id === newDevice.id)).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a winning refresh consume placement intent while an older request becomes stale', async () => {
+    const newDevice = mockDevice({
+      id: 'dev-race',
+      hostname: 'router-race',
+      ip: '10.0.0.54',
+      sys_name: 'router-race',
+    });
+    const staleLoad = deferred<CanvasTopologyFetchResult>();
+    const winningResponse = canvasTopologyOkResponse({
+      devices: [mockDevice(), newDevice],
+      topology_version: 'topo-race-winner',
+    });
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    vi.mocked(fetchCanvasTopology)
+      .mockReturnValueOnce(staleLoad.promise)
+      .mockResolvedValueOnce(winningResponse);
+    let staleRequest!: Promise<void>;
+    await act(async () => {
+      staleRequest = result.current.requestNewNodePlacement(newDevice.id);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+    const winningPosition = result.current.nodes.find((node) => node.id === newDevice.id)?.position;
+    expect(winningPosition).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      staleLoad.resolve(
+        canvasTopologyOkResponse({
+          devices: [mockDevice(), newDevice],
+          topology_version: 'topo-race-stale',
+        }),
+      );
+      await staleRequest;
+      await Promise.resolve();
+    });
+
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(winningResponse);
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(result.current.nodes.find((node) => node.id === newDevice.id)?.position).toEqual(
+      winningPosition,
+    );
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an older placement load that becomes stale while awaiting edge migration', async () => {
+    const staleBaseDevice = mockDevice({
+      hostname: 'stale-router',
+      sys_name: 'stale-router',
+    });
+    const winningBaseDevice = mockDevice({
+      hostname: 'winning-router',
+      sys_name: 'winning-router',
+    });
+    const staleTargetDevice = mockDevice({
+      id: 'dev-post-migration-race',
+      hostname: 'stale-target',
+      ip: '10.0.0.58',
+      sys_name: 'stale-target',
+    });
+    const winningTargetDevice = {
+      ...staleTargetDevice,
+      hostname: 'winning-target',
+      sys_name: 'winning-target',
+    };
+    const migrationEntered = deferred<void>();
+    const migrationRelease = deferred<{ status: 'not-run'; appliedCount: 0 }>();
+    const staleResponse = {
+      ...canvasTopologyOkResponse({
+        devices: [staleBaseDevice, staleTargetDevice],
+        topology_version: 'topo-post-migration-stale',
+      }),
+      etag: '"topo-post-migration-stale"',
+    };
+    const winningResponse = {
+      ...canvasTopologyOkResponse({
+        devices: [winningBaseDevice, winningTargetDevice],
+        topology_version: 'topo-post-migration-winner',
+      }),
+      etag: '"topo-post-migration-winner"',
+    };
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    positionMocks.savePositions.mockClear();
+    vi.mocked(reactFlow.screenToFlowPosition).mockClear();
+    vi.mocked(fetchCanvasTopology).mockClear();
+    vi.mocked(fetchCanvasTopology)
+      .mockResolvedValueOnce(staleResponse)
+      .mockImplementationOnce((etag?: string) => {
+        if (etag === staleResponse.etag) {
+          return Promise.resolve({
+            status: 'not-modified' as const,
+            etag,
+          });
+        }
+        return Promise.resolve(winningResponse);
+      });
+    manualEdgeMigrationOrchestratorControl.runOverride = () => {
+      manualEdgeMigrationOrchestratorControl.runOverride = null;
+      migrationEntered.resolve();
+      return migrationRelease.promise;
+    };
+
+    let staleRequest!: Promise<void>;
+    await act(async () => {
+      staleRequest = result.current.requestNewNodePlacement(staleTargetDevice.id);
+      await migrationEntered.promise;
+    });
+
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    await act(async () => {
+      migrationRelease.resolve({ status: 'not-run', appliedCount: 0 });
+      await staleRequest;
+      await Promise.resolve();
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenNthCalledWith(2, undefined);
+    const winningPosition = result.current.nodes.find(
+      (node) => node.id === winningTargetDevice.id,
+    )?.position;
+    expect(winningPosition).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+    expect(positionMocks.savePositions).toHaveBeenCalledTimes(1);
+    expect(result.current.devices.find((device) => device.id === 'dev-1')?.hostname).toBe(
+      'winning-router',
+    );
+    expect(
+      result.current.nodes.find((node) => node.id === winningTargetDevice.id)?.data.device.hostname,
+    ).toBe('winning-target');
+    expect(
+      result.current.nodes.find((node) => node.id === winningTargetDevice.id)?.position,
+    ).toEqual(winningPosition);
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+    expect(positionMocks.savePositions).toHaveBeenCalledTimes(1);
+
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(winningResponse);
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(fetchCanvasTopology).toHaveBeenNthCalledWith(3, winningResponse.etag);
+    expect(
+      result.current.nodes.find((node) => node.id === winningTargetDevice.id)?.position,
+    ).toEqual(winningPosition);
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps pending placement scoped to the map that requested it', async () => {
+    const map1Device = mockDevice({
+      id: 'map-1-existing',
+      hostname: 'map-1-existing',
+      ip: '10.0.1.1',
+      sys_name: 'map-1-existing',
+    });
+    const isolatedTarget = mockDevice({
+      id: 'map-1-target',
+      hostname: 'map-1-target',
+      ip: '10.0.1.2',
+      sys_name: 'map-1-target',
+    });
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [map1Device],
+        topology_version: 'topo-map-1-initial',
+      }),
+    );
+    const { result, rerender, reactFlow } = renderUseCanvasData(null, null, {
+      mapId: 'map-1',
+      mapName: 'Map 1',
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [map1Device],
+        topology_version: 'topo-map-1-target-absent',
+      }),
+    );
+    await act(async () => {
+      await result.current.requestNewNodePlacement(isolatedTarget.id);
+    });
+
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [isolatedTarget],
+        positions: {
+          [isolatedTarget.id]: {
+            device_id: isolatedTarget.id,
+            x: 9000,
+            y: 9000,
+            pinned: true,
+          },
+        },
+        topology_version: 'topo-map-2',
+      }),
+    );
+    await act(async () => {
+      rerender({
+        currentSnapshot: null,
+        currentMapId: 'map-2',
+        currentMapName: 'Map 2',
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes.find((node) => node.id === isolatedTarget.id)?.position).toEqual({
+      x: 9000,
+      y: 9000,
+    });
+    expect(reactFlow.screenToFlowPosition).not.toHaveBeenCalled();
+  });
+
+  it('does not fit while pending placement waits for canvas geometry', async () => {
+    const pendingDevice = mockDevice({
+      hostname: 'router-pending-geometry',
+      sys_name: 'router-pending-geometry',
+    });
+    vi.mocked(fetchCanvasBootstrap).mockResolvedValueOnce(
+      canvasBootstrapResponse({
+        devices: [],
+        topology_version: 'topo-empty-before-pending-placement',
+      }),
+    );
+    const getCanvasClientRect = vi.fn((): ScreenRect | null => null);
+    const { result, reactFlow } = renderUseCanvasData(null, null, { getCanvasClientRect });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    vi.mocked(reactFlow.fitView).mockClear();
+    vi.mocked(reactFlow.screenToFlowPosition).mockClear();
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [pendingDevice],
+        topology_version: 'topo-pending-placement-without-geometry',
+      }),
+    );
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement(pendingDevice.id);
+    });
+
+    expect(result.current.nodes.find((node) => node.id === pendingDevice.id)).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).not.toHaveBeenCalled();
+    expect(reactFlow.fitView).not.toHaveBeenCalled();
+  });
+
+  it('retains placement intent when canvas geometry is invalid', async () => {
+    const targetDevice = mockDevice({
+      id: 'dev-invalid-geometry',
+      hostname: 'router-invalid-geometry',
+      ip: '10.0.0.55',
+      sys_name: 'router-invalid-geometry',
+    });
+    vi.mocked(fetchDevices).mockResolvedValueOnce([mockDevice(), targetDevice]);
+    const getCanvasClientRect = vi.fn((): ScreenRect | null => ({
+      x: 100,
+      y: 60,
+      width: 0,
+      height: 700,
+    }));
+    const { result, reactFlow } = renderUseCanvasData(null, null, { getCanvasClientRect });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      result.current.setNodesForTest((currentNodes) =>
+        currentNodes.map((node) =>
+          node.id === targetDevice.id ? { ...node, position: { x: 9000, y: 9000 } } : node,
+        ),
+      );
+    });
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice(), targetDevice],
+        topology_version: 'topo-invalid-geometry',
+      }),
+    );
+
+    await act(async () => {
+      await result.current.requestNewNodePlacement(targetDevice.id);
+    });
+
+    expect(result.current.nodes.find((node) => node.id === targetDevice.id)?.position).toEqual({
+      x: 9000,
+      y: 9000,
+    });
+    expect(reactFlow.screenToFlowPosition).not.toHaveBeenCalled();
+
+    getCanvasClientRect.mockReturnValue({ x: 100, y: 60, width: 1000, height: 700 });
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice(), targetDevice],
+        topology_version: 'topo-valid-geometry',
+      }),
+    );
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+
+    expect(result.current.nodes.find((node) => node.id === targetDevice.id)?.position).not.toEqual({
+      x: 9000,
+      y: 9000,
+    });
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('places and persists two pending device IDs exactly once each', async () => {
+    const firstDevice = mockDevice({
+      id: 'dev-pending-a',
+      hostname: 'router-pending-a',
+      ip: '10.0.0.56',
+      sys_name: 'router-pending-a',
+    });
+    const secondDevice = mockDevice({
+      id: 'dev-pending-b',
+      hostname: 'router-pending-b',
+      ip: '10.0.0.57',
+      sys_name: 'router-pending-b',
+    });
+    const staleLoad = deferred<CanvasTopologyFetchResult>();
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    positionMocks.savePositions.mockClear();
+    vi.mocked(fetchCanvasTopology)
+      .mockReturnValueOnce(staleLoad.promise)
+      .mockResolvedValueOnce(
+        canvasTopologyOkResponse({
+          devices: [mockDevice(), firstDevice, secondDevice],
+          topology_version: 'topo-two-pending',
+        }),
+      );
+    let firstRequest!: Promise<void>;
+    await act(async () => {
+      firstRequest = result.current.requestNewNodePlacement(firstDevice.id);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await result.current.requestNewNodePlacement(secondDevice.id);
+    });
+    await act(async () => {
+      staleLoad.resolve(
+        canvasTopologyOkResponse({
+          devices: [mockDevice(), firstDevice, secondDevice],
+          topology_version: 'topo-two-pending-stale',
+        }),
+      );
+      await firstRequest;
+      await Promise.resolve();
+    });
+
+    expect(result.current.nodes.find((node) => node.id === firstDevice.id)).toBeDefined();
+    expect(result.current.nodes.find((node) => node.id === secondDevice.id)).toBeDefined();
+    expect(reactFlow.screenToFlowPosition).toHaveBeenCalledTimes(2);
+    expect(positionMocks.savePositions).toHaveBeenCalledTimes(1);
+    const savedPayload = positionMocks.savePositions.mock.calls[0]?.[0] ?? [];
+    expect(savedPayload.filter((position) => position.device_id === firstDevice.id)).toHaveLength(
+      1,
+    );
+    expect(savedPayload.filter((position) => position.device_id === secondDevice.id)).toHaveLength(
+      1,
+    );
   });
 
   it('only places newly added devices and preserves existing positioned nodes', async () => {

@@ -191,6 +191,10 @@ export function buildEdgeData(
       sourceIsVirtual: !!sourceIsVirtual,
       targetIsVirtual: !!targetIsVirtual,
       onContextMenu,
+      route: existingData?.route,
+      routeEditable: existingData?.routeEditable,
+      routeEditToken: existingData?.routeEditToken,
+      onRouteCommit: existingData?.onRouteCommit,
       metrics: existingData?.metrics,
       throughputLabel: existingData?.throughputLabel,
       utilization: existingData?.utilization,
@@ -243,6 +247,10 @@ export function buildEdgeData(
     sourceIsVirtual: false,
     targetIsVirtual: false,
     onContextMenu,
+    route: existingData?.route,
+    routeEditable: existingData?.routeEditable,
+    routeEditToken: existingData?.routeEditToken,
+    onRouteCommit: existingData?.onRouteCommit,
     metrics: existingData?.metrics,
     throughputLabel: existingData?.throughputLabel,
     utilization: existingData?.utilization,
@@ -304,9 +312,6 @@ export function buildTopologyEdges(
 
   const candidateEdges = visibleLinks
     .filter((link) => {
-      if (link.source_device_id === link.target_device_id) {
-        return false;
-      }
       if (!nodesByID.has(link.source_device_id) || !nodesByID.has(link.target_device_id)) {
         return false;
       }
@@ -381,7 +386,12 @@ export function buildTopologyEdges(
         })
       : pairEdges;
 
-    survivingEdges.forEach((edge, parallelIndex) => {
+    const indexedEdges =
+      survivingEdges[0]?.source === survivingEdges[0]?.target
+        ? [...survivingEdges].sort((left, right) => left.id.localeCompare(right.id))
+        : survivingEdges;
+
+    indexedEdges.forEach((edge, parallelIndex) => {
       filteredEdges.push({
         ...edge,
         data: {

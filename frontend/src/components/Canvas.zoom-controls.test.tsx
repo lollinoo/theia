@@ -76,6 +76,7 @@ vi.mock('./canvas/useCanvasData', () => ({
     error: null,
     renderedMapKey: 'default:',
     loadTopology: xyflowMocks.loadTopology,
+    requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
     runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
     grafanaUrlRef: { current: '' },
     grafanaDashboardConfigRef: { current: null },

@@ -2,6 +2,8 @@
  * Defines node builder behavior for the topology canvas.
  * Documents how canonical topology data is projected into the interactive view layer.
  */
+import type { SnapGrid } from '@xyflow/react';
+
 import type { Device, Link } from '../../types/api';
 import { type AlertDTO, alertStatusForDevice, type SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode, DeviceNodeRuntimeData } from '../DeviceCard';
@@ -9,6 +11,7 @@ import {
   resolveDeviceMonitoringState,
   sanitizeDeviceMetricsForDisplay,
 } from '../deviceVisualState';
+import { snapPositionToGrid } from './canvasGrid';
 import { preferVisibleLinks } from './edgeBuilder';
 
 function normalizeSnapshotStatus(status: string | undefined): Device['status'] | undefined {
@@ -50,7 +53,7 @@ export function buildTopologyNodes(
   devices: Device[],
   savedPositions: Map<string, { x: number; y: number; pinned?: boolean }>,
   computedPositions: Map<string, { x: number; y: number }>,
-  defaultPosition: { x: number; y: number } | undefined,
+  explicitPositions: Map<string, { x: number; y: number }>,
   editMode: boolean,
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void,
   pendingSnapshot: SnapshotPayload | null,
@@ -59,6 +62,7 @@ export function buildTopologyNodes(
   onSelfLinkClick?: (link: Link) => void,
   currentPositions: Map<string, { x: number; y: number; pinned?: boolean }> = new Map(),
   placementDeviceIds: Set<string> = new Set(devices.map((device) => device.id)),
+  snapGrid: SnapGrid | null = null,
 ): DeviceNode[] {
   const selfLinksByDeviceId = new Map<string, Link[]>();
   for (const link of preferVisibleLinks(links)) {
@@ -79,16 +83,25 @@ export function buildTopologyNodes(
   return devices.map((device) => {
     const current = currentPositions.get(device.id);
     const saved = savedPositions.get(device.id);
-    const canPlaceDevice = placementDeviceIds.has(device.id);
-    const placementPosition = canPlaceDevice
-      ? (defaultPosition ?? computedPositions.get(device.id))
+    const explicit = explicitPositions.get(device.id);
+    const computed = placementDeviceIds.has(device.id)
+      ? computedPositions.get(device.id)
       : undefined;
-    const position = hasUsablePosition(current)
-      ? current
-      : hasUsablePosition(saved)
-        ? saved
-        : placementPosition;
-    const resolvedPosition = position ?? { x: 0, y: 0 };
+    const position = hasUsablePosition(explicit)
+      ? explicit
+      : hasUsablePosition(current)
+        ? current
+        : hasUsablePosition(saved)
+          ? saved
+          : computed;
+    const explicitlyPlaced = hasUsablePosition(explicit);
+    const computedPlacement =
+      !hasUsablePosition(current) && !hasUsablePosition(saved) && hasUsablePosition(computed);
+    const unresolvedPosition = position ?? { x: 0, y: 0 };
+    const resolvedPosition =
+      snapGrid && (explicitlyPlaced || computedPlacement)
+        ? snapPositionToGrid(unresolvedPosition, snapGrid)
+        : unresolvedPosition;
     const selfLinks = selfLinksByDeviceId.get(device.id);
 
     const runtimeDevice = pendingSnapshot?.devices[device.id];
@@ -123,7 +136,7 @@ export function buildTopologyNodes(
         kind: 'device',
         device,
         runtime,
-        pinned: current?.pinned ?? saved?.pinned ?? false,
+        pinned: explicitlyPlaced ? false : (current?.pinned ?? saved?.pinned ?? false),
         highlighted: false,
         editMode,
         onContextMenu: openDeviceMenu,

@@ -331,6 +331,7 @@ test('recovers from websocket reconnects', async ({ page }) => {
     .filter((cursor): cursor is RuntimeCursor => cursor !== null);
   expect(acknowledgedCursors.length).toBeGreaterThan(0);
   const lastAcknowledgedCursor = acknowledgedCursors.at(-1)!;
+  const topologyRevalidationBaseline = topologyRevalidations.length;
 
   const reconnectBanner = page.getByTestId('reconnect-banner');
 
@@ -504,10 +505,14 @@ test('recovers from websocket reconnects', async ({ page }) => {
   }
 
   await expectTopologyVisible(page);
-  await expect.poll(() => topologyRevalidations.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
-  expect(topologyRevalidations).toHaveLength(1);
-  expect(topologyRevalidations[0]).toMatchObject({ status: 304 });
-  expect(topologyRevalidations[0].ifNoneMatch).toBeTruthy();
+  await expect
+    .poll(() => topologyRevalidations.length, { timeout: 15_000 })
+    .toBeGreaterThan(topologyRevalidationBaseline);
+  const reconnectRevalidations = topologyRevalidations.slice(topologyRevalidationBaseline);
+  for (const revalidation of reconnectRevalidations) {
+    expect(revalidation).toMatchObject({ status: 304 });
+    expect(revalidation.ifNoneMatch).toBeTruthy();
+  }
   expect(bootstrapGETs).toBe(initialBootstrapGETs);
   expect(bootstraps).toHaveLength(initialBootstrapGETs);
 });

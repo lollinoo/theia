@@ -2,7 +2,7 @@
  * Renders device card UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import { Handle, type Node, type NodeProps, Position } from '@xyflow/react';
+import { type Node, type NodeProps } from '@xyflow/react';
 import { type CSSProperties, memo, useLayoutEffect } from 'react';
 import type { Device, Link } from '../types/api';
 import {
@@ -31,6 +31,7 @@ import {
   sanitizeDeviceMetricsForDisplay,
 } from './deviceVisualState';
 import { MaterialIcon } from './MaterialIcon';
+import { NodeBorderHandles } from './NodeBorderHandles';
 import { StatusDot } from './StatusDot';
 
 /** Describes the device node data contract used by the UI component boundary. */
@@ -65,9 +66,6 @@ export interface DeviceNodeRuntimeData {
 }
 
 type ReadoutTone = 'default' | 'ok' | 'warning' | 'critical' | 'muted';
-
-const universalHandleClassName =
-  '!h-2 !w-2 !rounded-full !border-2 !border-bg !bg-surface-container-high shadow-none';
 
 const deviceTypeLabels: Record<string, string> = {
   router: 'Router',
@@ -622,7 +620,7 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
       data.device.sys_name || data.device.tags?.display_name || data.device.ip || 'Ghost';
     return (
       <>
-        <Handle type="target" position={Position.Top} className={universalHandleClassName} />
+        <NodeBorderHandles isConnectable={false} />
         <div
           data-testid="device-node-card"
           data-topology-node-variant="ghost-device"
@@ -649,12 +647,11 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
             </p>
           </div>
         </div>
-        <Handle type="source" position={Position.Bottom} className={universalHandleClassName} />
       </>
     );
   }
 
-  return (
+  const card = (
     // biome-ignore lint/a11y/noStaticElementInteractions: The card shell only owns pointer context-menu plumbing; child controls expose keyboard actions.
     <div
       data-testid="device-node-card"
@@ -694,39 +691,6 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
           ) : null}
         </button>
       ) : null}
-      <Handle
-        id="top"
-        type="source"
-        position={Position.Top}
-        isConnectable={!!data.editMode}
-        style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
-        className={`${universalHandleClassName} !-top-1 !left-1/2 !-translate-x-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
-      />
-      <Handle
-        id="right"
-        type="source"
-        position={Position.Right}
-        isConnectable={!!data.editMode}
-        style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
-        className={`${universalHandleClassName} !-right-1 !top-1/2 !-translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
-      />
-      <Handle
-        id="bottom"
-        type="source"
-        position={Position.Bottom}
-        isConnectable={!!data.editMode}
-        style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
-        className={`${universalHandleClassName} !-bottom-1 !left-1/2 !-translate-x-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
-      />
-      <Handle
-        id="left"
-        type="source"
-        position={Position.Left}
-        isConnectable={!!data.editMode}
-        style={{ pointerEvents: data.editMode ? 'auto' : 'none' }}
-        className={`${universalHandleClassName} !-left-1 !top-1/2 !-translate-y-1/2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 z-10`}
-      />
-
       <div
         data-testid="semantic-detail-node"
         className={
@@ -971,6 +935,13 @@ function DeviceCardInner({ data, selected }: NodeProps<DeviceNode>) {
         )}
       </div>
     </div>
+  );
+
+  return (
+    <>
+      <NodeBorderHandles isConnectable={data.editMode === true} />
+      {card}
+    </>
   );
 }
 

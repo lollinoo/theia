@@ -7,10 +7,12 @@ import {
   type CanvasMap,
   type CanvasMapFilter,
   type CanvasTopologyResponse,
+  type LinkRoute,
   parseAreaResponse,
   parseAreasResponse,
   parseCanvasMapResponse,
   parseCanvasMapsResponse,
+  parseCanvasTopologyLinkRoutes,
   parseCanvasTopologyResponse,
 } from '../types/api';
 import { type ErrorPayload, requestJSON, requestJSONWithBody } from './transport';
@@ -224,6 +226,36 @@ export async function updateCanvasMap(
 // deleteCanvasMap deletes a saved map and lets the backend enforce default-map conflicts.
 export async function deleteCanvasMap(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}`, 'DELETE');
+}
+
+/** Saves one map-local link route and returns the validated persisted route. */
+export async function saveCanvasMapLinkRoute(
+  mapId: string,
+  linkId: string,
+  route: LinkRoute,
+): Promise<LinkRoute> {
+  const payload = await requestJSONWithBody(
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/link-routes/${encodeURIComponent(linkId)}`,
+    'PUT',
+    route,
+  );
+  const routePayload =
+    typeof payload === 'object' && payload !== null && !Array.isArray(payload) && 'data' in payload
+      ? payload.data
+      : undefined;
+  const savedRoute = parseCanvasTopologyLinkRoutes({ route: routePayload }).route;
+  if (savedRoute === undefined) {
+    throw new Error('invalid canvas link route response');
+  }
+  return savedRoute;
+}
+
+/** Deletes one map-local link route and restores automatic routing. */
+export async function deleteCanvasMapLinkRoute(mapId: string, linkId: string): Promise<void> {
+  await requestJSONWithBody(
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/link-routes/${encodeURIComponent(linkId)}`,
+    'DELETE',
+  );
 }
 
 // setCanvasMapPrimary promotes one saved map to primary and returns the updated map DTO.

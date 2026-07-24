@@ -5,9 +5,10 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CanvasMap, Device, Link } from '../types/api';
+import type { CanvasMap, Device, Link, LinkRoute } from '../types/api';
 import Canvas from './Canvas';
 import type { DeviceNode } from './DeviceCard';
+import { FloatingConnectionLine } from './FloatingConnectionLine';
 
 const defaultCanvasProps = {
   mapId: null,
@@ -84,6 +85,8 @@ const testState = vi.hoisted(() => ({
   canonicalNodes: [] as DeviceNode[],
   displayedNodes: [] as DeviceNode[],
   setEdges: vi.fn(),
+  deleteCanvasMapLinkRoute: vi.fn(),
+  saveCanvasMapLinkRoute: vi.fn(),
   applyNodeChanges: vi.fn((changes: MockNodeChange[], currentNodes: DeviceNode[]) => {
     let nextNodes = currentNodes;
     for (const change of changes) {
@@ -108,16 +111,30 @@ const testState = vi.hoisted(() => ({
   nodesInitialized: true,
   renderedMapKey: 'default:' as string | null,
   reactFlowStore: { width: 1200, height: 800 },
-  canvasDataParams: null as null | { mapId: string | null; mapName?: string },
+  canvasDataParams: null as null | {
+    mapId: string | null;
+    mapName?: string;
+    getCanvasClientRect: () => unknown;
+    snapGrid: [number, number] | null;
+    onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
+  },
   canvasPanelsProps: {} as Record<string, unknown>,
+  backgroundProps: {} as Record<string, unknown>,
   reactFlowProps: {} as Record<string, unknown>,
   reactFlowRenderCount: 0,
+  snapRenderHistory: [] as {
+    snapToGrid: boolean;
+    positions: { x: number; y: number }[];
+  }[],
 }));
 
 vi.mock('@xyflow/react', () => ({
   ConnectionMode: { Loose: 'loose' },
   SelectionMode: { Partial: 'partial' },
-  Background: () => null,
+  Background: (props: Record<string, unknown>) => {
+    testState.backgroundProps = props;
+    return null;
+  },
   MiniMap: () => <div data-testid="topology-minimap" />,
   ReactFlow: ({
     children,
@@ -131,6 +148,11 @@ vi.mock('@xyflow/react', () => ({
     onConnectEnd,
     onNodeDragStop,
     onNodesChange,
+    snapToGrid,
+    snapGrid,
+    connectionLineComponent,
+    connectionLineStyle,
+    connectionMode,
   }: {
     children: React.ReactNode;
     nodes: DeviceNode[];
@@ -143,12 +165,26 @@ vi.mock('@xyflow/react', () => ({
     onConnectEnd?: () => void;
     onNodeDragStop?: (event: unknown, node: DeviceNode) => void;
     onNodesChange?: (changes: unknown[]) => void;
+    snapToGrid?: boolean;
+    snapGrid?: [number, number];
+    connectionLineComponent?: unknown;
+    connectionLineStyle?: React.CSSProperties;
+    connectionMode?: unknown;
   }) => {
     testState.reactFlowRenderCount += 1;
     testState.displayedNodes = nodes;
+    testState.snapRenderHistory.push({
+      snapToGrid: snapToGrid === true,
+      positions: nodes.map((node) => ({ ...node.position })),
+    });
     testState.reactFlowProps = {
       onlyRenderVisibleElements,
       proOptions,
+      snapToGrid,
+      snapGrid,
+      connectionLineComponent,
+      connectionLineStyle,
+      connectionMode,
     };
     const draggedNode = nodes.find((node) => node.id === 'dev-a');
     return (
@@ -184,11 +220,19 @@ vi.mock('@xyflow/react', () => ({
           type="button"
           onClick={() => {
             if (!draggedNode) return;
+            const exactPosition = { x: 444, y: 555 };
+            const position =
+              snapToGrid && snapGrid
+                ? {
+                    x: Math.round(exactPosition.x / snapGrid[0]) * snapGrid[0],
+                    y: Math.round(exactPosition.y / snapGrid[1]) * snapGrid[1],
+                  }
+                : exactPosition;
             onNodeDragStop?.(
               {},
               {
                 ...draggedNode,
-                position: { x: 444, y: 555 },
+                position,
               },
             );
           }}
@@ -255,7 +299,24 @@ vi.mock('./SidePanel', () => ({
   SidePanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
-vi.mock('./Toolbar', () => ({ Toolbar: () => null }));
+vi.mock('./Toolbar', () => ({
+  Toolbar: ({
+    onToggleSnapToGrid,
+    snapToGrid,
+  }: {
+    onToggleSnapToGrid: () => void;
+    snapToGrid: boolean;
+  }) => (
+    <button
+      type="button"
+      aria-label={`Snap to grid: ${snapToGrid ? 'On' : 'Off'}`}
+      aria-pressed={snapToGrid}
+      onClick={onToggleSnapToGrid}
+    >
+      Toggle snap
+    </button>
+  ),
+}));
 vi.mock('./MapSelector', () => ({ MapSelector: () => null }));
 vi.mock('./canvas/CanvasPanels', () => ({
   CanvasPanels: (props: Record<string, unknown>) => {
@@ -290,7 +351,9 @@ vi.mock('../contexts/ThemeContext', () => ({
   adaptAreaColor: (color: string) => color,
 }));
 vi.mock('../api/client', () => ({
+  deleteCanvasMapLinkRoute: (...args: unknown[]) => testState.deleteCanvasMapLinkRoute(...args),
   removeDeviceFromCanvasMap: (...args: unknown[]) => testState.removeDeviceFromCanvasMap(...args),
+  saveCanvasMapLinkRoute: (...args: unknown[]) => testState.saveCanvasMapLinkRoute(...args),
 }));
 vi.mock('./canvas/useCanvasData', async () => {
   const ReactRuntime = await import('react');
@@ -298,7 +361,10 @@ vi.mock('./canvas/useCanvasData', async () => {
     useCanvasData: (params: {
       mapId: string | null;
       mapName?: string;
+      getCanvasClientRect: () => unknown;
       setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;
+      snapGrid: [number, number] | null;
+      onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
     }) => {
       const lastSeededNodesRef = ReactRuntime.useRef<DeviceNode[] | null>(null);
       ReactRuntime.useLayoutEffect(() => {
@@ -308,7 +374,6 @@ vi.mock('./canvas/useCanvasData', async () => {
         lastSeededNodesRef.current = testState.canonicalNodes;
         params.setNodes(testState.canonicalNodes);
       });
-
       testState.canvasDataParams = params;
       return {
         devices: testState.devices,
@@ -317,6 +382,7 @@ vi.mock('./canvas/useCanvasData', async () => {
         loading: false,
         error: null,
         loadTopology: testState.loadTopology,
+        requestNewNodePlacement: vi.fn().mockResolvedValue(undefined),
         runtimeSummary: { alertCount: 0, prometheusDiagnosticsVisible: false },
         grafanaUrlRef: { current: '' },
         grafanaDashboardConfigRef: { current: null },
@@ -371,6 +437,8 @@ describe('Canvas drag state ownership', () => {
     ];
     testState.displayedNodes = [];
     testState.setEdges.mockReset();
+    testState.deleteCanvasMapLinkRoute.mockReset();
+    testState.saveCanvasMapLinkRoute.mockReset();
     testState.applyNodeChanges.mockClear();
     testState.savePositions.mockReset();
     testState.loadTopology.mockReset();
@@ -384,8 +452,11 @@ describe('Canvas drag state ownership', () => {
     testState.reactFlowStore = { width: 1200, height: 800 };
     testState.canvasDataParams = null;
     testState.canvasPanelsProps = {};
+    testState.backgroundProps = {};
     testState.reactFlowProps = {};
     testState.reactFlowRenderCount = 0;
+    testState.snapRenderHistory = [];
+    window.localStorage.clear();
   });
 
   it('keeps React Flow internals mounted while the canvas is hidden', () => {
@@ -421,7 +492,29 @@ describe('Canvas drag state ownership', () => {
     expect(testState.reactFlowProps.proOptions).toEqual({ hideAttribution: true });
   });
 
-  it('patches the dragged real node without replacing canonical nodes with the area projection', () => {
+  it('uses the floating connection preview while preserving loose connection behavior', () => {
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    expect(testState.reactFlowProps).toMatchObject({
+      connectionLineComponent: FloatingConnectionLine,
+      connectionLineStyle: {
+        stroke: 'var(--color-edge-default)',
+        strokeWidth: 10,
+      },
+      connectionMode: 'loose',
+    });
+  });
+
+  it('wires native snapping and persists snapped or exact drag coordinates from the preference', () => {
     render(
       <Canvas
         {...defaultCanvasProps}
@@ -440,6 +533,12 @@ describe('Canvas drag state ownership', () => {
     expect(
       testState.displayedNodes.map((node) => `${node.id}:${node.data.isGhost === true}`),
     ).toEqual(['dev-a:false', 'dev-c:true']);
+    expect(testState.reactFlowProps).toMatchObject({
+      snapToGrid: true,
+      snapGrid: [30, 30],
+    });
+    expect(testState.backgroundProps.gap).toBe(30);
+    expect(testState.canvasDataParams?.snapGrid).toEqual([30, 30]);
 
     testState.applyNodeChanges.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Drag area node' }));
@@ -447,9 +546,53 @@ describe('Canvas drag state ownership', () => {
     expect(testState.applyNodeChanges).not.toHaveBeenCalled();
     expect(testState.savePositions).not.toHaveBeenCalled();
     expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', {
+      x: 450,
+      y: 570,
+    });
+
+    testState.updateNodePosition.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Snap to grid: On' }));
+
+    expect(screen.getByRole('button', { name: 'Snap to grid: Off' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    expect(testState.reactFlowProps).toMatchObject({
+      snapToGrid: false,
+      snapGrid: [30, 30],
+    });
+    expect(testState.canvasDataParams?.snapGrid).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Drag area node' }));
+
+    expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', {
       x: 444,
       y: 555,
     });
+  });
+
+  it('enables snapping without rewriting existing controlled positions', () => {
+    window.localStorage.setItem('theia.canvas.snapToGrid', 'false');
+    render(
+      <Canvas
+        {...defaultCanvasProps}
+        snapshot={null}
+        reconnecting={false}
+        prometheusStatus={null}
+        selectedAreaId={null}
+        areas={[]}
+      />,
+    );
+
+    expect(testState.displayedNodes[0]?.position).toEqual({ x: 100, y: 100 });
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Snap to grid: Off' }));
+    });
+
+    expect(screen.getByRole('button', { name: 'Snap to grid: On' })).toBeInTheDocument();
+    expect(testState.displayedNodes[0]?.position).toEqual({ x: 100, y: 100 });
+    expect(testState.canvasDataParams?.snapGrid).toEqual([30, 30]);
   });
 
   it('filters ghost measurements while applying real node changes through graph state', () => {
@@ -720,6 +863,7 @@ describe('Canvas drag state ownership', () => {
     expect(testState.canvasDataParams).toMatchObject({
       mapId: 'map-backbone',
       mapName: 'Backbone',
+      onLinkRouteCommit: expect.any(Function),
     });
     expect(
       testState.displayedNodes.map((node) => `${node.id}:${node.data.isGhost === true}`),

@@ -2,6 +2,7 @@
  * Exercises toolbar component behavior so refactors preserve the documented contract.
  */
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { Toolbar } from './Toolbar';
 
@@ -20,9 +21,24 @@ const defaultProps = {
   onCreateLink: vi.fn(),
   onAlerts: vi.fn(),
   onToggleEditMode: vi.fn(),
+  onToggleSnapToGrid: vi.fn(),
   editMode: false,
+  snapToGrid: true,
   alertCount: 0,
 };
+
+function SnapPreferenceToolbarHarness() {
+  const [snapToGrid, setSnapToGrid] = useState(true);
+
+  return (
+    <Toolbar
+      {...defaultProps}
+      editMode
+      snapToGrid={snapToGrid}
+      onToggleSnapToGrid={() => setSnapToGrid((current) => !current)}
+    />
+  );
+}
 
 describe('Toolbar (COMP-04)', () => {
   it('renders MaterialIcon components — no inline SVGs', () => {
@@ -37,7 +53,7 @@ describe('Toolbar (COMP-04)', () => {
   });
 
   it('renders icons for canvas actions without a global settings shortcut', () => {
-    render(<Toolbar {...defaultProps} />);
+    render(<Toolbar {...defaultProps} editMode />);
     fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
 
     expect(screen.getByTestId('material-icon-edit')).toBeInTheDocument();
@@ -45,7 +61,62 @@ describe('Toolbar (COMP-04)', () => {
     expect(screen.getByTestId('material-icon-add')).toBeInTheDocument();
     expect(screen.getByTestId('material-icon-link')).toBeInTheDocument();
     expect(screen.getByTestId('material-icon-notifications')).toBeInTheDocument();
+    expect(screen.getByTestId('material-icon-grid_4x4')).toBeInTheDocument();
     expect(screen.queryByTestId('material-icon-settings')).not.toBeInTheDocument();
+  });
+
+  it('does not expose snap to grid outside edit mode', () => {
+    render(<Toolbar {...defaultProps} editMode={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
+
+    expect(screen.queryByRole('button', { name: /Snap to grid/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('material-icon-grid_4x4')).not.toBeInTheDocument();
+  });
+
+  it('exposes the enabled snap action as an active pressed toggle', () => {
+    render(<Toolbar {...defaultProps} editMode snapToGrid />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
+
+    const toggle = screen.getByRole('button', { name: 'Snap to grid: On' });
+
+    expect(toggle).toHaveAttribute('title', 'Snap to grid: On');
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(toggle.className).toContain('bg-primary/12');
+    expect(within(toggle).getByTestId('material-icon-grid_4x4')).toBeInTheDocument();
+  });
+
+  it('exposes the disabled snap action as an unpressed toggle', () => {
+    render(<Toolbar {...defaultProps} editMode snapToGrid={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
+
+    const toggle = screen.getByRole('button', { name: 'Snap to grid: Off' });
+
+    expect(toggle).toHaveAttribute('title', 'Snap to grid: Off');
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(toggle.className).not.toContain('bg-primary/12');
+  });
+
+  it('calls the snap preference callback', () => {
+    const onToggleSnapToGrid = vi.fn();
+    render(<Toolbar {...defaultProps} editMode onToggleSnapToGrid={onToggleSnapToGrid} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Snap to grid: On' }));
+
+    expect(onToggleSnapToGrid).toHaveBeenCalledOnce();
+  });
+
+  it('retains focus on the snap action when its state label changes', () => {
+    render(<SnapPreferenceToolbarHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show canvas tools' }));
+    const enabledToggle = screen.getByRole('button', { name: 'Snap to grid: On' });
+    enabledToggle.focus();
+
+    fireEvent.click(enabledToggle);
+
+    const disabledToggle = screen.getByRole('button', { name: 'Snap to grid: Off' });
+    expect(disabledToggle).toBe(enabledToggle);
+    expect(disabledToggle).toHaveFocus();
   });
 
   it('does not render border-b separators between buttons', () => {
