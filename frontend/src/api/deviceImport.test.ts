@@ -8,6 +8,7 @@ import {
   commitDeviceImport,
   continueDeviceImportTopologyRun,
   DeviceImportPartialCommitError,
+  fetchActiveDeviceImportTopologyRun,
   fetchDeviceImportTopologyRun,
   parseDeviceImportCommitResult,
   parseDeviceImportPreview,
@@ -136,6 +137,31 @@ afterEach(() => {
 });
 
 describe('device import client', () => {
+  it('treats an empty active-run response as a normal completed workflow', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchActiveDeviceImportTopologyRun('map-1')).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/admin/device-imports/topology-runs/active?map_id=map-1',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    );
+  });
+
+  it('keeps treating a legacy missing active-run response as a completed workflow', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        mockResponse(
+          { error: 'device import topology run not found' },
+          { ok: false, status: 404, statusText: 'Not Found' },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchActiveDeviceImportTopologyRun('map-1')).resolves.toBeNull();
+  });
+
   it('sends preview with only the approved multipart fields', async () => {
     const file = new File(['- targets: ["router.example.net"]\n'], 'targets.yml', {
       type: 'application/yaml',

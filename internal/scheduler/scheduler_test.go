@@ -837,6 +837,162 @@ func TestSchedulerScheduleBootstrapEnqueuesImmediateBootstrapTask(t *testing.T) 
 	}
 }
 
+func TestSchedulerDispatchReadyPrioritizesBootstrapOverRecurringBackgroundWork(t *testing.T) {
+	sharedProfile := domain.SNMPCredentials{
+		Version: domain.SNMPVersionV2c,
+		V2c:     &domain.SNMPv2cCredentials{Community: "bootstrap-priority"},
+	}
+	scheduler := NewScheduler(&fakeDeviceSource{}, fakeSettingsRepo{values: map[string]string{
+		domain.SettingSNMPWorkerPoolPerformance:    "1",
+		domain.SettingSNMPWorkerPoolOperational:    "1",
+		domain.SettingSNMPWorkerPoolStatic:         "1",
+		domain.SettingPollingMaxWorkersPerDevice:   "4",
+		domain.SettingPollingMaxWorkersPerSite:     "4",
+		domain.SettingPollingMaxWorkersPerSubnet:   "4",
+		domain.SettingPollingMaxInflightPerProfile: "1",
+	}})
+	now := time.Unix(1_700_000_333, 0).UTC()
+	performanceDevice := domain.Device{
+		ID: uuid.MustParse("44000000-0000-0000-0000-000000000020"), IP: "10.0.1.20",
+		SNMPCredentials: sharedProfile,
+	}
+	bootstrapDevice := domain.Device{
+		ID: uuid.MustParse("44000000-0000-0000-0000-000000000021"), IP: "10.0.2.21",
+		SNMPCredentials: sharedProfile,
+	}
+	performance := &heapItem{task: PollTask{
+		Key:    NewTaskKey(performanceDevice.ID, domain.VolatilityClassPerformance),
+		Device: performanceDevice, VolatilityClass: domain.VolatilityClassPerformance,
+	}, dueAt: now, index: -1}
+	bootstrap := &heapItem{task: PollTask{
+		Key: NewBootstrapTaskKey(bootstrapDevice.ID), Kind: polling.TaskKindBootstrap,
+		Lane: polling.LaneBootstrap, Device: bootstrapDevice,
+		VolatilityClass: domain.VolatilityClassStatic,
+	}, dueAt: now, index: -1}
+	scheduler.tasks = make(chan PollTask, 64)
+	scheduler.enqueueReady(performance)
+	scheduler.enqueueReady(bootstrap)
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	select {
+	case task := <-scheduler.tasks:
+		if task.Kind != polling.TaskKindBootstrap {
+			t.Fatalf("first dispatched kind = %q, want bootstrap", task.Kind)
+		}
+	default:
+		t.Fatal("expected one dispatched task")
+	}
+	if !bootstrap.inFlight {
+		t.Fatal("bootstrap task should own the available SNMP profile slot")
+	}
+	if performance.inFlight {
+		t.Fatal("recurring performance task should wait for the Bootstrap-Once task")
+	}
+}
+
+func TestSchedulerDispatchReadyPrioritizesEssentialOverBootstrap(t *testing.T) {
+	sharedProfile := domain.SNMPCredentials{
+		Version: domain.SNMPVersionV2c,
+		V2c:     &domain.SNMPv2cCredentials{Community: "essential-priority"},
+	}
+	scheduler := NewScheduler(&fakeDeviceSource{}, fakeSettingsRepo{values: map[string]string{
+		domain.SettingPollingEssentialWorkers:      "1",
+		domain.SettingSNMPWorkerPoolPerformance:    "1",
+		domain.SettingSNMPWorkerPoolStatic:         "1",
+		domain.SettingPollingMaxWorkersPerDevice:   "4",
+		domain.SettingPollingMaxWorkersPerSite:     "4",
+		domain.SettingPollingMaxWorkersPerSubnet:   "4",
+		domain.SettingPollingMaxInflightPerProfile: "1",
+	}})
+	now := time.Unix(1_700_000_334, 0).UTC()
+	essentialDevice := domain.Device{
+		ID: uuid.MustParse("44000000-0000-0000-0000-000000000022"), IP: "10.0.3.22",
+		SNMPCredentials: sharedProfile,
+	}
+	bootstrapDevice := domain.Device{
+		ID: uuid.MustParse("44000000-0000-0000-0000-000000000023"), IP: "10.0.4.23",
+		SNMPCredentials: sharedProfile,
+	}
+	essential := &heapItem{task: PollTask{
+		Key: NewEssentialTaskKey(essentialDevice.ID), Kind: polling.TaskKindEssential,
+		Device: essentialDevice,
+	}, dueAt: now, index: -1}
+	bootstrap := &heapItem{task: PollTask{
+		Key: NewBootstrapTaskKey(bootstrapDevice.ID), Kind: polling.TaskKindBootstrap,
+		Lane: polling.LaneBootstrap, Device: bootstrapDevice,
+		VolatilityClass: domain.VolatilityClassStatic,
+	}, dueAt: now, index: -1}
+	scheduler.tasks = make(chan PollTask, 64)
+	scheduler.enqueueReady(bootstrap)
+	scheduler.enqueueReady(essential)
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	select {
+	case task := <-scheduler.tasks:
+		if task.Kind != polling.TaskKindEssential {
+			t.Fatalf("first dispatched kind = %q, want essential", task.Kind)
+		}
+	default:
+		t.Fatal("expected one dispatched task")
+	}
+	if !essential.inFlight {
+		t.Fatal("essential task should own the available SNMP profile slot")
+	}
+	if bootstrap.inFlight {
+		t.Fatal("bootstrap task should wait for the essential task")
+	}
+}
+
+func TestSchedulerDispatchReadyFallsBackWhenBootstrapClassIsFull(t *testing.T) {
+	scheduler := NewScheduler(&fakeDeviceSource{}, fakeSettingsRepo{values: map[string]string{
+		domain.SettingSNMPWorkerPoolPerformance:    "1",
+		domain.SettingSNMPWorkerPoolStatic:         "1",
+		domain.SettingPollingMaxWorkersPerDevice:   "4",
+		domain.SettingPollingMaxWorkersPerSite:     "4",
+		domain.SettingPollingMaxWorkersPerSubnet:   "4",
+		domain.SettingPollingMaxInflightPerProfile: "4",
+	}})
+	now := time.Unix(1_700_000_335, 0).UTC()
+	performance := &heapItem{task: PollTask{
+		Key: NewTaskKey(uuid.MustParse("44000000-0000-0000-0000-000000000024"), domain.VolatilityClassPerformance),
+		Device: domain.Device{
+			ID: uuid.MustParse("44000000-0000-0000-0000-000000000024"), IP: "10.0.5.24",
+		},
+		VolatilityClass: domain.VolatilityClassPerformance,
+	}, dueAt: now, index: -1}
+	bootstrap := &heapItem{task: PollTask{
+		Key:  NewBootstrapTaskKey(uuid.MustParse("44000000-0000-0000-0000-000000000025")),
+		Kind: polling.TaskKindBootstrap, Lane: polling.LaneBootstrap,
+		Device: domain.Device{
+			ID: uuid.MustParse("44000000-0000-0000-0000-000000000025"), IP: "10.0.6.25",
+		},
+		VolatilityClass: domain.VolatilityClassStatic,
+	}, dueAt: now, index: -1}
+	scheduler.tasks = make(chan PollTask, 64)
+	scheduler.inFlightByClass[domain.VolatilityClassStatic] = 1
+	scheduler.enqueueReady(bootstrap)
+	scheduler.enqueueReady(performance)
+
+	scheduler.dispatchReady(context.Background(), now)
+
+	select {
+	case task := <-scheduler.tasks:
+		if task.Kind == polling.TaskKindBootstrap || task.VolatilityClass != domain.VolatilityClassPerformance {
+			t.Fatalf("dispatched task = kind %q class %q, want recurring performance", task.Kind, task.VolatilityClass)
+		}
+	default:
+		t.Fatal("expected recurring performance task to dispatch")
+	}
+	if bootstrap.inFlight {
+		t.Fatal("bootstrap task should remain queued while the static budget is full")
+	}
+	if !performance.inFlight {
+		t.Fatal("recurring performance task should use its available class budget")
+	}
+}
+
 func TestSchedulerScheduleBootstrap_IgnoresPollingDisabledDevice(t *testing.T) {
 	scheduler := NewScheduler(&fakeDeviceSource{}, nil)
 	scheduler.running.Store(true)

@@ -92,6 +92,11 @@ func (h *DeviceImportTopologyHandler) handleActive(
 	}
 	snapshot, err := h.topology.GetActiveRun(r.Context(), mapID, actorUserID)
 	if err != nil {
+		if errors.Is(err, domain.ErrDeviceImportTopologyRunNotFound) {
+			// No unfinished run is the normal refresh state after a completed Bootstrap-Once flow.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		writeDeviceImportTopologyError(w, err)
 		return
 	}

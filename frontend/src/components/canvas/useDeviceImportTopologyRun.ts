@@ -294,10 +294,15 @@ export function useDeviceImportTopologyRun({
       (item) =>
         item.state === 'warning' || item.state === 'failed' || item.unresolved_neighbors > 0,
     );
+    const allSNMPUnreachable =
+      currentSnapshot.items.length > 0 &&
+      currentSnapshot.items.every(
+        (item) => item.state === 'failed' && item.result_code === 'snmp_unreachable',
+      );
     if (
       current.state !== 'ready_for_layout' ||
       !current.auto_layout_allowed ||
-      (hasIssues && !current.backgrounded) ||
+      (hasIssues && !allSNMPUnreachable && !current.backgrounded) ||
       !inputToken ||
       !mapId ||
       current.map_id !== mapId ||

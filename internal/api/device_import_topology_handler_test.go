@@ -16,6 +16,7 @@ type fakeDeviceImportTopologyProvider struct {
 	snapshot          domain.DeviceImportTopologyRunSnapshot
 	getRunID          uuid.UUID
 	getActiveMapID    uuid.UUID
+	getActiveErr      error
 	actorID           uuid.UUID
 	retryRunID        uuid.UUID
 	retryDeviceIDs    []uuid.UUID
@@ -40,7 +41,7 @@ func (f *fakeDeviceImportTopologyProvider) GetActiveRun(
 ) (domain.DeviceImportTopologyRunSnapshot, error) {
 	f.getActiveMapID = mapID
 	f.actorID = actorID
-	return f.snapshot, nil
+	return f.snapshot, f.getActiveErr
 }
 
 func (f *fakeDeviceImportTopologyProvider) Retry(
@@ -114,6 +115,29 @@ func TestDeviceImportTopologyHandlerGetsActiveRunForActor(t *testing.T) {
 	}
 	if snapshot.Run.ID != runID || len(snapshot.Items) != 1 {
 		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestDeviceImportTopologyHandlerReturnsNoContentWhenNoRunIsActive(t *testing.T) {
+	mapID := uuid.New()
+	provider := &fakeDeviceImportTopologyProvider{
+		getActiveErr: domain.ErrDeviceImportTopologyRunNotFound,
+	}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/admin/device-imports/topology-runs/active?map_id="+mapID.String(),
+		nil,
+	)
+	_, auth := authorizeDeviceImportRequest(request, domain.PermissionCredentialsRead)
+	response := httptest.NewRecorder()
+
+	NewDeviceImportTopologyHandler(provider, auth).ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", response.Code, response.Body.String())
+	}
+	if response.Body.Len() != 0 {
+		t.Fatalf("body = %q, want empty", response.Body.String())
 	}
 }
 

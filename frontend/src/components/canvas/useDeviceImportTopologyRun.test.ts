@@ -264,6 +264,93 @@ describe('useDeviceImportTopologyRun', () => {
     await waitFor(() => expect(applyDeviceImportTopologyLayout).toHaveBeenCalledOnce());
   });
 
+  it('automatically lays out imported nodes when every device is SNMP unreachable', async () => {
+    const allOfflineSnapshot = {
+      ...snapshot('ready_for_layout', false),
+      items: [
+        {
+          ...snapshot('ready_for_layout', false).items[0],
+          state: 'failed' as const,
+          result_code: 'snmp_unreachable' as const,
+          message: 'SNMP topology discovery did not complete.',
+          neighbor_count: 0,
+          links_created: 0,
+          unresolved_neighbors: 0,
+        },
+      ],
+    };
+    vi.mocked(fetchDeviceImportTopologyRun).mockResolvedValue(allOfflineSnapshot);
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValue({
+      status: 'ok',
+      topology: {
+        devices: [{ id: 'imported' }],
+        links: [],
+        positions: {},
+      },
+    } as never);
+
+    renderHook(() =>
+      useDeviceImportTopologyRun({
+        mapId: 'map-1',
+        request,
+        renderedMapKey: 'map:map-1',
+        nodePositions: new Map(),
+        reloadTopology: vi.fn().mockResolvedValue(undefined),
+      }),
+    );
+
+    await waitFor(() => expect(applyDeviceImportTopologyLayout).toHaveBeenCalledOnce());
+    expect(continueDeviceImportTopologyRun).not.toHaveBeenCalled();
+    expect(applyDeviceImportTopologyLayout).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        input_token: 'sha256:topology',
+        positions: [expect.objectContaining({ device_id: 'imported' })],
+        reset_link_route_ids: [],
+      }),
+    );
+  });
+
+  it('still requires confirmation when an offline run contains another issue', async () => {
+    const baseItem = snapshot('ready_for_layout', false).items[0];
+    vi.mocked(fetchDeviceImportTopologyRun).mockResolvedValue({
+      ...snapshot('ready_for_layout', false),
+      items: [
+        {
+          ...baseItem,
+          state: 'failed' as const,
+          result_code: 'snmp_unreachable' as const,
+          message: 'SNMP topology discovery did not complete.',
+          neighbor_count: 0,
+          links_created: 0,
+          unresolved_neighbors: 0,
+        },
+        {
+          ...baseItem,
+          device_id: 'needs-attention',
+          state: 'warning' as const,
+          result_code: 'unresolved_neighbors' as const,
+          message: 'One neighbor needs attention.',
+          unresolved_neighbors: 1,
+        },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      useDeviceImportTopologyRun({
+        mapId: 'map-1',
+        request,
+        renderedMapKey: 'map:map-1',
+        nodePositions: new Map(),
+        reloadTopology: vi.fn().mockResolvedValue(undefined),
+      }),
+    );
+
+    await waitFor(() => expect(result.current.snapshot?.run.state).toBe('ready_for_layout'));
+    await flushEffects();
+    expect(applyDeviceImportTopologyLayout).not.toHaveBeenCalled();
+  });
+
   it('marks only the first manual canvas mutation and disables late auto-layout locally', async () => {
     vi.mocked(fetchDeviceImportTopologyRun).mockResolvedValue(snapshot());
     const { result } = renderHook(() =>

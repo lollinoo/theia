@@ -532,6 +532,7 @@ export async function fetchActiveDeviceImportTopologyRun(
     const payload = await requestJSON(
       `/api/v1/admin/device-imports/topology-runs/active?map_id=${encodeURIComponent(mapID)}`,
     );
+    if (payload === null) return null;
     return parseDeviceImportTopologyRunSnapshot(payload);
   } catch (error) {
     if (error instanceof Error && error.message.includes(' failed: 404 ')) {
