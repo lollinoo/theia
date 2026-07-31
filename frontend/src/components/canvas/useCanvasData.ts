@@ -118,6 +118,9 @@ interface UseCanvasDataReturn {
   renderedMapKey: string | null;
   loadTopology: (isSilentRefresh?: boolean, trigger?: CanvasMeasurementTrigger) => Promise<void>;
   requestNewNodePlacement: (deviceId: string) => Promise<void>;
+  requestImportedNodePlacement: (
+    deviceIds: Iterable<string>,
+  ) => Promise<'applied' | 'pending' | 'failed'>;
   grafanaUrlRef: React.MutableRefObject<string>;
   grafanaDashboardConfigRef: React.MutableRefObject<GrafanaDashboardConfig | null>;
   refreshSettings: () => void;
@@ -139,7 +142,7 @@ interface LoadTopologyOptions {
   forceFitView?: boolean;
 }
 
-type LoadTopologyResult = 'applied' | 'stale' | 'failed';
+type LoadTopologyResult = 'applied' | 'pending' | 'stale' | 'failed';
 
 const structuralRefreshDebounceMs = 250;
 const emptyAlerts: AlertDTO[] = [];
@@ -149,6 +152,10 @@ function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
     : Date.now();
+}
+
+function importedPlacementSignature(deviceIds: Iterable<string>): string {
+  return JSON.stringify([...new Set(deviceIds)].sort((left, right) => left.localeCompare(right)));
 }
 
 // useCanvasData orchestrates topology loading, runtime patches, position saves, and recovery notices.
@@ -203,11 +210,13 @@ export function useCanvasData({
   const lastUsablePositionStateByMapRef = useRef<Map<string, string>>(new Map());
   const currentNodePositionsByMapRef = useRef<Map<string, Map<string, PositionState>>>(new Map());
   const pendingNewNodePlacementIdsByMapRef = useRef<Map<string, Set<string>>>(new Map());
+  const pendingImportedNodePlacementIdsByMapRef = useRef<Map<string, Set<string>>>(new Map());
+  const completedImportedPlacementSignaturesByMapRef = useRef<Map<string, Set<string>>>(new Map());
   const topologyCompositionCacheRef = useRef(createCanvasTopologyCompositionCache());
   const skippedSavedMapManualEdgeMigrationRef = useRef<Set<string>>(new Set());
   const grafanaUrlRef = useRef<string>('');
   const grafanaDashboardConfigRef = useRef<GrafanaDashboardConfig | null>(null);
-  const { fetchPositions, savePositions } = usePositions(mapId);
+  const { fetchPositions, savePositions, savePositionsImmediately } = usePositions(mapId);
 
   const runtimeSummary = useMemo<RuntimeSummary>(() => {
     const runtimeState = buildRuntimeState({
@@ -253,6 +262,8 @@ export function useCanvasData({
   useEffect(() => {
     return () => {
       pendingNewNodePlacementIdsByMapRef.current.delete(mapKey);
+      pendingImportedNodePlacementIdsByMapRef.current.delete(mapKey);
+      completedImportedPlacementSignaturesByMapRef.current.delete(mapKey);
     };
   }, [mapKey]);
 
@@ -281,6 +292,8 @@ export function useCanvasData({
         if (activeMapKeyRef.current !== requestMapKey) {
           return 'stale';
         }
+        const importedPlacementRequested =
+          (pendingImportedNodePlacementIdsByMapRef.current.get(requestMapKey)?.size ?? 0) > 0;
         const requestSequence = topologyLoadSequenceRef.current + 1;
         topologyLoadSequenceRef.current = requestSequence;
         const isCurrentTopologyLoad = () =>
@@ -357,7 +370,7 @@ export function useCanvasData({
               forceFitView: options.forceFitView === true,
             });
             lastCanvasTopologyEtagByMapRef.current.set(requestMapKey, notModifiedPlan.etag);
-            if (notModifiedPlan.shouldFitView) {
+            if (notModifiedPlan.shouldFitView && !importedPlacementRequested) {
               requestFitViewAfterLoad();
             }
             recordCanvasTopologyLoadSucceeded({
@@ -365,7 +378,7 @@ export function useCanvasData({
               durationMs: nowMs() - loadStartedAt,
               notModified: true,
             });
-            return 'applied';
+            return importedPlacementRequested ? 'pending' : 'applied';
           }
 
           const fetchedDevices = topologySource.devices;
@@ -433,9 +446,21 @@ export function useCanvasData({
             alerts: alertsRef.current,
             prometheusStatus,
           });
-          const pendingDeviceIds = new Set(
-            pendingNewNodePlacementIdsByMapRef.current.get(requestMapKey) ?? [],
+          const pendingImportedDeviceIds = new Set(
+            pendingImportedNodePlacementIdsByMapRef.current.get(requestMapKey) ?? [],
           );
+          const strictImportedPlacement = pendingImportedDeviceIds.size > 0;
+          const pendingDeviceIds = strictImportedPlacement
+            ? pendingImportedDeviceIds
+            : new Set(pendingNewNodePlacementIdsByMapRef.current.get(requestMapKey) ?? []);
+          if (
+            strictImportedPlacement &&
+            [...pendingImportedDeviceIds].some(
+              (deviceId) => !fetchedDevices.some((device) => device.id === deviceId),
+            )
+          ) {
+            return 'pending';
+          }
           const canvasRect = getCanvasClientRect();
           const explicitPlacement =
             pendingDeviceIds.size > 0 && canvasRect !== null
@@ -446,19 +471,39 @@ export function useCanvasData({
                   links: fetchedLinks,
                   deviceIds: pendingDeviceIds,
                   snapGrid: snapGridRef.current,
+                  collisionPolicy: strictImportedPlacement ? 'expand-collision-free' : 'viewport',
                 })
               : {
                   positions: new Map<string, { x: number; y: number }>(),
                   placedDeviceIds: new Set<string>(),
+                  unplacedDeviceIds: strictImportedPlacement
+                    ? new Set(pendingImportedDeviceIds)
+                    : new Set<string>(),
                 };
+          if (strictImportedPlacement && explicitPlacement.unplacedDeviceIds.size > 0) {
+            throw new Error('Unable to place imported nodes without overlap');
+          }
           const shouldFitViewAfterLoad =
-            pendingDeviceIds.size === 0 &&
-            buildShouldFitViewAfterTopologyLoad({
-              trigger,
-              forceFitView: options.forceFitView === true,
-              usablePositionState,
-            });
+            strictImportedPlacement ||
+            (pendingDeviceIds.size === 0 &&
+              buildShouldFitViewAfterTopologyLoad({
+                trigger,
+                forceFitView: options.forceFitView === true,
+                usablePositionState,
+              }));
           const consumeAppliedExplicitPlacements = () => {
+            if (strictImportedPlacement) {
+              const completedForMap =
+                completedImportedPlacementSignaturesByMapRef.current.get(requestMapKey) ??
+                new Set<string>();
+              completedForMap.add(importedPlacementSignature(pendingImportedDeviceIds));
+              completedImportedPlacementSignaturesByMapRef.current.set(
+                requestMapKey,
+                completedForMap,
+              );
+              pendingImportedNodePlacementIdsByMapRef.current.delete(requestMapKey);
+              return;
+            }
             const pendingForMap = pendingNewNodePlacementIdsByMapRef.current.get(requestMapKey);
             if (!pendingForMap) return;
             for (const deviceId of explicitPlacement.placedDeviceIds) {
@@ -535,14 +580,20 @@ export function useCanvasData({
               new Map<string, { x: number; y: number }>(),
               new Set(),
             );
+            const positionSavePlan = buildTopologyPositionSavePlan(nextNodes, savedPositions);
+            if (strictImportedPlacement && positionSavePlan.shouldSave) {
+              const saveRemainsCurrent = await savePositionsImmediately(positionSavePlan.payload);
+              if (!saveRemainsCurrent || !isCurrentTopologyLoad()) {
+                return 'stale';
+              }
+            }
             nodesOwnerMapKeyRef.current = mapKey;
             setRenderedMapKey(mapKey);
             currentNodePositionsByMapRef.current.set(mapKey, nodePositionsToPositionMap(nextNodes));
             setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
             setEdges(nextEdges);
             lastAppliedRuntimeSnapshotRef.current = snapshotRef.current;
-            const positionSavePlan = buildTopologyPositionSavePlan(nextNodes, savedPositions);
-            if (positionSavePlan.shouldSave) {
+            if (!strictImportedPlacement && positionSavePlan.shouldSave) {
               void savePositions(positionSavePlan.payload);
             }
             consumeAppliedExplicitPlacements();
@@ -606,6 +657,13 @@ export function useCanvasData({
             computedPositions,
             placementDeviceIds,
           );
+          const positionSavePlan = buildTopologyPositionSavePlan(composedNodes, savedPositions);
+          if (strictImportedPlacement && positionSavePlan.shouldSave) {
+            const saveRemainsCurrent = await savePositionsImmediately(positionSavePlan.payload);
+            if (!saveRemainsCurrent || !isCurrentTopologyLoad()) {
+              return 'stale';
+            }
+          }
 
           // Apply all state updates together as urgent (not in startTransition).
           // Previously these were wrapped in startTransition which made them
@@ -627,8 +685,7 @@ export function useCanvasData({
           setEdges(composedEdges);
           lastAppliedRuntimeSnapshotRef.current = runtimeSnapshot;
 
-          const positionSavePlan = buildTopologyPositionSavePlan(composedNodes, savedPositions);
-          if (positionSavePlan.shouldSave) {
+          if (!strictImportedPlacement && positionSavePlan.shouldSave) {
             void savePositions(positionSavePlan.payload);
           }
           consumeAppliedExplicitPlacements();
@@ -694,6 +751,7 @@ export function useCanvasData({
       setEdges,
       fetchPositions,
       savePositions,
+      savePositionsImmediately,
       mapId,
       mapKey,
       diagnosticMapId,
@@ -712,6 +770,28 @@ export function useCanvasData({
 
       lastCanvasTopologyEtagByMapRef.current.set(mapKey, null);
       await loadTopology(true, 'manual_refresh');
+    },
+    [loadTopology, mapKey],
+  );
+
+  const requestImportedNodePlacement = useCallback(
+    async (deviceIds: Iterable<string>): Promise<'applied' | 'pending' | 'failed'> => {
+      const normalizedDeviceIds = new Set(
+        [...deviceIds].map((deviceId) => deviceId.trim()).filter(Boolean),
+      );
+      if (normalizedDeviceIds.size === 0) return 'pending';
+      const signature = importedPlacementSignature(normalizedDeviceIds);
+      if (
+        completedImportedPlacementSignaturesByMapRef.current.get(mapKey)?.has(signature) === true
+      ) {
+        return 'applied';
+      }
+
+      pendingImportedNodePlacementIdsByMapRef.current.set(mapKey, normalizedDeviceIds);
+      lastCanvasTopologyEtagByMapRef.current.set(mapKey, null);
+      const result = await loadTopology(true, 'manual_refresh');
+      if (result === 'applied' || result === 'failed' || result === 'pending') return result;
+      return 'pending';
     },
     [loadTopology, mapKey],
   );
@@ -969,6 +1049,7 @@ export function useCanvasData({
     renderedMapKey,
     loadTopology: loadTopologyForConsumer,
     requestNewNodePlacement,
+    requestImportedNodePlacement,
     grafanaUrlRef,
     grafanaDashboardConfigRef,
     refreshSettings,

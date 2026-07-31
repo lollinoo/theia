@@ -73,12 +73,15 @@ vi.mock('./manualEdgeMigrationOrchestrator', async (importOriginal) => {
 const positionMocks = vi.hoisted(() => {
   const fetchPositions = vi.fn();
   const savePositions = vi.fn();
+  const savePositionsImmediately = vi.fn();
   return {
     fetchPositions,
     savePositions,
+    savePositionsImmediately,
     usePositions: vi.fn((_mapId: string | null) => ({
       fetchPositions,
       savePositions,
+      savePositionsImmediately,
     })),
   };
 });
@@ -360,8 +363,10 @@ describe('useCanvasData', () => {
     positionMocks.usePositions.mockImplementation((_mapId: string | null) => ({
       fetchPositions: positionMocks.fetchPositions,
       savePositions: positionMocks.savePositions,
+      savePositionsImmediately: positionMocks.savePositionsImmediately,
     }));
     positionMocks.fetchPositions.mockResolvedValue(new Map());
+    positionMocks.savePositionsImmediately.mockResolvedValue(true);
     vi.mocked(fetchCanvasBootstrap).mockRejectedValue({ status: 404 });
     vi.mocked(fetchCanvasMapBootstrap).mockRejectedValue({ status: 404 });
     vi.mocked(fetchCanvasMapTopology).mockRejectedValue({ status: 404 });
@@ -3007,6 +3012,7 @@ describe('useCanvasData', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    vi.mocked(fetchCanvasTopology).mockClear();
     vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
       canvasTopologyOkResponse({
         devices: [mockDevice()],
@@ -3537,6 +3543,254 @@ describe('useCanvasData', () => {
     expect(savedPayload.filter((position) => position.device_id === secondDevice.id)).toHaveLength(
       1,
     );
+  });
+
+  it('atomically places an imported batch, preserves existing positions, and fits after save', async () => {
+    const firstDevice = mockDevice({
+      id: 'import-a',
+      hostname: 'import-a',
+      ip: '192.0.2.81',
+      sys_name: 'import-a',
+    });
+    const secondDevice = mockDevice({
+      id: 'import-b',
+      hostname: 'import-b',
+      ip: '192.0.2.82',
+      sys_name: 'import-b',
+    });
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const existingPosition = result.current.nodes.find((node) => node.id === 'dev-1')?.position;
+    const fitViewCallsBeforeImport = vi.mocked(reactFlow.fitView).mock.calls.length;
+    positionMocks.savePositions.mockClear();
+    positionMocks.savePositionsImmediately.mockClear();
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice(), firstDevice, secondDevice],
+        topology_version: 'topo-imported-batch',
+      }),
+    );
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.requestImportedNodePlacement([
+        secondDevice.id,
+        firstDevice.id,
+      ]);
+    });
+
+    expect(outcome).toBe('applied');
+    expect(result.current.nodes.find((node) => node.id === 'dev-1')?.position).toEqual(
+      existingPosition,
+    );
+    expect(result.current.nodes.find((node) => node.id === firstDevice.id)).toBeDefined();
+    expect(result.current.nodes.find((node) => node.id === secondDevice.id)).toBeDefined();
+    expect(positionMocks.savePositions).not.toHaveBeenCalled();
+    expect(positionMocks.savePositionsImmediately).toHaveBeenCalledTimes(1);
+    expect(positionMocks.savePositionsImmediately).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ device_id: 'dev-1' }),
+        expect.objectContaining({ device_id: firstDevice.id }),
+        expect.objectContaining({ device_id: secondDevice.id }),
+      ]),
+    );
+    expect(reactFlow.fitView).toHaveBeenCalledTimes(fitViewCallsBeforeImport + 1);
+  });
+
+  it('does not apply an imported topology load that becomes stale while its save is pending', async () => {
+    const importedDevice = mockDevice({
+      id: 'import-stale-save',
+      hostname: 'import-stale-save',
+      ip: '192.0.2.86',
+      sys_name: 'import-stale-save',
+    });
+    const nextMapDevice = mockDevice({
+      id: 'next-map-device',
+      hostname: 'next-map-device',
+      ip: '192.0.2.87',
+      sys_name: 'next-map-device',
+    });
+    const immediateSave = deferred<boolean>();
+    const { result, rerender } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice(), importedDevice],
+        topology_version: 'topo-import-stale-save',
+      }),
+    );
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [nextMapDevice],
+        topology_version: 'topo-next-map',
+      }),
+    );
+    positionMocks.savePositionsImmediately.mockReturnValueOnce(immediateSave.promise);
+
+    let placementPromise!: Promise<'applied' | 'pending' | 'failed'>;
+    await act(async () => {
+      placementPromise = result.current.requestImportedNodePlacement([importedDevice.id]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(positionMocks.savePositionsImmediately).toHaveBeenCalledOnce();
+
+    rerender({
+      currentSnapshot: null,
+      currentMapId: 'map-2',
+      currentMapName: 'Map 2',
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.nodes.map((node) => node.id)).toEqual([nextMapDevice.id]);
+
+    let outcome: unknown;
+    await act(async () => {
+      immediateSave.resolve(true);
+      outcome = await placementPromise;
+    });
+
+    expect(outcome).toBe('pending');
+    expect(result.current.nodes.map((node) => node.id)).toEqual([nextMapDevice.id]);
+  });
+
+  it('keeps an imported placement pending until every requested device reaches topology', async () => {
+    const importedDevice = mockDevice({
+      id: 'import-late',
+      hostname: 'import-late',
+      ip: '192.0.2.83',
+      sys_name: 'import-late',
+    });
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const fitViewCallsBeforeImport = vi.mocked(reactFlow.fitView).mock.calls.length;
+    positionMocks.savePositionsImmediately.mockClear();
+    vi.mocked(fetchCanvasTopology)
+      .mockResolvedValueOnce(
+        canvasTopologyOkResponse({
+          devices: [mockDevice()],
+          topology_version: 'topo-before-import-visible',
+        }),
+      )
+      .mockResolvedValueOnce(
+        canvasTopologyOkResponse({
+          devices: [mockDevice(), importedDevice],
+          topology_version: 'topo-import-visible',
+        }),
+      );
+
+    let firstOutcome: unknown;
+    await act(async () => {
+      firstOutcome = await result.current.requestImportedNodePlacement([importedDevice.id]);
+    });
+
+    expect(firstOutcome).toBe('pending');
+    expect(positionMocks.savePositionsImmediately).not.toHaveBeenCalled();
+    expect(reactFlow.fitView).toHaveBeenCalledTimes(fitViewCallsBeforeImport);
+
+    let retryOutcome: unknown;
+    await act(async () => {
+      retryOutcome = await result.current.requestImportedNodePlacement([importedDevice.id]);
+    });
+
+    expect(retryOutcome).toBe('applied');
+    expect(positionMocks.savePositionsImmediately).toHaveBeenCalledTimes(1);
+    expect(reactFlow.fitView).toHaveBeenCalledTimes(fitViewCallsBeforeImport + 1);
+  });
+
+  it('does not replay an imported batch that was already persisted on the map', async () => {
+    const importedDevice = mockDevice({
+      id: 'import-once',
+      hostname: 'import-once',
+      ip: '192.0.2.85',
+      sys_name: 'import-once',
+    });
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    vi.mocked(fetchCanvasTopology).mockClear();
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(
+      canvasTopologyOkResponse({
+        devices: [mockDevice(), importedDevice],
+        topology_version: 'topo-import-once',
+      }),
+    );
+    positionMocks.savePositionsImmediately.mockClear();
+
+    let firstOutcome: unknown;
+    let repeatedOutcome: unknown;
+    await act(async () => {
+      firstOutcome = await result.current.requestImportedNodePlacement([importedDevice.id]);
+      repeatedOutcome = await result.current.requestImportedNodePlacement([importedDevice.id]);
+    });
+
+    expect(firstOutcome).toBe('applied');
+    expect(repeatedOutcome).toBe('applied');
+    expect(positionMocks.savePositionsImmediately).toHaveBeenCalledTimes(1);
+    expect(fetchCanvasTopology).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not consume or fit a failed imported placement save and succeeds on retry', async () => {
+    const importedDevice = mockDevice({
+      id: 'import-retry',
+      hostname: 'import-retry',
+      ip: '192.0.2.84',
+      sys_name: 'import-retry',
+    });
+    const topology = canvasTopologyOkResponse({
+      devices: [mockDevice(), importedDevice],
+      topology_version: 'topo-import-retry',
+    });
+    const { result, reactFlow } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const nodesBeforeFailure = result.current.nodes;
+    const fitViewCallsBeforeImport = vi.mocked(reactFlow.fitView).mock.calls.length;
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(topology).mockResolvedValueOnce(topology);
+    positionMocks.savePositionsImmediately
+      .mockRejectedValueOnce(new Error('position store unavailable'))
+      .mockResolvedValueOnce(true);
+
+    let firstOutcome: unknown;
+    await act(async () => {
+      firstOutcome = await result.current.requestImportedNodePlacement([importedDevice.id]);
+    });
+
+    expect(firstOutcome).toBe('failed');
+    expect(result.current.nodes).toEqual(nodesBeforeFailure);
+    expect(result.current.error).toBe('position store unavailable');
+    expect(reactFlow.fitView).toHaveBeenCalledTimes(fitViewCallsBeforeImport);
+
+    let retryOutcome: unknown;
+    await act(async () => {
+      retryOutcome = await result.current.requestImportedNodePlacement([importedDevice.id]);
+    });
+
+    expect(retryOutcome).toBe('applied');
+    expect(result.current.nodes.find((node) => node.id === importedDevice.id)).toBeDefined();
+    expect(positionMocks.savePositionsImmediately).toHaveBeenCalledTimes(2);
+    expect(reactFlow.fitView).toHaveBeenCalledTimes(fitViewCallsBeforeImport + 1);
   });
 
   it('only places newly added devices and preserves existing positioned nodes', async () => {

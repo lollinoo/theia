@@ -10,6 +10,7 @@ import {
   type DeviceImportPreview,
 } from '../api/deviceImport';
 import type { Area, CanvasMap, SNMPProfile } from '../types/api';
+import type { ImportedNodePlacementRequest } from './canvas/importedNodePlacementRequest';
 import { DeviceImportPanel } from './DeviceImportPanel';
 
 const fetchCanvasMapsMock = vi.hoisted(() => vi.fn<() => Promise<CanvasMap[]>>());
@@ -212,7 +213,10 @@ function uploadFile(name = 'targets.yml'): File {
 }
 
 async function renderPanel(
-  props: { canReadCredentials?: boolean; onOpenMap?: (map: CanvasMap) => void } = {},
+  props: {
+    canReadCredentials?: boolean;
+    onOpenMap?: (map: CanvasMap, placementRequest?: ImportedNodePlacementRequest) => void;
+  } = {},
 ) {
   let rendered: ReturnType<typeof render> | undefined;
   await act(async () => {
@@ -478,7 +482,14 @@ describe('DeviceImportPanel', () => {
     expect(screen.getByText('ignored malformed group')).toBeVisible();
 
     await click(screen.getByRole('button', { name: 'Open destination map' }));
-    expect(onOpenMap).toHaveBeenCalledWith(primaryMap);
+    expect(onOpenMap).toHaveBeenCalledWith(
+      primaryMap,
+      expect.objectContaining({
+        mapId: primaryMap.id,
+        deviceIds: ['device-created'],
+        requestId: expect.any(String),
+      }),
+    );
 
     await click(screen.getByRole('button', { name: 'Reset import' }));
     expect(screen.queryByTestId('device-import-result-summary')).not.toBeInTheDocument();

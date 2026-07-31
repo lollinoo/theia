@@ -748,6 +748,90 @@ describe('buildExplicitNodePlacements', () => {
     expectContainedInCanvasInset(secondRect, canvasRect);
   });
 
+  it('expands a strict batch beyond a saturated viewport without overlapping hidden obstacles', () => {
+    const canvasRect = { x: 0, y: 0, width: 260, height: 180 };
+    const existing = device({ id: 'existing' });
+    const hiddenOffscreen = device({ id: 'hidden-offscreen' });
+    const first = device({ id: 'import-a' });
+    const second = device({ id: 'import-b' });
+    const { reactFlow, flowToScreenPosition } = reactFlowStub({
+      canvasRect,
+      nodes: [
+        node(existing, { x: 0, y: 0 }, { measured: { width: 260, height: 180 } }),
+        node(
+          hiddenOffscreen,
+          { x: 500, y: 0 },
+          { hidden: true, measured: { width: 370, height: 140 } },
+        ),
+      ],
+    });
+
+    const result = buildExplicitNodePlacements({
+      reactFlow,
+      canvasRect,
+      devices: [existing, hiddenOffscreen, second, first],
+      links: [],
+      deviceIds: new Set([second.id, first.id]),
+      collisionPolicy: 'expand-collision-free',
+    });
+
+    expect(result.unplacedDeviceIds).toEqual(new Set());
+    expect(result.placedDeviceIds).toEqual(new Set([first.id, second.id]));
+
+    const obstacleRects = [
+      { x: 0, y: 0, width: 260, height: 180 },
+      { x: 500, y: 0, width: 370, height: 140 },
+    ];
+    const importedRects = [first.id, second.id].map((deviceId) => {
+      const position = result.positions.get(deviceId);
+      expect(position).toBeDefined();
+      return { ...flowToScreenPosition(position ?? { x: 0, y: 0 }), width: 370, height: 140 };
+    });
+
+    for (const importedRect of importedRects) {
+      for (const obstacleRect of obstacleRects) {
+        expect(intersectionArea(importedRect, obstacleRect)).toBe(0);
+      }
+    }
+    expect(intersectionArea(importedRects[0], importedRects[1])).toBe(0);
+    expect(
+      importedRects.some(
+        (rect) =>
+          rect.x < canvasRect.x ||
+          rect.y < canvasRect.y ||
+          rect.x + rect.width > canvasRect.x + canvasRect.width ||
+          rect.y + rect.height > canvasRect.y + canvasRect.height,
+      ),
+    ).toBe(true);
+  });
+
+  it('returns no strict batch positions when one target cannot be projected', () => {
+    const canvasRect = { x: 0, y: 0, width: 900, height: 600 };
+    const first = device({ id: 'import-a' });
+    const second = device({ id: 'import-b' });
+    let projectionCount = 0;
+    const { reactFlow } = reactFlowStub({
+      canvasRect,
+      screenToFlowPosition: ({ x, y }) => {
+        projectionCount += 1;
+        return projectionCount === 1 ? { x, y } : { x: Number.NaN, y };
+      },
+    });
+
+    const result = buildExplicitNodePlacements({
+      reactFlow,
+      canvasRect,
+      devices: [first, second],
+      links: [],
+      deviceIds: new Set([first.id, second.id]),
+      collisionPolicy: 'expand-collision-free',
+    });
+
+    expect(result.positions).toEqual(new Map());
+    expect(result.placedDeviceIds).toEqual(new Set());
+    expect(result.unplacedDeviceIds).toEqual(new Set([first.id, second.id]));
+  });
+
   it('does not mark a target placed when client-to-flow conversion is non-finite', () => {
     const canvasRect = { x: 0, y: 0, width: 1000, height: 700 };
     const target = device({ id: 'target' });

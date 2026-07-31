@@ -24,6 +24,7 @@ import {
 } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import type { CanvasMap } from '../types/api';
+import type { ImportedNodePlacementRequest } from './canvas/importedNodePlacementRequest';
 import { DeviceImportPanel } from './DeviceImportPanel';
 import { MaterialIcon } from './MaterialIcon';
 import { SettingsPanel } from './SettingsPanel';
@@ -148,7 +149,7 @@ function auditResourceLabel(log: AdminAuditLog, usersById: Map<string, AuthUser>
 
 interface AdminDashboardProps {
   visible?: boolean;
-  onOpenMap?: (map: CanvasMap) => void;
+  onOpenMap?: (map: CanvasMap, placementRequest?: ImportedNodePlacementRequest) => void;
 }
 
 /** Renders the AdminDashboard component within the UI component boundary. */

@@ -49,6 +49,7 @@ import {
   projectCanvasRenderGraph,
 } from './canvas/canvasRenderProjection';
 import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
+import type { ImportedNodePlacementRequest } from './canvas/importedNodePlacementRequest';
 import type { ScreenRect } from './canvas/newNodePlacement';
 import { buildRuntimeState } from './canvas/runtimeAdapters';
 import { resolveTopologyZoomBand, type TopologyZoomBand } from './canvas/topologyZoom';
@@ -64,6 +65,7 @@ import { useCanvasLinkRoutes } from './canvas/useCanvasLinkRoutes';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { useCanvasSelection } from './canvas/useCanvasSelection';
 import { useCanvasSnapPreference } from './canvas/useCanvasSnapPreference';
+import { useImportedNodePlacementRequest } from './canvas/useImportedNodePlacementRequest';
 import DeviceCard, { type DeviceNode, resolveDeviceNodeReadabilityScale } from './DeviceCard';
 import { minimapColorForDevice } from './deviceVisualState';
 import { FloatingConnectionLine } from './FloatingConnectionLine';
@@ -182,6 +184,8 @@ interface CanvasProps {
   visible?: boolean;
   fitViewRevision?: number;
   topologyRefreshRevision?: number;
+  importedNodePlacementRequest?: ImportedNodePlacementRequest | null;
+  onImportedNodePlacementConsumed?: (requestId: string) => void;
   maps?: CanvasMap[];
   areas?: Area[];
   onDevicesChange?: (devices: Device[]) => void;
@@ -214,6 +218,8 @@ export default function Canvas({
   visible = true,
   fitViewRevision,
   topologyRefreshRevision,
+  importedNodePlacementRequest,
+  onImportedNodePlacementConsumed,
   onDevicesChange,
   onLinksChange,
   onAreaSelect,
@@ -498,6 +504,7 @@ export default function Canvas({
     renderedMapKey,
     loadTopology,
     requestNewNodePlacement,
+    requestImportedNodePlacement,
     runtimeSummary,
     grafanaUrlRef,
     grafanaDashboardConfigRef,
@@ -531,6 +538,26 @@ export default function Canvas({
     onDevicesChange,
     onLinksChange,
     onTopologyAreasChange,
+  });
+  const importedPlacementTopologyRevision = useMemo(() => {
+    if (!importedNodePlacementRequest) return '';
+    return JSON.stringify({
+      deviceIds: devices
+        .map((device) => device.id)
+        .sort((left, right) => left.localeCompare(right)),
+      nodePositions: nodes
+        .map((node) => ({ id: node.id, x: node.position.x, y: node.position.y }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+    });
+  }, [devices, importedNodePlacementRequest, nodes]);
+
+  useImportedNodePlacementRequest({
+    request: importedNodePlacementRequest,
+    activeMapId: mapId,
+    renderedMapKey,
+    topologyRevision: importedPlacementTopologyRevision,
+    placeImportedNodes: requestImportedNodePlacement,
+    onConsumed: onImportedNodePlacementConsumed,
   });
 
   useEffect(() => {

@@ -4,12 +4,13 @@
 import { fileURLToPath } from 'node:url';
 import { expect, type Page, test } from '@playwright/test';
 
-const TEST_ADDRESS = '192.0.2.241';
-const TEST_TARGET = `${TEST_ADDRESS}:9100`;
+const TEST_ADDRESSES: string[] = ['192.0.2.241', '192.0.2.242', '192.0.2.243', '192.0.2.244'];
+const TEST_TARGETS = TEST_ADDRESSES.map((address) => `${address}:9100`);
 const TEST_MAP_NAME = 'Device import e2e map';
 const TEST_PROFILE_NAME = 'Device import e2e SNMP profile';
 const TEST_SNMP_COMMUNITY = 'device-import-e2e-community';
 const IGNORED_LABEL_VALUE = 'MUST_NOT_BE_IMPORTED';
+const EXISTING_NODE_POSITION = { x: 80, y: 80, pinned: true };
 const IMPORT_FIXTURE_PATH = fileURLToPath(
   new URL('./fixtures/prometheus-file-sd.yml', import.meta.url),
 );
@@ -51,6 +52,25 @@ interface SNMPProfileResource {
   };
 }
 
+interface CanvasPositionResource {
+  device_id?: unknown;
+  x?: unknown;
+  y?: unknown;
+  pinned?: unknown;
+}
+
+interface CanvasTopologyResource {
+  devices?: Array<{ id?: unknown }>;
+  positions?: Record<string, CanvasPositionResource>;
+}
+
+interface ImportedDeviceFixture {
+  id: string;
+  address: string;
+  target: string;
+  attributes: NonNullable<DeviceResource['attributes']>;
+}
+
 async function csrfHeaders(page: Page): Promise<Record<string, string>> {
   const cookies = await page.context().cookies('http://127.0.0.1');
   const csrfCookie = cookies.find((cookie) => cookie.name === 'theia_csrf');
@@ -67,7 +87,13 @@ async function cleanupTestFixtures(page: Page): Promise<void> {
   );
   const devices = (await devicesResponse.json()) as APIListResponse<DeviceResource>;
   for (const device of devices.data ?? []) {
-    if (device.attributes?.ip !== TEST_ADDRESS || typeof device.id !== 'string') continue;
+    if (
+      typeof device.attributes?.ip !== 'string' ||
+      !TEST_ADDRESSES.includes(device.attributes.ip) ||
+      typeof device.id !== 'string'
+    ) {
+      continue;
+    }
     const response = await page.request.delete(`/api/v1/devices/${encodeURIComponent(device.id)}`, {
       headers,
     });
@@ -104,19 +130,44 @@ async function cleanupTestFixtures(page: Page): Promise<void> {
   }
 }
 
-async function createTestMap(page: Page): Promise<string> {
+async function findSeedDeviceId(page: Page): Promise<string> {
+  const response = await page.request.get('/api/v1/devices');
+  expect(response.ok(), `seed device list returned ${response.status()}`).toBe(true);
+  const payload = (await response.json()) as APIListResponse<DeviceResource>;
+  const seedDevice = (payload.data ?? []).find(
+    (device) => device.attributes?.hostname === 'router-a' && typeof device.id === 'string',
+  );
+  expect(seedDevice?.id).toEqual(expect.any(String));
+  return seedDevice?.id as string;
+}
+
+async function createTestMap(page: Page, seedDeviceId: string): Promise<string> {
   const response = await page.request.post('/api/v1/canvas/maps', {
     headers: await csrfHeaders(page),
     data: {
       name: TEST_MAP_NAME,
       description: 'Dedicated saved map for node import browser coverage',
-      filter: { device_ids: [] },
+      filter: { device_ids: [seedDeviceId] },
     },
   });
   expect(response.ok(), `map creation returned ${response.status()}`).toBe(true);
   const payload = (await response.json()) as APIDataResponse<CanvasMapResource>;
   expect(payload.data?.id).toEqual(expect.any(String));
-  return payload.data?.id as string;
+  const mapId = payload.data?.id as string;
+  const positionResponse = await page.request.put(
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/positions`,
+    {
+      headers: await csrfHeaders(page),
+      data: {
+        positions: [{ device_id: seedDeviceId, ...EXISTING_NODE_POSITION }],
+      },
+    },
+  );
+  expect(
+    positionResponse.ok(),
+    `seed position creation returned ${positionResponse.status()}`,
+  ).toBe(true);
+  return mapId;
 }
 
 async function createRedactedSNMPProfile(page: Page): Promise<string> {
@@ -136,24 +187,79 @@ async function createRedactedSNMPProfile(page: Page): Promise<string> {
   return payload.data?.id as string;
 }
 
-async function importedDevice(
-  page: Page,
-): Promise<{ id: string; attributes: NonNullable<DeviceResource['attributes']> }> {
+async function importedDevices(page: Page): Promise<ImportedDeviceFixture[]> {
   const response = await page.request.get('/api/v1/devices');
   expect(response.ok(), `device verification returned ${response.status()}`).toBe(true);
   const payload = (await response.json()) as APIListResponse<DeviceResource>;
-  const device = (payload.data ?? []).find(
-    (candidate) => candidate.attributes?.ip === TEST_ADDRESS && typeof candidate.id === 'string',
-  );
-  expect(device?.id).toEqual(expect.any(String));
-  expect(device?.attributes).toBeDefined();
-  return {
-    id: device?.id as string,
-    attributes: device?.attributes as NonNullable<DeviceResource['attributes']>,
-  };
+  return TEST_ADDRESSES.map((address, index) => {
+    const device = (payload.data ?? []).find(
+      (candidate) => candidate.attributes?.ip === address && typeof candidate.id === 'string',
+    );
+    expect(device?.id).toEqual(expect.any(String));
+    expect(device?.attributes).toBeDefined();
+    return {
+      id: device?.id as string,
+      address,
+      target: TEST_TARGETS[index],
+      attributes: device?.attributes as NonNullable<DeviceResource['attributes']>,
+    };
+  });
 }
 
-test('imports only file-SD targets from Admin Area into a dedicated saved map', async ({
+async function mapTopology(page: Page, mapId: string): Promise<CanvasTopologyResource> {
+  const response = await page.request.get(
+    `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/topology`,
+  );
+  expect(response.ok(), `map topology returned ${response.status()}`).toBe(true);
+  return (await response.json()) as CanvasTopologyResource;
+}
+
+async function expectNodesDoNotOverlap(page: Page, deviceIds: string[]): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const boxes = await Promise.all(
+          deviceIds.map(async (deviceId) => ({
+            deviceId,
+            box: await page.locator(`.react-flow__node[data-id="${deviceId}"]`).boundingBox(),
+          })),
+        );
+        if (boxes.some(({ box }) => box === null)) {
+          return 'missing-node';
+        }
+
+        for (let leftIndex = 0; leftIndex < boxes.length; leftIndex += 1) {
+          for (let rightIndex = leftIndex + 1; rightIndex < boxes.length; rightIndex += 1) {
+            const left = boxes[leftIndex];
+            const right = boxes[rightIndex];
+            if (!left.box || !right.box) continue;
+            const overlapWidth =
+              Math.min(left.box.x + left.box.width, right.box.x + right.box.width) -
+              Math.max(left.box.x, right.box.x);
+            const overlapHeight =
+              Math.min(left.box.y + left.box.height, right.box.y + right.box.height) -
+              Math.max(left.box.y, right.box.y);
+            if (overlapWidth > 0.5 && overlapHeight > 0.5) {
+              return `${left.deviceId}:${right.deviceId}`;
+            }
+          }
+        }
+        return 'none';
+      },
+      { timeout: 10_000 },
+    )
+    .toBe('none');
+}
+
+async function openSavedMap(page: Page, mapName: string): Promise<void> {
+  const mapSelector = page.getByLabel(/Select topology map/);
+  await expect(mapSelector).toBeVisible();
+  await mapSelector.click();
+  await page.getByRole('option', { name: mapName, exact: true }).click();
+  await expect(mapSelector).toContainText(mapName);
+}
+
+test('imports and persists a collision-free file-SD batch in an occupied saved map', async ({
   page,
 }) => {
   await cleanupTestFixtures(page);
@@ -165,7 +271,8 @@ test('imports only file-SD targets from Admin Area into a dedicated saved map', 
   });
 
   try {
-    const mapId = await createTestMap(page);
+    const seedDeviceId = await findSeedDeviceId(page);
+    const mapId = await createTestMap(page, seedDeviceId);
     const profileId = await createRedactedSNMPProfile(page);
 
     await page.goto('/');
@@ -190,46 +297,94 @@ test('imports only file-SD targets from Admin Area into a dedicated saved map', 
     await page.getByLabel('Prometheus file-SD YAML').setInputFiles(IMPORT_FIXTURE_PATH);
     await page.getByRole('button', { name: 'Preview import' }).click();
 
-    const previewRow = page.getByTestId('device-import-preview-row');
-    await expect(previewRow).toContainText(TEST_TARGET);
-    await expect(previewRow).toContainText(TEST_ADDRESS);
-    await expect(previewRow).toContainText('Ready');
+    const previewRows = page.getByTestId('device-import-preview-row');
+    await expect(previewRows).toHaveCount(TEST_TARGETS.length);
+    for (const target of TEST_TARGETS) {
+      const previewRow = previewRows.filter({ hasText: target });
+      await expect(previewRow).toHaveCount(1);
+      await expect(previewRow).toContainText('Ready');
+    }
     await expect(page.getByText(IGNORED_LABEL_VALUE)).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Commit import' }).click();
     await expect(page.getByRole('heading', { name: 'Import completed' })).toBeVisible();
-    const resultRow = page.getByTestId('device-import-result-row');
-    await expect(resultRow).toContainText(TEST_TARGET);
-    await expect(resultRow).toContainText('Created');
+    const resultRows = page.getByTestId('device-import-result-row');
+    await expect(resultRows).toHaveCount(TEST_TARGETS.length);
+    for (const target of TEST_TARGETS) {
+      const resultRow = resultRows.filter({ hasText: target });
+      await expect(resultRow).toHaveCount(1);
+      await expect(resultRow).toContainText('Created');
+    }
 
-    const device = await importedDevice(page);
-    expect(device.attributes).toMatchObject({
-      hostname: '',
-      ip: TEST_ADDRESS,
-      vendor: 'default',
-      tags: {},
-      area_ids: [],
-      metrics_source: 'prometheus',
-      prometheus_label_name: 'instance',
-      prometheus_label_value: TEST_TARGET,
-    });
+    const devices = await importedDevices(page);
+    for (const device of devices) {
+      expect(device.attributes).toMatchObject({
+        hostname: '',
+        ip: device.address,
+        vendor: 'default',
+        tags: {},
+        area_ids: [],
+        metrics_source: 'prometheus',
+        prometheus_label_name: 'instance',
+        prometheus_label_value: device.target,
+      });
+    }
 
-    const topologyResponse = await page.request.get(
-      `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/topology`,
-    );
-    expect(topologyResponse.ok(), `map topology returned ${topologyResponse.status()}`).toBe(true);
-    const topology = (await topologyResponse.json()) as {
-      devices?: Array<{ id?: unknown }>;
-      positions?: Record<string, unknown>;
-    };
-    expect(topology.devices?.map((candidate) => candidate.id)).toContain(device.id);
-    expect(topology.positions).not.toHaveProperty(device.id);
+    const topology = await mapTopology(page, mapId);
+    const topologyDeviceIds = topology.devices?.map((candidate) => candidate.id);
+    expect(topologyDeviceIds).toContain(seedDeviceId);
+    expect(topology.positions?.[seedDeviceId]).toMatchObject(EXISTING_NODE_POSITION);
+    for (const device of devices) {
+      expect(topologyDeviceIds).toContain(device.id);
+      expect(topology.positions).not.toHaveProperty(device.id);
+    }
 
     expect(revealRequests).toEqual([]);
     await page.getByRole('button', { name: 'Open destination map' }).click();
     await expect(page.getByLabel(/Select topology map/)).toContainText(TEST_MAP_NAME);
     await expect(page.getByTestId('topology-canvas-root')).toBeVisible();
-    await expect(page.locator(`.react-flow__node[data-id="${device.id}"]`)).toBeVisible();
+    const allDeviceIds = [seedDeviceId, ...devices.map((device) => device.id)];
+    for (const deviceId of allDeviceIds) {
+      await expect(page.locator(`.react-flow__node[data-id="${deviceId}"]`)).toBeVisible();
+    }
+
+    await expect
+      .poll(
+        async () => {
+          const positionedTopology = await mapTopology(page, mapId);
+          return devices.every((device) => {
+            const position = positionedTopology.positions?.[device.id];
+            return (
+              typeof position?.x === 'number' &&
+              Number.isFinite(position.x) &&
+              typeof position.y === 'number' &&
+              Number.isFinite(position.y)
+            );
+          });
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+
+    const positionedTopology = await mapTopology(page, mapId);
+    expect(positionedTopology.positions?.[seedDeviceId]).toMatchObject(EXISTING_NODE_POSITION);
+    const importedPositionSnapshot = Object.fromEntries(
+      devices.map((device) => [device.id, positionedTopology.positions?.[device.id]]),
+    );
+    await expectNodesDoNotOverlap(page, allDeviceIds);
+
+    await page.reload();
+    await openSavedMap(page, TEST_MAP_NAME);
+    await expect(page.getByTestId('topology-canvas-root')).toBeVisible();
+    for (const deviceId of allDeviceIds) {
+      await expect(page.locator(`.react-flow__node[data-id="${deviceId}"]`)).toBeVisible();
+    }
+    const reloadedTopology = await mapTopology(page, mapId);
+    expect(reloadedTopology.positions?.[seedDeviceId]).toMatchObject(EXISTING_NODE_POSITION);
+    for (const device of devices) {
+      expect(reloadedTopology.positions?.[device.id]).toEqual(importedPositionSnapshot[device.id]);
+    }
+    await expectNodesDoNotOverlap(page, allDeviceIds);
   } finally {
     await cleanupTestFixtures(page);
   }

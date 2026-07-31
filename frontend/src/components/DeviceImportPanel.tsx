@@ -26,10 +26,14 @@ import {
   previewDeviceImport,
 } from '../api/client';
 import type { Area, CanvasMap, SNMPProfile } from '../types/api';
+import {
+  buildImportedNodePlacementRequest,
+  type ImportedNodePlacementRequest,
+} from './canvas/importedNodePlacementRequest';
 
 interface DeviceImportPanelProps {
   canReadCredentials: boolean;
-  onOpenMap?: (map: CanvasMap) => void;
+  onOpenMap?: (map: CanvasMap, placementRequest?: ImportedNodePlacementRequest) => void;
 }
 
 type PendingAction = 'preview' | 'commit' | null;
@@ -730,7 +734,15 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
               type="button"
               disabled={!selectedMap || !onOpenMap}
               onClick={() => {
-                if (selectedMap) onOpenMap?.(selectedMap);
+                if (!selectedMap) return;
+                const placementRequest = buildImportedNodePlacementRequest({
+                  fileDigest: result.file_digest,
+                  mapId: selectedMap.id,
+                  deviceIds: result.results.flatMap((row) =>
+                    row.status === 'created' && row.device_id ? [row.device_id] : [],
+                  ),
+                });
+                onOpenMap?.(selectedMap, placementRequest ?? undefined);
               }}
               className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-60"
             >

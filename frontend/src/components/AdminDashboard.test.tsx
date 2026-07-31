@@ -20,6 +20,7 @@ import {
 } from '../api/client';
 import type { CanvasMap } from '../types/api';
 import { AdminDashboard } from './AdminDashboard';
+import type { ImportedNodePlacementRequest } from './canvas/importedNodePlacementRequest';
 
 const settingsPanelPropsMock = vi.hoisted(() => vi.fn());
 const deviceImportPanelPropsMock = vi.hoisted(() => vi.fn());
@@ -51,7 +52,7 @@ vi.mock('./SettingsPanel', () => ({
 vi.mock('./DeviceImportPanel', () => ({
   DeviceImportPanel: (props: {
     canReadCredentials: boolean;
-    onOpenMap?: (map: CanvasMap) => void;
+    onOpenMap?: (map: CanvasMap, placementRequest?: ImportedNodePlacementRequest) => void;
   }) => {
     deviceImportPanelPropsMock(props);
     return (
@@ -60,19 +61,26 @@ vi.mock('./DeviceImportPanel', () => ({
         <button
           type="button"
           onClick={() =>
-            props.onOpenMap?.({
-              id: 'import-map',
-              name: 'Imported Nodes',
-              description: '',
-              source_area_id: null,
-              filter: {},
-              is_default: false,
-              device_count: 1,
-              link_count: 0,
-              position_count: 0,
-              created_at: '2026-01-01T00:00:00Z',
-              updated_at: '2026-01-02T00:00:00Z',
-            })
+            props.onOpenMap?.(
+              {
+                id: 'import-map',
+                name: 'Imported Nodes',
+                description: '',
+                source_area_id: null,
+                filter: {},
+                is_default: false,
+                device_count: 1,
+                link_count: 0,
+                position_count: 0,
+                created_at: '2026-01-01T00:00:00Z',
+                updated_at: '2026-01-02T00:00:00Z',
+              },
+              {
+                requestId: 'import-request',
+                mapId: 'import-map',
+                deviceIds: ['imported-device'],
+              },
+            )
           }
         >
           Test open imported map
@@ -551,7 +559,11 @@ describe('AdminDashboard', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Test open imported map' }));
-    expect(onOpenMap).toHaveBeenCalledWith(expect.objectContaining({ id: 'import-map' }));
+    expect(onOpenMap).toHaveBeenCalledWith(expect.objectContaining({ id: 'import-map' }), {
+      requestId: 'import-request',
+      mapId: 'import-map',
+      deviceIds: ['imported-device'],
+    });
   });
 
   it('exposes global settings inside admin only when the user can read and update settings', async () => {
