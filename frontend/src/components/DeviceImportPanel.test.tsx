@@ -394,37 +394,34 @@ describe('DeviceImportPanel', () => {
     expect(screen.getByRole('button', { name: 'Commit import' })).toBeEnabled();
   });
 
-  it.each([
-    'file',
-    'mode',
-    'profile',
-    'map',
-    'area',
-  ] as const)('invalidates a preview when the %s configuration changes', async (field) => {
-    await renderPanel();
-    await chooseFile();
-    await click(screen.getByRole('radio', { name: 'Prometheus with SNMP fallback' }));
-    await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[0].id);
-    await change(screen.getByRole('combobox', { name: 'Map area (optional)' }), primaryArea.id);
-    await click(screen.getByRole('button', { name: 'Preview import' }));
-    expect(await screen.findByTestId('device-import-preview-summary')).toBeVisible();
-    await click(screen.getByRole('button', { name: 'Back to configuration' }));
+  it.each(['file', 'mode', 'profile', 'map', 'area'] as const)(
+    'invalidates a preview when the %s configuration changes',
+    async (field) => {
+      await renderPanel();
+      await chooseFile();
+      await click(screen.getByRole('radio', { name: 'Prometheus with SNMP fallback' }));
+      await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[0].id);
+      await change(screen.getByRole('combobox', { name: 'Map area (optional)' }), primaryArea.id);
+      await click(screen.getByRole('button', { name: 'Preview import' }));
+      expect(await screen.findByTestId('device-import-preview-summary')).toBeVisible();
+      await click(screen.getByRole('button', { name: 'Back to configuration' }));
 
-    if (field === 'file') {
-      await chooseFile(uploadFile('replacement.yml'));
-    } else if (field === 'mode') {
-      await click(screen.getByRole('radio', { name: 'SNMP' }));
-    } else if (field === 'profile') {
-      await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[1].id);
-    } else if (field === 'map') {
-      await change(screen.getByRole('combobox', { name: 'Destination map' }), secondaryMap.id);
-    } else {
-      await change(screen.getByRole('combobox', { name: 'Map area (optional)' }), '');
-    }
+      if (field === 'file') {
+        await chooseFile(uploadFile('replacement.yml'));
+      } else if (field === 'mode') {
+        await click(screen.getByRole('radio', { name: 'SNMP' }));
+      } else if (field === 'profile') {
+        await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[1].id);
+      } else if (field === 'map') {
+        await change(screen.getByRole('combobox', { name: 'Destination map' }), secondaryMap.id);
+      } else {
+        await change(screen.getByRole('combobox', { name: 'Map area (optional)' }), '');
+      }
 
-    expect(screen.queryByTestId('device-import-preview-summary')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Preview import' })).toBeVisible();
-  });
+      expect(screen.queryByTestId('device-import-preview-summary')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Preview import' })).toBeVisible();
+    },
+  );
 
   it('disables commit without ready rows', async () => {
     previewDeviceImportMock.mockResolvedValue(
