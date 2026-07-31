@@ -550,6 +550,10 @@ export default function Canvas({
         .sort((left, right) => left.id.localeCompare(right.id)),
     });
   }, [devices, importedNodePlacementRequest, nodes]);
+  const importedNodeCount =
+    importedNodePlacementRequest?.mapId === mapId
+      ? importedNodePlacementRequest.deviceIds.length
+      : undefined;
 
   useImportedNodePlacementRequest({
     request: importedNodePlacementRequest,
@@ -893,6 +897,9 @@ export default function Canvas({
   }
 
   if (loading) {
+    if (importedNodeCount !== undefined) {
+      return <CanvasLoadingState importedNodeCount={importedNodeCount} />;
+    }
     return <CanvasLoadingState />;
   }
 
@@ -912,7 +919,10 @@ export default function Canvas({
       ref={canvasRootRef}
       data-testid="topology-canvas-root"
       data-topology-zoom-band={topologyZoomBandRef.current}
-      className={`topology-backdrop relative h-full w-full bg-bg ${canvasInteractionActive ? 'topology-interacting' : ''}`}
+      aria-busy={importedNodeCount !== undefined || undefined}
+      className={`topology-import-placement-surface topology-backdrop relative h-full w-full bg-bg ${
+        importedNodeCount !== undefined ? 'topology-import-placement-pending' : ''
+      } ${canvasInteractionActive ? 'topology-interacting' : ''}`}
     >
       <CanvasChromeControls
         chromeHidden={effectiveChromeHidden}
@@ -1132,6 +1142,9 @@ export default function Canvas({
         <LinkLabelLayer />
         {!effectiveChromeHidden && <TopologyMiniMap />}
       </ReactFlow>
+      {importedNodeCount !== undefined && (
+        <CanvasLoadingState importedNodeCount={importedNodeCount} overlay />
+      )}
     </div>
   );
 }

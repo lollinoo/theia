@@ -263,6 +263,7 @@ test('imports and persists a collision-free file-SD batch in an occupied saved m
   page,
 }) => {
   await cleanupTestFixtures(page);
+  let releasePositionSave: (() => void) | undefined;
   const revealRequests: string[] = [];
   page.on('request', (request) => {
     if (new URL(request.url()).pathname.endsWith('/reveal')) {
@@ -340,10 +341,47 @@ test('imports and persists a collision-free file-SD batch in an occupied saved m
     }
 
     expect(revealRequests).toEqual([]);
+    const positionPath = `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/positions`;
+    const positionSaveGate = new Promise<void>((resolve) => {
+      releasePositionSave = resolve;
+    });
+    await page.route(`**${positionPath}`, async (route) => {
+      if (route.request().method() !== 'PUT') {
+        await route.continue();
+        return;
+      }
+      await positionSaveGate;
+      await route.continue();
+    });
+    const positionSaveRequest = page.waitForRequest(
+      (request) => request.method() === 'PUT' && new URL(request.url()).pathname === positionPath,
+    );
+
     await page.getByRole('button', { name: 'Open destination map' }).click();
     await expect(page.getByLabel(/Select topology map/)).toContainText(TEST_MAP_NAME);
-    await expect(page.getByTestId('topology-canvas-root')).toBeVisible();
+    const canvasRoot = page.getByTestId('topology-canvas-root');
+    await expect(canvasRoot).toHaveCount(1);
     const allDeviceIds = [seedDeviceId, ...devices.map((device) => device.id)];
+    const placementOverlay = page.getByTestId('imported-node-placement-overlay');
+    await expect(placementOverlay).toBeVisible();
+    await expect(placementOverlay).toContainText(`Arranging ${devices.length} imported nodes…`);
+    await positionSaveRequest;
+    await expect(canvasRoot).toHaveAttribute('aria-busy', 'true');
+    const canvasGraph = page.getByTestId('topology-canvas');
+    await expect(canvasGraph).toHaveCSS('opacity', '0');
+    await expect(canvasGraph).toHaveCSS('visibility', 'hidden');
+    await expect(canvasGraph).toHaveCSS('pointer-events', 'none');
+    for (const deviceId of allDeviceIds) {
+      const node = page.locator(`.react-flow__node[data-id="${deviceId}"]`);
+      await expect(node).toHaveCount(1);
+    }
+
+    releasePositionSave();
+    releasePositionSave = undefined;
+    await expect(placementOverlay).toBeHidden();
+    await expect(canvasRoot).toBeVisible();
+    await expect(canvasRoot).not.toHaveAttribute('aria-busy');
+    await expect(canvasGraph).toHaveCSS('opacity', '1');
     for (const deviceId of allDeviceIds) {
       await expect(page.locator(`.react-flow__node[data-id="${deviceId}"]`)).toBeVisible();
     }
@@ -386,6 +424,7 @@ test('imports and persists a collision-free file-SD batch in an occupied saved m
     }
     await expectNodesDoNotOverlap(page, allDeviceIds);
   } finally {
+    releasePositionSave?.();
     await cleanupTestFixtures(page);
   }
 });
