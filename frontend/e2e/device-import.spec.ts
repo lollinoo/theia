@@ -283,7 +283,14 @@ test('imports and persists a collision-free file-SD batch in an occupied saved m
     await page.getByRole('tab', { name: 'Node Import' }).click();
     await expect(page.getByRole('heading', { name: 'One-time node import' })).toBeVisible();
 
-    await page.getByRole('radio', { name: 'SNMP', exact: true }).check();
+    await page.getByRole('radio', { name: 'SNMP Direct', exact: true }).check();
+    const topologyBootstrap = page.getByRole('checkbox', {
+      name: 'Discover links with LLDP/CDP (Bootstrap-Once)',
+    });
+    await expect(topologyBootstrap).toBeChecked();
+    // This scenario isolates the legacy collision-free placement path; Bootstrap-Once
+    // orchestration is covered independently because TEST-NET targets cannot answer SNMP.
+    await topologyBootstrap.uncheck();
     const profileSelect = page.getByRole('combobox', { name: 'SNMP Profile' });
     const profileOption = profileSelect.getByRole('option', {
       name: `${TEST_PROFILE_NAME} (v2c)`,
@@ -307,15 +314,28 @@ test('imports and persists a collision-free file-SD batch in an occupied saved m
     }
     await expect(page.getByText(IGNORED_LABEL_VALUE)).toHaveCount(0);
 
+    const positionPath = `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/positions`;
+    const positionSaveGate = new Promise<void>((resolve) => {
+      releasePositionSave = resolve;
+    });
+    await page.route(`**${positionPath}`, async (route) => {
+      if (route.request().method() !== 'PUT') {
+        await route.continue();
+        return;
+      }
+      await positionSaveGate;
+      await route.continue();
+    });
+    const positionSaveRequest = page.waitForRequest(
+      (request) => request.method() === 'PUT' && new URL(request.url()).pathname === positionPath,
+    );
+
     await page.getByRole('button', { name: 'Commit import' }).click();
-    await expect(page.getByRole('heading', { name: 'Import completed' })).toBeVisible();
-    const resultRows = page.getByTestId('device-import-result-row');
-    await expect(resultRows).toHaveCount(TEST_TARGETS.length);
-    for (const target of TEST_TARGETS) {
-      const resultRow = resultRows.filter({ hasText: target });
-      await expect(resultRow).toHaveCount(1);
-      await expect(resultRow).toContainText('Created');
-    }
+    await expect(page.getByLabel(/Select topology map/)).toContainText(TEST_MAP_NAME);
+    const canvasRoot = page.getByTestId('topology-canvas-root');
+    const placementOverlay = page.getByTestId('imported-node-placement-overlay');
+    await expect(placementOverlay).toBeVisible();
+    await positionSaveRequest;
 
     const devices = await importedDevices(page);
     for (const device of devices) {
@@ -341,31 +361,9 @@ test('imports and persists a collision-free file-SD batch in an occupied saved m
     }
 
     expect(revealRequests).toEqual([]);
-    const positionPath = `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/positions`;
-    const positionSaveGate = new Promise<void>((resolve) => {
-      releasePositionSave = resolve;
-    });
-    await page.route(`**${positionPath}`, async (route) => {
-      if (route.request().method() !== 'PUT') {
-        await route.continue();
-        return;
-      }
-      await positionSaveGate;
-      await route.continue();
-    });
-    const positionSaveRequest = page.waitForRequest(
-      (request) => request.method() === 'PUT' && new URL(request.url()).pathname === positionPath,
-    );
-
-    await page.getByRole('button', { name: 'Open destination map' }).click();
-    await expect(page.getByLabel(/Select topology map/)).toContainText(TEST_MAP_NAME);
-    const canvasRoot = page.getByTestId('topology-canvas-root');
     await expect(canvasRoot).toHaveCount(1);
     const allDeviceIds = [seedDeviceId, ...devices.map((device) => device.id)];
-    const placementOverlay = page.getByTestId('imported-node-placement-overlay');
-    await expect(placementOverlay).toBeVisible();
     await expect(placementOverlay).toContainText(`Arranging ${devices.length} imported nodes…`);
-    await positionSaveRequest;
     await expect(canvasRoot).toHaveAttribute('aria-busy', 'true');
     const canvasGraph = page.getByTestId('topology-canvas');
     await expect(canvasGraph).toHaveCSS('opacity', '0');

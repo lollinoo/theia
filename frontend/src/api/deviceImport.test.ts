@@ -4,11 +4,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDocumentCookie } from '../test/documentCookie';
 import {
+  applyDeviceImportTopologyLayout,
   commitDeviceImport,
+  continueDeviceImportTopologyRun,
   DeviceImportPartialCommitError,
+  fetchDeviceImportTopologyRun,
   parseDeviceImportCommitResult,
   parseDeviceImportPreview,
   previewDeviceImport,
+  retryDeviceImportTopologyRun,
 } from './deviceImport';
 import { ValidationError } from './errors';
 
@@ -34,6 +38,8 @@ function validPreviewPayload(): Record<string, unknown> {
       snmp_profile_id: null,
       map_id: '11111111-1111-1111-1111-111111111111',
       area_id: '22222222-2222-2222-2222-222222222222',
+      topology_bootstrap_enabled: false,
+      topology_layout_scope: 'preserve',
     },
     summary: {
       total: 3,
@@ -79,6 +85,8 @@ function validCommitPayload(): Record<string, unknown> {
       snmp_profile_id: '33333333-3333-3333-3333-333333333333',
       map_id: '11111111-1111-1111-1111-111111111111',
       area_id: null,
+      topology_bootstrap_enabled: true,
+      topology_layout_scope: 'reorganize',
     },
     summary: {
       total: 3,
@@ -114,6 +122,7 @@ function validCommitPayload(): Record<string, unknown> {
     ],
     diagnostics: [],
     incomplete: true,
+    topology_run_id: '55555555-5555-5555-5555-555555555555',
   };
 }
 
@@ -169,6 +178,8 @@ describe('device import client', () => {
         metrics_mode: 'snmp',
         map_id: '11111111-1111-1111-1111-111111111111',
         snmp_profile_id: '33333333-3333-3333-3333-333333333333',
+        topology_bootstrap_enabled: true,
+        topology_layout_scope: 'reorganize',
       },
       'sha256:preview',
     );
@@ -187,10 +198,14 @@ describe('device import client', () => {
       'metrics_mode',
       'snmp_profile_id',
       'map_id',
+      'topology_bootstrap_enabled',
+      'topology_layout_scope',
       'expected_file_digest',
     ]);
     expect(form.get('file')).toBe(file);
     expect(form.get('snmp_profile_id')).toBe('33333333-3333-3333-3333-333333333333');
+    expect(form.get('topology_bootstrap_enabled')).toBe('true');
+    expect(form.get('topology_layout_scope')).toBe('reorganize');
     expect(form.get('expected_file_digest')).toBe('sha256:preview');
   });
 
@@ -299,6 +314,69 @@ describe('device import client', () => {
       skipped: 1,
       failed: 0,
       not_processed: 1,
+    });
+    expect(parsed.topology_run_id).toBe('55555555-5555-5555-5555-555555555555');
+  });
+
+  it('parses run progress and sends actor-scoped topology controls', async () => {
+    const runID = '55555555-5555-5555-5555-555555555555';
+    const mapID = '11111111-1111-1111-1111-111111111111';
+    const deviceID = '44444444-4444-4444-4444-444444444444';
+    const snapshotPayload = {
+      run: {
+        id: runID,
+        map_id: mapID,
+        file_digest: 'sha256:commit',
+        layout_scope: 'reorganize',
+        state: 'ready_for_layout',
+        auto_layout_allowed: true,
+        backgrounded: false,
+        layout_input_token: 'sha256:layout',
+        reconcile_attempts: 0,
+        created_at: '2026-07-31T10:00:00Z',
+        updated_at: '2026-07-31T10:00:02Z',
+      },
+      items: [
+        {
+          device_id: deviceID,
+          state: 'warning',
+          attempt: 1,
+          result_code: 'unresolved_neighbors',
+          message: 'Some discovered neighbors could not be linked automatically.',
+          neighbor_count: 2,
+          links_created: 1,
+          unresolved_neighbors: 1,
+          updated_at: '2026-07-31T10:00:02Z',
+        },
+      ],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse(snapshotPayload))
+      .mockResolvedValue(mockResponse(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const snapshot = await fetchDeviceImportTopologyRun(runID);
+    await retryDeviceImportTopologyRun(runID, [deviceID]);
+    await continueDeviceImportTopologyRun(runID);
+    await applyDeviceImportTopologyLayout(runID, {
+      input_token: 'sha256:layout',
+      positions: [{ device_id: deviceID, x: 120, y: 240, pinned: false }],
+      reset_link_route_ids: [],
+    });
+
+    expect(snapshot.run.state).toBe('ready_for_layout');
+    expect(snapshot.items[0].result_code).toBe('unresolved_neighbors');
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      `/api/v1/admin/device-imports/topology-runs/${runID}`,
+      `/api/v1/admin/device-imports/topology-runs/${runID}/retry`,
+      `/api/v1/admin/device-imports/topology-runs/${runID}/continue`,
+      `/api/v1/admin/device-imports/topology-runs/${runID}/layout`,
+    ]);
+    expect(JSON.parse(fetchMock.mock.calls[3][1].body as string)).toEqual({
+      input_token: 'sha256:layout',
+      positions: [{ device_id: deviceID, x: 120, y: 240, pinned: false }],
+      reset_link_route_ids: [],
     });
   });
 

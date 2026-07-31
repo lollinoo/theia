@@ -20,6 +20,7 @@ import {
   type DeviceImportPreview,
   type DeviceImportPreviewTarget,
   type DeviceImportResult,
+  type DeviceImportTopologyLayoutScope,
   fetchCanvasMapAreas,
   fetchCanvasMaps,
   fetchSNMPProfiles,
@@ -58,7 +59,7 @@ const metricsModes: Array<{
   },
   {
     value: 'snmp',
-    label: 'SNMP',
+    label: 'SNMP Direct',
     description: 'Poll imported addresses directly with the selected SNMP Profile.',
     requiresCredentials: true,
   },
@@ -252,6 +253,9 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
   const [mapId, setMapId] = useState('');
   const [areaId, setAreaId] = useState('');
   const [snmpProfileId, setSNMPProfileId] = useState('');
+  const [topologyBootstrapEnabled, setTopologyBootstrapEnabled] = useState(true);
+  const [topologyLayoutScope, setTopologyLayoutScope] =
+    useState<DeviceImportTopologyLayoutScope>('preserve');
   const [maps, setMaps] = useState<CanvasMap[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
   const [profiles, setProfiles] = useState<SNMPProfile[]>([]);
@@ -361,8 +365,24 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
       map_id: mapId,
       ...(areaId ? { area_id: areaId } : {}),
       ...(requiresSNMPProfile ? { snmp_profile_id: snmpProfileId } : {}),
+      ...(metricsMode === 'snmp'
+        ? {
+            topology_bootstrap_enabled: topologyBootstrapEnabled,
+            topology_layout_scope: topologyLayoutScope,
+          }
+        : {}),
     };
-  }, [areaId, canReadCredentials, file, mapId, metricsMode, requiresSNMPProfile, snmpProfileId]);
+  }, [
+    areaId,
+    canReadCredentials,
+    file,
+    mapId,
+    metricsMode,
+    requiresSNMPProfile,
+    snmpProfileId,
+    topologyBootstrapEnabled,
+    topologyLayoutScope,
+  ]);
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     invalidateOutcome();
@@ -389,6 +409,37 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
   function handleProfileChange(nextProfileId: string) {
     invalidateOutcome();
     setSNMPProfileId(nextProfileId);
+  }
+
+  function handleTopologyBootstrapChange(enabled: boolean) {
+    invalidateOutcome();
+    setTopologyBootstrapEnabled(enabled);
+  }
+
+  function handleTopologyLayoutScopeChange(scope: DeviceImportTopologyLayoutScope) {
+    invalidateOutcome();
+    setTopologyLayoutScope(scope);
+  }
+
+  function placementRequestForResult(
+    committedResult: DeviceImportCommitResult,
+  ): { map: CanvasMap; request?: ImportedNodePlacementRequest } | null {
+    const destinationMap = maps.find((map) => map.id === committedResult.configuration.map_id);
+    if (!destinationMap) return null;
+    const request = buildImportedNodePlacementRequest({
+      fileDigest: committedResult.file_digest,
+      mapId: destinationMap.id,
+      deviceIds: committedResult.results.flatMap((row) =>
+        row.status === 'created' && row.device_id ? [row.device_id] : [],
+      ),
+      ...(committedResult.topology_run_id
+        ? {
+            topologyRunId: committedResult.topology_run_id,
+            topologyLayoutScope: committedResult.configuration.topology_layout_scope,
+          }
+        : {}),
+    });
+    return { map: destinationMap, ...(request ? { request } : {}) };
   }
 
   async function handlePreview(event: FormEvent<HTMLFormElement>) {
@@ -428,6 +479,12 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
       const nextResult = await commitDeviceImport(configuration, preview.file_digest);
       if (revision === configurationRevision.current) {
         setResult(nextResult);
+        if (!nextResult.incomplete && nextResult.summary.created > 0) {
+          const destination = placementRequestForResult(nextResult);
+          if (destination) {
+            onOpenMap?.(destination.map, destination.request);
+          }
+        }
       }
     } catch (commitError) {
       if (revision === configurationRevision.current) {
@@ -458,6 +515,8 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
     setMapId(primaryMapId);
     setAreaId('');
     setSNMPProfileId('');
+    setTopologyBootstrapEnabled(true);
+    setTopologyLayoutScope('preserve');
     setPreview(null);
     setResult(null);
     setError(null);
@@ -530,6 +589,85 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
               </p>
             )}
           </fieldset>
+
+          {metricsMode === 'snmp' && (
+            <fieldset
+              className="flex flex-col gap-3 rounded-lg border border-outline-subtle bg-surface-container p-4"
+              disabled={pendingAction !== null}
+            >
+              <legend className="px-1 text-sm font-semibold text-on-bg">
+                Bootstrap-Once topology
+              </legend>
+              <label className="flex items-start gap-3 text-sm text-on-bg">
+                <input
+                  type="checkbox"
+                  checked={topologyBootstrapEnabled}
+                  aria-label="Discover links with LLDP/CDP (Bootstrap-Once)"
+                  onChange={(event) => handleTopologyBootstrapChange(event.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="block font-medium">
+                    Discover links with LLDP/CDP (Bootstrap-Once)
+                  </span>
+                  <span className="mt-1 block text-xs text-on-bg-secondary">
+                    The initial SNMP discovery creates links only between nodes already in this map.
+                    Unknown neighbors remain available for manual review.
+                  </span>
+                </span>
+              </label>
+              <div
+                className="grid gap-3 md:grid-cols-2"
+                role="group"
+                aria-label="Automatic layout scope"
+              >
+                <label
+                  className={`rounded-md border p-3 ${
+                    topologyLayoutScope === 'preserve'
+                      ? 'border-primary bg-primary/10'
+                      : 'border-outline-subtle bg-bg'
+                  } ${topologyBootstrapEnabled ? 'cursor-pointer' : 'opacity-50'}`}
+                >
+                  <span className="flex items-center gap-2 text-sm font-medium text-on-bg">
+                    <input
+                      type="radio"
+                      name="device-import-topology-layout"
+                      aria-label="Preserve existing layout"
+                      checked={topologyLayoutScope === 'preserve'}
+                      disabled={!topologyBootstrapEnabled}
+                      onChange={() => handleTopologyLayoutScopeChange('preserve')}
+                    />
+                    Preserve existing layout
+                  </span>
+                  <span className="mt-1 block text-xs text-on-bg-secondary">
+                    Keep existing nodes fixed and arrange imported nodes in free space.
+                  </span>
+                </label>
+                <label
+                  className={`rounded-md border p-3 ${
+                    topologyLayoutScope === 'reorganize'
+                      ? 'border-primary bg-primary/10'
+                      : 'border-outline-subtle bg-bg'
+                  } ${topologyBootstrapEnabled ? 'cursor-pointer' : 'opacity-50'}`}
+                >
+                  <span className="flex items-center gap-2 text-sm font-medium text-on-bg">
+                    <input
+                      type="radio"
+                      name="device-import-topology-layout"
+                      aria-label="Reorganize entire map"
+                      checked={topologyLayoutScope === 'reorganize'}
+                      disabled={!topologyBootstrapEnabled}
+                      onChange={() => handleTopologyLayoutScopeChange('reorganize')}
+                    />
+                    Reorganize entire map
+                  </span>
+                  <span className="mt-1 block text-xs text-on-bg-secondary">
+                    Reflow all nodes and clear saved waypoints only on links whose endpoints move.
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+          )}
 
           <div className="grid gap-4 lg:grid-cols-2">
             <label className="flex flex-col gap-1 text-sm font-medium text-on-bg">
@@ -734,15 +872,9 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
               type="button"
               disabled={!selectedMap || !onOpenMap}
               onClick={() => {
-                if (!selectedMap) return;
-                const placementRequest = buildImportedNodePlacementRequest({
-                  fileDigest: result.file_digest,
-                  mapId: selectedMap.id,
-                  deviceIds: result.results.flatMap((row) =>
-                    row.status === 'created' && row.device_id ? [row.device_id] : [],
-                  ),
-                });
-                onOpenMap?.(selectedMap, placementRequest ?? undefined);
+                const destination = placementRequestForResult(result);
+                if (!destination) return;
+                onOpenMap?.(destination.map, destination.request);
               }}
               className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:cursor-not-allowed disabled:opacity-60"
             >

@@ -16,7 +16,8 @@ export type WSMessageType =
   | 'prometheus_status'
   | 'polling_health_changed'
   | 'resync_required'
-  | 'topology_changed';
+  | 'topology_changed'
+  | 'device_import_topology_run_changed';
 type APIRecord = Record<string, unknown>;
 
 /** RuntimeReason explains why a runtime field is healthy, stale, missing, or unsupported. */
@@ -202,6 +203,12 @@ export interface TopologyChangedPayload {
   recommended_endpoint?: string;
 }
 
+/** Identifies the durable map-scoped import run whose progress snapshot changed. */
+export interface DeviceImportTopologyRunChangedPayload {
+  run_id: string;
+  map_id: string;
+}
+
 /** Confirms the exact runtime cursor barrier and whether current, replay, or snapshot synchronization reached it. */
 export interface ReadyPayload {
   runtime_version?: number;
@@ -328,6 +335,13 @@ export interface AlertWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
 export interface TopologyChangedWSMessage extends Omit<WSMessage, 'type' | 'payload'> {
   type: 'topology_changed';
   payload: TopologyChangedPayload;
+}
+
+/** Describes a map-scoped Bootstrap-Once progress invalidation. */
+export interface DeviceImportTopologyRunChangedWSMessage
+  extends Omit<WSMessage, 'type' | 'payload'> {
+  type: 'device_import_topology_run_changed';
+  payload: DeviceImportTopologyRunChangedPayload;
 }
 
 /** Describes the ready wsmessage contract used by the frontend domain model. */
@@ -948,6 +962,7 @@ export function parseWSMessage(
   | ResyncRequiredWSMessage
   | AlertWSMessage
   | TopologyChangedWSMessage
+  | DeviceImportTopologyRunChangedWSMessage
   | ReadyWSMessage {
   if (!isRecord(value)) {
     throw new Error('invalid websocket message');
@@ -967,7 +982,8 @@ export function parseWSMessage(
     type !== 'prometheus_status' &&
     type !== 'polling_health_changed' &&
     type !== 'resync_required' &&
-    type !== 'topology_changed'
+    type !== 'topology_changed' &&
+    type !== 'device_import_topology_run_changed'
   ) {
     throw new Error(`unsupported websocket message type: ${type}`);
   }
@@ -1224,6 +1240,19 @@ export function parseWSMessage(
             : undefined,
       },
     } as TopologyChangedWSMessage;
+  }
+
+  if (type === 'device_import_topology_run_changed') {
+    const payload = isRecord(value.payload) ? value.payload : {};
+    const runID = payload.run_id;
+    const mapID = payload.map_id;
+    if (typeof runID !== 'string' || !runID || typeof mapID !== 'string' || !mapID) {
+      throw new Error('invalid device import topology run invalidation');
+    }
+    return {
+      type,
+      payload: { run_id: runID, map_id: mapID },
+    } as DeviceImportTopologyRunChangedWSMessage;
   }
 
   if (type === 'topology_delta') {

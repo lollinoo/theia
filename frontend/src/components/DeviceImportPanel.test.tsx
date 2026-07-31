@@ -107,6 +107,8 @@ function previewFixture(overrides: Partial<DeviceImportPreview> = {}): DeviceImp
       snmp_profile_id: null,
       map_id: primaryMap.id,
       area_id: primaryArea.id,
+      topology_bootstrap_enabled: false,
+      topology_layout_scope: 'preserve',
     },
     summary: {
       total: 4,
@@ -160,6 +162,8 @@ function commitFixture(): DeviceImportCommitResult {
       snmp_profile_id: null,
       map_id: primaryMap.id,
       area_id: primaryArea.id,
+      topology_bootstrap_enabled: false,
+      topology_layout_scope: 'preserve',
     },
     summary: {
       total: 4,
@@ -273,13 +277,13 @@ describe('DeviceImportPanel', () => {
 
     expect(screen.getByRole('radio', { name: 'Prometheus' })).toBeChecked();
     expect(screen.getByRole('radio', { name: 'Prometheus with SNMP fallback' })).toBeEnabled();
-    expect(screen.getByRole('radio', { name: 'SNMP' })).toBeEnabled();
+    expect(screen.getByRole('radio', { name: 'SNMP Direct' })).toBeEnabled();
     expect(await screen.findByRole('option', { name: 'Primary Backbone (primary)' })).toBeVisible();
     expect(screen.getByRole('combobox', { name: 'Destination map' })).toHaveValue(primaryMap.id);
     expect(fetchCanvasMapAreasMock).toHaveBeenCalledWith(primaryMap.id);
     expect(fetchSNMPProfilesMock).toHaveBeenCalledTimes(1);
 
-    await click(screen.getByRole('radio', { name: 'SNMP' }));
+    await click(screen.getByRole('radio', { name: 'SNMP Direct' }));
     const profileSelect = screen.getByRole('combobox', { name: 'SNMP Profile' });
     expect(within(profileSelect).getByRole('option', { name: 'Core SNMPv3 (v3)' })).toBeVisible();
     expect(
@@ -288,12 +292,68 @@ describe('DeviceImportPanel', () => {
     expect(screen.queryByText(/auth_password|priv_password|community/i)).not.toBeInTheDocument();
   });
 
+  it('defaults SNMP Direct Bootstrap-Once on and auto-opens a clean topology import', async () => {
+    const onOpenMap = vi.fn();
+    commitDeviceImportMock.mockResolvedValue({
+      ...commitFixture(),
+      configuration: {
+        metrics_mode: 'snmp',
+        snmp_profile_id: profiles[0].id,
+        map_id: primaryMap.id,
+        area_id: null,
+        topology_bootstrap_enabled: true,
+        topology_layout_scope: 'reorganize',
+      },
+      summary: { total: 1, created: 1, skipped: 0, failed: 0, not_processed: 0 },
+      results: [
+        {
+          group_index: 0,
+          item_index: 0,
+          target: 'ready.example.net',
+          address: 'ready.example.net',
+          status: 'created',
+          device_id: 'device-created',
+        },
+      ],
+      diagnostics: [],
+      incomplete: false,
+      topology_run_id: 'topology-run-1',
+    });
+    await renderPanel({ onOpenMap });
+
+    await click(screen.getByRole('radio', { name: 'SNMP Direct' }));
+    expect(
+      screen.getByRole('checkbox', { name: 'Discover links with LLDP/CDP (Bootstrap-Once)' }),
+    ).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Preserve existing layout' })).toBeChecked();
+    await click(screen.getByRole('radio', { name: 'Reorganize entire map' }));
+    await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[0].id);
+    await chooseFile();
+    await click(screen.getByRole('button', { name: 'Preview import' }));
+    await click(await screen.findByRole('button', { name: 'Commit import' }));
+
+    expect(await screen.findByText('Import completed')).toBeVisible();
+    expect(commitDeviceImportMock.mock.calls[0][0]).toMatchObject({
+      topology_bootstrap_enabled: true,
+      topology_layout_scope: 'reorganize',
+    });
+    expect(onOpenMap).toHaveBeenCalledWith(
+      primaryMap,
+      expect.objectContaining({
+        mapId: primaryMap.id,
+        deviceIds: ['device-created'],
+        topologyRunId: 'topology-run-1',
+        topologyLayoutScope: 'reorganize',
+      }),
+    );
+  });
+
   it('disables SNMP modes with an explanation and never loads profiles without credentials read', async () => {
     await renderPanel({ canReadCredentials: false });
 
     expect(screen.getByRole('radio', { name: 'Prometheus' })).toBeChecked();
     expect(screen.getByRole('radio', { name: 'Prometheus with SNMP fallback' })).toBeDisabled();
-    expect(screen.getByRole('radio', { name: 'SNMP' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'SNMP Direct' })).toBeDisabled();
     expect(screen.getByText(/credentials:read permission is required/i)).toBeVisible();
     expect(fetchSNMPProfilesMock).not.toHaveBeenCalled();
   });
@@ -301,7 +361,7 @@ describe('DeviceImportPanel', () => {
   it('invalidates an SNMP configuration when credentials read is revoked', async () => {
     const rendered = await renderPanel();
     await chooseFile();
-    await click(screen.getByRole('radio', { name: 'SNMP' }));
+    await click(screen.getByRole('radio', { name: 'SNMP Direct' }));
     await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[0].id);
     expect(screen.getByRole('button', { name: 'Preview import' })).toBeEnabled();
 
@@ -309,7 +369,7 @@ describe('DeviceImportPanel', () => {
       rendered.rerender(<DeviceImportPanel canReadCredentials={false} />);
     });
 
-    expect(screen.getByRole('radio', { name: 'SNMP' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'SNMP Direct' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Preview import' })).toBeDisabled();
   });
 
@@ -350,7 +410,7 @@ describe('DeviceImportPanel', () => {
     await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[0].id);
     expect(previewButton).toBeEnabled();
 
-    await click(screen.getByRole('radio', { name: 'SNMP' }));
+    await click(screen.getByRole('radio', { name: 'SNMP Direct' }));
     expect(previewButton).toBeEnabled();
     await click(screen.getByRole('radio', { name: 'Prometheus' }));
     expect(screen.queryByRole('combobox', { name: 'SNMP Profile' })).not.toBeInTheDocument();
@@ -409,7 +469,7 @@ describe('DeviceImportPanel', () => {
       if (field === 'file') {
         await chooseFile(uploadFile('replacement.yml'));
       } else if (field === 'mode') {
-        await click(screen.getByRole('radio', { name: 'SNMP' }));
+        await click(screen.getByRole('radio', { name: 'SNMP Direct' }));
       } else if (field === 'profile') {
         await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[1].id);
       } else if (field === 'map') {

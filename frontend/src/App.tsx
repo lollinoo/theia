@@ -114,6 +114,13 @@ function App() {
   const canUpdateSettings = hasPermission('settings:update');
   const canOpenSettings = canViewAdmin && canReadSettings && canUpdateSettings;
   const canOpenUserSettings = hasPermission('account:manage');
+  const canCoordinateTopologyImport =
+    canViewAdmin &&
+    hasPermission('devices:read') &&
+    hasPermission('devices:create') &&
+    hasPermission('topology:read') &&
+    hasPermission('topology:update') &&
+    hasPermission('credentials:read');
 
   const { snapshot, alerts, reconnecting, prometheusStatus } = useWebSocket(
     '/api/v1/ws',
@@ -577,6 +584,7 @@ function App() {
                 visible={activeView === 'canvas'}
                 fitViewRevision={fitViewRevision}
                 topologyRefreshRevision={topologyRefreshRevision}
+                topologyImportEnabled={canCoordinateTopologyImport}
                 importedNodePlacementRequest={importedNodePlacementRequest}
                 onImportedNodePlacementConsumed={handleImportedNodePlacementConsumed}
                 chromeHidden={canvasChromeHidden}

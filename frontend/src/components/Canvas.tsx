@@ -48,6 +48,7 @@ import {
   type CanvasRenderProjectionNodeCacheEntry,
   projectCanvasRenderGraph,
 } from './canvas/canvasRenderProjection';
+import { DeviceImportTopologyOverlay } from './canvas/DeviceImportTopologyOverlay';
 import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
 import type { ImportedNodePlacementRequest } from './canvas/importedNodePlacementRequest';
 import type { ScreenRect } from './canvas/newNodePlacement';
@@ -65,6 +66,7 @@ import { useCanvasLinkRoutes } from './canvas/useCanvasLinkRoutes';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { useCanvasSelection } from './canvas/useCanvasSelection';
 import { useCanvasSnapPreference } from './canvas/useCanvasSnapPreference';
+import { useDeviceImportTopologyRun } from './canvas/useDeviceImportTopologyRun';
 import { useImportedNodePlacementRequest } from './canvas/useImportedNodePlacementRequest';
 import DeviceCard, { type DeviceNode, resolveDeviceNodeReadabilityScale } from './DeviceCard';
 import { minimapColorForDevice } from './deviceVisualState';
@@ -184,6 +186,7 @@ interface CanvasProps {
   visible?: boolean;
   fitViewRevision?: number;
   topologyRefreshRevision?: number;
+  topologyImportEnabled?: boolean;
   importedNodePlacementRequest?: ImportedNodePlacementRequest | null;
   onImportedNodePlacementConsumed?: (requestId: string) => void;
   maps?: CanvasMap[];
@@ -218,6 +221,7 @@ export default function Canvas({
   visible = true,
   fitViewRevision,
   topologyRefreshRevision,
+  topologyImportEnabled = false,
   importedNodePlacementRequest,
   onImportedNodePlacementConsumed,
   onDevicesChange,
@@ -231,6 +235,7 @@ export default function Canvas({
   onChromeHiddenChange,
 }: CanvasProps) {
   const { snapToGrid, toggleSnapToGrid } = useCanvasSnapPreference();
+  const topologyManualEditRef = useRef<() => Promise<void>>(async () => undefined);
   const {
     nodes,
     edges,
@@ -258,7 +263,12 @@ export default function Canvas({
       if (editToken.owner !== routeOwnerToken) {
         return;
       }
-      commitOwnedLinkRoute(edgeId, route, editToken);
+      void topologyManualEditRef
+        .current()
+        .then(() => {
+          commitOwnedLinkRoute(edgeId, route, editToken);
+        })
+        .catch(() => undefined);
     };
   }, [commitOwnedLinkRoute, routeOwnerToken]);
   const { diagnosticsVisible, closeDiagnostics } = useCanvasDiagnosticsToggle();
@@ -539,8 +549,33 @@ export default function Canvas({
     onLinksChange,
     onTopologyAreasChange,
   });
+  const topologyNodePositions = useMemo(
+    () =>
+      new Map(
+        nodes.map((node) => [
+          node.id,
+          { x: node.position.x, y: node.position.y, pinned: node.data.pinned },
+        ]),
+      ),
+    [nodes],
+  );
+  const topologyRun = useDeviceImportTopologyRun({
+    mapId: topologyImportEnabled ? mapId : null,
+    request: importedNodePlacementRequest,
+    renderedMapKey,
+    nodePositions: topologyNodePositions,
+    reloadTopology: loadTopology,
+    onConsumed: onImportedNodePlacementConsumed,
+  });
+  topologyManualEditRef.current = topologyRun.markManualEdit;
+  useEffect(() => {
+    if (editMode) void topologyRun.markManualEdit().catch(() => undefined);
+  }, [editMode, topologyRun.markManualEdit]);
+  const legacyImportedNodePlacementRequest = importedNodePlacementRequest?.topologyRunId
+    ? null
+    : importedNodePlacementRequest;
   const importedPlacementTopologyRevision = useMemo(() => {
-    if (!importedNodePlacementRequest) return '';
+    if (!legacyImportedNodePlacementRequest) return '';
     return JSON.stringify({
       deviceIds: devices
         .map((device) => device.id)
@@ -549,14 +584,14 @@ export default function Canvas({
         .map((node) => ({ id: node.id, x: node.position.x, y: node.position.y }))
         .sort((left, right) => left.id.localeCompare(right.id)),
     });
-  }, [devices, importedNodePlacementRequest, nodes]);
+  }, [devices, legacyImportedNodePlacementRequest, nodes]);
   const importedNodeCount =
-    importedNodePlacementRequest?.mapId === mapId
-      ? importedNodePlacementRequest.deviceIds.length
+    legacyImportedNodePlacementRequest?.mapId === mapId
+      ? legacyImportedNodePlacementRequest.deviceIds.length
       : undefined;
 
   useImportedNodePlacementRequest({
-    request: importedNodePlacementRequest,
+    request: legacyImportedNodePlacementRequest,
     activeMapId: mapId,
     renderedMapKey,
     topologyRevision: importedPlacementTopologyRevision,
@@ -565,8 +600,14 @@ export default function Canvas({
   });
 
   useEffect(() => {
-    setEdges((currentEdges) => setLinkRouteAvailability(currentEdges, editMode, onLinkRouteCommit));
-  }, [editMode, onLinkRouteCommit, setEdges]);
+    setEdges((currentEdges) =>
+      setLinkRouteAvailability(
+        currentEdges,
+        editMode && !topologyRun.mutationBlocked,
+        onLinkRouteCommit,
+      ),
+    );
+  }, [editMode, onLinkRouteCommit, setEdges, topologyRun.mutationBlocked]);
 
   useEffect(() => {
     onTopologyLoadingChange?.(loading);
@@ -591,11 +632,12 @@ export default function Canvas({
       if (!mapId) {
         return;
       }
+      await topologyRun.markManualEdit();
       await removeDeviceFromCanvasMap(mapId, deviceId);
       setPanelContent(null);
       await loadTopology(true);
     },
-    [loadTopology, mapId, setPanelContent],
+    [loadTopology, mapId, setPanelContent, topologyRun.markManualEdit],
   );
 
   const effectiveAreaId = selectedAreaId;
@@ -711,6 +753,16 @@ export default function Canvas({
   const renderEdges = useMemo(
     () => setEdgeInteractionMode(displayEdges, canvasInteractionActive ? 'interactive' : 'idle'),
     [displayEdges, canvasInteractionActive],
+  );
+  const topologyDeviceNames = useMemo(
+    () =>
+      new Map(
+        devices.map((device) => [
+          device.id,
+          device.tags?.display_name || device.sys_name || device.hostname || device.ip,
+        ]),
+      ),
+    [devices],
   );
 
   useEffect(() => {
@@ -840,15 +892,20 @@ export default function Canvas({
         connection.source === connection.target
       )
         return;
-      setPanelContent({
-        type: 'create-link',
-        data: {
-          initialSourceDeviceId: connection.source,
-          initialTargetDeviceId: connection.target,
-        },
-      });
+      void topologyRun
+        .markManualEdit()
+        .then(() => {
+          setPanelContent({
+            type: 'create-link',
+            data: {
+              initialSourceDeviceId: connection.source!,
+              initialTargetDeviceId: connection.target!,
+            },
+          });
+        })
+        .catch(() => undefined);
     },
-    [editMode, setPanelContent],
+    [editMode, setPanelContent, topologyRun.markManualEdit],
   );
 
   function focusOnDevice(deviceID: string) {
@@ -919,7 +976,11 @@ export default function Canvas({
       ref={canvasRootRef}
       data-testid="topology-canvas-root"
       data-topology-zoom-band={topologyZoomBandRef.current}
-      aria-busy={importedNodeCount !== undefined || undefined}
+      aria-busy={
+        importedNodeCount !== undefined ||
+        (topologyRun.phase !== null && topologyRun.phase !== 'complete') ||
+        undefined
+      }
       className={`topology-import-placement-surface topology-backdrop relative h-full w-full bg-bg ${
         importedNodeCount !== undefined ? 'topology-import-placement-pending' : ''
       } ${canvasInteractionActive ? 'topology-interacting' : ''}`}
@@ -942,8 +1003,18 @@ export default function Canvas({
       {!effectiveChromeHidden && (
         <Toolbar
           onSearch={() => setShowSearch((s) => !s)}
-          onAddDevice={() => setPanelContent({ type: 'addDevice' })}
-          onCreateLink={() => setPanelContent({ type: 'create-link' })}
+          onAddDevice={() => {
+            void topologyRun
+              .markManualEdit()
+              .then(() => setPanelContent({ type: 'addDevice' }))
+              .catch(() => undefined);
+          }}
+          onCreateLink={() => {
+            void topologyRun
+              .markManualEdit()
+              .then(() => setPanelContent({ type: 'create-link' }))
+              .catch(() => undefined);
+          }}
           onAlerts={() => setPanelContent({ type: 'alerts' })}
           onToggleEditMode={() => setEditMode((m) => !m)}
           onToggleSnapToGrid={toggleSnapToGrid}
@@ -966,7 +1037,12 @@ export default function Canvas({
         setEdgeMenu={setEdgeMenu}
         setPanelContent={setPanelContent}
         editMode={editMode}
-        resetLinkRoute={resetLinkRoute}
+        resetLinkRoute={(edgeID) => {
+          void topologyRun
+            .markManualEdit()
+            .then(() => resetLinkRoute(edgeID))
+            .catch(() => undefined);
+        }}
       />
 
       <SidePanel
@@ -1013,6 +1089,35 @@ export default function Canvas({
         selectedNodeCount={selectedNodeCount}
         prometheusDiagnosticsVisible={runtimeSummary.prometheusDiagnosticsVisible}
         onBulkEditClick={openBulkEditPanel}
+      />
+      <DeviceImportTopologyOverlay
+        snapshot={topologyRun.snapshot}
+        phase={topologyRun.phase}
+        progress={topologyRun.progress}
+        applyingLayout={topologyRun.applyingLayout}
+        error={topologyRun.error}
+        deviceNames={topologyDeviceNames}
+        onContinue={() => void topologyRun.continuePartial()}
+        onRetry={(deviceIDs) => void topologyRun.retry(deviceIDs)}
+        onConfigureDevice={(deviceID) => {
+          void topologyRun
+            .markManualEdit()
+            .then(() => {
+              setEditMode(true);
+              setPanelContent({ type: 'deviceConfig', data: { deviceId: deviceID } });
+            })
+            .catch(() => undefined);
+        }}
+        onCreateManualLink={() => {
+          void topologyRun
+            .markManualEdit()
+            .then(() => {
+              setEditMode(true);
+              setPanelContent({ type: 'create-link' });
+            })
+            .catch(() => undefined);
+        }}
+        onRefresh={() => void topologyRun.refresh()}
       />
       {/* WinBox launch error toast */}
       {winboxError && (
@@ -1112,7 +1217,10 @@ export default function Canvas({
             data: { link: lk },
           });
         }}
-        onNodeDragStart={beginCanvasInteraction}
+        onNodeDragStart={() => {
+          void topologyRun.markManualEdit().catch(() => undefined);
+          beginCanvasInteraction();
+        }}
         onNodeDragStop={(_ev, node) => {
           endCanvasInteraction();
           if (isGhostDeviceNode(node)) return;
@@ -1127,7 +1235,8 @@ export default function Canvas({
         fitView
         fitViewOptions={{ padding: currentTopologyFitViewPadding }}
         onlyRenderVisibleElements
-        nodesDraggable={editMode}
+        nodesDraggable={editMode && !topologyRun.mutationBlocked}
+        nodesConnectable={editMode && !topologyRun.mutationBlocked}
         snapToGrid={snapToGrid}
         snapGrid={canvasSnapGrid}
         panOnDrag

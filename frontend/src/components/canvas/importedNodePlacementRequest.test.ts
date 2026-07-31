@@ -37,6 +37,22 @@ describe('buildImportedNodePlacementRequest', () => {
     expect(first?.requestId).not.toBe(second?.requestId);
   });
 
+  it('carries durable topology-run layout ownership into the canvas request', () => {
+    const request = buildImportedNodePlacementRequest({
+      fileDigest: 'sha256:import',
+      mapId: 'map-1',
+      deviceIds: ['device-a'],
+      topologyRunId: 'run-1',
+      topologyLayoutScope: 'reorganize',
+    });
+
+    expect(request).toMatchObject({
+      topologyRunId: 'run-1',
+      topologyLayoutScope: 'reorganize',
+    });
+    expect(request?.requestId).toContain('run-1');
+  });
+
   it('returns null when no usable created device IDs exist', () => {
     expect(
       buildImportedNodePlacementRequest({
