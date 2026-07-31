@@ -522,6 +522,21 @@ func (s *DeviceService) hasIncompleteLLDPLinks(deviceID uuid.UUID) bool {
 	return false
 }
 
+// TopologyBootstrapFollowupDeviceIDs returns deterministic map-scoped devices
+// whose LLDP link endpoints still lack interface details after reconciliation.
+func (s *DeviceService) TopologyBootstrapFollowupDeviceIDs(deviceIDs []uuid.UUID) []uuid.UUID {
+	if s == nil || s.linkRepo == nil {
+		return nil
+	}
+	result := make([]uuid.UUID, 0, len(deviceIDs))
+	for _, deviceID := range normalizedTopologyBootstrapDeviceIDs(deviceIDs) {
+		if s.hasIncompleteLLDPLinks(deviceID) {
+			result = append(result, deviceID)
+		}
+	}
+	return result
+}
+
 func (s *DeviceService) lldpPeerIDs(deviceID uuid.UUID) []uuid.UUID {
 	links, err := s.linkRepo.GetByDeviceID(deviceID)
 	if err != nil {

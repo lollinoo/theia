@@ -30,6 +30,9 @@ type StaticDiscoveryInput struct {
 	NeighborDiscoveryProtocols  []domain.DiscoveryProtocol
 	NeighborDiscoveryFailures   []snmp.NeighborDiscoveryFailure
 	SkipTopologyMaterialization bool
+	// DeferTopologyMaterialization records fresh observations without creating
+	// canonical links so a later map-scoped reconciliation can enforce ownership.
+	DeferTopologyMaterialization bool
 }
 
 // StaticPersistenceResult represents static persistence result data used by the service orchestration.
@@ -38,6 +41,13 @@ type StaticPersistenceResult struct {
 	TopologyMaterialized bool
 	LinksCreated         int
 	UnresolvedNeighbors  int
+	DeviceResults        map[uuid.UUID]StaticTopologyDeviceResult
+}
+
+// StaticTopologyDeviceResult is the final map-scoped topology summary for one probed device.
+type StaticTopologyDeviceResult struct {
+	LinksCreated        int
+	UnresolvedNeighbors int
 }
 
 type linkUpsertReporter interface {
@@ -47,6 +57,231 @@ type linkUpsertReporter interface {
 type staticDiscoveryDeviceRepository interface {
 	GetByIDsForTopology([]uuid.UUID) ([]domain.Device, error)
 	UpdateStaticDiscovery(*domain.Device) error
+}
+
+// ReconcileStoredTopology resolves discovery observations against the supplied
+// map-scoped devices and materializes links only when both endpoints belong to
+// that scope. It never creates devices for unknown neighbors.
+func (s *DeviceService) ReconcileStoredTopology(deviceIDs []uuid.UUID) (StaticPersistenceResult, error) {
+	return s.ReconcileStoredTopologyForImport(deviceIDs, deviceIDs)
+}
+
+// ReconcileStoredTopologyForImport resolves observations emitted by imported devices against the
+// complete destination-map scope. Existing map devices may be link targets, but unrelated stored
+// observations are not materialized or reported as part of this one-time import.
+func (s *DeviceService) ReconcileStoredTopologyForImport(
+	scopeDeviceIDs []uuid.UUID,
+	importedDeviceIDs []uuid.UUID,
+) (StaticPersistenceResult, error) {
+	result := StaticPersistenceResult{
+		TopologyMaterialized: true,
+		DeviceResults:        make(map[uuid.UUID]StaticTopologyDeviceResult),
+	}
+	if s == nil || s.topologyStore == nil || len(scopeDeviceIDs) == 0 || len(importedDeviceIDs) == 0 {
+		return result, nil
+	}
+
+	devices, err := s.topologyDevicesByIDs(scopeDeviceIDs)
+	if err != nil {
+		return StaticPersistenceResult{}, fmt.Errorf("loading topology reconciliation scope: %w", err)
+	}
+	allowed := make(map[uuid.UUID]struct{}, len(devices))
+	identities := make(map[string]uuid.UUID, len(devices)*3)
+	ambiguous := make(map[string]struct{})
+	for _, device := range devices {
+		allowed[device.ID] = struct{}{}
+		for _, identity := range []string{device.SysName, device.Hostname, device.IP} {
+			normalized := topology.NormalizeRemoteIdentity(identity)
+			if normalized == "" {
+				continue
+			}
+			if existing, ok := identities[normalized]; ok && existing != device.ID {
+				delete(identities, normalized)
+				ambiguous[normalized] = struct{}{}
+				continue
+			}
+			if _, duplicate := ambiguous[normalized]; !duplicate {
+				identities[normalized] = device.ID
+			}
+		}
+	}
+	imported := make(map[uuid.UUID]struct{}, len(importedDeviceIDs))
+	for _, deviceID := range importedDeviceIDs {
+		if _, inScope := allowed[deviceID]; !inScope {
+			continue
+		}
+		imported[deviceID] = struct{}{}
+		result.DeviceResults[deviceID] = StaticTopologyDeviceResult{}
+	}
+	if len(imported) == 0 {
+		return result, nil
+	}
+
+	observations, err := s.topologyStore.ListObservationsForDevices(importedDeviceIDs)
+	if err != nil {
+		return StaticPersistenceResult{}, fmt.Errorf("listing stored topology observations: %w", err)
+	}
+	scopedSupportObservations := make([]topology.Observation, 0, len(observations))
+	for _, observation := range observations {
+		if _, localInScope := allowed[observation.LocalDeviceID]; !localInScope {
+			continue
+		}
+		support := observation
+		if support.RemoteDeviceID == uuid.Nil {
+			remoteID, matched := identities[topology.NormalizeRemoteIdentity(support.RemoteIdentity)]
+			if !matched || remoteID == support.LocalDeviceID {
+				continue
+			}
+			support.RemoteDeviceID = remoteID
+			support.SelfNeighbor = false
+		}
+		if _, remoteInScope := allowed[support.RemoteDeviceID]; !remoteInScope {
+			continue
+		}
+		scopedSupportObservations = append(scopedSupportObservations, support)
+	}
+	cleanupObservationsByDevice := make(map[uuid.UUID][]topology.Observation, len(imported))
+	for _, observation := range scopedSupportObservations {
+		if _, localImported := imported[observation.LocalDeviceID]; localImported {
+			cleanupObservationsByDevice[observation.LocalDeviceID] = append(
+				cleanupObservationsByDevice[observation.LocalDeviceID],
+				observation,
+			)
+		}
+		if _, remoteImported := imported[observation.RemoteDeviceID]; remoteImported {
+			cleanupObservationsByDevice[observation.RemoteDeviceID] = append(
+				cleanupObservationsByDevice[observation.RemoteDeviceID],
+				observation,
+			)
+		}
+	}
+	for _, observation := range observations {
+		if _, localImported := imported[observation.LocalDeviceID]; localImported && observation.RemoteDeviceID == uuid.Nil {
+			cleanupObservationsByDevice[observation.LocalDeviceID] = append(
+				cleanupObservationsByDevice[observation.LocalDeviceID],
+				observation,
+			)
+		}
+	}
+
+	now := time.Now().UTC()
+	materializable := make([]topology.Observation, 0, len(observations))
+	for index := range observations {
+		observation := &observations[index]
+		if _, ok := imported[observation.LocalDeviceID]; !ok {
+			continue
+		}
+
+		if observation.RemoteDeviceID == uuid.Nil {
+			normalized := topology.NormalizeRemoteIdentity(observation.RemoteIdentity)
+			remoteID, matched := identities[normalized]
+			if !matched || remoteID == observation.LocalDeviceID {
+				result.UnresolvedNeighbors++
+				deviceResult := result.DeviceResults[observation.LocalDeviceID]
+				deviceResult.UnresolvedNeighbors++
+				result.DeviceResults[observation.LocalDeviceID] = deviceResult
+				continue
+			}
+			observation.RemoteDeviceID = remoteID
+			observation.SelfNeighbor = false
+			observation.LastObservedAt = now
+			if err := s.topologyStore.UpsertObservation(observation); err != nil {
+				return StaticPersistenceResult{}, fmt.Errorf("updating resolved topology observation: %w", err)
+			}
+			if err := s.topologyStore.ResolveUnresolvedNeighbor(
+				observation.LocalDeviceID,
+				observation.RemoteIdentity,
+				observation.Protocol,
+				now,
+			); err != nil {
+				return StaticPersistenceResult{}, fmt.Errorf("resolving stored topology neighbor: %w", err)
+			}
+		}
+
+		if _, ok := allowed[observation.RemoteDeviceID]; !ok {
+			result.UnresolvedNeighbors++
+			deviceResult := result.DeviceResults[observation.LocalDeviceID]
+			deviceResult.UnresolvedNeighbors++
+			result.DeviceResults[observation.LocalDeviceID] = deviceResult
+			continue
+		}
+		materializable = append(materializable, *observation)
+	}
+
+	applied, err := topology.ApplyObservations(
+		materializableTopologyObservations(materializable),
+		linkWriterAdapter{repo: s.linkRepo},
+	)
+	if err != nil {
+		return StaticPersistenceResult{}, fmt.Errorf("materializing reconciled topology links: %w", err)
+	}
+	result.TopologyChanged = applied.TopologyChanged
+	countedLinks := make(map[string]struct{}, len(applied.Events))
+	for _, event := range applied.Events {
+		if _, ok := imported[event.Link.SourceDeviceID]; !ok {
+			continue
+		}
+		linkKey := event.Link.ID.String()
+		if event.Link.ID == uuid.Nil {
+			linkKey = physicalLinkKey(event.Link)
+		}
+		if _, counted := countedLinks[linkKey]; counted {
+			continue
+		}
+		countedLinks[linkKey] = struct{}{}
+		deviceResult := result.DeviceResults[event.Link.SourceDeviceID]
+		deviceResult.LinksCreated++
+		result.DeviceResults[event.Link.SourceDeviceID] = deviceResult
+		result.LinksCreated++
+	}
+	importedIDs := make([]uuid.UUID, 0, len(imported))
+	for deviceID := range imported {
+		importedIDs = append(importedIDs, deviceID)
+	}
+	sort.Slice(importedIDs, func(i, j int) bool {
+		return importedIDs[i].String() < importedIDs[j].String()
+	})
+	for _, deviceID := range importedIDs {
+		cleanupObservations := cleanupObservationsByDevice[deviceID]
+		reconciledProtocols := pruneSafeNeighborDiscoveryProtocols(
+			[]domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP, domain.DiscoveryProtocolCDP},
+			cleanupObservations,
+		)
+		deleted, deleteErr := s.deleteStaleAutoDiscoveredLinks(
+			deviceID,
+			reconciledProtocols,
+			applied.Events,
+			cleanupObservations,
+		)
+		if deleteErr != nil {
+			return StaticPersistenceResult{}, deleteErr
+		}
+		if deleted > 0 {
+			result.TopologyChanged = true
+		}
+	}
+	if result.TopologyChanged {
+		s.NotifyTopologyChanged()
+	}
+	return result, nil
+}
+
+func (s *DeviceService) topologyDevicesByIDs(deviceIDs []uuid.UUID) ([]domain.Device, error) {
+	if repo, ok := s.deviceRepo.(staticDiscoveryDeviceRepository); ok {
+		return repo.GetByIDsForTopology(deviceIDs)
+	}
+
+	devices := make([]domain.Device, 0, len(deviceIDs))
+	for _, deviceID := range deviceIDs {
+		device, err := s.deviceRepo.GetByID(deviceID)
+		if err != nil {
+			return nil, err
+		}
+		if device != nil {
+			devices = append(devices, *device)
+		}
+	}
+	return devices, nil
 }
 
 func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDiscoveryInput) (result StaticPersistenceResult, err error) {
@@ -98,13 +333,14 @@ func (s *DeviceService) ApplyStaticDiscovery(deviceID uuid.UUID, input StaticDis
 				neighbors,
 				input.NeighborDiscoveryProtocols,
 				input.NeighborDiscoveryFailures,
+				!input.DeferTopologyMaterialization,
 			)
 			observability.Default().ObserveTopologyMaterialization(time.Since(startedAt), materializeErr == nil)
 			if materializeErr != nil {
 				return StaticPersistenceResult{}, materializeErr
 			}
 			result.TopologyChanged = result.TopologyChanged || materialized.TopologyChanged
-			result.TopologyMaterialized = true
+			result.TopologyMaterialized = materialized.TopologyMaterialized
 			result.LinksCreated += materialized.LinksCreated
 			result.UnresolvedNeighbors = materialized.UnresolvedNeighbors
 			unknownNeighbors = currentUnknowns
@@ -221,6 +457,7 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 	neighbors []snmp.NeighborInfo,
 	attemptedProtocols []domain.DiscoveryProtocol,
 	failures []snmp.NeighborDiscoveryFailure,
+	materialize bool,
 ) (StaticPersistenceResult, map[unknownNeighborKey]int, map[domain.DiscoveryProtocol]int, error) {
 	if s.topologyStore == nil {
 		return StaticPersistenceResult{}, nil, nil, nil
@@ -305,6 +542,11 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 		if pruneErr != nil {
 			return StaticPersistenceResult{}, nil, nil, fmt.Errorf("pruning stale topology observations: %w", pruneErr)
 		}
+	}
+	if !materialize {
+		return StaticPersistenceResult{
+			UnresolvedNeighbors: countUnknownNeighbors(unknownNeighbors),
+		}, unknownNeighbors, unknownByProtocol, nil
 	}
 
 	deviceIDs := make([]uuid.UUID, 0, len(affectedDeviceIDs))
@@ -496,6 +738,9 @@ func (s *DeviceService) deleteStaleAutoDiscoveredLinks(
 		if _, ok := supportedLinks[physicalLinkKey(link)]; ok {
 			continue
 		}
+		if currentResolvedObservationSupportsLink(link, currentObservations) {
+			continue
+		}
 		if currentUnresolvedObservationSupportsLink(localDeviceID, link, currentObservations) {
 			continue
 		}
@@ -505,6 +750,52 @@ func (s *DeviceService) deleteStaleAutoDiscoveredLinks(
 		deleted++
 	}
 	return deleted, nil
+}
+
+func currentResolvedObservationSupportsLink(
+	link domain.Link,
+	currentObservations []topology.Observation,
+) bool {
+	for _, observation := range currentObservations {
+		if observation.RemoteDeviceID == uuid.Nil || observation.Protocol != link.DiscoveryProtocol {
+			continue
+		}
+		switch {
+		case observation.LocalDeviceID == link.SourceDeviceID &&
+			observation.RemoteDeviceID == link.TargetDeviceID:
+			if discoveryPortsSupportLink(
+				observation.LocalPort,
+				observation.RemotePort,
+				link.SourceIfName,
+				link.TargetIfName,
+			) {
+				return true
+			}
+		case observation.LocalDeviceID == link.TargetDeviceID &&
+			observation.RemoteDeviceID == link.SourceDeviceID:
+			if discoveryPortsSupportLink(
+				observation.LocalPort,
+				observation.RemotePort,
+				link.TargetIfName,
+				link.SourceIfName,
+			) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func discoveryPortsSupportLink(
+	observedLocal, observedRemote, linkLocal, linkRemote string,
+) bool {
+	localSupported := strings.TrimSpace(observedLocal) == "" ||
+		strings.TrimSpace(linkLocal) == "" ||
+		sameDiscoveryPort(observedLocal, linkLocal)
+	remoteSupported := strings.TrimSpace(observedRemote) == "" ||
+		strings.TrimSpace(linkRemote) == "" ||
+		sameDiscoveryPort(observedRemote, linkRemote)
+	return localSupported && remoteSupported
 }
 
 func currentUnresolvedObservationSupportsLink(

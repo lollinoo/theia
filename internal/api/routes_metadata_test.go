@@ -64,6 +64,9 @@ func TestPublicAndSpecialMiddlewareRoutesAreDeclaredInRouteMetadata(t *testing.T
 		{name: "restore upload", method: http.MethodPost, path: "/api/v1/instance-backups/restore", auth: routeAuthProtected, profile: routeMiddlewareRestoreUpload},
 		{name: "device import preview", method: http.MethodPost, path: "/api/v1/admin/device-imports/preview", auth: routeAuthProtected, profile: routeMiddlewareDeviceImportUpload},
 		{name: "device import commit", method: http.MethodPost, path: "/api/v1/admin/device-imports/commit", auth: routeAuthProtected, profile: routeMiddlewareDeviceImportUpload},
+		{name: "device import topology active", method: http.MethodGet, path: "/api/v1/admin/device-imports/topology-runs/active", auth: routeAuthProtected, profile: routeMiddlewareNormalJSON},
+		{name: "device import topology run", method: http.MethodGet, path: "/api/v1/admin/device-imports/topology-runs/00000000-0000-0000-0000-000000000001", auth: routeAuthProtected, profile: routeMiddlewareNormalJSON},
+		{name: "device import topology retry", method: http.MethodPost, path: "/api/v1/admin/device-imports/topology-runs/00000000-0000-0000-0000-000000000001/retry", auth: routeAuthProtected, profile: routeMiddlewareNormalJSON},
 		{name: "bridge connector launch", method: http.MethodPost, path: "/api/v1/bridge/connector/launch", auth: routeAuthPublic, profile: routeMiddlewarePublicJSONSmallBody},
 		{name: "health", method: http.MethodGet, path: "/api/v1/health", auth: routeAuthProtected, profile: routeMiddlewareNormalJSON},
 		{name: "prometheus health", method: http.MethodGet, path: "/api/v1/prometheus/health", auth: routeAuthProtected, profile: routeMiddlewareNormalJSON},
@@ -83,6 +86,33 @@ func TestPublicAndSpecialMiddlewareRoutesAreDeclaredInRouteMetadata(t *testing.T
 				t.Fatalf("middlewareProfile = %v, want %v", spec.middlewareProfile, tt.profile)
 			}
 		})
+	}
+}
+
+func TestDeviceImportTopologyRoutesUseDedicatedHandlerAndMethods(t *testing.T) {
+	runID := "00000000-0000-0000-0000-000000000001"
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/admin/device-imports/topology-runs/active"},
+		{method: http.MethodGet, path: "/api/v1/admin/device-imports/topology-runs/" + runID},
+		{method: http.MethodPost, path: "/api/v1/admin/device-imports/topology-runs/" + runID + "/retry"},
+		{method: http.MethodPost, path: "/api/v1/admin/device-imports/topology-runs/" + runID + "/continue"},
+		{method: http.MethodPost, path: "/api/v1/admin/device-imports/topology-runs/" + runID + "/manual-edit"},
+		{method: http.MethodPost, path: "/api/v1/admin/device-imports/topology-runs/" + runID + "/layout"},
+	}
+	for _, tt := range tests {
+		spec, ok := apiRouteMetadata.match(tt.method, tt.path)
+		if !ok {
+			t.Fatalf("route metadata did not match %s %s", tt.method, tt.path)
+		}
+		if spec.handlerKey != routeHandlerDeviceImportTopology || spec.middlewareProfile != routeMiddlewareNormalJSON {
+			t.Fatalf("route %s %s = %#v", tt.method, tt.path, spec)
+		}
+		if got := spec.methodPolicies[tt.method]; len(got) != 1 || got[0] != domain.PermissionAdminDashboard {
+			t.Fatalf("route %s %s static permissions = %#v", tt.method, tt.path, got)
+		}
 	}
 }
 

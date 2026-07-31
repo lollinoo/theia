@@ -27,13 +27,15 @@ var (
 
 // DeviceImportRequest carries one stateless preview or commit operation.
 type DeviceImportRequest struct {
-	FileBytes          []byte
-	MetricsMode        DeviceImportMode
-	SNMPProfileID      *uuid.UUID
-	MapID              uuid.UUID
-	AreaID             *uuid.UUID
-	ExpectedFileDigest string
-	Actor              DeviceImportActor
+	FileBytes                []byte
+	MetricsMode              DeviceImportMode
+	SNMPProfileID            *uuid.UUID
+	MapID                    uuid.UUID
+	AreaID                   *uuid.UUID
+	TopologyBootstrapEnabled bool
+	TopologyLayoutScope      domain.DeviceImportTopologyLayoutScope
+	ExpectedFileDigest       string
+	Actor                    DeviceImportActor
 }
 
 // DeviceImportActor identifies the administrator responsible for a committed import.
@@ -45,10 +47,12 @@ type DeviceImportActor struct {
 
 // DeviceImportConfiguration is the safe normalized configuration returned to clients.
 type DeviceImportConfiguration struct {
-	MetricsMode   DeviceImportMode `json:"metrics_mode"`
-	SNMPProfileID *uuid.UUID       `json:"snmp_profile_id"`
-	MapID         uuid.UUID        `json:"map_id"`
-	AreaID        *uuid.UUID       `json:"area_id"`
+	MetricsMode              DeviceImportMode                       `json:"metrics_mode"`
+	SNMPProfileID            *uuid.UUID                             `json:"snmp_profile_id"`
+	MapID                    uuid.UUID                              `json:"map_id"`
+	AreaID                   *uuid.UUID                             `json:"area_id"`
+	TopologyBootstrapEnabled bool                                   `json:"topology_bootstrap_enabled"`
+	TopologyLayoutScope      domain.DeviceImportTopologyLayoutScope `json:"topology_layout_scope"`
 }
 
 // DeviceImportTargetStatus is a stable preview or commit classification.
@@ -127,7 +131,16 @@ type DeviceImportCommitResult struct {
 	Results       []DeviceImportResult      `json:"results"`
 	Diagnostics   []DeviceImportDiagnostic  `json:"diagnostics"`
 	Incomplete    bool                      `json:"incomplete"`
+	TopologyRunID *uuid.UUID                `json:"topology_run_id,omitempty"`
 }
+
+type deviceImportTopologyRunStore interface {
+	Create(context.Context, *domain.DeviceImportTopologyRun) error
+	FinalizeImport(context.Context, uuid.UUID) error
+	FailImport(context.Context, uuid.UUID, domain.DeviceImportTopologyRunFailure) error
+}
+
+type deviceImportTopologyBootstrapLauncher func(context.Context, uuid.UUID, []uuid.UUID)
 
 // DeviceImportService orchestrates label-blind preview and one-time partial commit.
 type DeviceImportService struct {
@@ -138,7 +151,23 @@ type DeviceImportService struct {
 	auditLogs      domain.AuditLogRepository
 	reprobeDevice  func(context.Context, uuid.UUID) error
 	notifyTopology func()
+	topologyRuns   deviceImportTopologyRunStore
+	launchTopology deviceImportTopologyBootstrapLauncher
 	now            func() time.Time
+}
+
+// SetTopologyRunStore enables durable topology bootstrap runs for SNMP Direct imports.
+func (s *DeviceImportService) SetTopologyRunStore(store deviceImportTopologyRunStore) {
+	if s != nil {
+		s.topologyRuns = store
+	}
+}
+
+// SetTopologyBootstrapLauncher wires post-commit bootstrap scheduling without retaining request data.
+func (s *DeviceImportService) SetTopologyBootstrapLauncher(launcher deviceImportTopologyBootstrapLauncher) {
+	if s != nil {
+		s.launchTopology = launcher
+	}
 }
 
 type validatedDeviceImport struct {
@@ -147,10 +176,11 @@ type validatedDeviceImport struct {
 }
 
 const (
-	deviceImportDuplicateMessage    = "duplicate address in uploaded file"
-	deviceImportExistingMessage     = "address already exists"
-	deviceImportFailedMessage       = "device could not be imported"
-	deviceImportNotProcessedMessage = "not processed because the import stopped"
+	deviceImportDuplicateMessage         = "duplicate address in uploaded file"
+	deviceImportExistingMessage          = "address already exists"
+	deviceImportFailedMessage            = "device could not be imported"
+	deviceImportNotProcessedMessage      = "not processed because the import stopped"
+	deviceImportTopologyFinalizeAttempts = 2
 )
 
 // NewDeviceImportService creates the stateless import orchestrator.
@@ -280,6 +310,11 @@ func (s *DeviceImportService) Commit(
 	result.Diagnostics = importDiagnostics(parsed.Diagnostics)
 	result.Summary.Total = len(parsed.Targets)
 
+	topologyRunID, err := s.startTopologyRun(ctx, request, result.Configuration)
+	if err != nil {
+		return result, err
+	}
+
 	createdIDs := make([]uuid.UUID, 0, len(parsed.Targets))
 	probeIDs := make([]uuid.UUID, 0, len(parsed.Targets))
 	var abortErr error
@@ -324,8 +359,9 @@ func (s *DeviceImportService) Commit(
 				buildErr = domain.ErrDeviceImportStoreUnavailable
 			} else {
 				buildErr = s.store.CreateDeviceInMap(ctx, device, domain.DeviceImportPlacement{
-					MapID:  validated.configuration.MapID,
-					AreaID: cloneUUIDPointer(validated.configuration.AreaID),
+					MapID:         validated.configuration.MapID,
+					AreaID:        cloneUUIDPointer(validated.configuration.AreaID),
+					TopologyRunID: cloneUUIDPointer(topologyRunID),
 				})
 			}
 			switch {
@@ -335,7 +371,7 @@ func (s *DeviceImportService) Commit(
 				row.DeviceID = &deviceID
 				result.Summary.Created++
 				createdIDs = append(createdIDs, device.ID)
-				if deviceImportModeUsesSNMP(request.MetricsMode) {
+				if deviceImportModeUsesSNMP(request.MetricsMode) && topologyRunID == nil {
 					probeIDs = append(probeIDs, device.ID)
 				}
 			case errors.Is(buildErr, domain.ErrDeviceImportAddressConflict):
@@ -373,7 +409,10 @@ func (s *DeviceImportService) Commit(
 		result.Results = append(result.Results, row)
 	}
 
-	s.finishCommit(ctx, request, &result, createdIDs, probeIDs)
+	if topologyRunID != nil && len(createdIDs) > 0 {
+		result.TopologyRunID = cloneUUIDPointer(topologyRunID)
+	}
+	s.finishCommit(ctx, request, &result, createdIDs, probeIDs, topologyRunID)
 	return result, abortErr
 }
 
@@ -388,6 +427,16 @@ func (s *DeviceImportService) validateRequest(
 	}
 	if !deviceImportModeIsValid(request.MetricsMode) {
 		return validated, invalidDeviceImportConfiguration("unsupported metrics mode")
+	}
+	if request.TopologyBootstrapEnabled && request.MetricsMode != DeviceImportModeSNMP {
+		return validated, invalidDeviceImportConfiguration("topology bootstrap is only available in SNMP mode")
+	}
+	if request.TopologyLayoutScope != "" &&
+		domain.NormalizeDeviceImportTopologyLayoutScope(request.TopologyLayoutScope) != request.TopologyLayoutScope {
+		return validated, invalidDeviceImportConfiguration("unsupported topology layout scope")
+	}
+	if commit && request.TopologyBootstrapEnabled && (s == nil || s.topologyRuns == nil) {
+		return validated, domain.ErrDeviceImportStoreUnavailable
 	}
 	usesSNMP := deviceImportModeUsesSNMP(request.MetricsMode)
 	if request.MetricsMode == DeviceImportModePrometheus && request.SNMPProfileID != nil {
@@ -484,18 +533,26 @@ func (s *DeviceImportService) buildDeviceDraft(
 	default:
 		return nil, invalidDeviceImportConfiguration("unsupported metrics mode")
 	}
+	topologyMode := domain.TopologyDiscoveryModeInherit
+	if mode == DeviceImportModeSNMP {
+		topologyMode = domain.TopologyDiscoveryModeOff
+		if validated.configuration.TopologyBootstrapEnabled {
+			topologyMode = domain.TopologyDiscoveryModeBootstrapOnce
+		}
+	}
 
 	draft, err := s.devices.BuildDeviceDraft(DeviceDraftInput{
-		IP:                   target.CanonicalHost,
-		Hostname:             "",
-		DeviceType:           domain.DeviceTypeUnknown,
-		SNMPCredentials:      credentials,
-		Tags:                 map[string]string{},
-		Vendor:               "default",
-		MetricsSource:        metricsSource,
-		PrometheusLabelName:  labelName,
-		PrometheusLabelValue: labelValue,
-		AreaIDs:              nil,
+		IP:                    target.CanonicalHost,
+		Hostname:              "",
+		DeviceType:            domain.DeviceTypeUnknown,
+		SNMPCredentials:       credentials,
+		Tags:                  map[string]string{},
+		Vendor:                "default",
+		MetricsSource:         metricsSource,
+		PrometheusLabelName:   labelName,
+		PrometheusLabelValue:  labelValue,
+		TopologyDiscoveryMode: topologyMode,
+		AreaIDs:               nil,
 		Addresses: []domain.DeviceAddress{{
 			Address:   target.CanonicalHost,
 			Role:      domain.DeviceAddressRolePrimary,
@@ -521,6 +578,7 @@ func (s *DeviceImportService) finishCommit(
 	result *DeviceImportCommitResult,
 	createdIDs []uuid.UUID,
 	probeIDs []uuid.UUID,
+	topologyRunID *uuid.UUID,
 ) {
 	if s == nil || result == nil {
 		return
@@ -529,6 +587,36 @@ func (s *DeviceImportService) finishCommit(
 		s.store.PublishCreatedDevices(createdIDs)
 	}
 	postCommitContext := context.WithoutCancel(normalizeDeviceImportContext(ctx))
+	topologyRunReady := false
+	if topologyRunID != nil && s.topologyRuns != nil {
+		for attempt := 0; attempt < deviceImportTopologyFinalizeAttempts; attempt++ {
+			if err := s.topologyRuns.FinalizeImport(postCommitContext, *topologyRunID); err == nil {
+				topologyRunReady = true
+				break
+			}
+		}
+		if !topologyRunReady {
+			result.Incomplete = true
+			reference := uuid.NewString()
+			logging.Errorf(
+				"device import post-commit stage failed reference=%s stage=topology-run-finalize digest=%s mode=%s map_id=%s",
+				reference,
+				result.FileDigest,
+				result.Configuration.MetricsMode,
+				result.Configuration.MapID,
+			)
+			if err := s.topologyRuns.FailImport(postCommitContext, *topologyRunID, domain.DeviceImportTopologyRunFailure{
+				Code:      domain.DeviceImportTopologyResultInternal,
+				Message:   "Topology Bootstrap-Once could not start automatically.",
+				Reference: reference,
+			}); err != nil {
+				s.logPostCommitFailure("topology-run-failure-record", result.FileDigest, result.Configuration)
+			}
+		}
+	}
+	if topologyRunReady && len(createdIDs) > 0 && s.launchTopology != nil {
+		s.launchTopology(postCommitContext, *topologyRunID, append([]uuid.UUID(nil), createdIDs...))
+	}
 	for _, deviceID := range probeIDs {
 		if s.reprobeDevice == nil {
 			continue
@@ -543,6 +631,34 @@ func (s *DeviceImportService) finishCommit(
 	if err := s.appendAudit(postCommitContext, request, *result); err != nil {
 		s.logPostCommitFailure("audit", result.FileDigest, result.Configuration)
 	}
+}
+
+func (s *DeviceImportService) startTopologyRun(
+	ctx context.Context,
+	request DeviceImportRequest,
+	configuration DeviceImportConfiguration,
+) (*uuid.UUID, error) {
+	if !configuration.TopologyBootstrapEnabled {
+		return nil, nil
+	}
+	if s == nil || s.topologyRuns == nil {
+		return nil, domain.ErrDeviceImportStoreUnavailable
+	}
+	runID := uuid.New()
+	run := &domain.DeviceImportTopologyRun{
+		ID:                runID,
+		MapID:             configuration.MapID,
+		ActorUserID:       request.Actor.UserID,
+		FileDigest:        computeDeviceImportDigest(request.FileBytes),
+		LayoutScope:       configuration.TopologyLayoutScope,
+		State:             domain.DeviceImportTopologyRunStateImporting,
+		AutoLayoutAllowed: true,
+	}
+	if err := s.topologyRuns.Create(ctx, run); err != nil {
+		s.logPostCommitFailure("topology-run-create", run.FileDigest, configuration)
+		return nil, domain.ErrDeviceImportStoreUnavailable
+	}
+	return &runID, nil
 }
 
 func (s *DeviceImportService) appendAudit(
@@ -663,10 +779,12 @@ func computeDeviceImportDigest(fileBytes []byte) string {
 
 func normalizeDeviceImportConfiguration(request DeviceImportRequest) DeviceImportConfiguration {
 	return DeviceImportConfiguration{
-		MetricsMode:   request.MetricsMode,
-		SNMPProfileID: cloneUUIDPointer(request.SNMPProfileID),
-		MapID:         request.MapID,
-		AreaID:        cloneUUIDPointer(request.AreaID),
+		MetricsMode:              request.MetricsMode,
+		SNMPProfileID:            cloneUUIDPointer(request.SNMPProfileID),
+		MapID:                    request.MapID,
+		AreaID:                   cloneUUIDPointer(request.AreaID),
+		TopologyBootstrapEnabled: request.TopologyBootstrapEnabled,
+		TopologyLayoutScope:      domain.NormalizeDeviceImportTopologyLayoutScope(request.TopologyLayoutScope),
 	}
 }
 

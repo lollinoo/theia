@@ -59,6 +59,7 @@ const (
 	routeHandlerDeviceCollection            routeHandlerKey = "deviceCollection"
 	routeHandlerDeviceBatch                 routeHandlerKey = "deviceBatch"
 	routeHandlerDeviceImport                routeHandlerKey = "deviceImport"
+	routeHandlerDeviceImportTopology        routeHandlerKey = "deviceImportTopology"
 	routeHandlerDeviceItem                  routeHandlerKey = "deviceItem"
 	routeHandlerDeviceOrphans               routeHandlerKey = "deviceOrphans"
 	routeHandlerGrafanaDeviceOverride       routeHandlerKey = "grafanaDeviceOverride"
@@ -590,6 +591,12 @@ var apiRouteSpecs = []apiRouteSpec{
 
 	protectedRoute("device import preview", "/api/v1/admin/device-imports/preview", "/api/v1/admin/device-imports/preview", routeHandlerDeviceImport, routeMiddlewareDeviceImportUpload, postPolicy(domain.PermissionAdminDashboard)),
 	protectedRoute("device import commit", "/api/v1/admin/device-imports/commit", "/api/v1/admin/device-imports/commit", routeHandlerDeviceImport, routeMiddlewareDeviceImportUpload, postPolicy(domain.PermissionAdminDashboard)),
+	protectedRoute("device import topology active", "/api/v1/admin/device-imports/topology-runs/active", deviceImportTopologyRunPrefix, routeHandlerDeviceImportTopology, routeMiddlewareNormalJSON, readPolicy(domain.PermissionAdminDashboard)),
+	protectedRoute("device import topology retry", "/api/v1/admin/device-imports/topology-runs/{runID}/retry", deviceImportTopologyRunPrefix, routeHandlerDeviceImportTopology, routeMiddlewareNormalJSON, postPolicy(domain.PermissionAdminDashboard)),
+	protectedRoute("device import topology continue", "/api/v1/admin/device-imports/topology-runs/{runID}/continue", deviceImportTopologyRunPrefix, routeHandlerDeviceImportTopology, routeMiddlewareNormalJSON, postPolicy(domain.PermissionAdminDashboard)),
+	protectedRoute("device import topology manual edit", "/api/v1/admin/device-imports/topology-runs/{runID}/manual-edit", deviceImportTopologyRunPrefix, routeHandlerDeviceImportTopology, routeMiddlewareNormalJSON, postPolicy(domain.PermissionAdminDashboard)),
+	protectedRoute("device import topology layout", "/api/v1/admin/device-imports/topology-runs/{runID}/layout", deviceImportTopologyRunPrefix, routeHandlerDeviceImportTopology, routeMiddlewareNormalJSON, postPolicy(domain.PermissionAdminDashboard)),
+	protectedRoute("device import topology run", "/api/v1/admin/device-imports/topology-runs/{runID}", deviceImportTopologyRunPrefix, routeHandlerDeviceImportTopology, routeMiddlewareNormalJSON, readPolicy(domain.PermissionAdminDashboard)),
 	protectedRoute("admin dashboard", "/api/v1/admin/dashboard", "/api/v1/admin/", routeHandlerAdmin, routeMiddlewareNormalJSON, readPolicy(domain.PermissionAdminDashboard)),
 	protectedRoute("admin users", "/api/v1/admin/users", "/api/v1/admin/", routeHandlerAdmin, routeMiddlewareNormalJSON, policy(
 		methodPolicy(http.MethodGet, domain.PermissionUsersRead),

@@ -66,6 +66,11 @@ type pipelineTaskRunning interface {
 	publishSubscribedDetailDelta(domain.Device)
 }
 
+type deviceImportTopologyObserver interface {
+	BootstrapStarted(context.Context, uuid.UUID, time.Time) (uuid.UUID, bool)
+	BootstrapCompleted(context.Context, uuid.UUID, uuid.UUID, service.DeviceImportTopologyBootstrapOutcome)
+}
+
 // PipelineOrchestrator represents pipeline orchestrator data used by the background worker lifecycle.
 type PipelineOrchestrator struct {
 	scheduler         pipelineScheduler
@@ -79,6 +84,7 @@ type PipelineOrchestrator struct {
 	performance       *collector.PerformanceCollector
 	operational       *collector.OperationalCollector
 	staticCollector   *collector.StaticCollector
+	importTopology    deviceImportTopologyObserver
 	prometheus        *collector.PrometheusCollector
 	topologyService   interface {
 		ApplyStaticDiscovery(uuid.UUID, service.StaticDiscoveryInput) (service.StaticPersistenceResult, error)
@@ -107,6 +113,13 @@ type PipelineOrchestrator struct {
 	staticPersistenceMu     sync.Mutex
 	staticPersistenceCache  map[uuid.UUID]staticPersistenceCacheEntry
 	staticPersistenceNow    func() time.Time
+}
+
+// SetDeviceImportTopologyObserver connects bootstrap worker outcomes to durable import progress.
+func (p *PipelineOrchestrator) SetDeviceImportTopologyObserver(observer deviceImportTopologyObserver) {
+	if p != nil {
+		p.importTopology = observer
+	}
 }
 
 type runtimeRecoveryAttempt struct {

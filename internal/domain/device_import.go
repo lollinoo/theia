@@ -18,8 +18,9 @@ var (
 
 // DeviceImportPlacement identifies the saved map and optional map-local area for one imported device.
 type DeviceImportPlacement struct {
-	MapID  uuid.UUID
-	AreaID *uuid.UUID
+	MapID         uuid.UUID
+	AreaID        *uuid.UUID
+	TopologyRunID *uuid.UUID
 }
 
 // DeviceImportStore persists imported devices and delays publication until a completed batch is ready.

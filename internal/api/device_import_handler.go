@@ -117,13 +117,21 @@ func (h *DeviceImportHandler) authorizeBaseline(
 	w http.ResponseWriter,
 	r *http.Request,
 ) (*service.AuthenticatedUser, bool) {
+	return authorizeDeviceImportBaseline(w, r, h.auth)
+}
+
+func authorizeDeviceImportBaseline(
+	w http.ResponseWriter,
+	r *http.Request,
+	auth authProvider,
+) (*service.AuthenticatedUser, bool) {
 	actor, ok := AuthenticatedUserFromRequest(r)
 	if !ok {
 		writeAuthCodeError(w, http.StatusUnauthorized, "authentication_required", "authentication required")
 		return nil, false
 	}
 	for _, permission := range deviceImportBaselinePermissions {
-		if !requirePermission(w, h.auth, actor, permission) {
+		if !requirePermission(w, auth, actor, permission) {
 			return nil, false
 		}
 	}
@@ -131,14 +139,18 @@ func (h *DeviceImportHandler) authorizeBaseline(
 }
 
 type decodedDeviceImportFields struct {
-	fileBytes          []byte
-	metricsMode        string
-	snmpProfileID      string
-	snmpProfileIDSet   bool
-	mapID              string
-	areaID             string
-	areaIDSet          bool
-	expectedFileDigest string
+	fileBytes                   []byte
+	metricsMode                 string
+	snmpProfileID               string
+	snmpProfileIDSet            bool
+	mapID                       string
+	areaID                      string
+	areaIDSet                   bool
+	topologyBootstrapEnabled    string
+	topologyBootstrapEnabledSet bool
+	topologyLayoutScope         string
+	topologyLayoutScopeSet      bool
+	expectedFileDigest          string
 }
 
 func decodeDeviceImportRequest(
@@ -161,6 +173,24 @@ func decodeDeviceImportRequest(
 	mode, ok := parseDeviceImportMode(fields.metricsMode)
 	if !ok {
 		return request, newDeviceImportRequestError(http.StatusBadRequest, "unsupported metrics_mode")
+	}
+	topologyBootstrapEnabled := mode == service.DeviceImportModeSNMP
+	if fields.topologyBootstrapEnabledSet {
+		switch fields.topologyBootstrapEnabled {
+		case "true":
+			topologyBootstrapEnabled = true
+		case "false":
+			topologyBootstrapEnabled = false
+		default:
+			return request, newDeviceImportRequestError(http.StatusBadRequest, "invalid topology_bootstrap_enabled")
+		}
+	}
+	topologyLayoutScope := domain.DeviceImportTopologyLayoutScopePreserve
+	if fields.topologyLayoutScopeSet {
+		topologyLayoutScope = domain.DeviceImportTopologyLayoutScope(fields.topologyLayoutScope)
+		if domain.NormalizeDeviceImportTopologyLayoutScope(topologyLayoutScope) != topologyLayoutScope {
+			return request, newDeviceImportRequestError(http.StatusBadRequest, "invalid topology_layout_scope")
+		}
 	}
 	mapID, err := uuid.Parse(fields.mapID)
 	if err != nil || mapID == uuid.Nil {
@@ -188,12 +218,14 @@ func decodeDeviceImportRequest(
 	}
 
 	request = service.DeviceImportRequest{
-		FileBytes:          fields.fileBytes,
-		MetricsMode:        mode,
-		SNMPProfileID:      profileID,
-		MapID:              mapID,
-		AreaID:             areaID,
-		ExpectedFileDigest: fields.expectedFileDigest,
+		FileBytes:                fields.fileBytes,
+		MetricsMode:              mode,
+		SNMPProfileID:            profileID,
+		MapID:                    mapID,
+		AreaID:                   areaID,
+		TopologyBootstrapEnabled: topologyBootstrapEnabled,
+		TopologyLayoutScope:      topologyLayoutScope,
+		ExpectedFileDigest:       fields.expectedFileDigest,
 		Actor: service.DeviceImportActor{
 			IPAddress: clientIPAddress(r),
 			UserAgent: r.UserAgent(),
@@ -268,7 +300,8 @@ func readDeviceImportMultipart(reader *multipart.Reader, commit bool) (decodedDe
 
 func deviceImportFieldAllowed(name string, commit bool) bool {
 	switch name {
-	case "file", "metrics_mode", "snmp_profile_id", "map_id", "area_id":
+	case "file", "metrics_mode", "snmp_profile_id", "map_id", "area_id",
+		"topology_bootstrap_enabled", "topology_layout_scope":
 		return true
 	case "expected_file_digest":
 		return commit
@@ -336,6 +369,12 @@ func setDecodedDeviceImportField(fields *decodedDeviceImportFields, name, value 
 	case "area_id":
 		fields.areaID = value
 		fields.areaIDSet = true
+	case "topology_bootstrap_enabled":
+		fields.topologyBootstrapEnabled = value
+		fields.topologyBootstrapEnabledSet = true
+	case "topology_layout_scope":
+		fields.topologyLayoutScope = value
+		fields.topologyLayoutScopeSet = true
 	case "expected_file_digest":
 		fields.expectedFileDigest = value
 	}

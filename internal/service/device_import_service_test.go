@@ -253,6 +253,110 @@ func TestDeviceImportServiceCommitBuildsApprovedDeviceFieldsForEveryMode(t *test
 	}
 }
 
+func TestDeviceImportServiceCommitCreatesSNMPTopologyBootstrapRun(t *testing.T) {
+	h := newDeviceImportServiceHarness(t)
+	runs := &fakeDeviceImportTopologyRunStore{}
+	h.importer.SetTopologyRunStore(runs)
+	var launchedRunID uuid.UUID
+	var launchedDeviceIDs []uuid.UUID
+	h.importer.SetTopologyBootstrapLauncher(func(_ context.Context, runID uuid.UUID, deviceIDs []uuid.UUID) {
+		launchedRunID = runID
+		launchedDeviceIDs = append([]uuid.UUID(nil), deviceIDs...)
+	})
+
+	uploaded := []byte("- targets: [\"router.example.net\"]\n")
+	request := h.request(DeviceImportModeSNMP, uploaded)
+	request.SNMPProfileID = &h.profileID
+	request.TopologyBootstrapEnabled = true
+	request.TopologyLayoutScope = domain.DeviceImportTopologyLayoutScopeReorganize
+	request.ExpectedFileDigest = deviceImportDigest(uploaded)
+
+	result, err := h.importer.Commit(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	if result.TopologyRunID == nil || *result.TopologyRunID == uuid.Nil {
+		t.Fatalf("TopologyRunID = %#v, want non-zero run", result.TopologyRunID)
+	}
+	if len(runs.created) != 1 || runs.created[0].MapID != h.mapID || runs.created[0].ActorUserID != h.actorID {
+		t.Fatalf("created topology runs = %#v", runs.created)
+	}
+	if runs.created[0].LayoutScope != domain.DeviceImportTopologyLayoutScopeReorganize || runs.created[0].FileDigest != deviceImportDigest(uploaded) {
+		t.Fatalf("created topology run configuration = %#v", runs.created[0])
+	}
+	if len(runs.finalized) != 1 || runs.finalized[0] != *result.TopologyRunID {
+		t.Fatalf("finalized topology runs = %#v", runs.finalized)
+	}
+	if len(h.store.created) != 1 || len(h.store.placements) != 1 {
+		t.Fatalf("created devices=%d placements=%d", len(h.store.created), len(h.store.placements))
+	}
+	device := h.store.created[0]
+	if device.TopologyDiscoveryMode != domain.TopologyDiscoveryModeBootstrapOnce || device.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+		t.Fatalf("topology bootstrap device = mode %q state %q", device.TopologyDiscoveryMode, device.TopologyBootstrapState)
+	}
+	if h.store.placements[0].TopologyRunID == nil || *h.store.placements[0].TopologyRunID != *result.TopologyRunID {
+		t.Fatalf("topology run placement = %#v", h.store.placements[0])
+	}
+	if h.reprobeCalls != 0 {
+		t.Fatalf("legacy reprobe calls = %d, want 0", h.reprobeCalls)
+	}
+	if launchedRunID != *result.TopologyRunID || len(launchedDeviceIDs) != 1 || launchedDeviceIDs[0] != device.ID {
+		t.Fatalf("bootstrap launch = run %s devices %#v", launchedRunID, launchedDeviceIDs)
+	}
+	if !result.Configuration.TopologyBootstrapEnabled || result.Configuration.TopologyLayoutScope != domain.DeviceImportTopologyLayoutScopeReorganize {
+		t.Fatalf("resolved topology configuration = %#v", result.Configuration)
+	}
+}
+
+func TestDeviceImportServiceCommitPersistsTopologyFinalizationFailure(t *testing.T) {
+	h := newDeviceImportServiceHarness(t)
+	runs := &fakeDeviceImportTopologyRunStore{finishErr: errors.New("database failure containing a secret")}
+	h.importer.SetTopologyRunStore(runs)
+	launchCalls := 0
+	h.importer.SetTopologyBootstrapLauncher(func(context.Context, uuid.UUID, []uuid.UUID) {
+		launchCalls++
+	})
+	uploaded := []byte("- targets: [\"router.example.net\"]\n")
+	request := h.request(DeviceImportModeSNMP, uploaded)
+	request.SNMPProfileID = &h.profileID
+	request.TopologyBootstrapEnabled = true
+	request.ExpectedFileDigest = deviceImportDigest(uploaded)
+
+	result, err := h.importer.Commit(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	if !result.Incomplete || result.TopologyRunID == nil {
+		t.Fatalf("commit result = %#v, want durable incomplete topology run", result)
+	}
+	if len(runs.finalized) != deviceImportTopologyFinalizeAttempts || len(runs.failures) != 1 {
+		t.Fatalf("finalize calls=%d failures=%#v", len(runs.finalized), runs.failures)
+	}
+	failure := runs.failures[0]
+	if failure.Code != domain.DeviceImportTopologyResultInternal || failure.Message == "" || failure.Reference == "" {
+		t.Fatalf("failure metadata = %#v", failure)
+	}
+	if failure.Message == "database failure containing a secret" {
+		t.Fatal("topology finalization failure leaked internal error")
+	}
+	if launchCalls != 0 {
+		t.Fatalf("bootstrap launch calls = %d, want zero after finalization failure", launchCalls)
+	}
+}
+
+func TestDeviceImportServiceRejectsTopologyBootstrapOutsideSNMPDirect(t *testing.T) {
+	h := newDeviceImportServiceHarness(t)
+	uploaded := []byte("- targets: [\"router.example.net\"]\n")
+	request := h.request(DeviceImportModePrometheusFallback, uploaded)
+	request.SNMPProfileID = &h.profileID
+	request.TopologyBootstrapEnabled = true
+
+	_, err := h.importer.Preview(context.Background(), request)
+	if !errors.Is(err, ErrDeviceImportInvalidConfiguration) {
+		t.Fatalf("Preview() error = %v, want invalid configuration", err)
+	}
+}
+
 func TestDeviceImportServiceCommitDeepCopiesSNMPv3Credentials(t *testing.T) {
 	h := newDeviceImportServiceHarness(t)
 	profileCredentials := &domain.SNMPv3Credentials{
@@ -980,6 +1084,37 @@ type fakeDeviceImportStore struct {
 	placements     []domain.DeviceImportPlacement
 	publishCalls   int
 	published      [][]uuid.UUID
+}
+
+type fakeDeviceImportTopologyRunStore struct {
+	created   []domain.DeviceImportTopologyRun
+	finalized []uuid.UUID
+	failures  []domain.DeviceImportTopologyRunFailure
+	createErr error
+	finishErr error
+}
+
+func (s *fakeDeviceImportTopologyRunStore) Create(_ context.Context, run *domain.DeviceImportTopologyRun) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
+	copy := *run
+	s.created = append(s.created, copy)
+	return nil
+}
+
+func (s *fakeDeviceImportTopologyRunStore) FinalizeImport(_ context.Context, runID uuid.UUID) error {
+	s.finalized = append(s.finalized, runID)
+	return s.finishErr
+}
+
+func (s *fakeDeviceImportTopologyRunStore) FailImport(
+	_ context.Context,
+	_ uuid.UUID,
+	failure domain.DeviceImportTopologyRunFailure,
+) error {
+	s.failures = append(s.failures, failure)
+	return nil
 }
 
 func (s *fakeDeviceImportStore) ExistingCanonicalAddresses(_ context.Context, addresses []string) (map[string]struct{}, error) {

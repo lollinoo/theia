@@ -162,6 +162,47 @@ func TestDeviceImportStoreCreatesDeviceAndMapMembershipAtomically(t *testing.T) 
 	}
 }
 
+func TestDeviceImportStoreCreatesTopologyRunItemInDeviceTransaction(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	mapID := uuid.New()
+	actorID := uuid.New()
+	insertDeviceImportTestMap(t, db, mapID)
+	insertDeviceImportTopologyTestUser(t, db, actorID)
+	runRepo := NewDeviceImportTopologyRunRepo(db)
+	run := &domain.DeviceImportTopologyRun{
+		ID:                uuid.New(),
+		MapID:             mapID,
+		ActorUserID:       actorID,
+		FileDigest:        "sha256:atomic-item",
+		LayoutScope:       domain.DeviceImportTopologyLayoutScopePreserve,
+		AutoLayoutAllowed: true,
+	}
+	if err := runRepo.Create(ctx, run); err != nil {
+		t.Fatalf("create topology run: %v", err)
+	}
+
+	store := NewDeviceImportStore(NewDeviceRepo(db, testKeyring, nil))
+	device := newDeviceImportTestDevice("topology-item.example.net")
+	if err := store.CreateDeviceInMap(ctx, device, domain.DeviceImportPlacement{
+		MapID:         mapID,
+		TopologyRunID: &run.ID,
+	}); err != nil {
+		t.Fatalf("CreateDeviceInMap: %v", err)
+	}
+
+	var state string
+	if err := db.QueryRow(
+		`SELECT state FROM device_import_topology_run_items WHERE run_id = $1 AND device_id = $2`,
+		run.ID.String(), device.ID.String(),
+	).Scan(&state); err != nil {
+		t.Fatalf("read topology run item: %v", err)
+	}
+	if state != string(domain.DeviceImportTopologyItemStateQueued) {
+		t.Fatalf("topology run item state = %q, want queued", state)
+	}
+}
+
 func TestDeviceImportStoreMissingMapRollsBack(t *testing.T) {
 	db := newTestDB(t)
 	store := NewDeviceImportStore(NewDeviceRepo(db, testKeyring, nil))

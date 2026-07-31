@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/api"
 	"github.com/lollinoo/theia/internal/cache"
 	"github.com/lollinoo/theia/internal/collector"
@@ -54,6 +55,33 @@ type runtimeChildren []runtimeChild
 type runtimeServer interface {
 	ListenAndServe() error
 	Shutdown(ctx context.Context) error
+}
+
+type runtimePipelineStarter interface {
+	Start(context.Context) error
+}
+
+type runtimeTopologyRecoveryCoordinator interface {
+	PrepareRecovery(context.Context) (service.DeviceImportTopologyRecoveryPlan, error)
+	ResumeRecovery(context.Context, service.DeviceImportTopologyRecoveryPlan) error
+}
+
+func startPipelineWithTopologyRecovery(
+	ctx context.Context,
+	pipeline runtimePipelineStarter,
+	coordinator runtimeTopologyRecoveryCoordinator,
+) error {
+	recovery, err := coordinator.PrepareRecovery(ctx)
+	if err != nil {
+		return fmt.Errorf("prepare topology import recovery: %w", err)
+	}
+	if err := pipeline.Start(ctx); err != nil {
+		return fmt.Errorf("start runtime pipeline: %w", err)
+	}
+	if err := coordinator.ResumeRecovery(ctx, recovery); err != nil {
+		log.Printf("Warning: failed to resume topology import runs: %v", err)
+	}
+	return nil
 }
 
 type runtimeWebSocketPipeline interface {
@@ -453,6 +481,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		service.WithTopologyObservationStore(topologyObservationRepo),
 	)
 	deviceImportStore := postgres.NewDeviceImportStore(deviceRepo)
+	deviceImportTopologyRunRepo := postgres.NewDeviceImportTopologyRunRepo(db)
 	deviceImportService := service.NewDeviceImportService(
 		deviceImportStore,
 		deviceService,
@@ -460,6 +489,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		snmpProfileRepo,
 		authRepo,
 	)
+	deviceImportService.SetTopologyRunStore(deviceImportTopologyRunRepo)
 
 	sshDialer := &ssh.DefaultDialer{}
 
@@ -562,9 +592,65 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		deviceChangeNotify,
 		linkChangeNotify,
 	)
+	deviceImportTopologyCoordinator := service.NewDeviceImportTopologyCoordinator(
+		deviceImportTopologyRunRepo,
+		func(scheduleCtx context.Context, deviceID uuid.UUID) bool {
+			device, getErr := deviceService.GetDevice(scheduleCtx, deviceID)
+			if getErr != nil || device == nil {
+				log.Printf("Topology import bootstrap device unavailable: device_id=%s error=%v", deviceID, getErr)
+				return false
+			}
+			return sched.ScheduleBootstrap(*device, time.Now().UTC())
+		},
+		func(reconcileCtx context.Context, runID uuid.UUID) (service.DeviceImportTopologyReconciliation, error) {
+			snapshot, getErr := deviceImportTopologyRunRepo.Get(reconcileCtx, runID)
+			if getErr != nil {
+				return service.DeviceImportTopologyReconciliation{}, getErr
+			}
+			membership, membershipErr := canvasMapRepo.GetMembership(snapshot.Run.MapID)
+			if membershipErr != nil {
+				return service.DeviceImportTopologyReconciliation{}, membershipErr
+			}
+			mapDeviceIDs := make([]uuid.UUID, 0, len(membership.Devices))
+			for _, member := range membership.Devices {
+				mapDeviceIDs = append(mapDeviceIDs, member.DeviceID)
+			}
+			importedDeviceIDs := make([]uuid.UUID, 0, len(snapshot.Items))
+			for _, item := range snapshot.Items {
+				importedDeviceIDs = append(importedDeviceIDs, item.DeviceID)
+			}
+			reconciled, reconcileErr := deviceService.ReconcileStoredTopologyForImport(
+				mapDeviceIDs,
+				importedDeviceIDs,
+			)
+			if reconcileErr != nil {
+				return service.DeviceImportTopologyReconciliation{}, reconcileErr
+			}
+			itemResults := make([]domain.DeviceImportTopologyItemReconciliation, 0, len(importedDeviceIDs))
+			for _, deviceID := range importedDeviceIDs {
+				deviceResult := reconciled.DeviceResults[deviceID]
+				itemResults = append(itemResults, domain.DeviceImportTopologyItemReconciliation{
+					DeviceID:            deviceID,
+					LinksCreated:        deviceResult.LinksCreated,
+					UnresolvedNeighbors: deviceResult.UnresolvedNeighbors,
+				})
+			}
+			return service.DeviceImportTopologyReconciliation{
+				Items: itemResults,
+				FollowupDeviceIDs: deviceService.TopologyBootstrapFollowupDeviceIDs(
+					importedDeviceIDs,
+				),
+			}, nil
+		},
+		func(runID, mapID uuid.UUID) {
+			hub.Broadcast(ws.NewDeviceImportTopologyRunChangedMessage(runID, mapID))
+		},
+	)
+	deviceImportService.SetTopologyBootstrapLauncher(deviceImportTopologyCoordinator.Launch)
+	pipeline.SetDeviceImportTopologyObserver(deviceImportTopologyCoordinator)
 	wireRuntimeResetter(deviceService, pipeline)
-	if err := pipeline.Start(ctx); err != nil {
-		return fmt.Errorf("start runtime pipeline: %w", err)
+	if err := startPipelineWithTopologyRecovery(ctx, pipeline, deviceImportTopologyCoordinator); err != nil {
+		return err
 	}
 	if backupScheduler != nil {
 		backupScheduler.Start(ctx)
@@ -602,7 +688,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		})
 	}
 
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewState, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService), api.WithDeviceImportService(deviceImportService), api.WithAuditLogRepository(authRepo), api.WithRuntimeEnvironment(cfg.DeploymentEnv))
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewState, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService), api.WithDeviceImportService(deviceImportService), api.WithDeviceImportTopologyCoordinator(deviceImportTopologyCoordinator), api.WithAuditLogRepository(authRepo), api.WithRuntimeEnvironment(cfg.DeploymentEnv))
 	metricsHandler := observability.Handler()
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{

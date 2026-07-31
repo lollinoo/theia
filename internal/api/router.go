@@ -17,12 +17,20 @@ import (
 
 // routerOptions collects optional services that alter middleware or route behavior.
 type routerOptions struct {
-	security           SecurityConfig
-	auth               authProvider
-	bridgeService      *service.BridgeService
-	deviceImport       deviceImportProvider
-	auditLogs          domain.AuditLogRepository
-	runtimeEnvironment string
+	security             SecurityConfig
+	auth                 authProvider
+	bridgeService        *service.BridgeService
+	deviceImport         deviceImportProvider
+	deviceImportTopology deviceImportTopologyProvider
+	auditLogs            domain.AuditLogRepository
+	runtimeEnvironment   string
+}
+
+// WithDeviceImportTopologyCoordinator configures resumable Bootstrap-Once controls.
+func WithDeviceImportTopologyCoordinator(coordinator *service.DeviceImportTopologyCoordinator) RouterOption {
+	return func(options *routerOptions) {
+		options.deviceImportTopology = coordinator
+	}
 }
 
 // RouterOption customizes router middleware behavior.
@@ -81,6 +89,13 @@ func withAuthProvider(auth authProvider) RouterOption {
 func withDeviceImportProvider(importer deviceImportProvider) RouterOption {
 	return func(options *routerOptions) {
 		options.deviceImport = importer
+	}
+}
+
+// withDeviceImportTopologyProvider injects the narrow topology-run seam for HTTP tests.
+func withDeviceImportTopologyProvider(topology deviceImportTopologyProvider) RouterOption {
+	return func(options *routerOptions) {
+		options.deviceImportTopology = topology
 	}
 }
 

@@ -131,6 +131,8 @@ func TestDeviceImportHandlerCommitMapsProfileDigestAndActor(t *testing.T) {
 		{name: "metrics_mode", value: []byte(service.DeviceImportModeSNMP)},
 		{name: "snmp_profile_id", value: []byte(profileID.String())},
 		{name: "map_id", value: []byte(mapID.String())},
+		{name: "topology_bootstrap_enabled", value: []byte("false")},
+		{name: "topology_layout_scope", value: []byte(domain.DeviceImportTopologyLayoutScopeReorganize)},
 		{name: "expected_file_digest", value: []byte("sha256:expected")},
 	})
 	request.RemoteAddr = "198.51.100.22:4567"
@@ -148,6 +150,7 @@ func TestDeviceImportHandlerCommitMapsProfileDigestAndActor(t *testing.T) {
 	got := provider.commitRequest
 	if !bytes.Equal(got.FileBytes, uploaded) || got.MetricsMode != service.DeviceImportModeSNMP ||
 		got.SNMPProfileID == nil || *got.SNMPProfileID != profileID || got.MapID != mapID || got.AreaID != nil ||
+		got.TopologyBootstrapEnabled || got.TopologyLayoutScope != domain.DeviceImportTopologyLayoutScopeReorganize ||
 		got.ExpectedFileDigest != "sha256:expected" {
 		t.Fatalf("commit request = %#v", got)
 	}
@@ -156,6 +159,29 @@ func TestDeviceImportHandlerCommitMapsProfileDigestAndActor(t *testing.T) {
 	}
 	if !containsString(auth.checked, domain.PermissionCredentialsRead) || containsString(auth.checked, domain.PermissionCredentialsReveal) {
 		t.Fatalf("checked permissions = %#v", auth.checked)
+	}
+}
+
+func TestDeviceImportHandlerDefaultsSNMPTopologyBootstrapOn(t *testing.T) {
+	provider := &fakeDeviceImportProvider{}
+	profileID := uuid.New()
+	request := newDeviceImportMultipartRequest(t, http.MethodPost, "/api/v1/admin/device-imports/preview", []deviceImportMultipartPart{
+		{name: "file", value: []byte("- targets: [\"192.0.2.10\"]\n"), fileName: "targets.yml"},
+		{name: "metrics_mode", value: []byte(service.DeviceImportModeSNMP)},
+		{name: "snmp_profile_id", value: []byte(profileID.String())},
+		{name: "map_id", value: []byte(uuid.NewString())},
+	})
+	_, auth := authorizeDeviceImportRequest(request, domain.PermissionCredentialsRead)
+	response := httptest.NewRecorder()
+
+	NewDeviceImportHandler(provider, auth).HandlePreview(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if !provider.previewRequest.TopologyBootstrapEnabled ||
+		provider.previewRequest.TopologyLayoutScope != domain.DeviceImportTopologyLayoutScopePreserve {
+		t.Fatalf("topology defaults = %#v", provider.previewRequest)
 	}
 }
 
@@ -190,6 +216,8 @@ func TestDeviceImportHandlerRejectsMalformedOrUnboundedMultipartBeforeProvider(t
 		{name: "empty area", operation: "preview", method: http.MethodPost, parts: appendParts(validParts, deviceImportMultipartPart{name: "area_id", value: nil}), wantStatus: http.StatusBadRequest},
 		{name: "invalid profile", operation: "preview", method: http.MethodPost, parts: appendParts(validParts, deviceImportMultipartPart{name: "snmp_profile_id", value: []byte("not-a-uuid")}), wantStatus: http.StatusBadRequest},
 		{name: "empty profile", operation: "preview", method: http.MethodPost, parts: appendParts(validParts, deviceImportMultipartPart{name: "snmp_profile_id", value: nil}), wantStatus: http.StatusBadRequest},
+		{name: "invalid topology bootstrap", operation: "preview", method: http.MethodPost, parts: appendParts(validParts, deviceImportMultipartPart{name: "topology_bootstrap_enabled", value: []byte("yes")}), wantStatus: http.StatusBadRequest},
+		{name: "invalid topology layout scope", operation: "preview", method: http.MethodPost, parts: appendParts(validParts, deviceImportMultipartPart{name: "topology_layout_scope", value: []byte("compact")}), wantStatus: http.StatusBadRequest},
 		{name: "preview digest forbidden", operation: "preview", method: http.MethodPost, parts: appendParts(validParts, deviceImportMultipartPart{name: "expected_file_digest", value: []byte("sha256:nope")}), wantStatus: http.StatusBadRequest},
 		{name: "commit digest required", operation: "commit", method: http.MethodPost, parts: validParts, wantStatus: http.StatusBadRequest},
 		{name: "oversized file", operation: "preview", method: http.MethodPost, parts: replaceDeviceImportPart(validParts, "file", make([]byte, service.DeviceImportMaxFileBytes+1)), wantStatus: http.StatusRequestEntityTooLarge},

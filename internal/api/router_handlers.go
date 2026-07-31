@@ -22,6 +22,7 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 		WithPrimaryCanvasMapMembership(deps.canvasMapRepo, deps.areaRepo, deps.linkRepo),
 	)
 	deviceImportHandler := NewDeviceImportHandler(routerOpts.deviceImport, routerOpts.auth)
+	deviceImportTopologyHandler := NewDeviceImportTopologyHandler(routerOpts.deviceImportTopology, routerOpts.auth)
 	linkHandler := NewLinkHandler(deps.linkRepo, deps.deviceService)
 	positionHandler := NewPositionHandler(deps.positionRepo, deps.canvasMapRepo, deps.canvasMapPositionRepo)
 	canvasTopologyHandler := NewCanvasTopologyHandler(
@@ -68,9 +69,10 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 		webSocketHandler = deps.wsHandler
 	}
 	return map[routeHandlerKey]http.Handler{
-		routeHandlerAdmin:        adminHandler,
-		routeHandlerAuth:         authHandler,
-		routeHandlerDeviceImport: deviceImportHandler,
+		routeHandlerAdmin:                adminHandler,
+		routeHandlerAuth:                 authHandler,
+		routeHandlerDeviceImport:         deviceImportHandler,
+		routeHandlerDeviceImportTopology: deviceImportTopologyHandler,
 		routeHandlerTopologyCanvas: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")

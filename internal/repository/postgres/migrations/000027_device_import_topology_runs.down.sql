@@ -1,0 +1,6 @@
+DROP INDEX IF EXISTS device_import_topology_run_items_device_active_idx;
+DROP INDEX IF EXISTS device_import_topology_run_items_run_state_idx;
+DROP TABLE IF EXISTS device_import_topology_run_items;
+DROP INDEX IF EXISTS device_import_topology_runs_actor_map_created_idx;
+DROP INDEX IF EXISTS device_import_topology_runs_one_active_per_map;
+DROP TABLE IF EXISTS device_import_topology_runs;

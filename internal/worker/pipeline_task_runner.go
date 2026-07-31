@@ -86,6 +86,11 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			return
 		}
 
+		trackedRunID := uuid.Nil
+		tracked := false
+		if p.importTopology != nil {
+			trackedRunID, tracked = p.importTopology.BootstrapStarted(ctx, task.Device.ID, time.Now().UTC())
+		}
 		profile := r.timeoutProfile(polling.LaneBootstrap)
 		result := p.staticCollector.Poll(ctx, task.Device, profile.Timeout, profile.Retries, r.bootstrapTopologyDiscoveryMode(task.Device))
 		finishedAt = completionTime(result.CollectedAt)
@@ -99,11 +104,46 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 			Timestamp:        finishedAt,
 		})
 		r.publishSubscribedDetailDelta(task.Device)
-		if result.Err != nil || p.topologyService == nil {
+		if result.Err != nil {
+			if tracked {
+				p.importTopology.BootstrapCompleted(ctx, trackedRunID, task.Device.ID, service.DeviceImportTopologyBootstrapOutcome{
+					DiscoveryErr:   result.Err,
+					NeighborCount:  len(result.Neighbors),
+					ProtocolIssues: len(result.NeighborDiscoveryFailures),
+					CompletedAt:    finishedAt,
+				})
+			}
+			return
+		}
+		if p.topologyService == nil {
+			if tracked {
+				p.importTopology.BootstrapCompleted(ctx, trackedRunID, task.Device.ID, service.DeviceImportTopologyBootstrapOutcome{
+					PersistenceErr: fmt.Errorf("topology persistence is unavailable"),
+					NeighborCount:  len(result.Neighbors),
+					ProtocolIssues: len(result.NeighborDiscoveryFailures),
+					CompletedAt:    finishedAt,
+				})
+			}
 			return
 		}
 
-		r.persistStaticDiscoveryForced(task.Device, result)
+		var persisted service.StaticPersistenceResult
+		var persistErr error
+		if deferBootstrapTopologyMaterialization(task.Device, tracked) {
+			persisted, persistErr = r.persistStaticDiscoveryDeferred(task.Device, result)
+		} else {
+			persisted, persistErr = r.persistStaticDiscoveryForced(task.Device, result)
+		}
+		if tracked {
+			p.importTopology.BootstrapCompleted(ctx, trackedRunID, task.Device.ID, service.DeviceImportTopologyBootstrapOutcome{
+				PersistenceErr:      persistErr,
+				NeighborCount:       len(result.Neighbors),
+				ProtocolIssues:      len(result.NeighborDiscoveryFailures),
+				LinksCreated:        persisted.LinksCreated,
+				UnresolvedNeighbors: persisted.UnresolvedNeighbors,
+				CompletedAt:         finishedAt,
+			})
+		}
 		return
 	}
 
@@ -197,6 +237,13 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 	}
 }
 
+func deferBootstrapTopologyMaterialization(device domain.Device, tracked bool) bool {
+	return tracked || domain.NormalizeTopologyDiscoveryMode(
+		device.TopologyDiscoveryMode,
+		domain.TopologyDiscoveryModeOff,
+	) == domain.TopologyDiscoveryModeBootstrapOnce
+}
+
 func staticResultMetrics(result collector.StaticResult) *domain.DeviceMetrics {
 	if result.Err != nil {
 		return nil
@@ -239,16 +286,28 @@ func sameStaticPollIdentity(taskDevice domain.Device, cached domain.Device) bool
 	return true
 }
 
-func (r *pipelineTaskRunner) persistStaticDiscovery(device domain.Device, result collector.StaticResult) {
-	r.persistStaticDiscoveryWithPolicy(device, result, false)
+func (r *pipelineTaskRunner) persistStaticDiscovery(device domain.Device, result collector.StaticResult) (service.StaticPersistenceResult, error) {
+	return r.persistStaticDiscoveryWithPolicy(device, result, false, false)
 }
 
-func (r *pipelineTaskRunner) persistStaticDiscoveryForced(device domain.Device, result collector.StaticResult) {
-	r.persistStaticDiscoveryWithPolicy(device, result, true)
+func (r *pipelineTaskRunner) persistStaticDiscoveryForced(device domain.Device, result collector.StaticResult) (service.StaticPersistenceResult, error) {
+	return r.persistStaticDiscoveryWithPolicy(device, result, true, false)
 }
 
-func (r *pipelineTaskRunner) persistStaticDiscoveryWithPolicy(device domain.Device, result collector.StaticResult, force bool) {
+func (r *pipelineTaskRunner) persistStaticDiscoveryDeferred(device domain.Device, result collector.StaticResult) (service.StaticPersistenceResult, error) {
+	return r.persistStaticDiscoveryWithPolicy(device, result, true, true)
+}
+
+func (r *pipelineTaskRunner) persistStaticDiscoveryWithPolicy(
+	device domain.Device,
+	result collector.StaticResult,
+	force bool,
+	deferTopologyMaterialization bool,
+) (service.StaticPersistenceResult, error) {
 	p := r.pipeline
+	if p == nil || p.topologyService == nil {
+		return service.StaticPersistenceResult{}, fmt.Errorf("topology persistence is unavailable")
+	}
 	force = force || staticPersistenceRequiresBootstrapFollowup(device)
 	fingerprint := staticDiscoveryFingerprint(device, result)
 	topologyFingerprint := staticDiscoveryTopologyFingerprint(result)
@@ -259,28 +318,29 @@ func (r *pipelineTaskRunner) persistStaticDiscoveryWithPolicy(device domain.Devi
 				skipReason = "unchanged"
 			}
 			observability.Default().IncStaticPersistenceSkip(skipReason)
-			return
+			return service.StaticPersistenceResult{}, nil
 		}
 	}
 	skipTopologyMaterialization := !force && p.staticTopologyFingerprintUnchanged(device.ID, topologyFingerprint)
 
 	persisted, err := p.topologyService.ApplyStaticDiscovery(device.ID, service.StaticDiscoveryInput{
-		SysName:                     result.SysName,
-		SysDescr:                    result.SysDescr,
-		SysObjectID:                 result.SysObjectID,
-		HardwareModel:               result.HardwareModel,
-		OSVersion:                   result.OSVersion,
-		Vendor:                      result.Vendor,
-		DeviceType:                  result.DeviceType,
-		Interfaces:                  append([]domain.Interface(nil), result.Interfaces...),
-		Neighbors:                   append([]snmp.NeighborInfo(nil), result.Neighbors...),
-		NeighborDiscoveryProtocols:  append([]domain.DiscoveryProtocol(nil), result.NeighborDiscoveryProtocols...),
-		NeighborDiscoveryFailures:   append([]snmp.NeighborDiscoveryFailure(nil), result.NeighborDiscoveryFailures...),
-		SkipTopologyMaterialization: skipTopologyMaterialization,
+		SysName:                      result.SysName,
+		SysDescr:                     result.SysDescr,
+		SysObjectID:                  result.SysObjectID,
+		HardwareModel:                result.HardwareModel,
+		OSVersion:                    result.OSVersion,
+		Vendor:                       result.Vendor,
+		DeviceType:                   result.DeviceType,
+		Interfaces:                   append([]domain.Interface(nil), result.Interfaces...),
+		Neighbors:                    append([]snmp.NeighborInfo(nil), result.Neighbors...),
+		NeighborDiscoveryProtocols:   append([]domain.DiscoveryProtocol(nil), result.NeighborDiscoveryProtocols...),
+		NeighborDiscoveryFailures:    append([]snmp.NeighborDiscoveryFailure(nil), result.NeighborDiscoveryFailures...),
+		SkipTopologyMaterialization:  skipTopologyMaterialization,
+		DeferTopologyMaterialization: deferTopologyMaterialization,
 	})
 	if err != nil {
 		log.Printf("pipeline: static persistence failed for %s: %v", device.ID, err)
-		return
+		return service.StaticPersistenceResult{}, err
 	}
 	if skipTopologyMaterialization {
 		observability.Default().IncTopologyMaterializationSkip("unchanged")
@@ -292,6 +352,7 @@ func (r *pipelineTaskRunner) persistStaticDiscoveryWithPolicy(device domain.Devi
 		default:
 		}
 	}
+	return persisted, nil
 }
 
 func staticPersistenceRequiresBootstrapFollowup(device domain.Device) bool {

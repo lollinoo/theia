@@ -292,6 +292,31 @@ func appendImportedDevicePlacement(
 			return err
 		}
 	}
+	if placement.TopologyRunID != nil {
+		result, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO device_import_topology_run_items (run_id, device_id, state, updated_at)
+			 SELECT id, ?, ?, ?
+			 FROM device_import_topology_runs
+			 WHERE id = ? AND map_id = ? AND state = ?`,
+			deviceID.String(),
+			string(domain.DeviceImportTopologyItemStateQueued),
+			now,
+			placement.TopologyRunID.String(),
+			placement.MapID.String(),
+			string(domain.DeviceImportTopologyRunStateImporting),
+		)
+		if err != nil {
+			return err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rowsAffected != 1 {
+			return domain.ErrDeviceImportDestinationChanged
+		}
+	}
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE canvas_maps

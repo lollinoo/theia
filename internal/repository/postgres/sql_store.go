@@ -71,6 +71,10 @@ func (tx *Tx) Query(query string, args ...interface{}) (*sql.Rows, error) {
 	return tx.raw.Query(rebindQuery(query), args...)
 }
 
+func (tx *Tx) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	return tx.raw.QueryContext(ctx, rebindQuery(query), args...)
+}
+
 func (tx *Tx) QueryRow(query string, args ...interface{}) *sql.Row {
 	return tx.raw.QueryRow(rebindQuery(query), args...)
 }
