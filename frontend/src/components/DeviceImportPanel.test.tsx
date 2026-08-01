@@ -615,6 +615,72 @@ describe('DeviceImportPanel', () => {
     expect(screen.getByText(/No ready targets can be committed/i)).toBeVisible();
   });
 
+  it('re-previews the same file and configuration when retrying an incomplete import', async () => {
+    commitDeviceImportMock.mockRejectedValueOnce(
+      new DeviceImportPartialCommitError('device import store unavailable', commitFixture()),
+    );
+    await renderPanel();
+    await click(screen.getByRole('radio', { name: 'Prometheus with SNMP fallback' }));
+    await click(screen.getByRole('radio', { name: 'Reorganize entire map' }));
+    await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[0].id);
+    await change(screen.getByRole('combobox', { name: 'Map area (optional)' }), primaryArea.id);
+    const file = await chooseFile();
+    await click(screen.getByRole('button', { name: 'Preview import' }));
+    await click(await screen.findByRole('button', { name: 'Commit import' }));
+
+    expect(await screen.findByText('Import incomplete')).toBeVisible();
+    let resolveRetryPreview: ((value: DeviceImportPreview) => void) | undefined;
+    previewDeviceImportMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRetryPreview = resolve;
+      }),
+    );
+    await click(screen.getByRole('button', { name: 'Retry import' }));
+
+    expect(screen.getByText('Import incomplete')).toBeVisible();
+    expect(screen.getByRole('button', { name: /Retrying/ })).toBeDisabled();
+    await act(async () => {
+      resolveRetryPreview?.(previewFixture());
+    });
+    expect(await screen.findByText('Import preview')).toBeVisible();
+    expect(screen.queryByTestId('device-import-result-summary')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Commit import' })).toBeVisible();
+    expect(commitDeviceImportMock).toHaveBeenCalledTimes(1);
+    expect(previewDeviceImportMock).toHaveBeenCalledTimes(2);
+    const retryConfiguration = previewDeviceImportMock.mock
+      .calls[1][0] as DeviceImportConfiguration;
+    expect(retryConfiguration.file).toBe(file);
+    expect(retryConfiguration).toMatchObject({
+      metrics_mode: 'prometheus_snmp_fallback',
+      snmp_profile_id: profiles[0].id,
+      map_id: primaryMap.id,
+      area_id: primaryArea.id,
+      topology_bootstrap_enabled: true,
+      topology_layout_scope: 'reorganize',
+    });
+  });
+
+  it('keeps the incomplete result available when the retry preview fails', async () => {
+    previewDeviceImportMock
+      .mockResolvedValueOnce(previewFixture())
+      .mockRejectedValueOnce(new Error('retry preview unavailable'));
+    commitDeviceImportMock.mockRejectedValueOnce(
+      new DeviceImportPartialCommitError('device import store unavailable', commitFixture()),
+    );
+    await renderPanel();
+    await chooseFile();
+    await click(screen.getByRole('button', { name: 'Preview import' }));
+    await click(await screen.findByRole('button', { name: 'Commit import' }));
+
+    expect(await screen.findByText('Import incomplete')).toBeVisible();
+    await click(screen.getByRole('button', { name: 'Retry import' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('retry preview unavailable');
+    expect(screen.getByText('Import incomplete')).toBeVisible();
+    expect(screen.getByTestId('device-import-result-summary')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Retry import' })).toBeEnabled();
+  });
+
   it('keeps partial error rows, uses the same File and digest, opens the map, and resets', async () => {
     const onOpenMap = vi.fn();
     commitDeviceImportMock.mockRejectedValueOnce(

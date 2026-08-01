@@ -444,8 +444,7 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
     return { map: destinationMap, ...(request ? { request } : {}) };
   }
 
-  async function handlePreview(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function requestPreview() {
     if (!configuration || requestInFlight.current) {
       return;
     }
@@ -467,6 +466,11 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
       requestInFlight.current = false;
       setPendingAction(null);
     }
+  }
+
+  function handlePreview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void requestPreview();
   }
 
   async function handleCommit() {
@@ -506,7 +510,7 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
   }
 
   function handleRetry() {
-    invalidateOutcome();
+    void requestPreview();
   }
 
   function handleReset() {
@@ -827,7 +831,11 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
       )}
 
       {result && (
-        <section aria-labelledby="device-import-result-title" className="flex flex-col gap-4">
+        <section
+          aria-labelledby="device-import-result-title"
+          aria-busy={pendingAction === 'preview'}
+          className="flex flex-col gap-4"
+        >
           <div
             role="status"
             className={`rounded-lg border px-4 py-3 ${
@@ -858,10 +866,11 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
           <div className="flex flex-wrap justify-end gap-2">
             <button
               type="button"
+              disabled={pendingAction !== null}
               onClick={handleRetry}
-              className="rounded-md border border-outline-subtle bg-surface-container px-4 py-2 text-sm text-on-bg hover:bg-surface-container-high"
+              className="rounded-md border border-outline-subtle bg-surface-container px-4 py-2 text-sm text-on-bg hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Retry import
+              {pendingAction === 'preview' ? 'Retrying…' : 'Retry import'}
             </button>
             <button
               type="button"
