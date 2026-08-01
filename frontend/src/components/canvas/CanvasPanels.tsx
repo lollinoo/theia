@@ -66,7 +66,7 @@ interface CanvasPanelsProps {
   devices: Device[];
   topologyLinks: Link[];
   topologyAreas?: Area[];
-  loadTopology: (silent?: boolean) => Promise<void>;
+  loadTopology: (silent?: boolean) => Promise<unknown>;
   requestNewNodePlacement: (deviceId: string) => Promise<void>;
   setDevices: React.Dispatch<React.SetStateAction<Device[]>>;
   setNodes: React.Dispatch<React.SetStateAction<DeviceNode[]>>;

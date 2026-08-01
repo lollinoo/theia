@@ -204,7 +204,7 @@ describe('useDeviceImportTopologyRun', () => {
         },
       },
     } as never);
-    const reloadTopology = vi.fn().mockResolvedValue(undefined);
+    const reloadTopology = vi.fn().mockResolvedValue('applied');
     const onConsumed = vi.fn();
 
     renderHook(() =>
@@ -227,8 +227,242 @@ describe('useDeviceImportTopologyRun', () => {
         reset_link_route_ids: ['link-1'],
       }),
     );
-    expect(reloadTopology).toHaveBeenCalledWith(true);
+    expect(reloadTopology).toHaveBeenCalledWith(true, 'topology_import_layout');
     expect(onConsumed).toHaveBeenCalledWith('request-1');
+  });
+
+  it('keeps the layout phase visible until authoritative canvas reload finishes', async () => {
+    const readySnapshot = snapshot('ready_for_layout', false);
+    const completedSnapshot = snapshot('completed', false);
+    vi.mocked(fetchDeviceImportTopologyRun)
+      .mockResolvedValueOnce(readySnapshot)
+      .mockResolvedValue(completedSnapshot);
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValue({
+      status: 'ok',
+      topology: {
+        devices: [{ id: 'imported' }],
+        links: [],
+        positions: {},
+      },
+    } as never);
+    const reloadTopology = deferred<'applied'>();
+    const onConsumed = vi.fn();
+    const { result } = renderHook(() =>
+      useDeviceImportTopologyRun({
+        mapId: 'map-1',
+        request,
+        renderedMapKey: 'map:map-1',
+        nodePositions: new Map(),
+        reloadTopology: () => reloadTopology.promise,
+        onConsumed,
+      }),
+    );
+
+    await waitFor(() => expect(applyDeviceImportTopologyLayout).toHaveBeenCalledOnce());
+    await waitFor(() => expect(result.current.applyingLayout).toBe(true));
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('device-import-topology-run-changed', {
+          detail: { run_id: 'run-1', map_id: 'map-1' },
+        }),
+      );
+    });
+    await waitFor(() => expect(result.current.snapshot?.run.state).toBe('completed'));
+    expect(result.current.phase).toBe('layout');
+    expect(onConsumed).not.toHaveBeenCalled();
+
+    await act(async () => reloadTopology.resolve('applied'));
+    await waitFor(() => expect(result.current.applyingLayout).toBe(false));
+    expect(result.current.phase).toBe('complete');
+    expect(onConsumed).toHaveBeenCalledWith('request-1');
+  });
+
+  it('holds the canvas position-save fence through layout apply and authoritative reload', async () => {
+    vi.mocked(fetchDeviceImportTopologyRun).mockResolvedValue(snapshot('ready_for_layout', false));
+    const order: string[] = [];
+    vi.mocked(fetchCanvasMapTopology).mockImplementation(async () => {
+      order.push('fetch-topology');
+      return {
+        status: 'ok',
+        topology: {
+          devices: [{ id: 'imported' }],
+          links: [],
+          positions: {},
+        },
+      } as never;
+    });
+    vi.mocked(applyDeviceImportTopologyLayout).mockImplementation(async () => {
+      order.push('apply-layout');
+    });
+    const reloadTopology = vi.fn(async () => {
+      order.push('reload-topology');
+      return 'applied' as const;
+    });
+    const withPositionSaveFence = vi.fn(async (operation: () => Promise<void>) => {
+      order.push('fence-start');
+      await operation();
+      order.push('fence-end');
+    });
+    const onConsumed = vi.fn();
+
+    renderHook(() =>
+      useDeviceImportTopologyRun({
+        mapId: 'map-1',
+        request,
+        renderedMapKey: 'map:map-1',
+        nodePositions: new Map(),
+        reloadTopology,
+        withPositionSaveFence,
+        onConsumed,
+      }),
+    );
+
+    await waitFor(() => expect(onConsumed).toHaveBeenCalledWith('request-1'));
+    expect(withPositionSaveFence).toHaveBeenCalledOnce();
+    expect(order).toEqual([
+      'fence-start',
+      'fetch-topology',
+      'apply-layout',
+      'reload-topology',
+      'fence-end',
+    ]);
+    expect(reloadTopology).toHaveBeenCalledWith(true, 'topology_import_layout');
+  });
+
+  it('retries a stale authoritative canvas reload before consuming the import request', async () => {
+    vi.mocked(fetchDeviceImportTopologyRun).mockResolvedValue(snapshot('ready_for_layout', false));
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValue({
+      status: 'ok',
+      topology: {
+        devices: [{ id: 'imported' }],
+        links: [],
+        positions: {},
+      },
+    } as never);
+    const reloadTopology = vi.fn().mockResolvedValueOnce('stale').mockResolvedValueOnce('applied');
+    const onConsumed = vi.fn();
+
+    renderHook(() =>
+      useDeviceImportTopologyRun({
+        mapId: 'map-1',
+        request,
+        renderedMapKey: 'map:map-1',
+        nodePositions: new Map(),
+        reloadTopology,
+        onConsumed,
+      }),
+    );
+
+    await waitFor(() => expect(onConsumed).toHaveBeenCalledWith('request-1'));
+    expect(reloadTopology).toHaveBeenCalledTimes(2);
+    expect(reloadTopology).toHaveBeenNthCalledWith(1, true, 'topology_import_layout');
+    expect(reloadTopology).toHaveBeenNthCalledWith(2, true, 'topology_import_layout');
+  });
+
+  it('keeps a completed run in layout phase when reload fails and retries that reload', async () => {
+    const readySnapshot = snapshot('ready_for_layout', false);
+    const completedSnapshot = snapshot('completed', false);
+    vi.mocked(fetchDeviceImportTopologyRun)
+      .mockResolvedValueOnce(readySnapshot)
+      .mockResolvedValue(completedSnapshot);
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValue({
+      status: 'ok',
+      topology: {
+        devices: [{ id: 'imported' }],
+        links: [],
+        positions: {},
+      },
+    } as never);
+    const firstReload = deferred<'applied'>();
+    const reloadTopology = vi
+      .fn()
+      .mockReturnValueOnce(firstReload.promise)
+      .mockResolvedValueOnce('applied');
+    const onConsumed = vi.fn();
+    const { result } = renderHook(() =>
+      useDeviceImportTopologyRun({
+        mapId: 'map-1',
+        request,
+        renderedMapKey: 'map:map-1',
+        nodePositions: new Map(),
+        reloadTopology,
+        onConsumed,
+      }),
+    );
+
+    await waitFor(() => expect(result.current.applyingLayout).toBe(true));
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('device-import-topology-run-changed', {
+          detail: { run_id: 'run-1', map_id: 'map-1' },
+        }),
+      );
+    });
+    await waitFor(() => expect(result.current.snapshot?.run.state).toBe('completed'));
+
+    await act(async () => firstReload.reject(new Error('authoritative reload failed')));
+    await waitFor(() => expect(result.current.error).toBe('authoritative reload failed'));
+    expect(result.current.phase).toBe('layout');
+    expect(result.current.applyingLayout).toBe(true);
+    expect(onConsumed).not.toHaveBeenCalled();
+
+    await act(async () => result.current.refresh());
+
+    expect(reloadTopology).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBeNull();
+    expect(result.current.applyingLayout).toBe(false);
+    expect(result.current.phase).toBe('complete');
+    expect(onConsumed).toHaveBeenCalledWith('request-1');
+  });
+
+  it('preserves a reload error when an in-flight run poll settles afterward', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const readySnapshot = snapshot('ready_for_layout', false);
+    const completedSnapshot = snapshot('completed', false);
+    const poll = deferred<ReturnType<typeof snapshot>>();
+    const layoutApplication = deferred<void>();
+    vi.mocked(fetchDeviceImportTopologyRun)
+      .mockResolvedValueOnce(readySnapshot)
+      .mockReturnValueOnce(poll.promise);
+    vi.mocked(applyDeviceImportTopologyLayout).mockReturnValue(layoutApplication.promise);
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValue({
+      status: 'ok',
+      topology: {
+        devices: [{ id: 'imported' }],
+        links: [],
+        positions: {},
+      },
+    } as never);
+    const rendered = renderHook(() =>
+      useDeviceImportTopologyRun({
+        mapId: 'map-1',
+        request,
+        renderedMapKey: 'map:map-1',
+        nodePositions: new Map(),
+        reloadTopology: vi.fn().mockRejectedValue(new Error('authoritative reload failed')),
+      }),
+    );
+    const { result } = rendered;
+
+    try {
+      await flushEffects();
+      expect(applyDeviceImportTopologyLayout).toHaveBeenCalledOnce();
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+      expect(fetchDeviceImportTopologyRun).toHaveBeenCalledTimes(2);
+
+      await act(async () => layoutApplication.resolve());
+      await flushEffects();
+      expect(result.current.error).toBe('authoritative reload failed');
+      await act(async () => poll.resolve(completedSnapshot));
+
+      expect(result.current.error).toBe('authoritative reload failed');
+      expect(result.current.phase).toBe('layout');
+      expect(result.current.applyingLayout).toBe(true);
+    } finally {
+      rendered.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('waits for operator confirmation before laying out warning results', async () => {
@@ -247,13 +481,16 @@ describe('useDeviceImportTopologyRun', () => {
         positions: {},
       },
     } as never);
+    const reloadTopology = vi.fn().mockResolvedValue('applied');
+    const onConsumed = vi.fn();
     const { result } = renderHook(() =>
       useDeviceImportTopologyRun({
         mapId: 'map-1',
         request,
         renderedMapKey: 'map:map-1',
         nodePositions: new Map(),
-        reloadTopology: vi.fn(),
+        reloadTopology,
+        onConsumed,
       }),
     );
     await waitFor(() => expect(result.current.snapshot).not.toBeNull());
@@ -262,6 +499,9 @@ describe('useDeviceImportTopologyRun', () => {
     await act(async () => result.current.continuePartial());
 
     await waitFor(() => expect(applyDeviceImportTopologyLayout).toHaveBeenCalledOnce());
+    await waitFor(() => expect(onConsumed).toHaveBeenCalledWith('request-1'));
+    expect(reloadTopology).toHaveBeenCalledWith(true, 'topology_import_layout');
+    expect(result.current.phase).toBe('complete');
   });
 
   it('automatically lays out imported nodes when every device is SNMP unreachable', async () => {
@@ -295,7 +535,7 @@ describe('useDeviceImportTopologyRun', () => {
         request,
         renderedMapKey: 'map:map-1',
         nodePositions: new Map(),
-        reloadTopology: vi.fn().mockResolvedValue(undefined),
+        reloadTopology: vi.fn().mockResolvedValue('applied'),
       }),
     );
 
@@ -342,7 +582,7 @@ describe('useDeviceImportTopologyRun', () => {
         request,
         renderedMapKey: 'map:map-1',
         nodePositions: new Map(),
-        reloadTopology: vi.fn().mockResolvedValue(undefined),
+        reloadTopology: vi.fn().mockResolvedValue('applied'),
       }),
     );
 
@@ -381,7 +621,7 @@ describe('useDeviceImportTopologyRun', () => {
         request,
         renderedMapKey: 'map:map-1',
         nodePositions: new Map(),
-        reloadTopology: vi.fn().mockResolvedValue(undefined),
+        reloadTopology: vi.fn().mockResolvedValue('applied'),
       }),
     );
 
@@ -636,6 +876,38 @@ describe('useDeviceImportTopologyRun', () => {
 
     expect(result.current.snapshot?.run.id).toBe('run-2');
     expect(result.current.error).toBeNull();
+  });
+
+  it('coalesces repeated retry requests while the first retry is pending', async () => {
+    const pendingRetry = deferred<void>();
+    vi.mocked(fetchDeviceImportTopologyRun).mockResolvedValue(snapshot('ready_for_layout'));
+    vi.mocked(retryDeviceImportTopologyRun).mockReturnValue(pendingRetry.promise);
+    const { result } = renderHook(() =>
+      useDeviceImportTopologyRun({
+        mapId: 'map-1',
+        request,
+        renderedMapKey: null,
+        nodePositions: new Map(),
+        reloadTopology: vi.fn(),
+      }),
+    );
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+
+    let firstRetry: Promise<void> | undefined;
+    let secondRetry: Promise<void> | undefined;
+    act(() => {
+      firstRetry = result.current.retry(['imported']);
+      secondRetry = result.current.retry(['imported']);
+    });
+
+    expect(result.current.retryPending).toBe(true);
+    expect(retryDeviceImportTopologyRun).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      pendingRetry.resolve();
+      await Promise.all([firstRetry, secondRetry]);
+    });
+    expect(result.current.retryPending).toBe(false);
   });
 
   it('exposes retry and continue actions with refreshed state', async () => {

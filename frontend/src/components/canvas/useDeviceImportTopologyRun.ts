@@ -10,6 +10,7 @@ import {
   markDeviceImportTopologyManualEdit,
   retryDeviceImportTopologyRun,
 } from '../../api/deviceImport';
+import type { CanvasMeasurementTrigger } from './canvasInstrumentation';
 import { canvasMapKey } from './canvasTopologySource';
 import type { ImportedNodePlacementRequest } from './importedNodePlacementRequest';
 import {
@@ -18,6 +19,21 @@ import {
 } from './topologyImportLayout';
 
 const POLL_INTERVAL_MS = 1000;
+const AUTHORITATIVE_RELOAD_ATTEMPTS = 3;
+
+type CanvasTopologyReloadResult = 'applied' | 'pending' | 'stale' | 'failed';
+
+interface PendingAuthoritativeReload {
+  applicationKey: string;
+  runID: string;
+  mapID: string;
+  requestID: string | null;
+}
+
+interface PendingRetry {
+  promise: Promise<void>;
+  token: symbol;
+}
 
 export type DeviceImportTopologyPhase = 'discovery' | 'links' | 'layout' | 'complete';
 
@@ -37,7 +53,11 @@ interface UseDeviceImportTopologyRunInput {
   request: ImportedNodePlacementRequest | null | undefined;
   renderedMapKey: string | null;
   nodePositions: Map<string, TopologyImportLayoutPosition>;
-  reloadTopology: (force?: boolean) => Promise<unknown>;
+  reloadTopology: (
+    force?: boolean,
+    trigger?: CanvasMeasurementTrigger,
+  ) => Promise<CanvasTopologyReloadResult>;
+  withPositionSaveFence?: <Result>(operation: () => Promise<Result>) => Promise<Result>;
   onConsumed?: (requestId: string) => void;
 }
 
@@ -46,6 +66,7 @@ export interface DeviceImportTopologyRunController {
   phase: DeviceImportTopologyPhase | null;
   progress: DeviceImportTopologyProgress;
   applyingLayout: boolean;
+  retryPending: boolean;
   mutationBlocked: boolean;
   error: string | null;
   retry: (deviceIDs?: string[]) => Promise<void>;
@@ -105,6 +126,23 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Topology Bootstrap-Once failed';
 }
 
+async function reloadAuthoritativeTopology(
+  reloadTopology: UseDeviceImportTopologyRunInput['reloadTopology'],
+): Promise<void> {
+  let lastResult: Exclude<CanvasTopologyReloadResult, 'applied'> = 'stale';
+  for (let attempt = 0; attempt < AUTHORITATIVE_RELOAD_ATTEMPTS; attempt += 1) {
+    const result = await reloadTopology(true, 'topology_import_layout');
+    if (result === 'applied') {
+      return;
+    }
+    if (result === 'failed') {
+      throw new Error('Authoritative map topology reload failed');
+    }
+    lastResult = result;
+  }
+  throw new Error(`Authoritative map topology reload remained ${lastResult}`);
+}
+
 /**
  * Resumes and coordinates one durable Bootstrap-Once run for the selected map. The backend
  * remains authoritative; polling makes the workflow restart-safe and WebSocket-independent.
@@ -115,10 +153,12 @@ export function useDeviceImportTopologyRun({
   renderedMapKey,
   nodePositions,
   reloadTopology,
+  withPositionSaveFence,
   onConsumed,
 }: UseDeviceImportTopologyRunInput): DeviceImportTopologyRunController {
   const [snapshot, setSnapshot] = useState<DeviceImportTopologyRunSnapshot | null>(null);
   const [applyingLayout, setApplyingLayout] = useState(false);
+  const [retryPending, setRetryPending] = useState(false);
   const [manualEditPending, setManualEditPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadedScopeKey, setLoadedScopeKey] = useState<string | null>(null);
@@ -127,6 +167,8 @@ export function useDeviceImportTopologyRun({
   const operationRevisionRef = useRef(0);
   const appliedTokensRef = useRef(new Set<string>());
   const applyingLayoutKeyRef = useRef<string | null>(null);
+  const pendingAuthoritativeReloadRef = useRef<PendingAuthoritativeReload | null>(null);
+  const retryPromisesRef = useRef(new Map<string, PendingRetry>());
   const manualEditRunIDsRef = useRef(new Set<string>());
   const manualEditPromisesRef = useRef(new Map<string, Promise<void>>());
   const requestedRunID =
@@ -134,9 +176,11 @@ export function useDeviceImportTopologyRun({
   const lookupScopeKey = mapId ? `${mapId}:${requestedRunID ?? 'active'}` : null;
   const lookupPending = lookupScopeKey !== null && loadedScopeKey !== lookupScopeKey;
   const reloadTopologyRef = useRef(reloadTopology);
+  const withPositionSaveFenceRef = useRef(withPositionSaveFence);
   const onConsumedRef = useRef(onConsumed);
   const nodePositionsRef = useRef(nodePositions);
   reloadTopologyRef.current = reloadTopology;
+  withPositionSaveFenceRef.current = withPositionSaveFence;
   onConsumedRef.current = onConsumed;
   nodePositionsRef.current = nodePositions;
 
@@ -179,11 +223,72 @@ export function useDeviceImportTopologyRun({
     }
     retainSnapshot(next);
     setLoadedScopeKey(lookupScopeKey);
-    setError(null);
+    if (pendingAuthoritativeReloadRef.current === null) {
+      setError(null);
+    }
   }, [lookupScopeKey, mapId, requestedRunID, retainSnapshot]);
+
+  const finishAuthoritativeReload = useCallback(
+    (pendingReload: PendingAuthoritativeReload): boolean => {
+      const latestSnapshot = snapshotRef.current;
+      if (
+        latestSnapshot === null ||
+        latestSnapshot.run.id !== pendingReload.runID ||
+        latestSnapshot.run.map_id !== pendingReload.mapID
+      ) {
+        return false;
+      }
+
+      pendingAuthoritativeReloadRef.current = null;
+      applyingLayoutKeyRef.current = null;
+      retainSnapshot({
+        ...latestSnapshot,
+        run: {
+          ...latestSnapshot.run,
+          state: 'completed',
+          completed_at: latestSnapshot.run.completed_at ?? new Date().toISOString(),
+        },
+      });
+      setApplyingLayout(false);
+      setError(null);
+      if (pendingReload.requestID !== null) {
+        onConsumedRef.current?.(pendingReload.requestID);
+      }
+      return true;
+    },
+    [retainSnapshot],
+  );
 
   const refresh = useCallback(async () => {
     const scopeRevision = scopeRevisionRef.current;
+    const pendingReload = pendingAuthoritativeReloadRef.current;
+    if (pendingReload !== null && pendingReload.mapID === mapId) {
+      setError(null);
+      setApplyingLayout(true);
+      try {
+        const reload = () => reloadAuthoritativeTopology(reloadTopologyRef.current);
+        if (withPositionSaveFenceRef.current) {
+          await withPositionSaveFenceRef.current(reload);
+        } else {
+          await reload();
+        }
+        if (
+          scopeRevisionRef.current === scopeRevision &&
+          pendingAuthoritativeReloadRef.current === pendingReload
+        ) {
+          finishAuthoritativeReload(pendingReload);
+        }
+      } catch (refreshError) {
+        if (
+          scopeRevisionRef.current === scopeRevision &&
+          pendingAuthoritativeReloadRef.current === pendingReload
+        ) {
+          setError(errorMessage(refreshError));
+        }
+      }
+      return;
+    }
+
     appliedTokensRef.current.clear();
     setError(null);
     try {
@@ -193,7 +298,7 @@ export function useDeviceImportTopologyRun({
         setError(errorMessage(refreshError));
       }
     }
-  }, [refreshSnapshot]);
+  }, [finishAuthoritativeReload, mapId, refreshSnapshot]);
 
   useEffect(() => {
     const scopeRevision = scopeRevisionRef.current + 1;
@@ -203,6 +308,9 @@ export function useDeviceImportTopologyRun({
     setError(null);
     setApplyingLayout(false);
     applyingLayoutKeyRef.current = null;
+    pendingAuthoritativeReloadRef.current = null;
+    retryPromisesRef.current.clear();
+    setRetryPending(false);
     setManualEditPending(false);
     setLoadedScopeKey(null);
     appliedTokensRef.current.clear();
@@ -249,7 +357,9 @@ export function useDeviceImportTopologyRun({
             return;
           }
           retainSnapshot(next);
-          setError(null);
+          if (pendingAuthoritativeReloadRef.current === null) {
+            setError(null);
+          }
         })
         .catch((pollError) => {
           if (
@@ -323,8 +433,8 @@ export function useDeviceImportTopologyRun({
     setApplyingLayout(true);
     setError(null);
 
-    void fetchCanvasMapTopology(mapId)
-      .then(async (result) => {
+    const applyLayout = () =>
+      fetchCanvasMapTopology(mapId).then(async (result) => {
         if (result.status !== 'ok') throw new Error('Map topology was not available for layout');
         if (
           scopeRevisionRef.current !== scopeRevision ||
@@ -376,15 +486,14 @@ export function useDeviceImportTopologyRun({
         ) {
           return;
         }
-        retainSnapshot({
-          ...currentSnapshot,
-          run: {
-            ...currentSnapshot.run,
-            state: 'completed',
-            completed_at: new Date().toISOString(),
-          },
-        });
-        await reloadTopologyRef.current(true);
+        const pendingReload: PendingAuthoritativeReload = {
+          applicationKey,
+          runID: current.id,
+          mapID: mapId,
+          requestID: request?.topologyRunId === current.id ? request.requestId : null,
+        };
+        pendingAuthoritativeReloadRef.current = pendingReload;
+        await reloadAuthoritativeTopology(reloadTopologyRef.current);
         if (
           scopeRevisionRef.current !== scopeRevision ||
           operationRevisionRef.current !== operationRevision ||
@@ -393,10 +502,13 @@ export function useDeviceImportTopologyRun({
         ) {
           return;
         }
-        if (request?.topologyRunId === current.id) {
-          onConsumedRef.current?.(request.requestId);
-        }
-      })
+        finishAuthoritativeReload(pendingReload);
+      });
+    const fencedLayout = withPositionSaveFenceRef.current
+      ? withPositionSaveFenceRef.current(applyLayout)
+      : applyLayout();
+
+    void fencedLayout
       .catch((layoutError) => {
         if (
           scopeRevisionRef.current !== scopeRevision ||
@@ -414,13 +526,14 @@ export function useDeviceImportTopologyRun({
       .finally(() => {
         if (
           scopeRevisionRef.current === scopeRevision &&
-          applyingLayoutKeyRef.current === applicationKey
+          applyingLayoutKeyRef.current === applicationKey &&
+          pendingAuthoritativeReloadRef.current?.applicationKey !== applicationKey
         ) {
           applyingLayoutKeyRef.current = null;
           setApplyingLayout(false);
         }
       });
-  }, [mapId, renderedMapKey, request, retainSnapshot, snapshot]);
+  }, [finishAuthoritativeReload, mapId, renderedMapKey, request, snapshot]);
 
   const continuePartial = useCallback(async () => {
     const current = snapshotRef.current?.run;
@@ -441,22 +554,34 @@ export function useDeviceImportTopologyRun({
   }, [refreshSnapshot]);
 
   const retry = useCallback(
-    async (deviceIDs: string[] = []) => {
+    (deviceIDs: string[] = []): Promise<void> => {
       const current = snapshotRef.current?.run;
-      if (!current) return;
+      if (!current) return Promise.resolve();
+      const existing = retryPromisesRef.current.get(current.id);
+      if (existing) return existing.promise;
       const scopeRevision = scopeRevisionRef.current;
       const stillCurrent = () =>
         scopeRevisionRef.current === scopeRevision &&
         snapshotRef.current?.run.id === current.id &&
         snapshotRef.current.run.map_id === current.map_id;
+      const token = Symbol(current.id);
+      setRetryPending(true);
       setError(null);
-      try {
-        await retryDeviceImportTopologyRun(current.id, deviceIDs);
-        if (!stillCurrent()) return;
-        await refreshSnapshot();
-      } catch (actionError) {
-        if (stillCurrent()) setError(errorMessage(actionError));
-      }
+      const operation = retryDeviceImportTopologyRun(current.id, deviceIDs)
+        .then(async () => {
+          if (!stillCurrent()) return;
+          await refreshSnapshot();
+        })
+        .catch((actionError) => {
+          if (stillCurrent()) setError(errorMessage(actionError));
+        })
+        .finally(() => {
+          if (retryPromisesRef.current.get(current.id)?.token !== token) return;
+          retryPromisesRef.current.delete(current.id);
+          if (scopeRevisionRef.current === scopeRevision) setRetryPending(false);
+        });
+      retryPromisesRef.current.set(current.id, { promise: operation, token });
+      return operation;
     },
     [refreshSnapshot],
   );
@@ -533,9 +658,10 @@ export function useDeviceImportTopologyRun({
   return useMemo(
     () => ({
       snapshot,
-      phase: phaseForSnapshot(snapshot),
+      phase: applyingLayout ? 'layout' : phaseForSnapshot(snapshot),
       progress: progressForSnapshot(snapshot),
       applyingLayout,
+      retryPending,
       mutationBlocked,
       error,
       retry,
@@ -551,6 +677,7 @@ export function useDeviceImportTopologyRun({
       mutationBlocked,
       refresh,
       retry,
+      retryPending,
       snapshot,
     ],
   );

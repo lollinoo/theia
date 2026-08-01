@@ -126,6 +126,29 @@ function discoveringTopologySnapshot() {
   };
 }
 
+function layoutReviewTopologySnapshot() {
+  return {
+    ...discoveringTopologySnapshot(),
+    run: {
+      ...discoveringTopologySnapshot().run,
+      state: 'ready_for_layout' as const,
+      layout_input_token: 'sha256:layout',
+    },
+    items: [
+      {
+        ...discoveringTopologySnapshot().items[0],
+        state: 'warning' as const,
+        attempt: 5,
+        result_code: 'unresolved_neighbors' as const,
+        message: 'Some discovered neighbors could not be linked automatically.',
+        neighbor_count: 3,
+        links_created: 0,
+        unresolved_neighbors: 1,
+      },
+    ],
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -629,6 +652,26 @@ describe('Canvas drag state ownership', () => {
     await waitFor(() =>
       expect(testState.markDeviceImportTopologyManualEdit).toHaveBeenCalledWith('run-import'),
     );
+  });
+
+  it('opens unresolved device details read-only without relinquishing automatic layout', async () => {
+    testState.renderedMapKey = 'map:map-backbone';
+    testState.fetchDeviceImportTopologyRun.mockResolvedValue(layoutReviewTopologySnapshot());
+
+    render(topologyImportCanvas(topologyImportRequest));
+
+    const inspectDevice = await screen.findByRole('button', { name: 'Inspect device' });
+    fireEvent.click(inspectDevice);
+
+    await waitFor(() =>
+      expect(testState.canvasPanelsProps.panelContent).toEqual({
+        type: 'deviceConfig',
+        data: { deviceId: 'dev-a' },
+      }),
+    );
+    expect(testState.canvasPanelsProps.mutationBlocked).toBe(true);
+    expect(testState.markDeviceImportTopologyManualEdit).not.toHaveBeenCalled();
+    expect(screen.getByTestId('topology-bootstrap-overlay')).toBeInTheDocument();
   });
 
   it('does not carry pending edit intent into a later imported run', async () => {

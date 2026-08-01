@@ -548,6 +548,7 @@ export default function Canvas({
     loadTopology,
     requestNewNodePlacement,
     requestImportedNodePlacement,
+    withPositionSaveFence,
     runtimeSummary,
     grafanaUrlRef,
     grafanaDashboardConfigRef,
@@ -598,6 +599,7 @@ export default function Canvas({
     renderedMapKey,
     nodePositions: topologyNodePositions,
     reloadTopology: loadTopology,
+    withPositionSaveFence,
     onConsumed: onImportedNodePlacementConsumed,
   });
   topologyManualEditRef.current = topologyRun.markManualEdit;
@@ -1150,18 +1152,13 @@ export default function Canvas({
         phase={topologyRun.phase}
         progress={topologyRun.progress}
         applyingLayout={topologyRun.applyingLayout}
+        retryPending={topologyRun.retryPending}
         error={topologyRun.error}
         deviceNames={topologyDeviceNames}
         onContinue={() => void topologyRun.continuePartial()}
         onRetry={(deviceIDs) => void topologyRun.retry(deviceIDs)}
         onConfigureDevice={(deviceID) => {
-          void topologyRun
-            .markManualEdit()
-            .then(() => {
-              setEditMode(true);
-              setPanelContent({ type: 'deviceConfig', data: { deviceId: deviceID } });
-            })
-            .catch(() => undefined);
+          setPanelContent({ type: 'deviceConfig', data: { deviceId: deviceID } });
         }}
         onCreateManualLink={() => {
           void topologyRun

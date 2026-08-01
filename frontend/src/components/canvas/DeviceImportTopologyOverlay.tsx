@@ -9,6 +9,7 @@ interface DeviceImportTopologyOverlayProps {
   phase: DeviceImportTopologyPhase | null;
   progress: DeviceImportTopologyProgress;
   applyingLayout: boolean;
+  retryPending?: boolean;
   error: string | null;
   deviceNames: Map<string, string>;
   onContinue: () => void;
@@ -24,7 +25,12 @@ const phases: Array<{ id: Exclude<DeviceImportTopologyPhase, 'complete'>; label:
   { id: 'layout', label: 'Layout' },
 ];
 
-function phaseTitle(phase: DeviceImportTopologyPhase | null, applyingLayout: boolean): string {
+function phaseTitle(
+  phase: DeviceImportTopologyPhase | null,
+  applyingLayout: boolean,
+  awaitingLayoutDecision: boolean,
+): string {
+  if (awaitingLayoutDecision) return 'Review required before layout';
   switch (phase) {
     case 'discovery':
       return 'Discovering LLDP/CDP neighbors';
@@ -43,6 +49,7 @@ export function DeviceImportTopologyOverlay({
   phase,
   progress,
   applyingLayout,
+  retryPending = false,
   error,
   deviceNames,
   onContinue,
@@ -76,8 +83,17 @@ export function DeviceImportTopologyOverlay({
   if (phase === 'complete') return null;
 
   const runFailed = snapshot.run.state === 'failed';
+  const issueItems = snapshot.items.filter(
+    (item) => item.state === 'warning' || item.state === 'failed' || item.unresolved_neighbors > 0,
+  );
+  const awaitingLayoutDecision =
+    phase === 'layout' &&
+    !applyingLayout &&
+    snapshot.run.state === 'ready_for_layout' &&
+    !snapshot.run.backgrounded &&
+    issueItems.length > 0;
 
-  if (snapshot.run.backgrounded) {
+  if (snapshot.run.backgrounded && phase !== 'layout') {
     return (
       <div
         data-testid="topology-bootstrap-background-status"
@@ -97,11 +113,9 @@ export function DeviceImportTopologyOverlay({
     0,
     phases.findIndex((candidate) => candidate.id === phase),
   );
-  const issueItems = snapshot.items.filter(
-    (item) => item.state === 'warning' || item.state === 'failed',
-  );
   const issueIDs = issueItems.map((item) => item.device_id);
   const primaryIssue = issueItems[0];
+  const decisionPending = applyingLayout || retryPending;
   const progressPercent =
     progress.total === 0 ? 0 : Math.round((progress.completed / progress.total) * 100);
 
@@ -120,7 +134,7 @@ export function DeviceImportTopologyOverlay({
           <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-on-bg">
             {runFailed
               ? 'Automatic link creation needs attention'
-              : phaseTitle(phase, applyingLayout)}
+              : phaseTitle(phase, applyingLayout, awaitingLayoutDecision)}
           </h2>
           <p className="mt-1 text-sm text-on-bg-secondary">
             {progress.completed} of {progress.total} devices checked
@@ -134,7 +148,9 @@ export function DeviceImportTopologyOverlay({
             className={
               runFailed
                 ? 'h-5 w-5 rounded-full border-2 border-warning bg-warning/20'
-                : 'h-5 w-5 animate-spin rounded-full border-2 border-primary/20 border-t-primary'
+                : awaitingLayoutDecision
+                  ? 'h-5 w-5 rounded-full border-2 border-warning bg-warning/20'
+                  : 'h-5 w-5 animate-spin rounded-full border-2 border-primary/20 border-t-primary'
             }
           />
         </div>
@@ -168,6 +184,13 @@ export function DeviceImportTopologyOverlay({
           style={{ width: `${progressPercent}%` }}
         />
       </div>
+
+      {awaitingLayoutDecision && (
+        <p className="mt-4 text-sm leading-5 text-on-bg-secondary">
+          Review the unresolved discovery result, retry it, or apply the deterministic layout with
+          the partial topology.
+        </p>
+      )}
 
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
         <div className="rounded-xl bg-surface-container px-2 py-2">
@@ -247,6 +270,10 @@ export function DeviceImportTopologyOverlay({
         </div>
       )}
 
+      {awaitingLayoutDecision && (
+        <p className="mt-4 text-xs text-on-bg-secondary">Manual changes end automatic layout.</p>
+      )}
+
       <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
         {primaryIssue && (
           <>
@@ -255,30 +282,37 @@ export function DeviceImportTopologyOverlay({
               onClick={() => onConfigureDevice(primaryIssue.device_id)}
               className="rounded-full border border-outline px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:bg-surface-container-high hover:text-on-bg"
             >
-              Configure device
+              Inspect device
             </button>
             <button
               type="button"
               onClick={onCreateManualLink}
-              className="rounded-full border border-outline px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:bg-surface-container-high hover:text-on-bg"
+              disabled={decisionPending}
+              className="rounded-full border border-outline px-3 py-2 text-xs font-medium text-on-bg-secondary transition-colors hover:bg-surface-container-high hover:text-on-bg disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Create link manually
+              Take manual control and create link
             </button>
             <button
               type="button"
               onClick={() => onRetry(issueIDs)}
-              className="rounded-full border border-warning/40 px-3 py-2 text-xs font-medium text-warning transition-colors hover:bg-warning/10"
+              disabled={decisionPending}
+              className="rounded-full border border-warning/40 px-3 py-2 text-xs font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Retry affected devices
+              {retryPending ? 'Retrying affected devices…' : 'Retry affected devices'}
             </button>
           </>
         )}
         <button
           type="button"
           onClick={onContinue}
-          className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90"
+          disabled={decisionPending}
+          className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {runFailed ? 'Continue with manual map' : 'Continue with partial map'}
+          {runFailed
+            ? 'Continue with manual map'
+            : awaitingLayoutDecision
+              ? 'Apply layout with partial results'
+              : 'Continue with partial map'}
         </button>
       </div>
     </section>

@@ -2096,6 +2096,58 @@ describe('useCanvasData', () => {
     expect(result.current.nodes[0].position).toEqual({ x: 400, y: 500 });
   });
 
+  it('adopts persisted positions without writing stale canvas coordinates after import layout', async () => {
+    vi.mocked(fetchDevices)
+      .mockResolvedValueOnce([mockDevice()])
+      .mockResolvedValueOnce([mockDevice()]);
+    positionMocks.fetchPositions
+      .mockResolvedValueOnce(new Map([['dev-1', { x: 120, y: 120, pinned: false }]]))
+      .mockResolvedValueOnce(new Map([['dev-1', { x: 466, y: 256, pinned: false }]]));
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      result.current.setNodesForTest((currentNodes) =>
+        currentNodes.map((node) => ({
+          ...node,
+          position: { x: 900, y: 900 },
+        })),
+      );
+    });
+    positionMocks.savePositions.mockClear();
+
+    await act(async () => {
+      await result.current.loadTopology(true, 'topology_import_layout');
+    });
+
+    expect(result.current.nodes[0].position).toEqual({ x: 466, y: 256 });
+    expect(positionMocks.savePositions).not.toHaveBeenCalled();
+  });
+
+  it('rejects a failed authoritative topology-import layout reload', async () => {
+    vi.mocked(fetchDevices)
+      .mockResolvedValueOnce([mockDevice()])
+      .mockRejectedValueOnce(new Error('authoritative reload failed'));
+
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await expect(result.current.loadTopology(true, 'topology_import_layout')).rejects.toThrow(
+        'authoritative reload failed',
+      );
+    });
+  });
+
   it('does not fetch topology or rerun layout for runtime-only snapshot updates', async () => {
     const { rerender } = renderUseCanvasData(mockSnapshot());
 

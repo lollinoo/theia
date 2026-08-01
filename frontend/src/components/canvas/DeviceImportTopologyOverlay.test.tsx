@@ -131,7 +131,7 @@ describe('DeviceImportTopologyOverlay', () => {
         }}
         phase="layout"
         progress={{ ...progress, running: 0, completed: 3 }}
-        applyingLayout={true}
+        applyingLayout={false}
         error={null}
         deviceNames={new Map([['device-b', 'Distribution switch']])}
         onContinue={vi.fn()}
@@ -147,11 +147,76 @@ describe('DeviceImportTopologyOverlay', () => {
       screen.getByText('Some neighbors could not be linked automatically.'),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry affected devices' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Configure device' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create link manually' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect device' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Take manual control and create link' }));
     expect(onRetry).toHaveBeenCalledWith(['device-b']);
     expect(onConfigureDevice).toHaveBeenCalledWith('device-b');
     expect(onCreateManualLink).toHaveBeenCalledOnce();
+  });
+
+  it('explains that unresolved results require a decision before layout starts', () => {
+    const onContinue = vi.fn();
+    render(
+      <DeviceImportTopologyOverlay
+        snapshot={{
+          ...snapshot,
+          run: { ...snapshot.run, state: 'ready_for_layout' },
+        }}
+        phase="layout"
+        progress={{ ...progress, running: 0, completed: 3 }}
+        applyingLayout={false}
+        error={null}
+        deviceNames={new Map([['device-b', 'Distribution switch']])}
+        onContinue={onContinue}
+        onRetry={vi.fn()}
+        onConfigureDevice={vi.fn()}
+        onCreateManualLink={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Review required before layout')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Review the unresolved discovery result, retry it, or apply the deterministic layout with the partial topology.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Manual changes end automatic layout.')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Take manual control and create link' }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply layout with partial results' }));
+    expect(onContinue).toHaveBeenCalledOnce();
+  });
+
+  it('disables conflicting decisions while an affected-device retry is pending', () => {
+    render(
+      <DeviceImportTopologyOverlay
+        snapshot={{
+          ...snapshot,
+          run: { ...snapshot.run, state: 'ready_for_layout' },
+        }}
+        phase="layout"
+        progress={{ ...progress, running: 0, completed: 3 }}
+        applyingLayout={false}
+        retryPending
+        error={null}
+        deviceNames={new Map([['device-b', 'Distribution switch']])}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        onConfigureDevice={vi.fn()}
+        onCreateManualLink={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Retrying affected devices…' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Apply layout with partial results' }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Take manual control and create link' }),
+    ).toBeDisabled();
   });
 
   it('shows a compact background status after continuing', () => {
@@ -175,6 +240,35 @@ describe('DeviceImportTopologyOverlay', () => {
       'Topology discovery continues in the background',
     );
     expect(screen.queryByRole('button', { name: 'Continue with partial map' })).toBeNull();
+  });
+
+  it('keeps the full layout modal visible after partial results are accepted', () => {
+    render(
+      <DeviceImportTopologyOverlay
+        snapshot={{
+          ...snapshot,
+          run: {
+            ...snapshot.run,
+            state: 'ready_for_layout',
+            backgrounded: true,
+          },
+        }}
+        phase="layout"
+        progress={{ ...progress, running: 0, completed: 3 }}
+        applyingLayout
+        error={null}
+        deviceNames={new Map([['device-b', 'Distribution switch']])}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        onConfigureDevice={vi.fn()}
+        onCreateManualLink={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('topology-bootstrap-overlay')).toBeInTheDocument();
+    expect(screen.getByText('Organizing map layout')).toBeInTheDocument();
+    expect(screen.queryByTestId('topology-bootstrap-background-status')).toBeNull();
   });
 
   it('keeps a durable reconciliation failure actionable for manual recovery', () => {

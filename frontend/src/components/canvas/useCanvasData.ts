@@ -116,11 +116,15 @@ interface UseCanvasDataReturn {
   loading: boolean;
   error: string | null;
   renderedMapKey: string | null;
-  loadTopology: (isSilentRefresh?: boolean, trigger?: CanvasMeasurementTrigger) => Promise<void>;
+  loadTopology: (
+    isSilentRefresh?: boolean,
+    trigger?: CanvasMeasurementTrigger,
+  ) => Promise<LoadTopologyResult>;
   requestNewNodePlacement: (deviceId: string) => Promise<void>;
   requestImportedNodePlacement: (
     deviceIds: Iterable<string>,
   ) => Promise<'applied' | 'pending' | 'failed'>;
+  withPositionSaveFence: <Result>(operation: () => Promise<Result>) => Promise<Result>;
   grafanaUrlRef: React.MutableRefObject<string>;
   grafanaDashboardConfigRef: React.MutableRefObject<GrafanaDashboardConfig | null>;
   refreshSettings: () => void;
@@ -216,7 +220,8 @@ export function useCanvasData({
   const skippedSavedMapManualEdgeMigrationRef = useRef<Set<string>>(new Set());
   const grafanaUrlRef = useRef<string>('');
   const grafanaDashboardConfigRef = useRef<GrafanaDashboardConfig | null>(null);
-  const { fetchPositions, savePositions, savePositionsImmediately } = usePositions(mapId);
+  const { fetchPositions, savePositions, savePositionsImmediately, withPositionSaveFence } =
+    usePositions(mapId);
 
   const runtimeSummary = useMemo<RuntimeSummary>(() => {
     const runtimeState = buildRuntimeState({
@@ -801,9 +806,14 @@ export function useCanvasData({
   }, []);
 
   const loadTopologyForConsumer = useCallback(
-    async (isSilentRefresh = false, trigger: CanvasMeasurementTrigger = 'manual_refresh') => {
-      await loadTopology(isSilentRefresh, trigger);
-    },
+    (isSilentRefresh = false, trigger: CanvasMeasurementTrigger = 'manual_refresh') =>
+      loadTopology(
+        isSilentRefresh,
+        trigger,
+        trigger === 'topology_import_layout'
+          ? { suppressBlockingError: true, rethrowOnError: true }
+          : {},
+      ),
     [loadTopology],
   );
 
@@ -1050,6 +1060,7 @@ export function useCanvasData({
     loadTopology: loadTopologyForConsumer,
     requestNewNodePlacement,
     requestImportedNodePlacement,
+    withPositionSaveFence,
     grafanaUrlRef,
     grafanaDashboardConfigRef,
     refreshSettings,

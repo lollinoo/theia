@@ -45,7 +45,9 @@ export function buildTopologyCompositionPositionPlan({
   return {
     effectivePositions,
     currentPositionsForComposition:
-      trigger === 'backend_reconnected' ? new Map<string, PositionState>() : currentNodePositions,
+      trigger === 'backend_reconnected' || trigger === 'topology_import_layout'
+        ? new Map<string, PositionState>()
+        : currentNodePositions,
   };
 }
 

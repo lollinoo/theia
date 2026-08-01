@@ -112,6 +112,20 @@ describe('topology position state helpers', () => {
     expect(plan.currentPositionsForComposition).toEqual(new Map());
   });
 
+  it('lets persisted positions replace stale canvas positions after topology import layout', () => {
+    const saved = new Map<string, PositionState>([['dev-1', { x: 466, y: 256, pinned: false }]]);
+    const current = new Map<string, PositionState>([['dev-1', { x: 120, y: 120, pinned: false }]]);
+
+    const plan = buildTopologyCompositionPositionPlan({
+      trigger: 'topology_import_layout',
+      savedPositions: saved,
+      currentNodePositions: current,
+    });
+
+    expect(plan.effectivePositions).toEqual(saved);
+    expect(plan.currentPositionsForComposition).toEqual(new Map());
+  });
+
   it('builds a stable usable-position signature from current or saved positions', () => {
     const devices = [device('dev-b'), device('dev-a'), device('dev-c')];
     const current = new Map<string, PositionState>([['dev-b', { x: 1, y: 2, pinned: false }]]);

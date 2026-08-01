@@ -63,6 +63,7 @@ export function usePositions(mapId: string | null) {
   const fetchSequenceRef = useRef(0);
   const latestSaveTokenRef = useRef(0);
   const saveQueueByEndpointRef = useRef(new Map<string, Promise<void>>());
+  const positionSaveFenceDepthByEndpointRef = useRef(new Map<string, number>());
 
   const fetchPositions = useCallback(async () => {
     const requestEndpoint = endpointRef.current;
@@ -281,6 +282,9 @@ export function usePositions(mapId: string | null) {
 
   const savePositions = useCallback(
     async (nextPositions: PositionPayload[]) => {
+      if ((positionSaveFenceDepthByEndpointRef.current.get(endpointRef.current) ?? 0) > 0) {
+        return;
+      }
       setPositions(toPositionMap(nextPositions));
       const token = latestSaveTokenRef.current + 1;
       latestSaveTokenRef.current = token;
@@ -311,6 +315,9 @@ export function usePositions(mapId: string | null) {
 
   const savePositionsImmediately = useCallback(
     async (nextPositions: PositionPayload[]) => {
+      if ((positionSaveFenceDepthByEndpointRef.current.get(endpointRef.current) ?? 0) > 0) {
+        return false;
+      }
       const displacedPendingSave = pendingRef.current;
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current);
@@ -407,6 +414,62 @@ export function usePositions(mapId: string | null) {
     [enqueuePositionsCommit, handleSaveFailure, schedulePendingSave],
   );
 
+  // Serializes a server-authoritative layout after older canvas saves and suppresses
+  // provisional writes until the authoritative topology has been rendered.
+  const withPositionSaveFence = useCallback(
+    async <Result>(operation: () => Promise<Result>): Promise<Result> => {
+      const endpoint = endpointRef.current;
+      positionSaveFenceDepthByEndpointRef.current.set(
+        endpoint,
+        (positionSaveFenceDepthByEndpointRef.current.get(endpoint) ?? 0) + 1,
+      );
+
+      const pendingPayload = pendingRef.current;
+      if (pendingPayload?.endpoint === endpoint) {
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        pendingRef.current = null;
+        latestSaveTokenRef.current += 1;
+        pendingSaveCountRef.current = 0;
+        updateCanvasDiagnosticsState({
+          positions: {
+            pendingSaveCount: 0,
+            lastSaveStatus: 'idle',
+            lastSaveError: undefined,
+          },
+        });
+        recordCanvasDiagnosticEvent({
+          level: 'debug',
+          source: 'positions',
+          event: 'positions.save.discarded',
+          message: 'Queued canvas positions discarded before an authoritative update',
+          metadata: {
+            positionCount: pendingPayload.positions.length,
+            token: pendingPayload.token,
+          },
+        });
+      }
+
+      try {
+        const inFlightSave = saveQueueByEndpointRef.current.get(endpoint);
+        if (inFlightSave) {
+          await inFlightSave.catch(() => undefined);
+        }
+        return await operation();
+      } finally {
+        const remainingDepth = (positionSaveFenceDepthByEndpointRef.current.get(endpoint) ?? 1) - 1;
+        if (remainingDepth > 0) {
+          positionSaveFenceDepthByEndpointRef.current.set(endpoint, remainingDepth);
+        } else {
+          positionSaveFenceDepthByEndpointRef.current.delete(endpoint);
+        }
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) {
@@ -421,5 +484,6 @@ export function usePositions(mapId: string | null) {
     fetchPositions,
     savePositions,
     savePositionsImmediately,
+    withPositionSaveFence,
   };
 }

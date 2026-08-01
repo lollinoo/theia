@@ -41,6 +41,7 @@ export type CanvasMeasurementTrigger =
   | 'backend_reconnected'
   | 'topology_changed'
   | 'snapshot'
+  | 'topology_import_layout'
   | 'manual_refresh';
 
 /** Describes the canvas recorded metric name contract used by the topology canvas. */
