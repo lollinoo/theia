@@ -234,6 +234,12 @@ export default function Canvas({
   chromeHidden,
   onChromeHiddenChange,
 }: CanvasProps) {
+  const requestedTopologyRunID =
+    importedNodePlacementRequest?.mapId === mapId
+      ? importedNodePlacementRequest.topologyRunId
+      : undefined;
+  const topologyRunLookupScopeKey =
+    topologyImportEnabled && mapId ? `${mapId}:${requestedTopologyRunID ?? 'active'}` : null;
   const { snapToGrid, toggleSnapToGrid } = useCanvasSnapPreference();
   const topologyManualEditRef = useRef<() => Promise<void>>(async () => undefined);
   const {
@@ -314,6 +320,9 @@ export default function Canvas({
     shortcuts,
     getPanelTitle,
   } = useCanvasMenus({ reactFlow });
+  const previousEditModeRef = useRef(editMode);
+  const previousTopologyRunLookupScopeRef = useRef(topologyRunLookupScopeKey);
+  const pendingEditModeEntryScopeRef = useRef<string | null>(null);
   const {
     selectedNodeCount,
     selectedRealNodeIds,
@@ -470,7 +479,31 @@ export default function Canvas({
     [setDeviceNodeReadabilityScale, setLinkBadgeReadabilityScale, setTopologyZoomBand],
   );
 
-  useKeyboardShortcuts(shortcuts);
+  const topologySafeShortcuts = useMemo(
+    () => ({
+      ...shortcuts,
+      addDevice: {
+        ...shortcuts.addDevice,
+        handler: () => {
+          void topologyManualEditRef
+            .current()
+            .then(() => setPanelContent({ type: 'addDevice' }))
+            .catch(() => undefined);
+        },
+      },
+      createLink: {
+        ...shortcuts.createLink,
+        handler: () => {
+          void topologyManualEditRef
+            .current()
+            .then(() => setPanelContent({ type: 'create-link' }))
+            .catch(() => undefined);
+        },
+      },
+    }),
+    [setPanelContent, shortcuts],
+  );
+  useKeyboardShortcuts(topologySafeShortcuts);
 
   const openEdgeMenu = useCallback(
     (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => {
@@ -569,8 +602,29 @@ export default function Canvas({
   });
   topologyManualEditRef.current = topologyRun.markManualEdit;
   useEffect(() => {
-    if (editMode) void topologyRun.markManualEdit().catch(() => undefined);
-  }, [editMode, topologyRun.markManualEdit]);
+    const lookupScopeChanged =
+      previousTopologyRunLookupScopeRef.current !== topologyRunLookupScopeKey;
+    previousTopologyRunLookupScopeRef.current = topologyRunLookupScopeKey;
+    if (lookupScopeChanged) pendingEditModeEntryScopeRef.current = null;
+    const enteredEditMode = editMode && !previousEditModeRef.current;
+    previousEditModeRef.current = editMode;
+    if (!editMode) {
+      pendingEditModeEntryScopeRef.current = null;
+      return;
+    }
+    if (enteredEditMode) pendingEditModeEntryScopeRef.current = topologyRunLookupScopeKey;
+    // Lifecycle updates are not edits unless an operator transition is waiting for run lookup.
+    const pendingScopeKey = pendingEditModeEntryScopeRef.current;
+    if (pendingScopeKey === null || pendingScopeKey !== topologyRunLookupScopeKey) return;
+    void topologyRun
+      .markManualEdit()
+      .then(() => {
+        if (pendingEditModeEntryScopeRef.current === pendingScopeKey) {
+          pendingEditModeEntryScopeRef.current = null;
+        }
+      })
+      .catch(() => undefined);
+  }, [editMode, topologyRun.markManualEdit, topologyRunLookupScopeKey]);
   const legacyImportedNodePlacementRequest = importedNodePlacementRequest?.topologyRunId
     ? null
     : importedNodePlacementRequest;
@@ -1066,6 +1120,7 @@ export default function Canvas({
           mapId={mapId}
           mapName={mapName}
           editMode={editMode}
+          mutationBlocked={topologyRun.mutationBlocked}
           onRemoveDeviceFromMap={handleRemoveDeviceFromMap}
           onSettingsChange={refreshSettings}
           onWinBoxAvailabilityChange={(deviceId, hasWinboxProfile) => {
@@ -1224,7 +1279,10 @@ export default function Canvas({
         onNodeDragStop={(_ev, node) => {
           endCanvasInteraction();
           if (isGhostDeviceNode(node)) return;
-          updateNodePosition(node.id, node.position);
+          void topologyManualEditRef
+            .current()
+            .then(() => updateNodePosition(node.id, node.position))
+            .catch(() => undefined);
         }}
         selectionOnDrag={editMode}
         selectionMode={SelectionMode.Partial}

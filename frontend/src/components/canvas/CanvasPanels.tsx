@@ -36,6 +36,7 @@ import { buildAlertsPanelModel } from './panelAdapters';
 import type { RuntimeState } from './runtimeAdapters';
 
 const emptyAlerts: AlertDTO[] = [];
+const mutationOnlyPanelTypes = new Set(['addDevice', 'create-link', 'bulkEdit']);
 
 function sameAreaIds(first: string[] = [], second: string[] = []): boolean {
   if (first.length !== second.length) return false;
@@ -73,6 +74,7 @@ interface CanvasPanelsProps {
   mapId?: string | null;
   mapName?: string;
   editMode?: boolean;
+  mutationBlocked?: boolean;
   onRemoveDeviceFromMap?: (deviceId: string) => void | Promise<void>;
   onSettingsChange?: () => void;
   onWinBoxAvailabilityChange?: (deviceId: string, hasWinboxProfile: boolean) => void;
@@ -94,6 +96,7 @@ export function CanvasPanels({
   mapId = null,
   mapName = 'Default',
   editMode = false,
+  mutationBlocked = false,
   onRemoveDeviceFromMap,
   onSettingsChange,
   onWinBoxAvailabilityChange,
@@ -147,6 +150,14 @@ export function CanvasPanels({
     }
   }
 
+  if (mutationBlocked && panelContent && mutationOnlyPanelTypes.has(panelContent.type)) {
+    return (
+      <p role="status" className="p-4 text-sm text-on-bg-secondary">
+        Manual changes are paused while Bootstrap-Once owns the map.
+      </p>
+    );
+  }
+
   return (
     <>
       {panelContent?.type === 'interfaceStats' &&
@@ -188,15 +199,21 @@ export function CanvasPanels({
               detailMetrics={runtimeState.devicesById.get(device.id)?.metrics ?? null}
               onCheckAddressReachability={handleCheckAddressReachability}
               addressReachabilityState={addressReachabilityState}
-              onPromoteAddress={async (addressId) => {
-                const address = device.addresses.find((candidate) => candidate.id === addressId);
-                if (!address) return;
-                await updateDevice(device.id, {
-                  ip: address.address,
-                  addresses: buildPromotedAddressPayloads(device, addressId),
-                });
-                await loadTopology(true);
-              }}
+              onPromoteAddress={
+                mutationBlocked
+                  ? undefined
+                  : async (addressId) => {
+                      const address = device.addresses.find(
+                        (candidate) => candidate.id === addressId,
+                      );
+                      if (!address) return;
+                      await updateDevice(device.id, {
+                        ip: address.address,
+                        addresses: buildPromotedAddressPayloads(device, addressId),
+                      });
+                      await loadTopology(true);
+                    }
+              }
               interfaceStats={
                 device.device_type !== 'virtual' ? (
                   <DeviceInterfaceStatsPanelRoute
@@ -249,7 +266,7 @@ export function CanvasPanels({
             return (
               <LinkDetailsPanel
                 link={liveLink}
-                readOnly={!editMode}
+                readOnly={!editMode || mutationBlocked}
                 devices={devices}
                 onUpdated={() => {
                   setPanelContent(null);
@@ -275,7 +292,7 @@ export function CanvasPanels({
             return (
               <DeviceConfigPanel
                 device={device}
-                readOnly={!editMode}
+                readOnly={!editMode || mutationBlocked}
                 isVirtual={device.device_type === 'virtual'}
                 areas={topologyAreas}
                 mapContext={mapId && onRemoveDeviceFromMap ? { mapId, mapName } : undefined}
