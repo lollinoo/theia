@@ -18,10 +18,12 @@ const LINKED_LAYOUT_ADDRESSES = [
   '192.0.2.225',
 ];
 const LINKED_LAYOUT_IMPORT_ADDRESS = '192.0.2.226';
+const DISABLED_FALLBACK_IMPORT_ADDRESS = '192.0.2.227';
 const ALL_TEST_ADDRESSES = [
   ...TEST_ADDRESSES,
   ...LINKED_LAYOUT_ADDRESSES,
   LINKED_LAYOUT_IMPORT_ADDRESS,
+  DISABLED_FALLBACK_IMPORT_ADDRESS,
 ];
 const TEST_MAP_NAMES = [TEST_MAP_NAME, LINKED_LAYOUT_MAP_NAME];
 const TEST_PROFILE_NAMES = [TEST_PROFILE_NAME, LINKED_LAYOUT_PROFILE_NAME];
@@ -51,6 +53,9 @@ interface DeviceResource {
     metrics_source?: unknown;
     prometheus_label_name?: unknown;
     prometheus_label_value?: unknown;
+    topology_discovery_mode?: unknown;
+    effective_topology_discovery_mode?: unknown;
+    topology_bootstrap_state?: unknown;
   };
 }
 
@@ -609,86 +614,280 @@ test('imports and persists a collision-free file-SD batch in an occupied saved m
   }
 });
 
-test('Bootstrap-Once keeps automatic links clear of unrelated nodes after layout', async ({
+const linkedLayoutImportCases = [
+  {
+    name: 'SNMP Direct',
+    radioName: 'SNMP Direct',
+    metricsMode: 'snmp',
+    metricsSource: 'snmp',
+  },
+  {
+    name: 'Prometheus SNMP fallback',
+    radioName: 'Prometheus with SNMP fallback',
+    metricsMode: 'prometheus_snmp_fallback',
+    metricsSource: 'prometheus_snmp_fallback',
+  },
+] as const;
+
+for (const importCase of linkedLayoutImportCases) {
+  test(`${importCase.name} Bootstrap-Once keeps links clear after layout`, async ({ page }) => {
+    test.setTimeout(180_000);
+    await cleanupTestFixtures(page);
+
+    try {
+      const fixture = await createLinkedLayoutFixture(page);
+
+      await page.goto('/');
+      await page.getByRole('button', { name: /User menu for/ }).click();
+      await page.getByRole('menuitem', { name: 'Admin Area' }).click();
+      await page.getByRole('tab', { name: 'Node Import' }).click();
+      await expect(page.getByRole('heading', { name: 'One-time node import' })).toBeVisible();
+
+      await page.getByRole('radio', { name: importCase.radioName, exact: true }).check();
+      await expect(
+        page.getByRole('checkbox', {
+          name: 'Discover links with LLDP/CDP (Bootstrap-Once)',
+        }),
+      ).toBeChecked();
+      await page.getByRole('combobox', { name: 'SNMP Profile' }).selectOption(fixture.profileId);
+      await page.getByRole('combobox', { name: 'Destination map' }).selectOption(fixture.mapId);
+      await page.getByRole('radio', { name: 'Reorganize entire map' }).check();
+      await page.getByLabel('Prometheus file-SD YAML').setInputFiles({
+        name: 'bootstrap-linked-layout.yml',
+        mimeType: 'application/yaml',
+        buffer: Buffer.from(`- targets:\n    - ${LINKED_LAYOUT_IMPORT_ADDRESS}\n`),
+      });
+      await page.getByRole('button', { name: 'Preview import' }).click();
+      await expect(page.getByTestId('device-import-preview-row')).toHaveCount(1);
+      const commitResponsePromise = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/v1/admin/device-imports/commit' &&
+          response.request().method() === 'POST',
+      );
+      await page.getByRole('button', { name: 'Commit import' }).click();
+      const commitResponse = await commitResponsePromise;
+      expect(commitResponse.ok(), `device import commit returned ${commitResponse.status()}`).toBe(
+        true,
+      );
+      const commitPayload = (await commitResponse.json()) as {
+        configuration?: {
+          metrics_mode?: unknown;
+          topology_bootstrap_enabled?: unknown;
+          topology_layout_scope?: unknown;
+        };
+        topology_run_id?: unknown;
+      };
+      expect(commitPayload.configuration).toMatchObject({
+        metrics_mode: importCase.metricsMode,
+        topology_bootstrap_enabled: true,
+        topology_layout_scope: 'reorganize',
+      });
+      expect(commitPayload.topology_run_id).toEqual(expect.any(String));
+      const topologyRunId = commitPayload.topology_run_id as string;
+      await expect(page.getByLabel(/Select topology map/)).toContainText(LINKED_LAYOUT_MAP_NAME);
+
+      await expect
+        .poll(() => deviceIdsForAddresses(page, [LINKED_LAYOUT_IMPORT_ADDRESS]), {
+          timeout: 30_000,
+        })
+        .toEqual([expect.any(String)]);
+      const importedDeviceIds = await deviceIdsForAddresses(page, [LINKED_LAYOUT_IMPORT_ADDRESS]);
+      const allDeviceIds = [...fixture.deviceIds, ...importedDeviceIds];
+
+      await expect
+        .poll(
+          async () => {
+            const topology = await mapTopology(page, fixture.mapId);
+            return allDeviceIds.every((deviceId) => {
+              const position = topology.positions?.[deviceId];
+              return (
+                typeof position?.x === 'number' &&
+                Number.isFinite(position.x) &&
+                typeof position.y === 'number' &&
+                Number.isFinite(position.y)
+              );
+            });
+          },
+          { timeout: 120_000 },
+        )
+        .toBe(true);
+      await expect(page.getByTestId('topology-bootstrap-overlay')).toBeHidden({ timeout: 120_000 });
+
+      const runResponse = await page.request.get(
+        `/api/v1/admin/device-imports/topology-runs/${encodeURIComponent(topologyRunId)}`,
+      );
+      expect(runResponse.ok(), `topology run verification returned ${runResponse.status()}`).toBe(
+        true,
+      );
+      const runSnapshot = (await runResponse.json()) as {
+        run?: {
+          id?: unknown;
+          map_id?: unknown;
+          layout_scope?: unknown;
+          state?: unknown;
+        };
+        items?: Array<{ device_id?: unknown }>;
+      };
+      expect(runSnapshot.run).toMatchObject({
+        id: topologyRunId,
+        map_id: fixture.mapId,
+        layout_scope: 'reorganize',
+        state: 'completed',
+      });
+      expect(runSnapshot.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            device_id: importedDeviceIds[0],
+          }),
+        ]),
+      );
+
+      const devicesResponse = await page.request.get('/api/v1/devices');
+      expect(devicesResponse.ok(), `device verification returned ${devicesResponse.status()}`).toBe(
+        true,
+      );
+      const devicesPayload = (await devicesResponse.json()) as APIListResponse<DeviceResource>;
+      const importedDevice = (devicesPayload.data ?? []).find(
+        (device) => device.attributes?.ip === LINKED_LAYOUT_IMPORT_ADDRESS,
+      );
+      expect(importedDevice?.attributes).toMatchObject({
+        metrics_source: importCase.metricsSource,
+        topology_discovery_mode: 'bootstrap_once',
+        topology_bootstrap_state: 'completed',
+        ...(importCase.metricsMode === 'prometheus_snmp_fallback'
+          ? {
+              prometheus_label_name: 'instance',
+              prometheus_label_value: LINKED_LAYOUT_IMPORT_ADDRESS,
+            }
+          : {}),
+      });
+
+      await page.getByRole('button', { name: 'Fit view' }).click();
+      for (const deviceId of allDeviceIds) {
+        await expect(page.locator(`.react-flow__node[data-id="${deviceId}"]`)).toBeVisible();
+      }
+      await expectNodesDoNotOverlap(page, allDeviceIds);
+      await expectLinksDoNotCrossUnrelatedNodes(page, fixture.links, allDeviceIds);
+
+      const positionedTopology = await mapTopology(page, fixture.mapId);
+      const positionSnapshot = Object.fromEntries(
+        allDeviceIds.map((deviceId) => [deviceId, positionedTopology.positions?.[deviceId]]),
+      );
+      await page.reload();
+      await openSavedMap(page, LINKED_LAYOUT_MAP_NAME);
+      await page.getByRole('button', { name: 'Fit view' }).click();
+      const reloadedTopology = await mapTopology(page, fixture.mapId);
+      for (const deviceId of allDeviceIds) {
+        expect(reloadedTopology.positions?.[deviceId]).toEqual(positionSnapshot[deviceId]);
+      }
+      await expectNodesDoNotOverlap(page, allDeviceIds);
+      await expectLinksDoNotCrossUnrelatedNodes(page, fixture.links, allDeviceIds);
+    } finally {
+      await cleanupTestFixtures(page);
+    }
+  });
+}
+
+test('Prometheus SNMP fallback opt-out keeps topology off and creates no bootstrap run', async ({
   page,
 }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(120_000);
   await cleanupTestFixtures(page);
 
   try {
-    const fixture = await createLinkedLayoutFixture(page);
+    const seedDeviceId = await findSeedDeviceId(page);
+    const mapId = await createTestMap(page, seedDeviceId);
+    const profileId = await createRedactedSNMPProfile(page);
 
     await page.goto('/');
     await page.getByRole('button', { name: /User menu for/ }).click();
     await page.getByRole('menuitem', { name: 'Admin Area' }).click();
     await page.getByRole('tab', { name: 'Node Import' }).click();
-    await expect(page.getByRole('heading', { name: 'One-time node import' })).toBeVisible();
-
-    await page.getByRole('radio', { name: 'SNMP Direct', exact: true }).check();
-    await expect(
-      page.getByRole('checkbox', {
-        name: 'Discover links with LLDP/CDP (Bootstrap-Once)',
-      }),
-    ).toBeChecked();
-    await page.getByRole('combobox', { name: 'SNMP Profile' }).selectOption(fixture.profileId);
-    await page.getByRole('combobox', { name: 'Destination map' }).selectOption(fixture.mapId);
-    await page.getByRole('radio', { name: 'Reorganize entire map' }).check();
+    await page.getByRole('radio', { name: 'Prometheus with SNMP fallback', exact: true }).check();
+    await page
+      .getByRole('checkbox', { name: 'Discover links with LLDP/CDP (Bootstrap-Once)' })
+      .uncheck();
+    await page.getByRole('combobox', { name: 'SNMP Profile' }).selectOption(profileId);
+    await page.getByRole('combobox', { name: 'Destination map' }).selectOption(mapId);
     await page.getByLabel('Prometheus file-SD YAML').setInputFiles({
-      name: 'bootstrap-linked-layout.yml',
+      name: 'fallback-topology-disabled.yml',
       mimeType: 'application/yaml',
-      buffer: Buffer.from(`- targets:\n    - ${LINKED_LAYOUT_IMPORT_ADDRESS}\n`),
+      buffer: Buffer.from(`- targets:\n    - ${DISABLED_FALLBACK_IMPORT_ADDRESS}\n`),
     });
     await page.getByRole('button', { name: 'Preview import' }).click();
     await expect(page.getByTestId('device-import-preview-row')).toHaveCount(1);
+
+    const commitResponsePromise = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/v1/admin/device-imports/commit' &&
+        response.request().method() === 'POST',
+    );
     await page.getByRole('button', { name: 'Commit import' }).click();
-    await expect(page.getByLabel(/Select topology map/)).toContainText(LINKED_LAYOUT_MAP_NAME);
+    const commitResponse = await commitResponsePromise;
+    expect(commitResponse.ok(), `device import commit returned ${commitResponse.status()}`).toBe(
+      true,
+    );
+    const commitPayload = (await commitResponse.json()) as {
+      configuration?: {
+        metrics_mode?: unknown;
+        topology_bootstrap_enabled?: unknown;
+      };
+      topology_run_id?: unknown;
+    };
+    expect(commitPayload.configuration).toMatchObject({
+      metrics_mode: 'prometheus_snmp_fallback',
+      topology_bootstrap_enabled: false,
+    });
+    expect(commitPayload).not.toHaveProperty('topology_run_id');
+    await expect(page.getByLabel(/Select topology map/)).toContainText(TEST_MAP_NAME);
 
     await expect
-      .poll(() => deviceIdsForAddresses(page, [LINKED_LAYOUT_IMPORT_ADDRESS]), {
+      .poll(() => deviceIdsForAddresses(page, [DISABLED_FALLBACK_IMPORT_ADDRESS]), {
         timeout: 30_000,
       })
       .toEqual([expect.any(String)]);
-    const importedDeviceIds = await deviceIdsForAddresses(page, [LINKED_LAYOUT_IMPORT_ADDRESS]);
-    const allDeviceIds = [...fixture.deviceIds, ...importedDeviceIds];
+    const [importedDeviceId] = await deviceIdsForAddresses(page, [
+      DISABLED_FALLBACK_IMPORT_ADDRESS,
+    ]);
+
+    const devicesResponse = await page.request.get('/api/v1/devices');
+    expect(devicesResponse.ok(), `device verification returned ${devicesResponse.status()}`).toBe(
+      true,
+    );
+    const devicesPayload = (await devicesResponse.json()) as APIListResponse<DeviceResource>;
+    const importedDevice = (devicesPayload.data ?? []).find(
+      (device) => device.attributes?.ip === DISABLED_FALLBACK_IMPORT_ADDRESS,
+    );
+    expect(importedDevice?.attributes).toMatchObject({
+      metrics_source: 'prometheus_snmp_fallback',
+      topology_discovery_mode: 'off',
+      effective_topology_discovery_mode: 'off',
+    });
+
+    const activeRunResponse = await page.request.get(
+      `/api/v1/admin/device-imports/topology-runs/active?map_id=${encodeURIComponent(mapId)}`,
+    );
+    expect(activeRunResponse.status()).toBe(204);
+    await expect(page.getByTestId('topology-bootstrap-overlay')).toBeHidden();
 
     await expect
-      .poll(
-        async () => {
-          const topology = await mapTopology(page, fixture.mapId);
-          return allDeviceIds.every((deviceId) => {
-            const position = topology.positions?.[deviceId];
-            return (
-              typeof position?.x === 'number' &&
-              Number.isFinite(position.x) &&
-              typeof position.y === 'number' &&
-              Number.isFinite(position.y)
-            );
-          });
-        },
-        { timeout: 120_000 },
-      )
-      .toBe(true);
-    await expect(page.getByTestId('topology-bootstrap-overlay')).toBeHidden({ timeout: 120_000 });
-    await page.getByRole('button', { name: 'Fit view' }).click();
-    for (const deviceId of allDeviceIds) {
-      await expect(page.locator(`.react-flow__node[data-id="${deviceId}"]`)).toBeVisible();
-    }
-    await expectNodesDoNotOverlap(page, allDeviceIds);
-    await expectLinksDoNotCrossUnrelatedNodes(page, fixture.links, allDeviceIds);
-
-    const positionedTopology = await mapTopology(page, fixture.mapId);
-    const positionSnapshot = Object.fromEntries(
-      allDeviceIds.map((deviceId) => [deviceId, positionedTopology.positions?.[deviceId]]),
-    );
-    await page.reload();
-    await openSavedMap(page, LINKED_LAYOUT_MAP_NAME);
-    await page.getByRole('button', { name: 'Fit view' }).click();
-    const reloadedTopology = await mapTopology(page, fixture.mapId);
-    for (const deviceId of allDeviceIds) {
-      expect(reloadedTopology.positions?.[deviceId]).toEqual(positionSnapshot[deviceId]);
-    }
-    await expectNodesDoNotOverlap(page, allDeviceIds);
-    await expectLinksDoNotCrossUnrelatedNodes(page, fixture.links, allDeviceIds);
+      .poll(async () => {
+        const topology = await mapTopology(page, mapId);
+        const position = importedDeviceId ? topology.positions?.[importedDeviceId] : undefined;
+        return {
+          positioned:
+            typeof position?.x === 'number' &&
+            Number.isFinite(position.x) &&
+            typeof position.y === 'number' &&
+            Number.isFinite(position.y),
+          importedLinks: (topology.links ?? []).filter(
+            (link) =>
+              link.source_device_id === importedDeviceId ||
+              link.target_device_id === importedDeviceId,
+          ).length,
+        };
+      })
+      .toEqual({ positioned: true, importedLinks: 0 });
   } finally {
     await cleanupTestFixtures(page);
   }

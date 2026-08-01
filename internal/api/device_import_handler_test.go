@@ -162,14 +162,16 @@ func TestDeviceImportHandlerCommitMapsProfileDigestAndActor(t *testing.T) {
 	}
 }
 
-func TestDeviceImportHandlerDefaultsSNMPTopologyBootstrapOn(t *testing.T) {
+func TestDeviceImportHandlerPreservesDisabledPrometheusFallbackTopology(t *testing.T) {
 	provider := &fakeDeviceImportProvider{}
 	profileID := uuid.New()
 	request := newDeviceImportMultipartRequest(t, http.MethodPost, "/api/v1/admin/device-imports/preview", []deviceImportMultipartPart{
 		{name: "file", value: []byte("- targets: [\"192.0.2.10\"]\n"), fileName: "targets.yml"},
-		{name: "metrics_mode", value: []byte(service.DeviceImportModeSNMP)},
+		{name: "metrics_mode", value: []byte(service.DeviceImportModePrometheusFallback)},
 		{name: "snmp_profile_id", value: []byte(profileID.String())},
 		{name: "map_id", value: []byte(uuid.NewString())},
+		{name: "topology_bootstrap_enabled", value: []byte("false")},
+		{name: "topology_layout_scope", value: []byte(domain.DeviceImportTopologyLayoutScopePreserve)},
 	})
 	_, auth := authorizeDeviceImportRequest(request, domain.PermissionCredentialsRead)
 	response := httptest.NewRecorder()
@@ -179,9 +181,40 @@ func TestDeviceImportHandlerDefaultsSNMPTopologyBootstrapOn(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
 	}
-	if !provider.previewRequest.TopologyBootstrapEnabled ||
+	if provider.previewRequest.MetricsMode != service.DeviceImportModePrometheusFallback ||
+		provider.previewRequest.TopologyBootstrapEnabled ||
 		provider.previewRequest.TopologyLayoutScope != domain.DeviceImportTopologyLayoutScopePreserve {
-		t.Fatalf("topology defaults = %#v", provider.previewRequest)
+		t.Fatalf("fallback topology request = %#v", provider.previewRequest)
+	}
+}
+
+func TestDeviceImportHandlerDefaultsSNMPCapableTopologyBootstrapOn(t *testing.T) {
+	for _, mode := range []service.DeviceImportMode{
+		service.DeviceImportModeSNMP,
+		service.DeviceImportModePrometheusFallback,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			provider := &fakeDeviceImportProvider{}
+			profileID := uuid.New()
+			request := newDeviceImportMultipartRequest(t, http.MethodPost, "/api/v1/admin/device-imports/preview", []deviceImportMultipartPart{
+				{name: "file", value: []byte("- targets: [\"192.0.2.10\"]\n"), fileName: "targets.yml"},
+				{name: "metrics_mode", value: []byte(mode)},
+				{name: "snmp_profile_id", value: []byte(profileID.String())},
+				{name: "map_id", value: []byte(uuid.NewString())},
+			})
+			_, auth := authorizeDeviceImportRequest(request, domain.PermissionCredentialsRead)
+			response := httptest.NewRecorder()
+
+			NewDeviceImportHandler(provider, auth).HandlePreview(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+			}
+			if !provider.previewRequest.TopologyBootstrapEnabled ||
+				provider.previewRequest.TopologyLayoutScope != domain.DeviceImportTopologyLayoutScopePreserve {
+				t.Fatalf("topology defaults = %#v", provider.previewRequest)
+			}
+		})
 	}
 }
 

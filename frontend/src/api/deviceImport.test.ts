@@ -193,6 +193,61 @@ describe('device import client', () => {
     expect(form.has('expected_file_digest')).toBe(false);
   });
 
+  it('defaults Prometheus SNMP fallback to the explicit Bootstrap-Once fields', async () => {
+    const file = new File(['- targets: ["router.example.net:161"]\n'], 'targets.yml');
+    const response = validPreviewPayload();
+    response.configuration = {
+      metrics_mode: 'prometheus_snmp_fallback',
+      snmp_profile_id: '33333333-3333-3333-3333-333333333333',
+      map_id: '11111111-1111-1111-1111-111111111111',
+      area_id: null,
+      topology_bootstrap_enabled: true,
+      topology_layout_scope: 'preserve',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(response));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await previewDeviceImport({
+      file,
+      metrics_mode: 'prometheus_snmp_fallback',
+      map_id: '11111111-1111-1111-1111-111111111111',
+      snmp_profile_id: '33333333-3333-3333-3333-333333333333',
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const form = init.body as FormData;
+    expect([...form.keys()]).toEqual([
+      'file',
+      'metrics_mode',
+      'snmp_profile_id',
+      'map_id',
+      'topology_bootstrap_enabled',
+      'topology_layout_scope',
+    ]);
+    expect(form.get('topology_bootstrap_enabled')).toBe('true');
+    expect(form.get('topology_layout_scope')).toBe('preserve');
+  });
+
+  it('sends an explicitly disabled Bootstrap-Once setting for Prometheus SNMP fallback', async () => {
+    const file = new File(['- targets: ["router.example.net:161"]\n'], 'targets.yml');
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(validPreviewPayload()));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await previewDeviceImport({
+      file,
+      metrics_mode: 'prometheus_snmp_fallback',
+      map_id: '11111111-1111-1111-1111-111111111111',
+      snmp_profile_id: '33333333-3333-3333-3333-333333333333',
+      topology_bootstrap_enabled: false,
+      topology_layout_scope: 'preserve',
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const form = init.body as FormData;
+    expect(form.get('topology_bootstrap_enabled')).toBe('false');
+    expect(form.get('topology_layout_scope')).toBe('preserve');
+  });
+
   it('resends the same File for commit with profile and expected digest', async () => {
     const file = new File(['- targets: ["router.example.net:161"]\n'], 'targets.yml');
     const fetchMock = vi.fn().mockResolvedValue(mockResponse(validCommitPayload()));

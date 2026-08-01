@@ -149,14 +149,16 @@ func TestDeviceImportServiceCommitBuildsApprovedDeviceFieldsForEveryMode(t *test
 		wantSelector     string
 		wantCredentials  bool
 		wantReprobeCalls int
+		wantTopologyMode domain.TopologyDiscoveryMode
 	}{
 		{
-			name:         "prometheus",
-			mode:         DeviceImportModePrometheus,
-			target:       " Router.Example.NET:9116 ",
-			wantAddress:  "router.example.net",
-			wantSource:   domain.MetricsSourcePrometheus,
-			wantSelector: "Router.Example.NET:9116",
+			name:             "prometheus",
+			mode:             DeviceImportModePrometheus,
+			target:           " Router.Example.NET:9116 ",
+			wantAddress:      "router.example.net",
+			wantSource:       domain.MetricsSourcePrometheus,
+			wantSelector:     "Router.Example.NET:9116",
+			wantTopologyMode: domain.TopologyDiscoveryModeInherit,
 		},
 		{
 			name:             "prometheus snmp fallback",
@@ -167,6 +169,7 @@ func TestDeviceImportServiceCommitBuildsApprovedDeviceFieldsForEveryMode(t *test
 			wantSelector:     "Router.Example.NET:161",
 			wantCredentials:  true,
 			wantReprobeCalls: 1,
+			wantTopologyMode: domain.TopologyDiscoveryModeOff,
 		},
 		{
 			name:             "pure snmp ignores identity and selector",
@@ -176,6 +179,7 @@ func TestDeviceImportServiceCommitBuildsApprovedDeviceFieldsForEveryMode(t *test
 			wantSource:       domain.MetricsSourceSNMP,
 			wantCredentials:  true,
 			wantReprobeCalls: 1,
+			wantTopologyMode: domain.TopologyDiscoveryModeOff,
 		},
 	}
 
@@ -203,6 +207,9 @@ func TestDeviceImportServiceCommitBuildsApprovedDeviceFieldsForEveryMode(t *test
 			}
 			if device.MetricsSource != tt.wantSource {
 				t.Fatalf("MetricsSource = %q, want %q", device.MetricsSource, tt.wantSource)
+			}
+			if device.TopologyDiscoveryMode != tt.wantTopologyMode {
+				t.Fatalf("TopologyDiscoveryMode = %q, want %q", device.TopologyDiscoveryMode, tt.wantTopologyMode)
 			}
 			if tt.mode == DeviceImportModeSNMP {
 				if device.PrometheusLabelName != "" || device.PrometheusLabelValue != "" {
@@ -253,58 +260,101 @@ func TestDeviceImportServiceCommitBuildsApprovedDeviceFieldsForEveryMode(t *test
 	}
 }
 
-func TestDeviceImportServiceCommitCreatesSNMPTopologyBootstrapRun(t *testing.T) {
+func TestDeviceImportServiceCommitCreatesSNMPCapableTopologyBootstrapRun(t *testing.T) {
+	for _, mode := range []DeviceImportMode{DeviceImportModeSNMP, DeviceImportModePrometheusFallback} {
+		t.Run(string(mode), func(t *testing.T) {
+			h := newDeviceImportServiceHarness(t)
+			runs := &fakeDeviceImportTopologyRunStore{}
+			h.importer.SetTopologyRunStore(runs)
+			var launchedRunID uuid.UUID
+			var launchedDeviceIDs []uuid.UUID
+			h.importer.SetTopologyBootstrapLauncher(func(_ context.Context, runID uuid.UUID, deviceIDs []uuid.UUID) {
+				launchedRunID = runID
+				launchedDeviceIDs = append([]uuid.UUID(nil), deviceIDs...)
+			})
+
+			uploaded := []byte("- targets: [\"router.example.net\"]\n")
+			request := h.request(mode, uploaded)
+			request.SNMPProfileID = &h.profileID
+			request.TopologyBootstrapEnabled = true
+			request.TopologyLayoutScope = domain.DeviceImportTopologyLayoutScopeReorganize
+			request.ExpectedFileDigest = deviceImportDigest(uploaded)
+
+			result, err := h.importer.Commit(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Commit() error = %v", err)
+			}
+			if result.TopologyRunID == nil || *result.TopologyRunID == uuid.Nil {
+				t.Fatalf("TopologyRunID = %#v, want non-zero run", result.TopologyRunID)
+			}
+			if len(runs.created) != 1 || runs.created[0].MapID != h.mapID || runs.created[0].ActorUserID != h.actorID {
+				t.Fatalf("created topology runs = %#v", runs.created)
+			}
+			if runs.created[0].LayoutScope != domain.DeviceImportTopologyLayoutScopeReorganize || runs.created[0].FileDigest != deviceImportDigest(uploaded) {
+				t.Fatalf("created topology run configuration = %#v", runs.created[0])
+			}
+			if len(runs.finalized) != 1 || runs.finalized[0] != *result.TopologyRunID {
+				t.Fatalf("finalized topology runs = %#v", runs.finalized)
+			}
+			if len(h.store.created) != 1 || len(h.store.placements) != 1 {
+				t.Fatalf("created devices=%d placements=%d", len(h.store.created), len(h.store.placements))
+			}
+			device := h.store.created[0]
+			if device.TopologyDiscoveryMode != domain.TopologyDiscoveryModeBootstrapOnce || device.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+				t.Fatalf("topology bootstrap device = mode %q state %q", device.TopologyDiscoveryMode, device.TopologyBootstrapState)
+			}
+			wantSource := domain.MetricsSourceSNMP
+			if mode == DeviceImportModePrometheusFallback {
+				wantSource = domain.MetricsSourcePrometheusSNMPFallback
+			}
+			if device.MetricsSource != wantSource {
+				t.Fatalf("MetricsSource = %q, want %q", device.MetricsSource, wantSource)
+			}
+			if h.store.placements[0].TopologyRunID == nil || *h.store.placements[0].TopologyRunID != *result.TopologyRunID {
+				t.Fatalf("topology run placement = %#v", h.store.placements[0])
+			}
+			if h.reprobeCalls != 0 {
+				t.Fatalf("legacy reprobe calls = %d, want 0", h.reprobeCalls)
+			}
+			if launchedRunID != *result.TopologyRunID || len(launchedDeviceIDs) != 1 || launchedDeviceIDs[0] != device.ID {
+				t.Fatalf("bootstrap launch = run %s devices %#v", launchedRunID, launchedDeviceIDs)
+			}
+			if !result.Configuration.TopologyBootstrapEnabled || result.Configuration.TopologyLayoutScope != domain.DeviceImportTopologyLayoutScopeReorganize {
+				t.Fatalf("resolved topology configuration = %#v", result.Configuration)
+			}
+		})
+	}
+}
+
+func TestDeviceImportServiceCommitDisablesImplicitTopologyForPrometheusFallback(t *testing.T) {
 	h := newDeviceImportServiceHarness(t)
 	runs := &fakeDeviceImportTopologyRunStore{}
 	h.importer.SetTopologyRunStore(runs)
-	var launchedRunID uuid.UUID
-	var launchedDeviceIDs []uuid.UUID
-	h.importer.SetTopologyBootstrapLauncher(func(_ context.Context, runID uuid.UUID, deviceIDs []uuid.UUID) {
-		launchedRunID = runID
-		launchedDeviceIDs = append([]uuid.UUID(nil), deviceIDs...)
-	})
-
 	uploaded := []byte("- targets: [\"router.example.net\"]\n")
-	request := h.request(DeviceImportModeSNMP, uploaded)
+	request := h.request(DeviceImportModePrometheusFallback, uploaded)
 	request.SNMPProfileID = &h.profileID
-	request.TopologyBootstrapEnabled = true
-	request.TopologyLayoutScope = domain.DeviceImportTopologyLayoutScopeReorganize
+	request.TopologyBootstrapEnabled = false
+	request.TopologyLayoutScope = domain.DeviceImportTopologyLayoutScopePreserve
 	request.ExpectedFileDigest = deviceImportDigest(uploaded)
 
 	result, err := h.importer.Commit(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
-	if result.TopologyRunID == nil || *result.TopologyRunID == uuid.Nil {
-		t.Fatalf("TopologyRunID = %#v, want non-zero run", result.TopologyRunID)
+	if result.TopologyRunID != nil || len(runs.created) != 0 || len(runs.finalized) != 0 {
+		t.Fatalf("disabled topology created a run: result=%#v created=%#v finalized=%#v", result.TopologyRunID, runs.created, runs.finalized)
 	}
-	if len(runs.created) != 1 || runs.created[0].MapID != h.mapID || runs.created[0].ActorUserID != h.actorID {
-		t.Fatalf("created topology runs = %#v", runs.created)
+	if len(h.store.created) != 1 || h.store.created[0].TopologyDiscoveryMode != domain.TopologyDiscoveryModeOff {
+		t.Fatalf("fallback topology mode = %#v, want one device with topology off", h.store.created)
 	}
-	if runs.created[0].LayoutScope != domain.DeviceImportTopologyLayoutScopeReorganize || runs.created[0].FileDigest != deviceImportDigest(uploaded) {
-		t.Fatalf("created topology run configuration = %#v", runs.created[0])
+	if len(h.store.placements) != 1 || h.store.placements[0].TopologyRunID != nil {
+		t.Fatalf("fallback placement unexpectedly references a topology run: %#v", h.store.placements)
 	}
-	if len(runs.finalized) != 1 || runs.finalized[0] != *result.TopologyRunID {
-		t.Fatalf("finalized topology runs = %#v", runs.finalized)
+	if h.reprobeCalls != 1 {
+		t.Fatalf("fallback static reprobe calls = %d, want 1", h.reprobeCalls)
 	}
-	if len(h.store.created) != 1 || len(h.store.placements) != 1 {
-		t.Fatalf("created devices=%d placements=%d", len(h.store.created), len(h.store.placements))
-	}
-	device := h.store.created[0]
-	if device.TopologyDiscoveryMode != domain.TopologyDiscoveryModeBootstrapOnce || device.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
-		t.Fatalf("topology bootstrap device = mode %q state %q", device.TopologyDiscoveryMode, device.TopologyBootstrapState)
-	}
-	if h.store.placements[0].TopologyRunID == nil || *h.store.placements[0].TopologyRunID != *result.TopologyRunID {
-		t.Fatalf("topology run placement = %#v", h.store.placements[0])
-	}
-	if h.reprobeCalls != 0 {
-		t.Fatalf("legacy reprobe calls = %d, want 0", h.reprobeCalls)
-	}
-	if launchedRunID != *result.TopologyRunID || len(launchedDeviceIDs) != 1 || launchedDeviceIDs[0] != device.ID {
-		t.Fatalf("bootstrap launch = run %s devices %#v", launchedRunID, launchedDeviceIDs)
-	}
-	if !result.Configuration.TopologyBootstrapEnabled || result.Configuration.TopologyLayoutScope != domain.DeviceImportTopologyLayoutScopeReorganize {
-		t.Fatalf("resolved topology configuration = %#v", result.Configuration)
+	if result.Configuration.TopologyBootstrapEnabled {
+		t.Fatalf("resolved topology configuration = %#v, want disabled", result.Configuration)
 	}
 }
 
@@ -344,11 +394,10 @@ func TestDeviceImportServiceCommitPersistsTopologyFinalizationFailure(t *testing
 	}
 }
 
-func TestDeviceImportServiceRejectsTopologyBootstrapOutsideSNMPDirect(t *testing.T) {
+func TestDeviceImportServiceRejectsTopologyBootstrapWithoutSNMPCapableMode(t *testing.T) {
 	h := newDeviceImportServiceHarness(t)
 	uploaded := []byte("- targets: [\"router.example.net\"]\n")
-	request := h.request(DeviceImportModePrometheusFallback, uploaded)
-	request.SNMPProfileID = &h.profileID
+	request := h.request(DeviceImportModePrometheus, uploaded)
 	request.TopologyBootstrapEnabled = true
 
 	_, err := h.importer.Preview(context.Background(), request)

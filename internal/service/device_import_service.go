@@ -156,7 +156,7 @@ type DeviceImportService struct {
 	now            func() time.Time
 }
 
-// SetTopologyRunStore enables durable topology bootstrap runs for SNMP Direct imports.
+// SetTopologyRunStore enables durable topology bootstrap runs for SNMP-capable imports.
 func (s *DeviceImportService) SetTopologyRunStore(store deviceImportTopologyRunStore) {
 	if s != nil {
 		s.topologyRuns = store
@@ -428,8 +428,8 @@ func (s *DeviceImportService) validateRequest(
 	if !deviceImportModeIsValid(request.MetricsMode) {
 		return validated, invalidDeviceImportConfiguration("unsupported metrics mode")
 	}
-	if request.TopologyBootstrapEnabled && request.MetricsMode != DeviceImportModeSNMP {
-		return validated, invalidDeviceImportConfiguration("topology bootstrap is only available in SNMP mode")
+	if request.TopologyBootstrapEnabled && !deviceImportModeUsesSNMP(request.MetricsMode) {
+		return validated, invalidDeviceImportConfiguration("topology bootstrap requires an SNMP-capable mode")
 	}
 	if request.TopologyLayoutScope != "" &&
 		domain.NormalizeDeviceImportTopologyLayoutScope(request.TopologyLayoutScope) != request.TopologyLayoutScope {
@@ -534,7 +534,7 @@ func (s *DeviceImportService) buildDeviceDraft(
 		return nil, invalidDeviceImportConfiguration("unsupported metrics mode")
 	}
 	topologyMode := domain.TopologyDiscoveryModeInherit
-	if mode == DeviceImportModeSNMP {
+	if deviceImportModeUsesSNMP(mode) {
 		topologyMode = domain.TopologyDiscoveryModeOff
 		if validated.configuration.TopologyBootstrapEnabled {
 			topologyMode = domain.TopologyDiscoveryModeBootstrapOnce

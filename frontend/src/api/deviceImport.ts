@@ -501,7 +501,7 @@ function deviceImportFormData(
   if (configuration.area_id) {
     form.append('area_id', configuration.area_id);
   }
-  if (configuration.metrics_mode === 'snmp') {
+  if (configuration.metrics_mode !== 'prometheus') {
     form.append(
       'topology_bootstrap_enabled',
       String(configuration.topology_bootstrap_enabled ?? true),

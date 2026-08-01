@@ -271,6 +271,7 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
   const configurationRevision = useRef(0);
 
   const requiresSNMPProfile = metricsMode !== 'prometheus';
+  const supportsTopologyBootstrap = metricsMode !== 'prometheus';
   const primaryMapId = maps.find((map) => map.is_default)?.id ?? '';
   const selectedMap = maps.find((map) => map.id === mapId) ?? null;
 
@@ -365,7 +366,7 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
       map_id: mapId,
       ...(areaId ? { area_id: areaId } : {}),
       ...(requiresSNMPProfile ? { snmp_profile_id: snmpProfileId } : {}),
-      ...(metricsMode === 'snmp'
+      ...(supportsTopologyBootstrap
         ? {
             topology_bootstrap_enabled: topologyBootstrapEnabled,
             topology_layout_scope: topologyLayoutScope,
@@ -382,6 +383,7 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
     snmpProfileId,
     topologyBootstrapEnabled,
     topologyLayoutScope,
+    supportsTopologyBootstrap,
   ]);
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -590,7 +592,7 @@ export function DeviceImportPanel({ canReadCredentials, onOpenMap }: DeviceImpor
             )}
           </fieldset>
 
-          {metricsMode === 'snmp' && (
+          {supportsTopologyBootstrap && (
             <fieldset
               className="flex flex-col gap-3 rounded-lg border border-outline-subtle bg-surface-container p-4"
               disabled={pendingAction !== null}

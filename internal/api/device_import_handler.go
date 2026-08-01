@@ -174,7 +174,8 @@ func decodeDeviceImportRequest(
 	if !ok {
 		return request, newDeviceImportRequestError(http.StatusBadRequest, "unsupported metrics_mode")
 	}
-	topologyBootstrapEnabled := mode == service.DeviceImportModeSNMP
+	topologyBootstrapEnabled := mode == service.DeviceImportModeSNMP ||
+		mode == service.DeviceImportModePrometheusFallback
 	if fields.topologyBootstrapEnabledSet {
 		switch fields.topologyBootstrapEnabled {
 		case "true":

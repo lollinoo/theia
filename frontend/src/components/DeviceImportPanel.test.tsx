@@ -348,6 +348,117 @@ describe('DeviceImportPanel', () => {
     );
   });
 
+  it('defaults Prometheus SNMP fallback to the tracked Bootstrap-Once workflow', async () => {
+    const onOpenMap = vi.fn();
+    commitDeviceImportMock.mockResolvedValue({
+      ...commitFixture(),
+      configuration: {
+        metrics_mode: 'prometheus_snmp_fallback',
+        snmp_profile_id: profiles[0].id,
+        map_id: primaryMap.id,
+        area_id: null,
+        topology_bootstrap_enabled: true,
+        topology_layout_scope: 'preserve',
+      },
+      summary: { total: 1, created: 1, skipped: 0, failed: 0, not_processed: 0 },
+      results: [
+        {
+          group_index: 0,
+          item_index: 0,
+          target: 'ready.example.net:161',
+          address: 'ready.example.net',
+          status: 'created',
+          device_id: 'fallback-device-created',
+        },
+      ],
+      diagnostics: [],
+      incomplete: false,
+      topology_run_id: 'fallback-topology-run-1',
+    });
+    await renderPanel({ onOpenMap });
+
+    await click(screen.getByRole('radio', { name: 'Prometheus with SNMP fallback' }));
+    expect(
+      screen.getByRole('checkbox', { name: 'Discover links with LLDP/CDP (Bootstrap-Once)' }),
+    ).toBeChecked();
+    await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[0].id);
+    await chooseFile();
+    await click(screen.getByRole('button', { name: 'Preview import' }));
+    await click(await screen.findByRole('button', { name: 'Commit import' }));
+
+    expect(commitDeviceImportMock.mock.calls[0][0]).toMatchObject({
+      metrics_mode: 'prometheus_snmp_fallback',
+      topology_bootstrap_enabled: true,
+      topology_layout_scope: 'preserve',
+    });
+    expect(onOpenMap).toHaveBeenCalledWith(
+      primaryMap,
+      expect.objectContaining({
+        mapId: primaryMap.id,
+        deviceIds: ['fallback-device-created'],
+        topologyRunId: 'fallback-topology-run-1',
+        topologyLayoutScope: 'preserve',
+      }),
+    );
+  });
+
+  it('keeps Prometheus SNMP fallback topology disabled when the operator opts out', async () => {
+    const onOpenMap = vi.fn();
+    commitDeviceImportMock.mockResolvedValue({
+      ...commitFixture(),
+      configuration: {
+        metrics_mode: 'prometheus_snmp_fallback',
+        snmp_profile_id: profiles[0].id,
+        map_id: primaryMap.id,
+        area_id: null,
+        topology_bootstrap_enabled: false,
+        topology_layout_scope: 'preserve',
+      },
+      summary: { total: 1, created: 1, skipped: 0, failed: 0, not_processed: 0 },
+      results: [
+        {
+          group_index: 0,
+          item_index: 0,
+          target: 'ready.example.net:161',
+          address: 'ready.example.net',
+          status: 'created',
+          device_id: 'fallback-device-created',
+        },
+      ],
+      diagnostics: [],
+      incomplete: false,
+    });
+    await renderPanel({ onOpenMap });
+
+    await click(screen.getByRole('radio', { name: 'Prometheus with SNMP fallback' }));
+    await click(
+      screen.getByRole('checkbox', { name: 'Discover links with LLDP/CDP (Bootstrap-Once)' }),
+    );
+    await change(screen.getByRole('combobox', { name: 'SNMP Profile' }), profiles[0].id);
+    await chooseFile();
+    await click(screen.getByRole('button', { name: 'Preview import' }));
+    await click(await screen.findByRole('button', { name: 'Commit import' }));
+
+    expect(previewDeviceImportMock.mock.calls[0][0]).toMatchObject({
+      metrics_mode: 'prometheus_snmp_fallback',
+      topology_bootstrap_enabled: false,
+      topology_layout_scope: 'preserve',
+    });
+    expect(commitDeviceImportMock.mock.calls[0][0]).toMatchObject({
+      metrics_mode: 'prometheus_snmp_fallback',
+      topology_bootstrap_enabled: false,
+      topology_layout_scope: 'preserve',
+    });
+    expect(onOpenMap).toHaveBeenCalledTimes(1);
+    expect(onOpenMap.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        mapId: primaryMap.id,
+        deviceIds: ['fallback-device-created'],
+      }),
+    );
+    expect(onOpenMap.mock.calls[0][1]).not.toHaveProperty('topologyRunId');
+  });
+
   it('disables SNMP modes with an explanation and never loads profiles without credentials read', async () => {
     await renderPanel({ canReadCredentials: false });
 
