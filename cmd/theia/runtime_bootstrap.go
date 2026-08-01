@@ -481,7 +481,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		service.WithTopologyObservationStore(topologyObservationRepo),
 	)
 	deviceImportStore := postgres.NewDeviceImportStore(deviceRepo)
-	deviceImportTopologyRunRepo := postgres.NewDeviceImportTopologyRunRepo(db)
+	deviceImportTopologyRunRepo := postgres.NewDeviceImportTopologyRunRepo(db, deviceRepo)
 	deviceImportService := service.NewDeviceImportService(
 		deviceImportStore,
 		deviceService,

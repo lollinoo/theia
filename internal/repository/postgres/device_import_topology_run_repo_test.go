@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	devicecache "github.com/lollinoo/theia/internal/cache"
 	"github.com/lollinoo/theia/internal/domain"
 )
 
@@ -424,7 +425,7 @@ func TestDeviceImportTopologyRunRepoRecoversInterruptedItems(t *testing.T) {
 		}
 	}
 
-	repo := NewDeviceImportTopologyRunRepo(db)
+	repo := NewDeviceImportTopologyRunRepo(db, deviceRepo)
 	run := &domain.DeviceImportTopologyRun{
 		ID:                uuid.New(),
 		MapID:             mapID,
@@ -456,6 +457,16 @@ func TestDeviceImportTopologyRunRepoRecoversInterruptedItems(t *testing.T) {
 		device.ID.String(), queuedDevice.ID.String(),
 	); err != nil {
 		t.Fatalf("simulate completed device state before run-item persistence: %v", err)
+	}
+	deviceLinkCache := devicecache.NewDeviceLinkCache(deviceRepo, NewLinkRepo(db, nil), nil)
+	for _, deviceID := range []uuid.UUID{device.ID, queuedDevice.ID} {
+		cachedDevice, found, cacheErr := deviceLinkCache.GetDeviceByID(deviceID)
+		if cacheErr != nil {
+			t.Fatalf("prime recovered device cache for %s: %v", deviceID, cacheErr)
+		}
+		if !found || cachedDevice.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+			t.Fatalf("cached device %s before recovery = (%v, %q), want (true, completed)", deviceID, found, cachedDevice.TopologyBootstrapState)
+		}
 	}
 
 	recovered, err := repo.RecoverInterrupted(ctx)
@@ -491,6 +502,13 @@ func TestDeviceImportTopologyRunRepoRecoversInterruptedItems(t *testing.T) {
 				deviceID,
 				recoveredDevice.TopologyBootstrapState,
 			)
+		}
+		cachedDevice, found, cacheErr := deviceLinkCache.GetDeviceByID(deviceID)
+		if cacheErr != nil {
+			t.Fatalf("read recovered device cache for %s: %v", deviceID, cacheErr)
+		}
+		if !found || cachedDevice.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+			t.Fatalf("cached device %s after recovery = (%v, %q), want (true, pending)", deviceID, found, cachedDevice.TopologyBootstrapState)
 		}
 	}
 }
@@ -580,7 +598,7 @@ func TestDeviceImportTopologyRunRepoAllowsOnlyOneTargetedFollowup(t *testing.T) 
 	); err != nil {
 		t.Fatalf("insert membership: %v", err)
 	}
-	repo := NewDeviceImportTopologyRunRepo(db)
+	repo := NewDeviceImportTopologyRunRepo(db, deviceRepo)
 	run := &domain.DeviceImportTopologyRun{
 		ID: uuid.New(), MapID: mapID, ActorUserID: actorID, FileDigest: "sha256:followup",
 		LayoutScope: domain.DeviceImportTopologyLayoutScopePreserve,
@@ -595,6 +613,14 @@ func TestDeviceImportTopologyRunRepoAllowsOnlyOneTargetedFollowup(t *testing.T) 
 		t.Fatalf("FinalizeImport: %v", err)
 	}
 	completeImportTopologyAttempt(t, ctx, repo, run.ID, device.ID)
+	deviceLinkCache := devicecache.NewDeviceLinkCache(deviceRepo, NewLinkRepo(db, nil), nil)
+	cachedCompleted, found, err := deviceLinkCache.GetDeviceByID(device.ID)
+	if err != nil {
+		t.Fatalf("prime follow-up device cache: %v", err)
+	}
+	if !found || cachedCompleted.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+		t.Fatalf("cached device before follow-up = (%v, %q), want (true, completed)", found, cachedCompleted.TopologyBootstrapState)
+	}
 	if err := repo.TransitionRun(ctx, run.ID, domain.DeviceImportTopologyRunStateReconciling); err != nil {
 		t.Fatalf("TransitionRun(reconciling): %v", err)
 	}
@@ -604,6 +630,13 @@ func TestDeviceImportTopologyRunRepoAllowsOnlyOneTargetedFollowup(t *testing.T) 
 	}
 	if len(requeued) != 1 || requeued[0] != device.ID {
 		t.Fatalf("follow-up requeued = %#v, want [%s]", requeued, device.ID)
+	}
+	cachedPending, found, err := deviceLinkCache.GetDeviceByID(device.ID)
+	if err != nil {
+		t.Fatalf("read follow-up device cache: %v", err)
+	}
+	if !found || cachedPending.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+		t.Fatalf("cached device after follow-up = (%v, %q), want (true, pending)", found, cachedPending.TopologyBootstrapState)
 	}
 	snapshot, err := repo.Get(ctx, run.ID)
 	if err != nil {
@@ -767,6 +800,16 @@ func TestDeviceImportTopologyRunRepoActorScopedControlsAndRetry(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CompleteItem: %v", err)
 	}
+	completedDevice, err := deviceRepo.GetByID(device.ID)
+	if err != nil {
+		t.Fatalf("GetByID after terminal item: %v", err)
+	}
+	if completedDevice.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+		t.Fatalf(
+			"terminal topology state = %q, want completed",
+			completedDevice.TopologyBootstrapState,
+		)
+	}
 	if err := repo.TransitionRun(ctx, run.ID, domain.DeviceImportTopologyRunStateReconciling); err != nil {
 		t.Fatalf("TransitionRun(reconciling): %v", err)
 	}
@@ -814,6 +857,85 @@ func TestDeviceImportTopologyRunRepoActorScopedControlsAndRetry(t *testing.T) {
 	}
 	if storedDevice.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
 		t.Fatalf("retried topology state = %q, want pending", storedDevice.TopologyBootstrapState)
+	}
+}
+
+func TestDeviceImportTopologyRunRepoPublishesTerminalDeviceStateToLoadedCache(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	mapID := uuid.New()
+	actorID := uuid.New()
+	insertDeviceImportTestMap(t, db, mapID)
+	insertDeviceImportTopologyTestUser(t, db, actorID)
+
+	deviceRepo := NewDeviceRepo(db, testKeyring, nil)
+	device := newDeviceImportTestDevice("cached-offline-router.example.net")
+	device.TopologyDiscoveryMode = domain.TopologyDiscoveryModeBootstrapOnce
+	device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
+	if err := deviceRepo.Create(device); err != nil {
+		t.Fatalf("create device: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO canvas_map_devices (map_id, device_id, role, added_at) VALUES ($1, $2, $3, NOW())`,
+		mapID.String(), device.ID.String(), string(domain.CanvasMapDeviceRoleBase),
+	); err != nil {
+		t.Fatalf("insert device membership: %v", err)
+	}
+
+	deviceLinkCache := devicecache.NewDeviceLinkCache(deviceRepo, NewLinkRepo(db, nil), nil)
+	cachedBefore, found, err := deviceLinkCache.GetDeviceByID(device.ID)
+	if err != nil {
+		t.Fatalf("prime device cache: %v", err)
+	}
+	if !found || cachedBefore.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+		t.Fatalf("cached bootstrap state before completion = (%v, %q), want (true, pending)", found, cachedBefore.TopologyBootstrapState)
+	}
+
+	repo := NewDeviceImportTopologyRunRepo(db, deviceRepo)
+	run := &domain.DeviceImportTopologyRun{
+		ID: uuid.New(), MapID: mapID, ActorUserID: actorID, FileDigest: "sha256:cached-terminal-state",
+		LayoutScope: domain.DeviceImportTopologyLayoutScopePreserve,
+	}
+	if err := repo.Create(ctx, run); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.AddItem(ctx, run.ID, device.ID); err != nil {
+		t.Fatalf("AddItem: %v", err)
+	}
+	if err := repo.FinalizeImport(ctx, run.ID); err != nil {
+		t.Fatalf("FinalizeImport: %v", err)
+	}
+	if _, _, err := repo.MarkItemRunning(ctx, device.ID, time.Now().UTC()); err != nil {
+		t.Fatalf("MarkItemRunning: %v", err)
+	}
+	if _, err := repo.CompleteItem(ctx, run.ID, device.ID, domain.DeviceImportTopologyItemCompletion{
+		State: domain.DeviceImportTopologyItemStateFailed, ResultCode: domain.DeviceImportTopologyResultSNMPUnreachable,
+		Message: "SNMP topology discovery did not complete.", CompletedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("CompleteItem: %v", err)
+	}
+
+	cachedAfter, found, err := deviceLinkCache.GetDeviceByID(device.ID)
+	if err != nil {
+		t.Fatalf("read device cache after completion: %v", err)
+	}
+	if !found || cachedAfter.TopologyBootstrapState != domain.TopologyBootstrapStateCompleted {
+		t.Fatalf("cached bootstrap state after completion = (%v, %q), want (true, completed)", found, cachedAfter.TopologyBootstrapState)
+	}
+
+	requeued, err := repo.RequeueItems(ctx, run.ID, actorID, []uuid.UUID{device.ID})
+	if err != nil {
+		t.Fatalf("RequeueItems: %v", err)
+	}
+	if len(requeued) != 1 || requeued[0] != device.ID {
+		t.Fatalf("requeued devices = %#v, want [%s]", requeued, device.ID)
+	}
+	cachedRetry, found, err := deviceLinkCache.GetDeviceByID(device.ID)
+	if err != nil {
+		t.Fatalf("read device cache after retry: %v", err)
+	}
+	if !found || cachedRetry.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+		t.Fatalf("cached bootstrap state after retry = (%v, %q), want (true, pending)", found, cachedRetry.TopologyBootstrapState)
 	}
 }
 

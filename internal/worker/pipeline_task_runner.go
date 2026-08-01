@@ -91,6 +91,15 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		if p.importTopology != nil {
 			trackedRunID, tracked = p.importTopology.BootstrapStarted(ctx, task.Device.ID, time.Now().UTC())
 		}
+		// Essential reachability is authoritative for a tracked import. Avoid serially spending
+		// the full Bootstrap SNMP timeout on devices already known to be unreachable.
+		if tracked && r.knownSNMPUnreachable(task.Device.ID) {
+			p.importTopology.BootstrapCompleted(ctx, trackedRunID, task.Device.ID, service.DeviceImportTopologyBootstrapOutcome{
+				DiscoveryErr: fmt.Errorf("SNMP was already marked unreachable by essential polling"),
+				CompletedAt:  time.Now().UTC(),
+			})
+			return
+		}
 		profile := r.timeoutProfile(polling.LaneBootstrap)
 		result := p.staticCollector.Poll(ctx, task.Device, profile.Timeout, profile.Retries, r.bootstrapTopologyDiscoveryMode(task.Device))
 		finishedAt = completionTime(result.CollectedAt)

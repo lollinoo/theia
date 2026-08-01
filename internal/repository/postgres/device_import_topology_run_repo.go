@@ -29,8 +29,9 @@ var (
 
 // DeviceImportTopologyRunRepo persists run state independently of browser lifetime.
 type DeviceImportTopologyRunRepo struct {
-	db  *DB
-	now func() time.Time
+	db         *DB
+	deviceRepo *DeviceRepo
+	now        func() time.Time
 }
 
 const (
@@ -39,8 +40,28 @@ const (
 )
 
 // NewDeviceImportTopologyRunRepo creates the PostgreSQL topology-run repository.
-func NewDeviceImportTopologyRunRepo(db *sql.DB) *DeviceImportTopologyRunRepo {
-	return &DeviceImportTopologyRunRepo{db: wrapDB(db), now: time.Now}
+// Supplying the shared device repository lets direct transactional device-state
+// updates publish the same post-commit cache events as normal device mutations.
+func NewDeviceImportTopologyRunRepo(db *sql.DB, deviceRepos ...*DeviceRepo) *DeviceImportTopologyRunRepo {
+	var deviceRepo *DeviceRepo
+	if len(deviceRepos) > 0 {
+		deviceRepo = deviceRepos[0]
+	}
+	return &DeviceImportTopologyRunRepo{db: wrapDB(db), deviceRepo: deviceRepo, now: time.Now}
+}
+
+func (r *DeviceImportTopologyRunRepo) publishDeviceUpdates(deviceIDs []uuid.UUID) {
+	if r == nil || r.deviceRepo == nil {
+		return
+	}
+	deviceIDs = normalizedDeviceImportTopologyUUIDs(deviceIDs)
+	if len(deviceIDs) == 0 {
+		return
+	}
+	r.deviceRepo.notify()
+	for _, deviceID := range deviceIDs {
+		r.deviceRepo.publishChange(domain.ChangeKindUpdated, deviceID)
+	}
 }
 
 // Create starts an importing run and serializes automatic layout ownership per map.
@@ -723,7 +744,8 @@ func (r *DeviceImportTopologyRunRepo) MarkItemRunning(
 	return runID, true, nil
 }
 
-// CompleteItem records one sanitized terminal result and reports whether the run is terminal.
+// CompleteItem records one sanitized terminal result, closes its one-shot device window, and
+// reports whether the run is terminal. Retry and follow-up transitions reopen that window.
 func (r *DeviceImportTopologyRunRepo) CompleteItem(
 	ctx context.Context,
 	runID, deviceID uuid.UUID,
@@ -769,6 +791,17 @@ func (r *DeviceImportTopologyRunRepo) CompleteItem(
 	if rows != 1 {
 		return false, ErrDeviceImportTopologyRunConflict
 	}
+	deviceResult, err := tx.ExecContext(ctx,
+		`UPDATE devices
+		 SET topology_bootstrap_state = ?, updated_at = ?
+		 WHERE id = ? AND topology_bootstrap_state IN (?, ?)`,
+		string(domain.TopologyBootstrapStateCompleted), r.now().UTC(), deviceID.String(),
+		string(domain.TopologyBootstrapStatePending), string(domain.TopologyBootstrapStateFollowupScheduled),
+	)
+	if err != nil {
+		return false, fmt.Errorf("closing topology bootstrap window after item completion: %w", err)
+	}
+	deviceRows, _ := deviceResult.RowsAffected()
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE device_import_topology_runs SET updated_at = ? WHERE id = ?`,
 		completion.CompletedAt.UTC(), runID.String(),
@@ -785,6 +818,9 @@ func (r *DeviceImportTopologyRunRepo) CompleteItem(
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("committing topology item completion: %w", err)
+	}
+	if deviceRows > 0 {
+		r.publishDeviceUpdates([]uuid.UUID{deviceID})
 	}
 	return remaining == 0, nil
 }
@@ -1017,7 +1053,9 @@ func (r *DeviceImportTopologyRunRepo) RecoverInterrupted(ctx context.Context) ([
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("committing topology run recovery: %w", err)
 	}
-	return normalizedDeviceImportTopologyUUIDs(recovered), nil
+	recovered = normalizedDeviceImportTopologyUUIDs(recovered)
+	r.publishDeviceUpdates(recovered)
+	return recovered, nil
 }
 
 // RecoverReconciling returns runs whose idempotent reconciliation was interrupted.
@@ -1438,6 +1476,7 @@ func (r *DeviceImportTopologyRunRepo) RequeueFollowupItems(
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("committing topology follow-up: %w", err)
 	}
+	r.publishDeviceUpdates(requeued)
 	return requeued, nil
 }
 
@@ -1538,6 +1577,7 @@ func (r *DeviceImportTopologyRunRepo) RequeueItems(
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("committing topology retry: %w", err)
 	}
+	r.publishDeviceUpdates(requeued)
 	return requeued, nil
 }
 

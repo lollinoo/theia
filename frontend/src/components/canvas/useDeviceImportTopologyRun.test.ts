@@ -311,6 +311,45 @@ describe('useDeviceImportTopologyRun', () => {
     );
   });
 
+  it('automatically lays out imported nodes when discovery finds no neighbors or links', async () => {
+    const noTopologySnapshot = {
+      ...snapshot('ready_for_layout', false),
+      items: [
+        {
+          ...snapshot('ready_for_layout', false).items[0],
+          state: 'warning' as const,
+          result_code: 'no_neighbors' as const,
+          message: 'No LLDP or CDP neighbors were discovered.',
+          neighbor_count: 0,
+          links_created: 0,
+          unresolved_neighbors: 0,
+        },
+      ],
+    };
+    vi.mocked(fetchDeviceImportTopologyRun).mockResolvedValue(noTopologySnapshot);
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValue({
+      status: 'ok',
+      topology: {
+        devices: [{ id: 'imported' }],
+        links: [],
+        positions: {},
+      },
+    } as never);
+
+    renderHook(() =>
+      useDeviceImportTopologyRun({
+        mapId: 'map-1',
+        request,
+        renderedMapKey: 'map:map-1',
+        nodePositions: new Map(),
+        reloadTopology: vi.fn().mockResolvedValue(undefined),
+      }),
+    );
+
+    await waitFor(() => expect(applyDeviceImportTopologyLayout).toHaveBeenCalledOnce());
+    expect(continueDeviceImportTopologyRun).not.toHaveBeenCalled();
+  });
+
   it('still requires confirmation when an offline run contains another issue', async () => {
     const baseItem = snapshot('ready_for_layout', false).items[0];
     vi.mocked(fetchDeviceImportTopologyRun).mockResolvedValue({

@@ -1858,6 +1858,76 @@ func TestPipelineOrchestratorBootstrapTaskReportsCollectorFailure(t *testing.T) 
 	}
 }
 
+func TestPipelineOrchestratorTrackedBootstrapSkipsSNMPWhenEssentialMarkedUnreachable(t *testing.T) {
+	deviceID := uuid.New()
+	store := state.NewStore()
+	store.Update(state.StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        time.Now().UTC(),
+		Essential: &state.EssentialUpdate{
+			PollStatus:       polling.PollStatusFailed,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateFalse,
+			Uptime:           polling.FieldStateError,
+			CPU:              polling.FieldStateError,
+			Memory:           polling.FieldStateError,
+		},
+	})
+
+	var snmpCalls int
+	staticCollector := collector.NewStaticCollector(
+		buildEmptyVendorRegistry(),
+		func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+			snmpCalls++
+			return nil, errors.New("offline bootstrap must not attempt SNMP")
+		},
+	)
+	topologyService := &fakeTopologyService{}
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		store,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		staticCollector,
+		nil,
+		topologyService,
+		newMockWorkerSettingsRepo(),
+		nil,
+		nil,
+		nil,
+	)
+	observer := &fakeDeviceImportTopologyObserver{runID: uuid.New()}
+	pipeline.SetDeviceImportTopologyObserver(observer)
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		Kind:            polling.TaskKindBootstrap,
+		Lane:            polling.LaneBootstrap,
+		VolatilityClass: domain.VolatilityClassStatic,
+		Device: domain.Device{
+			ID:                    deviceID,
+			IP:                    "192.0.2.100",
+			TopologyDiscoveryMode: domain.TopologyDiscoveryModeBootstrapOnce,
+			SNMPCredentials: domain.SNMPCredentials{
+				Version: domain.SNMPVersionV2c,
+				V2c:     &domain.SNMPv2cCredentials{Community: "offline"},
+			},
+		},
+	})
+
+	if snmpCalls != 0 {
+		t.Fatalf("SNMP collector calls = %d, want 0", snmpCalls)
+	}
+	if len(observer.completed) != 1 || observer.completed[0].DiscoveryErr == nil {
+		t.Fatalf("topology observer completions = %#v, want immediate unreachable outcome", observer.completed)
+	}
+	if topologyService.calls != 0 {
+		t.Fatalf("topology persistence calls = %d, want 0", topologyService.calls)
+	}
+}
+
 func TestPipelineOrchestratorTopologyDiscoveryMode_TreatsBootstrapOnceAsOffForRegularPolls(t *testing.T) {
 	settingsRepo := newMockWorkerSettingsRepo()
 	if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeBootstrapOnce)); err != nil {
