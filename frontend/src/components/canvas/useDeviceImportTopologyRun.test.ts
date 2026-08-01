@@ -231,6 +231,55 @@ describe('useDeviceImportTopologyRun', () => {
     expect(onConsumed).toHaveBeenCalledWith('request-1');
   });
 
+  it('keeps an imported node out of a fixed saved link route', async () => {
+    vi.mocked(fetchDeviceImportTopologyRun).mockResolvedValue(snapshot('ready_for_layout', false));
+    const source = { x: 215, y: 326 };
+    const target = { x: 1147, y: 326 };
+    const waypoints = [
+      { x: source.x, y: 582 },
+      { x: 2000, y: 582 },
+      { x: target.x, y: 582 },
+    ];
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValue({
+      status: 'ok',
+      topology: {
+        devices: [{ id: 'left' }, { id: 'right' }, { id: 'imported' }],
+        links: [
+          {
+            id: 'fixed-link',
+            source_device_id: 'left',
+            target_device_id: 'right',
+          },
+        ],
+        positions: {
+          left: { device_id: 'left', x: 0, y: 256, pinned: true },
+          right: { device_id: 'right', x: 932, y: 256, pinned: true },
+          imported: { device_id: 'imported', x: 466, y: 256, pinned: false },
+        },
+        link_routes: {
+          'fixed-link': { version: 1, waypoints },
+        },
+      },
+    } as never);
+
+    renderHook(() =>
+      useDeviceImportTopologyRun({
+        mapId: 'map-1',
+        request,
+        renderedMapKey: 'map:map-1',
+        nodePositions: new Map(),
+        reloadTopology: vi.fn().mockResolvedValue('applied'),
+      }),
+    );
+
+    await waitFor(() => expect(applyDeviceImportTopologyLayout).toHaveBeenCalledOnce());
+    const applied = vi.mocked(applyDeviceImportTopologyLayout).mock.calls[0]?.[1];
+    const imported = applied?.positions.find((position) => position.device_id === 'imported');
+
+    expect(imported).toBeDefined();
+    expect(imported!.y + 140 <= 582 || imported!.y >= 582).toBe(true);
+  });
+
   it('keeps the layout phase visible until authoritative canvas reload finishes', async () => {
     const readySnapshot = snapshot('ready_for_layout', false);
     const completedSnapshot = snapshot('completed', false);

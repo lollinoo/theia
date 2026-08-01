@@ -8,6 +8,23 @@ const TEST_ADDRESSES: string[] = ['192.0.2.241', '192.0.2.242', '192.0.2.243', '
 const TEST_TARGETS = TEST_ADDRESSES.map((address) => `${address}:9100`);
 const TEST_MAP_NAME = 'Device import e2e map';
 const TEST_PROFILE_NAME = 'Device import e2e SNMP profile';
+const LINKED_LAYOUT_MAP_NAME = 'Device import linked layout e2e map';
+const LINKED_LAYOUT_PROFILE_NAME = 'Device import linked layout e2e SNMP profile';
+const LINKED_LAYOUT_ADDRESSES = [
+  '192.0.2.221',
+  '192.0.2.222',
+  '192.0.2.223',
+  '192.0.2.224',
+  '192.0.2.225',
+];
+const LINKED_LAYOUT_IMPORT_ADDRESS = '192.0.2.226';
+const ALL_TEST_ADDRESSES = [
+  ...TEST_ADDRESSES,
+  ...LINKED_LAYOUT_ADDRESSES,
+  LINKED_LAYOUT_IMPORT_ADDRESS,
+];
+const TEST_MAP_NAMES = [TEST_MAP_NAME, LINKED_LAYOUT_MAP_NAME];
+const TEST_PROFILE_NAMES = [TEST_PROFILE_NAME, LINKED_LAYOUT_PROFILE_NAME];
 const TEST_SNMP_COMMUNITY = 'device-import-e2e-community';
 const IGNORED_LABEL_VALUE = 'MUST_NOT_BE_IMPORTED';
 const EXISTING_NODE_POSITION = { x: 80, y: 80, pinned: true };
@@ -61,7 +78,19 @@ interface CanvasPositionResource {
 
 interface CanvasTopologyResource {
   devices?: Array<{ id?: unknown }>;
+  links?: Array<{
+    id?: unknown;
+    source_device_id?: unknown;
+    target_device_id?: unknown;
+  }>;
   positions?: Record<string, CanvasPositionResource>;
+}
+
+interface LinkedLayoutFixture {
+  mapId: string;
+  deviceIds: string[];
+  links: Array<{ id: string; source: string; target: string }>;
+  profileId: string;
 }
 
 interface ImportedDeviceFixture {
@@ -89,7 +118,7 @@ async function cleanupTestFixtures(page: Page): Promise<void> {
   for (const device of devices.data ?? []) {
     if (
       typeof device.attributes?.ip !== 'string' ||
-      !TEST_ADDRESSES.includes(device.attributes.ip) ||
+      !ALL_TEST_ADDRESSES.includes(device.attributes.ip) ||
       typeof device.id !== 'string'
     ) {
       continue;
@@ -104,7 +133,12 @@ async function cleanupTestFixtures(page: Page): Promise<void> {
   expect(mapsResponse.ok(), `map cleanup list returned ${mapsResponse.status()}`).toBe(true);
   const maps = (await mapsResponse.json()) as APIListResponse<CanvasMapResource>;
   for (const map of maps.data ?? []) {
-    if (map.name !== TEST_MAP_NAME || map.is_default !== false || typeof map.id !== 'string') {
+    if (
+      typeof map.name !== 'string' ||
+      !TEST_MAP_NAMES.includes(map.name) ||
+      map.is_default !== false ||
+      typeof map.id !== 'string'
+    ) {
       continue;
     }
     const response = await page.request.delete(
@@ -121,7 +155,13 @@ async function cleanupTestFixtures(page: Page): Promise<void> {
   ).toBe(true);
   const profiles = (await profilesResponse.json()) as APIListResponse<SNMPProfileResource>;
   for (const profile of profiles.data ?? []) {
-    if (profile.name !== TEST_PROFILE_NAME || typeof profile.id !== 'string') continue;
+    if (
+      typeof profile.name !== 'string' ||
+      !TEST_PROFILE_NAMES.includes(profile.name) ||
+      typeof profile.id !== 'string'
+    ) {
+      continue;
+    }
     const response = await page.request.delete(
       `/api/v1/snmp-profiles/${encodeURIComponent(profile.id)}`,
       { headers },
@@ -170,11 +210,14 @@ async function createTestMap(page: Page, seedDeviceId: string): Promise<string> 
   return mapId;
 }
 
-async function createRedactedSNMPProfile(page: Page): Promise<string> {
+async function createRedactedSNMPProfile(
+  page: Page,
+  profileName = TEST_PROFILE_NAME,
+): Promise<string> {
   const response = await page.request.post('/api/v1/snmp-profiles', {
     headers: await csrfHeaders(page),
     data: {
-      name: TEST_PROFILE_NAME,
+      name: profileName,
       description: 'Redacted profile used by node import browser coverage',
       snmp: { version: '2c', community: TEST_SNMP_COMMUNITY },
     },
@@ -185,6 +228,87 @@ async function createRedactedSNMPProfile(page: Page): Promise<string> {
   expect(payload.data?.snmp?.community).toBeUndefined();
   expect(payload.data?.snmp?.community_set).toBe(true);
   return payload.data?.id as string;
+}
+
+async function createLinkedLayoutFixture(page: Page): Promise<LinkedLayoutFixture> {
+  const headers = await csrfHeaders(page);
+  const deviceIds: string[] = [];
+
+  for (const [index, address] of LINKED_LAYOUT_ADDRESSES.entries()) {
+    const response = await page.request.post('/api/v1/devices', {
+      headers,
+      data: {
+        hostname: `layout-node-${index + 1}`,
+        ip: address,
+        metrics_source: 'prometheus',
+        prometheus_label_name: 'instance',
+        prometheus_label_value: `${address}:9100`,
+        skip_primary_map_membership: true,
+      },
+    });
+    expect(response.ok(), `linked device creation returned ${response.status()}`).toBe(true);
+    const payload = (await response.json()) as APIDataResponse<DeviceResource>;
+    expect(payload.data?.id).toEqual(expect.any(String));
+    deviceIds.push(payload.data?.id as string);
+  }
+
+  const mapResponse = await page.request.post('/api/v1/canvas/maps', {
+    headers,
+    data: {
+      name: LINKED_LAYOUT_MAP_NAME,
+      description: 'Dense linked map for Bootstrap-Once layout browser coverage',
+      filter: { device_ids: deviceIds },
+    },
+  });
+  expect(mapResponse.ok(), `linked map creation returned ${mapResponse.status()}`).toBe(true);
+  const mapPayload = (await mapResponse.json()) as APIDataResponse<CanvasMapResource>;
+  expect(mapPayload.data?.id).toEqual(expect.any(String));
+
+  const links: LinkedLayoutFixture['links'] = [];
+  for (let index = 1; index < deviceIds.length; index += 1) {
+    const response = await page.request.post('/api/v1/links', {
+      headers,
+      data: {
+        source_device_id: deviceIds[0],
+        source_if_name: `ether${index}`,
+        target_device_id: deviceIds[index],
+        target_if_name: 'ether1',
+      },
+    });
+    expect(response.ok(), `linked topology creation returned ${response.status()}`).toBe(true);
+    const payload = (await response.json()) as APIDataResponse<{
+      id?: unknown;
+      source_device_id?: unknown;
+      target_device_id?: unknown;
+    }>;
+    expect(payload.data?.id).toEqual(expect.any(String));
+    links.push({
+      id: payload.data?.id as string,
+      source: deviceIds[0],
+      target: deviceIds[index],
+    });
+  }
+
+  return {
+    mapId: mapPayload.data?.id as string,
+    deviceIds,
+    links,
+    profileId: await createRedactedSNMPProfile(page, LINKED_LAYOUT_PROFILE_NAME),
+  };
+}
+
+async function deviceIdsForAddresses(page: Page, addresses: string[]): Promise<string[]> {
+  const response = await page.request.get('/api/v1/devices');
+  expect(response.ok(), `device lookup returned ${response.status()}`).toBe(true);
+  const payload = (await response.json()) as APIListResponse<DeviceResource>;
+
+  return addresses.map((address) => {
+    const device = (payload.data ?? []).find(
+      (candidate) => candidate.attributes?.ip === address && typeof candidate.id === 'string',
+    );
+    expect(device?.id).toEqual(expect.any(String));
+    return device?.id as string;
+  });
 }
 
 async function importedDevices(page: Page): Promise<ImportedDeviceFixture[]> {
@@ -249,6 +373,64 @@ async function expectNodesDoNotOverlap(page: Page, deviceIds: string[]): Promise
       { timeout: 10_000 },
     )
     .toBe('none');
+}
+
+async function expectLinksDoNotCrossUnrelatedNodes(
+  page: Page,
+  links: LinkedLayoutFixture['links'],
+  deviceIds: string[],
+): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          ({ evaluatedLinks, evaluatedDeviceIds }) => {
+            const nodeRects = new Map<string, DOMRect>();
+            for (const deviceId of evaluatedDeviceIds) {
+              const node = document.querySelector<HTMLElement>(
+                `.react-flow__node[data-id="${CSS.escape(deviceId)}"]`,
+              );
+              if (!node) return [`missing-node:${deviceId}`];
+              nodeRects.set(deviceId, node.getBoundingClientRect());
+            }
+
+            const conflicts: string[] = [];
+            for (const link of evaluatedLinks) {
+              const path = document.getElementById(link.id) as SVGPathElement | null;
+              const matrix = path?.getScreenCTM();
+              if (!path || !matrix) return [`missing-link:${link.id}`];
+              const length = path.getTotalLength();
+              const sampleCount = Math.max(2, Math.ceil(length / 4));
+
+              for (let sample = 1; sample < sampleCount; sample += 1) {
+                const local = path.getPointAtLength((length * sample) / sampleCount);
+                const svgPoint = path.ownerSVGElement!.createSVGPoint();
+                svgPoint.x = local.x;
+                svgPoint.y = local.y;
+                const screen = svgPoint.matrixTransform(matrix);
+
+                for (const [deviceId, rect] of nodeRects) {
+                  if (deviceId === link.source || deviceId === link.target) continue;
+                  if (
+                    screen.x > rect.left + 2 &&
+                    screen.x < rect.right - 2 &&
+                    screen.y > rect.top + 2 &&
+                    screen.y < rect.bottom - 2
+                  ) {
+                    conflicts.push(`${link.id}:${deviceId}`);
+                    break;
+                  }
+                }
+                if (conflicts.length > 0) break;
+              }
+            }
+            return conflicts;
+          },
+          { evaluatedLinks: links, evaluatedDeviceIds: deviceIds },
+        ),
+      { timeout: 15_000 },
+    )
+    .toEqual([]);
 }
 
 async function openSavedMap(page: Page, mapName: string): Promise<void> {
@@ -423,6 +605,91 @@ test('imports and persists a collision-free file-SD batch in an occupied saved m
     await expectNodesDoNotOverlap(page, allDeviceIds);
   } finally {
     releasePositionSave?.();
+    await cleanupTestFixtures(page);
+  }
+});
+
+test('Bootstrap-Once keeps automatic links clear of unrelated nodes after layout', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await cleanupTestFixtures(page);
+
+  try {
+    const fixture = await createLinkedLayoutFixture(page);
+
+    await page.goto('/');
+    await page.getByRole('button', { name: /User menu for/ }).click();
+    await page.getByRole('menuitem', { name: 'Admin Area' }).click();
+    await page.getByRole('tab', { name: 'Node Import' }).click();
+    await expect(page.getByRole('heading', { name: 'One-time node import' })).toBeVisible();
+
+    await page.getByRole('radio', { name: 'SNMP Direct', exact: true }).check();
+    await expect(
+      page.getByRole('checkbox', {
+        name: 'Discover links with LLDP/CDP (Bootstrap-Once)',
+      }),
+    ).toBeChecked();
+    await page.getByRole('combobox', { name: 'SNMP Profile' }).selectOption(fixture.profileId);
+    await page.getByRole('combobox', { name: 'Destination map' }).selectOption(fixture.mapId);
+    await page.getByRole('radio', { name: 'Reorganize entire map' }).check();
+    await page.getByLabel('Prometheus file-SD YAML').setInputFiles({
+      name: 'bootstrap-linked-layout.yml',
+      mimeType: 'application/yaml',
+      buffer: Buffer.from(`- targets:\n    - ${LINKED_LAYOUT_IMPORT_ADDRESS}\n`),
+    });
+    await page.getByRole('button', { name: 'Preview import' }).click();
+    await expect(page.getByTestId('device-import-preview-row')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Commit import' }).click();
+    await expect(page.getByLabel(/Select topology map/)).toContainText(LINKED_LAYOUT_MAP_NAME);
+
+    await expect
+      .poll(() => deviceIdsForAddresses(page, [LINKED_LAYOUT_IMPORT_ADDRESS]), {
+        timeout: 30_000,
+      })
+      .toEqual([expect.any(String)]);
+    const importedDeviceIds = await deviceIdsForAddresses(page, [LINKED_LAYOUT_IMPORT_ADDRESS]);
+    const allDeviceIds = [...fixture.deviceIds, ...importedDeviceIds];
+
+    await expect
+      .poll(
+        async () => {
+          const topology = await mapTopology(page, fixture.mapId);
+          return allDeviceIds.every((deviceId) => {
+            const position = topology.positions?.[deviceId];
+            return (
+              typeof position?.x === 'number' &&
+              Number.isFinite(position.x) &&
+              typeof position.y === 'number' &&
+              Number.isFinite(position.y)
+            );
+          });
+        },
+        { timeout: 120_000 },
+      )
+      .toBe(true);
+    await expect(page.getByTestId('topology-bootstrap-overlay')).toBeHidden({ timeout: 120_000 });
+    await page.getByRole('button', { name: 'Fit view' }).click();
+    for (const deviceId of allDeviceIds) {
+      await expect(page.locator(`.react-flow__node[data-id="${deviceId}"]`)).toBeVisible();
+    }
+    await expectNodesDoNotOverlap(page, allDeviceIds);
+    await expectLinksDoNotCrossUnrelatedNodes(page, fixture.links, allDeviceIds);
+
+    const positionedTopology = await mapTopology(page, fixture.mapId);
+    const positionSnapshot = Object.fromEntries(
+      allDeviceIds.map((deviceId) => [deviceId, positionedTopology.positions?.[deviceId]]),
+    );
+    await page.reload();
+    await openSavedMap(page, LINKED_LAYOUT_MAP_NAME);
+    await page.getByRole('button', { name: 'Fit view' }).click();
+    const reloadedTopology = await mapTopology(page, fixture.mapId);
+    for (const deviceId of allDeviceIds) {
+      expect(reloadedTopology.positions?.[deviceId]).toEqual(positionSnapshot[deviceId]);
+    }
+    await expectNodesDoNotOverlap(page, allDeviceIds);
+    await expectLinksDoNotCrossUnrelatedNodes(page, fixture.links, allDeviceIds);
+  } finally {
     await cleanupTestFixtures(page);
   }
 });

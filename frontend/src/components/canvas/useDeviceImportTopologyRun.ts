@@ -467,6 +467,7 @@ export function useDeviceImportTopologyRun({
             id: link.id,
             source: link.source_device_id,
             target: link.target_device_id,
+            waypoints: result.topology.link_routes?.[link.id]?.waypoints,
           })),
           positions,
           importedDeviceIds: new Set(currentSnapshot.items.map((item) => item.device_id)),
