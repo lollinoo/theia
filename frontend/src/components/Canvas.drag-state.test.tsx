@@ -1,12 +1,13 @@
 /**
  * Exercises canvas drag state component behavior so refactors preserve the documented contract.
  */
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasMap, Device, Link, LinkRoute } from '../types/api';
 import Canvas from './Canvas';
+import type { ImportedNodePlacementRequest } from './canvas/importedNodePlacementRequest';
 import type { DeviceNode } from './DeviceCard';
 import { FloatingConnectionLine } from './FloatingConnectionLine';
 
@@ -17,6 +18,30 @@ const defaultCanvasProps = {
   onMapSelect: vi.fn(),
   onManageMaps: vi.fn(),
 };
+
+const topologyImportRequest: ImportedNodePlacementRequest = {
+  requestId: 'request-import',
+  mapId: 'map-backbone',
+  deviceIds: ['dev-a'],
+  topologyRunId: 'run-import',
+  topologyLayoutScope: 'preserve',
+};
+
+function topologyImportCanvas(request?: ImportedNodePlacementRequest) {
+  return (
+    <Canvas
+      {...defaultCanvasProps}
+      mapId="map-backbone"
+      topologyImportEnabled
+      importedNodePlacementRequest={request}
+      snapshot={null}
+      reconnecting={false}
+      prometheusStatus={null}
+      selectedAreaId={null}
+      areas={[]}
+    />
+  );
+}
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -73,6 +98,65 @@ function mockNode(device: Device, x: number, y: number): DeviceNode {
   } as DeviceNode;
 }
 
+function discoveringTopologySnapshot() {
+  return {
+    run: {
+      id: 'run-import',
+      map_id: 'map-backbone',
+      file_digest: 'sha256:file',
+      layout_scope: 'preserve' as const,
+      state: 'discovering' as const,
+      auto_layout_allowed: true,
+      backgrounded: false,
+      reconcile_attempts: 0,
+      created_at: '2026-08-01T08:00:00Z',
+      updated_at: '2026-08-01T08:00:00Z',
+    },
+    items: [
+      {
+        device_id: 'dev-a',
+        state: 'queued' as const,
+        attempt: 0,
+        neighbor_count: 0,
+        links_created: 0,
+        unresolved_neighbors: 0,
+        updated_at: '2026-08-01T08:00:00Z',
+      },
+    ],
+  };
+}
+
+function layoutReviewTopologySnapshot() {
+  return {
+    ...discoveringTopologySnapshot(),
+    run: {
+      ...discoveringTopologySnapshot().run,
+      state: 'ready_for_layout' as const,
+      layout_input_token: 'sha256:layout',
+    },
+    items: [
+      {
+        ...discoveringTopologySnapshot().items[0],
+        state: 'warning' as const,
+        attempt: 5,
+        result_code: 'unresolved_neighbors' as const,
+        message: 'Some discovered neighbors could not be linked automatically.',
+        neighbor_count: 3,
+        links_created: 0,
+        unresolved_neighbors: 1,
+      },
+    ],
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 type MockNodeChange = {
   id: string;
   type: string;
@@ -105,6 +189,9 @@ const testState = vi.hoisted(() => ({
   }),
   savePositions: vi.fn(),
   loadTopology: vi.fn(),
+  fetchActiveDeviceImportTopologyRun: vi.fn(),
+  fetchDeviceImportTopologyRun: vi.fn(),
+  markDeviceImportTopologyManualEdit: vi.fn(),
   removeDeviceFromCanvasMap: vi.fn(),
   updateNodePosition: vi.fn(),
   fitView: vi.fn(),
@@ -119,6 +206,7 @@ const testState = vi.hoisted(() => ({
     onLinkRouteCommit?: (edgeId: string, route: LinkRoute | null) => void;
   },
   canvasPanelsProps: {} as Record<string, unknown>,
+  keyboardShortcuts: {} as Record<string, { handler: () => void }>,
   backgroundProps: {} as Record<string, unknown>,
   reactFlowProps: {} as Record<string, unknown>,
   reactFlowRenderCount: 0,
@@ -146,6 +234,7 @@ vi.mock('@xyflow/react', () => ({
     onMove,
     onConnectStart,
     onConnectEnd,
+    onNodeDragStart,
     onNodeDragStop,
     onNodesChange,
     snapToGrid,
@@ -163,6 +252,7 @@ vi.mock('@xyflow/react', () => ({
     onMove?: (event: unknown, viewport: { zoom: number }) => void;
     onConnectStart?: () => void;
     onConnectEnd?: () => void;
+    onNodeDragStart?: () => void;
     onNodeDragStop?: (event: unknown, node: DeviceNode) => void;
     onNodesChange?: (changes: unknown[]) => void;
     snapToGrid?: boolean;
@@ -215,6 +305,9 @@ vi.mock('@xyflow/react', () => ({
         </button>
         <button type="button" onClick={() => onConnectEnd?.()}>
           End connect
+        </button>
+        <button type="button" onClick={() => onNodeDragStart?.()}>
+          Start node drag
         </button>
         <button
           type="button"
@@ -301,20 +394,34 @@ vi.mock('./SidePanel', () => ({
 vi.mock('./ShortcutHelp', () => ({ ShortcutHelp: () => null }));
 vi.mock('./Toolbar', () => ({
   Toolbar: ({
+    onToggleEditMode,
     onToggleSnapToGrid,
+    editMode,
     snapToGrid,
   }: {
+    onToggleEditMode: () => void;
     onToggleSnapToGrid: () => void;
+    editMode: boolean;
     snapToGrid: boolean;
   }) => (
-    <button
-      type="button"
-      aria-label={`Snap to grid: ${snapToGrid ? 'On' : 'Off'}`}
-      aria-pressed={snapToGrid}
-      onClick={onToggleSnapToGrid}
-    >
-      Toggle snap
-    </button>
+    <>
+      <button
+        type="button"
+        aria-label={`Snap to grid: ${snapToGrid ? 'On' : 'Off'}`}
+        aria-pressed={snapToGrid}
+        onClick={onToggleSnapToGrid}
+      >
+        Toggle snap
+      </button>
+      <button
+        type="button"
+        aria-label={`Edit mode: ${editMode ? 'On' : 'Off'}`}
+        aria-pressed={editMode}
+        onClick={onToggleEditMode}
+      >
+        Toggle edit mode
+      </button>
+    </>
   ),
 }));
 vi.mock('./MapSelector', () => ({ MapSelector: () => null }));
@@ -329,7 +436,9 @@ vi.mock('./canvas/detailSubscription', () => ({
   getCanvasDetailDeviceId: () => null,
 }));
 vi.mock('../hooks/useKeyboardShortcuts', () => ({
-  useKeyboardShortcuts: () => undefined,
+  useKeyboardShortcuts: (shortcuts: Record<string, { handler: () => void }>) => {
+    testState.keyboardShortcuts = shortcuts;
+  },
 }));
 vi.mock('../hooks/usePositions', () => ({
   usePositions: () => ({ savePositions: testState.savePositions }),
@@ -354,6 +463,15 @@ vi.mock('../api/client', () => ({
   deleteCanvasMapLinkRoute: (...args: unknown[]) => testState.deleteCanvasMapLinkRoute(...args),
   removeDeviceFromCanvasMap: (...args: unknown[]) => testState.removeDeviceFromCanvasMap(...args),
   saveCanvasMapLinkRoute: (...args: unknown[]) => testState.saveCanvasMapLinkRoute(...args),
+}));
+vi.mock('../api/deviceImport', async (loadOriginal) => ({
+  ...(await loadOriginal<typeof import('../api/deviceImport')>()),
+  fetchActiveDeviceImportTopologyRun: (...args: unknown[]) =>
+    testState.fetchActiveDeviceImportTopologyRun(...args),
+  fetchDeviceImportTopologyRun: (...args: unknown[]) =>
+    testState.fetchDeviceImportTopologyRun(...args),
+  markDeviceImportTopologyManualEdit: (...args: unknown[]) =>
+    testState.markDeviceImportTopologyManualEdit(...args),
 }));
 vi.mock('./canvas/useCanvasData', async () => {
   const ReactRuntime = await import('react');
@@ -443,6 +561,11 @@ describe('Canvas drag state ownership', () => {
     testState.savePositions.mockReset();
     testState.loadTopology.mockReset();
     testState.loadTopology.mockResolvedValue(undefined);
+    testState.fetchActiveDeviceImportTopologyRun.mockReset();
+    testState.fetchActiveDeviceImportTopologyRun.mockResolvedValue(null);
+    testState.fetchDeviceImportTopologyRun.mockReset();
+    testState.markDeviceImportTopologyManualEdit.mockReset();
+    testState.markDeviceImportTopologyManualEdit.mockResolvedValue(undefined);
     testState.removeDeviceFromCanvasMap.mockReset();
     testState.removeDeviceFromCanvasMap.mockResolvedValue(undefined);
     testState.updateNodePosition.mockReset();
@@ -452,6 +575,7 @@ describe('Canvas drag state ownership', () => {
     testState.reactFlowStore = { width: 1200, height: 800 };
     testState.canvasDataParams = null;
     testState.canvasPanelsProps = {};
+    testState.keyboardShortcuts = {};
     testState.backgroundProps = {};
     testState.reactFlowProps = {};
     testState.reactFlowRenderCount = 0;
@@ -476,6 +600,149 @@ describe('Canvas drag state ownership', () => {
     expect(screen.getByTestId('topology-minimap')).toBeInTheDocument();
     expect(testState.displayedNodes.map((node) => node.id)).toEqual(['dev-a', 'dev-b', 'dev-c']);
   });
+
+  it('does not cancel a new topology bootstrap when edit mode was already enabled', async () => {
+    testState.renderedMapKey = 'map:map-backbone';
+    testState.fetchDeviceImportTopologyRun.mockResolvedValue(discoveringTopologySnapshot());
+
+    const view = render(topologyImportCanvas());
+
+    await waitFor(() =>
+      expect(testState.fetchActiveDeviceImportTopologyRun).toHaveBeenCalledWith('map-backbone'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit mode: Off' }));
+    expect(testState.markDeviceImportTopologyManualEdit).not.toHaveBeenCalled();
+
+    view.rerender(topologyImportCanvas(topologyImportRequest));
+
+    await waitFor(() =>
+      expect(testState.fetchDeviceImportTopologyRun).toHaveBeenCalledWith('run-import'),
+    );
+    await act(async () => Promise.resolve());
+    expect(testState.markDeviceImportTopologyManualEdit).not.toHaveBeenCalled();
+  });
+
+  it('cancels an active topology bootstrap when the operator enters edit mode', async () => {
+    testState.renderedMapKey = 'map:map-backbone';
+    testState.fetchDeviceImportTopologyRun.mockResolvedValue(discoveringTopologySnapshot());
+
+    render(topologyImportCanvas(topologyImportRequest));
+
+    await waitFor(() =>
+      expect(testState.fetchDeviceImportTopologyRun).toHaveBeenCalledWith('run-import'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit mode: Off' }));
+
+    await waitFor(() =>
+      expect(testState.markDeviceImportTopologyManualEdit).toHaveBeenCalledWith('run-import'),
+    );
+  });
+
+  it('honors edit mode entered while the topology run lookup is pending', async () => {
+    testState.renderedMapKey = 'map:map-backbone';
+    const runLookup = deferred<ReturnType<typeof discoveringTopologySnapshot>>();
+    testState.fetchDeviceImportTopologyRun.mockReturnValue(runLookup.promise);
+
+    render(topologyImportCanvas(topologyImportRequest));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit mode: Off' }));
+    expect(testState.markDeviceImportTopologyManualEdit).not.toHaveBeenCalled();
+
+    await act(async () => runLookup.resolve(discoveringTopologySnapshot()));
+    await waitFor(() =>
+      expect(testState.markDeviceImportTopologyManualEdit).toHaveBeenCalledWith('run-import'),
+    );
+  });
+
+  it('opens unresolved device details read-only without relinquishing automatic layout', async () => {
+    testState.renderedMapKey = 'map:map-backbone';
+    testState.fetchDeviceImportTopologyRun.mockResolvedValue(layoutReviewTopologySnapshot());
+
+    render(topologyImportCanvas(topologyImportRequest));
+
+    const inspectDevice = await screen.findByRole('button', { name: 'Inspect device' });
+    fireEvent.click(inspectDevice);
+
+    await waitFor(() =>
+      expect(testState.canvasPanelsProps.panelContent).toEqual({
+        type: 'deviceConfig',
+        data: { deviceId: 'dev-a' },
+      }),
+    );
+    expect(testState.canvasPanelsProps.mutationBlocked).toBe(true);
+    expect(testState.markDeviceImportTopologyManualEdit).not.toHaveBeenCalled();
+    expect(screen.getByTestId('topology-bootstrap-overlay')).toBeInTheDocument();
+  });
+
+  it('does not carry pending edit intent into a later imported run', async () => {
+    testState.renderedMapKey = 'map:map-backbone';
+    const activeLookup = deferred<null>();
+    testState.fetchActiveDeviceImportTopologyRun.mockReturnValue(activeLookup.promise);
+    testState.fetchDeviceImportTopologyRun.mockResolvedValue(discoveringTopologySnapshot());
+
+    const view = render(topologyImportCanvas());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit mode: Off' }));
+    expect(testState.markDeviceImportTopologyManualEdit).not.toHaveBeenCalled();
+
+    view.rerender(topologyImportCanvas(topologyImportRequest));
+
+    await act(async () => activeLookup.resolve(null));
+    await waitFor(() =>
+      expect(testState.fetchDeviceImportTopologyRun).toHaveBeenCalledWith('run-import'),
+    );
+    await act(async () => Promise.resolve());
+    expect(testState.markDeviceImportTopologyManualEdit).not.toHaveBeenCalled();
+  });
+
+  it('guards a node position saved after a topology run appears mid-drag', async () => {
+    testState.renderedMapKey = 'map:map-backbone';
+    testState.fetchDeviceImportTopologyRun.mockResolvedValue(discoveringTopologySnapshot());
+    const manualEdit = deferred<void>();
+    testState.markDeviceImportTopologyManualEdit.mockReturnValue(manualEdit.promise);
+
+    const view = render(topologyImportCanvas());
+
+    await waitFor(() =>
+      expect(testState.fetchActiveDeviceImportTopologyRun).toHaveBeenCalledWith('map-backbone'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Start node drag' }));
+    expect(testState.markDeviceImportTopologyManualEdit).not.toHaveBeenCalled();
+
+    view.rerender(topologyImportCanvas(topologyImportRequest));
+    await waitFor(() => expect(testState.canvasPanelsProps.mutationBlocked).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Drag area node' }));
+    expect(testState.markDeviceImportTopologyManualEdit).toHaveBeenCalledWith('run-import');
+    expect(testState.updateNodePosition).not.toHaveBeenCalled();
+
+    await act(async () => manualEdit.resolve());
+    await waitFor(() =>
+      expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', {
+        x: 450,
+        y: 570,
+      }),
+    );
+  });
+
+  it.each(['addDevice', 'createLink'])(
+    'marks the active topology run before the %s keyboard shortcut opens a mutation panel',
+    async (shortcut) => {
+      testState.renderedMapKey = 'map:map-backbone';
+      testState.fetchDeviceImportTopologyRun.mockResolvedValue(discoveringTopologySnapshot());
+
+      render(topologyImportCanvas(topologyImportRequest));
+
+      await waitFor(() =>
+        expect(testState.fetchDeviceImportTopologyRun).toHaveBeenCalledWith('run-import'),
+      );
+      act(() => testState.keyboardShortcuts[shortcut].handler());
+
+      await waitFor(() =>
+        expect(testState.markDeviceImportTopologyManualEdit).toHaveBeenCalledWith('run-import'),
+      );
+    },
+  );
 
   it('hides the React Flow attribution watermark', () => {
     render(
@@ -514,7 +781,7 @@ describe('Canvas drag state ownership', () => {
     });
   });
 
-  it('wires native snapping and persists snapped or exact drag coordinates from the preference', () => {
+  it('wires native snapping and persists snapped or exact drag coordinates from the preference', async () => {
     render(
       <Canvas
         {...defaultCanvasProps}
@@ -545,10 +812,12 @@ describe('Canvas drag state ownership', () => {
 
     expect(testState.applyNodeChanges).not.toHaveBeenCalled();
     expect(testState.savePositions).not.toHaveBeenCalled();
-    expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', {
-      x: 450,
-      y: 570,
-    });
+    await waitFor(() =>
+      expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', {
+        x: 450,
+        y: 570,
+      }),
+    );
 
     testState.updateNodePosition.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Snap to grid: On' }));
@@ -565,10 +834,12 @@ describe('Canvas drag state ownership', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Drag area node' }));
 
-    expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', {
-      x: 444,
-      y: 555,
-    });
+    await waitFor(() =>
+      expect(testState.updateNodePosition).toHaveBeenCalledWith('dev-a', {
+        x: 444,
+        y: 555,
+      }),
+    );
   });
 
   it('enables snapping without rewriting existing controlled positions', () => {

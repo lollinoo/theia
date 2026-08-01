@@ -14,6 +14,7 @@ import { BACKEND_SESSION_CHECK_REQUIRED_EVENT } from '../events/backend';
 import {
   type AlertDTO,
   type AlertWSMessage,
+  type DeviceImportTopologyRunChangedWSMessage,
   mergeRuntimeDeltaPatch,
   mergeSnapshotDelta,
   type PollingHealthPayload,
@@ -1284,6 +1285,12 @@ export function useWebSocket(
             });
             resetAlertState();
             dispatchBackendResyncRequired(payload);
+          } else if (message.type === 'device_import_topology_run_changed') {
+            window.dispatchEvent(
+              new CustomEvent('device-import-topology-run-changed', {
+                detail: (message as DeviceImportTopologyRunChangedWSMessage).payload,
+              }),
+            );
           } else if (message.type === 'topology_changed' || message.type === 'topology_delta') {
             const topologyPayload =
               message.type === 'topology_changed'

@@ -61,8 +61,10 @@ export function buildTopologySourceRequestPlan({
     options.includeRuntimeBootstrap === true || trigger === 'initial_load';
   const forceRuntimeBootstrap = options.includeRuntimeBootstrap === true;
   const renderedNodesOwnedByMap = nodesOwnerMapKey === mapKey;
+  const forceAuthoritativeTopologyRead = trigger === 'topology_import_layout';
   const etag =
     includeRuntimeBootstrap ||
+    forceAuthoritativeTopologyRead ||
     manualEdgeMigrationPlan.shouldBypassReadModelEtagForManualEdgeMigration ||
     !renderedNodesOwnedByMap
       ? null

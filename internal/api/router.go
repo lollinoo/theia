@@ -17,11 +17,20 @@ import (
 
 // routerOptions collects optional services that alter middleware or route behavior.
 type routerOptions struct {
-	security           SecurityConfig
-	auth               authProvider
-	bridgeService      *service.BridgeService
-	auditLogs          domain.AuditLogRepository
-	runtimeEnvironment string
+	security             SecurityConfig
+	auth                 authProvider
+	bridgeService        *service.BridgeService
+	deviceImport         deviceImportProvider
+	deviceImportTopology deviceImportTopologyProvider
+	auditLogs            domain.AuditLogRepository
+	runtimeEnvironment   string
+}
+
+// WithDeviceImportTopologyCoordinator configures resumable Bootstrap-Once controls.
+func WithDeviceImportTopologyCoordinator(coordinator *service.DeviceImportTopologyCoordinator) RouterOption {
+	return func(options *routerOptions) {
+		options.deviceImportTopology = coordinator
+	}
 }
 
 // RouterOption customizes router middleware behavior.
@@ -48,6 +57,13 @@ func WithBridgeService(bridgeService *service.BridgeService) RouterOption {
 	}
 }
 
+// WithDeviceImportService configures the Admin Area one-time node import endpoints.
+func WithDeviceImportService(importer *service.DeviceImportService) RouterOption {
+	return func(options *routerOptions) {
+		options.deviceImport = importer
+	}
+}
+
 // WithAuditLogRepository configures audit logging for backup routes.
 func WithAuditLogRepository(auditLogs domain.AuditLogRepository) RouterOption {
 	return func(options *routerOptions) {
@@ -66,6 +82,20 @@ func WithRuntimeEnvironment(environment string) RouterOption {
 func withAuthProvider(auth authProvider) RouterOption {
 	return func(options *routerOptions) {
 		options.auth = auth
+	}
+}
+
+// withDeviceImportProvider injects the narrow import seam for HTTP tests.
+func withDeviceImportProvider(importer deviceImportProvider) RouterOption {
+	return func(options *routerOptions) {
+		options.deviceImport = importer
+	}
+}
+
+// withDeviceImportTopologyProvider injects the narrow topology-run seam for HTTP tests.
+func withDeviceImportTopologyProvider(topology deviceImportTopologyProvider) RouterOption {
+	return func(options *routerOptions) {
+		options.deviceImportTopology = topology
 	}
 }
 

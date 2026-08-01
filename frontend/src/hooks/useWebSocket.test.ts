@@ -2105,6 +2105,26 @@ describe('useWebSocket', () => {
     );
   });
 
+  it('dispatches a map-scoped topology import progress invalidation', () => {
+    const dispatchSpy = spyOnDispatchEvent();
+    renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+      mockInstance.simulateMessage({
+        type: 'device_import_topology_run_changed',
+        payload: { run_id: 'run-1', map_id: 'map-1' },
+      });
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'device-import-topology-run-changed',
+        detail: { run_id: 'run-1', map_id: 'map-1' },
+      }),
+    );
+  });
+
   it('handles snapshot message', () => {
     const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
 

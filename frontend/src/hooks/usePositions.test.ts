@@ -103,6 +103,392 @@ describe('usePositions diagnostics', () => {
     );
   });
 
+  it('immediately persists the final payload and cancels an older debounced save', async () => {
+    const immediateSave = createDeferred<Response>();
+    vi.mocked(fetch).mockReturnValue(immediateSave.promise);
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    await act(async () => {
+      await result.current.savePositions([
+        { device_id: 'old-device', x: 10, y: 20, pinned: false },
+      ]);
+    });
+
+    let savePromise!: Promise<void>;
+    await act(async () => {
+      savePromise = result.current.savePositionsImmediately([
+        { device_id: 'imported-device', x: 300, y: 400, pinned: false },
+      ]);
+      await Promise.resolve();
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map-1/positions',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({
+          positions: [{ device_id: 'imported-device', x: 300, y: 400, pinned: false }],
+        }),
+      }),
+    );
+
+    await act(async () => {
+      immediateSave.resolve(jsonResponse({ data: [] }));
+      await savePromise;
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(result.current.positions).toEqual(
+      new Map([['imported-device', { x: 300, y: 400, pinned: false }]]),
+    );
+  });
+
+  it('discards a queued save while an authoritative position operation owns the endpoint', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({}),
+    } as unknown as Response);
+    const authoritativeOperation = createDeferred<void>();
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    await act(async () => {
+      await result.current.savePositions([
+        { device_id: 'stale-device', x: 10, y: 20, pinned: false },
+      ]);
+    });
+
+    let fencePromise!: Promise<void>;
+    await act(async () => {
+      fencePromise = result.current.withPositionSaveFence(() => authoritativeOperation.promise);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(fetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      authoritativeOperation.resolve();
+      await fencePromise;
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(fetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.savePositions([
+        { device_id: 'fresh-device', x: 300, y: 400, pinned: false },
+      ]);
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for an in-flight save before starting an authoritative position operation', async () => {
+    const inFlightSave = createDeferred<Response>();
+    vi.mocked(fetch).mockReturnValue(inFlightSave.promise);
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    await act(async () => {
+      await result.current.savePositions([
+        { device_id: 'older-device', x: 10, y: 20, pinned: false },
+      ]);
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    const operation = vi.fn().mockResolvedValue(undefined);
+    let fencePromise!: Promise<void>;
+    await act(async () => {
+      fencePromise = result.current.withPositionSaveFence(operation);
+      await Promise.resolve();
+    });
+    expect(operation).not.toHaveBeenCalled();
+
+    await act(async () => {
+      inFlightSave.resolve({
+        ok: true,
+        json: vi.fn().mockResolvedValue({}),
+      } as unknown as Response);
+      await fencePromise;
+    });
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it('suppresses position writes started inside an authoritative position operation', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({}),
+    } as unknown as Response);
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    let immediateSaveRemainedCurrent = true;
+    await act(async () => {
+      await result.current.withPositionSaveFence(async () => {
+        await result.current.savePositions([
+          { device_id: 'stale-debounced', x: 10, y: 20, pinned: false },
+        ]);
+        immediateSaveRemainedCurrent = await result.current.savePositionsImmediately([
+          { device_id: 'stale-immediate', x: 30, y: 40, pinned: false },
+        ]);
+      });
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    expect(immediateSaveRemainedCurrent).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('allows position saves for a new map while the previous map remains fenced', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
+    const authoritativeOperation = createDeferred<void>();
+    const { result, rerender } = renderHook(({ mapId }: { mapId: string }) => usePositions(mapId), {
+      initialProps: { mapId: 'map-1' },
+    });
+
+    let fencePromise!: Promise<void>;
+    await act(async () => {
+      fencePromise = result.current.withPositionSaveFence(() => authoritativeOperation.promise);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      rerender({ mapId: 'map-2' });
+    });
+    await act(async () => {
+      await result.current.savePositions([
+        { device_id: 'map-2-device', x: 300, y: 400, pinned: false },
+      ]);
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/canvas/maps/map-2/positions',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+
+    await act(async () => {
+      authoritativeOperation.resolve();
+      await fencePromise;
+    });
+  });
+
+  it('keeps an endpoint fenced until its outermost authoritative operation finishes', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    await act(async () => {
+      await result.current.withPositionSaveFence(async () => {
+        await result.current.withPositionSaveFence(async () => undefined);
+        await result.current.savePositions([
+          { device_id: 'still-fenced', x: 300, y: 400, pinned: false },
+        ]);
+      });
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    expect(fetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.savePositions([
+        { device_id: 'after-fence', x: 500, y: 600, pinned: false },
+      ]);
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an immediate save as stale when a newer manual save supersedes it', async () => {
+    const immediateSave = createDeferred<Response>();
+    vi.mocked(fetch)
+      .mockReturnValueOnce(immediateSave.promise)
+      .mockResolvedValueOnce(jsonResponse({ data: [] }));
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    let immediateSavePromise!: Promise<boolean>;
+    await act(async () => {
+      immediateSavePromise = result.current.savePositionsImmediately([
+        { device_id: 'imported-device', x: 300, y: 400, pinned: false },
+      ]);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await result.current.savePositions([
+        { device_id: 'manual-device', x: 75, y: 125, pinned: true },
+      ]);
+    });
+
+    let saveRemainsCurrent: boolean | undefined;
+    await act(async () => {
+      immediateSave.resolve(jsonResponse({ data: [] }));
+      saveRemainsCurrent = await immediateSavePromise;
+    });
+
+    expect(saveRemainsCurrent).toBe(false);
+    expect(result.current.positions).toEqual(
+      new Map([['manual-device', { x: 75, y: 125, pinned: true }]]),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('serializes an immediate save after an older in-flight debounced save', async () => {
+    const olderSave = createDeferred<Response>();
+    const immediateSave = createDeferred<Response>();
+    vi.mocked(fetch)
+      .mockReturnValueOnce(olderSave.promise)
+      .mockReturnValueOnce(immediateSave.promise);
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    await act(async () => {
+      await result.current.savePositions([
+        { device_id: 'manual-device', x: 75, y: 125, pinned: true },
+      ]);
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    let immediateSavePromise!: Promise<boolean>;
+    await act(async () => {
+      immediateSavePromise = result.current.savePositionsImmediately([
+        { device_id: 'imported-device', x: 300, y: 400, pinned: false },
+      ]);
+      await Promise.resolve();
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      olderSave.resolve(jsonResponse({ data: [] }));
+      await olderSave.promise;
+      await flushMicrotasks();
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    let saveRemainsCurrent: boolean | undefined;
+    await act(async () => {
+      immediateSave.resolve(jsonResponse({ data: [] }));
+      saveRemainsCurrent = await immediateSavePromise;
+    });
+
+    expect(saveRemainsCurrent).toBe(true);
+    expect(result.current.positions).toEqual(
+      new Map([['imported-device', { x: 300, y: 400, pinned: false }]]),
+    );
+  });
+
+  it('rejects an immediate save failure and keeps error diagnostics retryable', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      errorResponse(503, 'service unavailable', { error: 'position store unavailable' }),
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await result.current.savePositionsImmediately([
+          { device_id: 'imported-device', x: 300, y: 400, pinned: false },
+        ]);
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain('position store unavailable');
+    expect(result.current.positions).toEqual(new Map());
+    expect(exportCanvasDiagnostics().diagnostics.positions).toMatchObject({
+      pendingSaveCount: 0,
+      lastSaveStatus: 'error',
+      lastSaveError: expect.stringContaining('position store unavailable'),
+    });
+  });
+
+  it('restores a queued debounced save when an immediate save fails', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        errorResponse(503, 'service unavailable', { error: 'position store unavailable' }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: [] }));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { result } = renderHook(() => usePositions('map-1'));
+    const queuedPositions = [{ device_id: 'manual-device', x: 75, y: 125, pinned: true }];
+
+    await act(async () => {
+      await result.current.savePositions(queuedPositions);
+    });
+    await act(async () => {
+      await expect(
+        result.current.savePositionsImmediately([
+          { device_id: 'imported-device', x: 300, y: 400, pinned: false },
+        ]),
+      ).rejects.toThrow('position store unavailable');
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenLastCalledWith(
+      '/api/v1/canvas/maps/map-1/positions',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ positions: queuedPositions }),
+      }),
+    );
+    expect(result.current.positions).toEqual(
+      new Map([['manual-device', { x: 75, y: 125, pinned: true }]]),
+    );
+  });
+
+  it('flushes a displaced queued save to its original endpoint after a map switch', async () => {
+    const immediateSave = createDeferred<Response>();
+    vi.mocked(fetch)
+      .mockReturnValueOnce(immediateSave.promise)
+      .mockResolvedValueOnce(jsonResponse({ data: [] }));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { result, rerender } = renderHook(({ mapId }) => usePositions(mapId), {
+      initialProps: { mapId: 'map-a' as string | null },
+    });
+    const queuedPositions = [{ device_id: 'manual-device', x: 75, y: 125, pinned: true }];
+
+    await act(async () => {
+      await result.current.savePositions(queuedPositions);
+    });
+    let immediateSavePromise!: Promise<boolean>;
+    await act(async () => {
+      immediateSavePromise = result.current.savePositionsImmediately([
+        { device_id: 'imported-device', x: 300, y: 400, pinned: false },
+      ]);
+      await Promise.resolve();
+    });
+    rerender({ mapId: 'map-b' });
+
+    await act(async () => {
+      immediateSave.resolve(
+        errorResponse(503, 'service unavailable', { error: 'position store unavailable' }),
+      );
+      await expect(immediateSavePromise).rejects.toThrow('position store unavailable');
+      await flushMicrotasks();
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenLastCalledWith(
+      '/api/v1/canvas/maps/map-a/positions',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ positions: queuedPositions }),
+      }),
+    );
+  });
+
   it('uses the default positions endpoint when mapId is null', async () => {
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
     const { result } = renderHook(() => usePositions(null));

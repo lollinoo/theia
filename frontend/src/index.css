@@ -263,6 +263,25 @@
   display: none;
 }
 
+.topology-import-placement-surface > .react-flow {
+  transition: opacity 200ms ease;
+}
+
+.topology-import-placement-pending > :not(.topology-import-placement-overlay) {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.topology-import-placement-pending > .react-flow {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topology-import-placement-surface > .react-flow {
+    transition-duration: 0ms;
+  }
+}
+
 @layer base {
   html,
   body,

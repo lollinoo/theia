@@ -1,9 +1,14 @@
 /**
  * Exercises transport API boundary behavior so refactors preserve the documented contract.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerError, ValidationError } from './errors';
-import { headersWithCsrf, requestJSON, requestJSONWithBody } from './transport';
+import {
+  headersWithCsrf,
+  requestJSON,
+  requestJSONWithBody,
+  requestMultipartJSON,
+} from './transport';
 
 function mockResponse(
   body: unknown,
@@ -25,6 +30,10 @@ beforeEach(() => {
     configurable: true,
     value: '',
   });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('API transport', () => {
@@ -143,5 +152,86 @@ describe('API transport', () => {
     await expect(requestJSON('/api/v1/devices')).rejects.toEqual(
       new ServerError('Something went wrong (ref: abc12345)', 'abc12345'),
     );
+  });
+
+  it('sends multipart bodies with Accept and CSRF headers but no manual Content-Type', async () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      value: 'theia_csrf=multipart-csrf',
+    });
+    const form = new FormData();
+    form.append('file', new File(['targets'], 'targets.yml'));
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ file_digest: 'sha256:test' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      requestMultipartJSON('/api/v1/admin/device-imports/preview', form),
+    ).resolves.toEqual({ file_digest: 'sha256:test' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init).toMatchObject({
+      method: 'POST',
+      body: form,
+      headers: {
+        Accept: 'application/json',
+        'X-CSRF-Token': 'multipart-csrf',
+      },
+    });
+    expect(init.headers).not.toHaveProperty('Content-Type');
+  });
+
+  it.each([400, 409])('maps multipart %i responses to ValidationError', async (status) => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'invalid import' },
+            { ok: false, status, statusText: 'Invalid Import' },
+          ),
+        ),
+    );
+
+    await expect(
+      requestMultipartJSON('/api/v1/admin/device-imports/preview', new FormData()),
+    ).rejects.toEqual(new ValidationError('invalid import'));
+  });
+
+  it('maps multipart 413 to an actionable import limit error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'device import limit exceeded' },
+            { ok: false, status: 413, statusText: 'Content Too Large' },
+          ),
+        ),
+    );
+
+    await expect(
+      requestMultipartJSON('/api/v1/admin/device-imports/preview', new FormData()),
+    ).rejects.toEqual(new ValidationError('Import files are limited to 2 MiB and 5,000 targets'));
+  });
+
+  it('redacts multipart 500 errors behind ServerError correlation messages', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          mockResponse(
+            { error: 'internal error, ref: import123' },
+            { ok: false, status: 500, statusText: 'Internal Server Error' },
+          ),
+        ),
+    );
+
+    await expect(
+      requestMultipartJSON('/api/v1/admin/device-imports/commit', new FormData()),
+    ).rejects.toEqual(new ServerError('Something went wrong (ref: import123)', 'import123'));
   });
 });

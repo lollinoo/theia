@@ -61,6 +61,23 @@ describe('topologyLoadPlan', () => {
     });
   });
 
+  it('bypasses cached ETags for an authoritative topology-import layout reload', () => {
+    expect(
+      buildTopologySourceRequestPlan({
+        trigger: 'topology_import_layout',
+        options: {},
+        mapKey: 'map:current',
+        nodesOwnerMapKey: 'map:current',
+        lastCanvasTopologyEtag: '"topo-1"',
+        manualEdgeMigrationPlan: manualMigrationPlan(),
+      }),
+    ).toEqual({
+      includeRuntimeBootstrap: false,
+      forceRuntimeBootstrap: false,
+      etag: null,
+    });
+  });
+
   it('bypasses cached ETags while default-map manual edge migration is pending', () => {
     expect(
       buildTopologySourceRequestPlan({

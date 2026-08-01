@@ -207,6 +207,10 @@ type Registry struct {
 	pollResultsTotal                  map[taskResultKey]uint64
 	discoveryNeighbors                map[deviceProtocolKey]float64
 	linkUpsertsTotal                  map[linkUpsertKey]uint64
+	deviceImportTopologyRunEvents     map[string]uint64
+	deviceImportTopologyItemOutcomes  map[string]uint64
+	deviceImportTopologyRetries       map[string]uint64
+	deviceImportTopologyLayouts       map[string]uint64
 	cacheInvalidationsTotal           map[string]uint64
 	cacheReloadTotal                  uint64
 	topologyMaterialization           map[string]*histogram
@@ -271,6 +275,10 @@ func NewRegistry() *Registry {
 		pollResultsTotal:                  make(map[taskResultKey]uint64),
 		discoveryNeighbors:                make(map[deviceProtocolKey]float64),
 		linkUpsertsTotal:                  make(map[linkUpsertKey]uint64),
+		deviceImportTopologyRunEvents:     make(map[string]uint64),
+		deviceImportTopologyItemOutcomes:  make(map[string]uint64),
+		deviceImportTopologyRetries:       make(map[string]uint64),
+		deviceImportTopologyLayouts:       make(map[string]uint64),
 		cacheInvalidationsTotal:           make(map[string]uint64),
 		staticPersistenceSkipsTotal:       make(map[string]uint64),
 		topologyMaterializationSkipsTotal: make(map[string]uint64),
@@ -500,6 +508,26 @@ func (r *Registry) MarshalPrometheus() []byte {
 		"theia_link_upserts_total",
 		"Link upsert totals by discovery protocol and result.",
 		sortedLinkUpsertRows(r.linkUpsertsTotal),
+	)
+	writeCounterVec(&b,
+		"theia_device_import_topology_run_events_total",
+		"Durable Bootstrap-Once run lifecycle events.",
+		sortedStringCounterRows("event", r.deviceImportTopologyRunEvents),
+	)
+	writeCounterVec(&b,
+		"theia_device_import_topology_item_outcomes_total",
+		"Bootstrap-Once device outcomes by bounded result category.",
+		sortedStringCounterRows("result", r.deviceImportTopologyItemOutcomes),
+	)
+	writeCounterVec(&b,
+		"theia_device_import_topology_retries_total",
+		"Bootstrap-Once retries by bounded retry kind.",
+		sortedStringCounterRows("kind", r.deviceImportTopologyRetries),
+	)
+	writeCounterVec(&b,
+		"theia_device_import_topology_layout_total",
+		"Atomic Bootstrap-Once layout attempts by result.",
+		sortedStringCounterRows("result", r.deviceImportTopologyLayouts),
 	)
 	writeCounterVec(&b,
 		"theia_cache_invalidation_total",
@@ -903,6 +931,54 @@ func (r *Registry) IncLinkUpsert(protocol domain.DiscoveryProtocol, result domai
 		Protocol: string(protocol),
 		Result:   string(result),
 	}]++
+}
+
+// IncDeviceImportTopologyRunEvent records a bounded, map- and actor-independent lifecycle event.
+func (r *Registry) IncDeviceImportTopologyRunEvent(event string) {
+	switch event {
+	case "launched", "recovered", "ready", "backgrounded", "manual_edit":
+	default:
+		event = "unknown"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deviceImportTopologyRunEvents[event]++
+}
+
+// IncDeviceImportTopologyItemOutcome records only the stable domain result code.
+func (r *Registry) IncDeviceImportTopologyItemOutcome(result string) {
+	switch result {
+	case "discovered", "no_neighbors", "partial_protocol", "unresolved_neighbors",
+		"incomplete_ports", "snmp_unreachable", "authentication_failed", "persistence_failed",
+		"internal_error":
+	default:
+		result = "unknown"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deviceImportTopologyItemOutcomes[result]++
+}
+
+// IncDeviceImportTopologyRetry records whether a retry was automatic or operator requested.
+func (r *Registry) IncDeviceImportTopologyRetry(kind string) {
+	if kind != "automatic_followup" && kind != "manual" {
+		kind = "unknown"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deviceImportTopologyRetries[kind]++
+}
+
+// IncDeviceImportTopologyLayout records atomic layout success and bounded failure classes.
+func (r *Registry) IncDeviceImportTopologyLayout(result string) {
+	switch result {
+	case "success", "stale", "conflict", "error", "skipped_manual":
+	default:
+		result = "unknown"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deviceImportTopologyLayouts[result]++
 }
 
 func (r *Registry) IncCacheInvalidation(source string) {

@@ -1063,6 +1063,18 @@ describe('parseSnapshotPayload', () => {
     });
   });
 
+  it('parses map-scoped device import topology progress invalidations', () => {
+    const message = parseWSMessage({
+      type: 'device_import_topology_run_changed',
+      payload: { run_id: 'run-1', map_id: 'map-1' },
+    });
+
+    expect(message).toEqual({
+      type: 'device_import_topology_run_changed',
+      payload: { run_id: 'run-1', map_id: 'map-1' },
+    });
+  });
+
   it('fails snapshot parsing when link map keys do not match link_id', () => {
     expect(() =>
       parseWSMessage({

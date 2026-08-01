@@ -114,6 +114,32 @@ type fakeTopologyService struct {
 	err    error
 }
 
+type fakeDeviceImportTopologyObserver struct {
+	runID       uuid.UUID
+	started     []uuid.UUID
+	completed   []service.DeviceImportTopologyBootstrapOutcome
+	completedID []uuid.UUID
+}
+
+func (o *fakeDeviceImportTopologyObserver) BootstrapStarted(
+	_ context.Context,
+	deviceID uuid.UUID,
+	_ time.Time,
+) (uuid.UUID, bool) {
+	o.started = append(o.started, deviceID)
+	return o.runID, o.runID != uuid.Nil
+}
+
+func (o *fakeDeviceImportTopologyObserver) BootstrapCompleted(
+	_ context.Context,
+	_ uuid.UUID,
+	deviceID uuid.UUID,
+	outcome service.DeviceImportTopologyBootstrapOutcome,
+) {
+	o.completedID = append(o.completedID, deviceID)
+	o.completed = append(o.completed, outcome)
+}
+
 func (s *fakeTopologyService) ApplyStaticDiscovery(deviceID uuid.UUID, input service.StaticDiscoveryInput) (service.StaticPersistenceResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -122,8 +148,12 @@ func (s *fakeTopologyService) ApplyStaticDiscovery(deviceID uuid.UUID, input ser
 	s.lastIn = input
 	s.inputs = append(s.inputs, input)
 	result := s.result
-	if !input.SkipTopologyMaterialization {
+	if !input.SkipTopologyMaterialization && !input.DeferTopologyMaterialization {
 		result.TopologyMaterialized = true
+	}
+	if input.DeferTopologyMaterialization {
+		result.TopologyMaterialized = false
+		result.LinksCreated = 0
 	}
 	return result, s.err
 }
@@ -424,6 +454,19 @@ func TestPipelineTaskRunnerPersistStaticDiscoveryForcedPersistsUnchangedResult(t
 	}
 	if topologyService.inputs[1].SkipTopologyMaterialization {
 		t.Fatal("forced static persistence skipped topology materialization")
+	}
+}
+
+func TestBootstrapOnceAlwaysDefersTopologyMaterialization(t *testing.T) {
+	bootstrapDevice := domain.Device{TopologyDiscoveryMode: domain.TopologyDiscoveryModeBootstrapOnce}
+	if !deferBootstrapTopologyMaterialization(bootstrapDevice, false) {
+		t.Fatal("untracked Bootstrap-Once task could materialize links outside its map scope")
+	}
+	if !deferBootstrapTopologyMaterialization(domain.Device{}, true) {
+		t.Fatal("tracked import bootstrap did not defer topology materialization")
+	}
+	if deferBootstrapTopologyMaterialization(domain.Device{TopologyDiscoveryMode: domain.TopologyDiscoveryModeLLDP}, false) {
+		t.Fatal("ordinary LLDP bootstrap unexpectedly deferred topology materialization")
 	}
 }
 
@@ -1523,7 +1566,6 @@ func TestPipelineOrchestratorStaticTaskUpdatesStorePersistsTopologyAndSignalsNot
 		nil,
 		nil,
 	)
-
 	pipeline.taskRunner.runTask(context.Background(), task)
 
 	deviceState, ok := store.GetDevice(deviceID)
@@ -1719,6 +1761,8 @@ func TestPipelineOrchestratorBootstrapTaskUsesBootstrapLaneAndPersistsTopology(t
 		nil,
 		nil,
 	)
+	observer := &fakeDeviceImportTopologyObserver{runID: uuid.New()}
+	pipeline.SetDeviceImportTopologyObserver(observer)
 
 	pipeline.taskRunner.runTask(context.Background(), task)
 
@@ -1738,11 +1782,149 @@ func TestPipelineOrchestratorBootstrapTaskUsesBootstrapLaneAndPersistsTopology(t
 	if len(topologyService.lastIn.Neighbors) != 1 {
 		t.Fatalf("expected bootstrap topology discovery to include 1 neighbor, got %d", len(topologyService.lastIn.Neighbors))
 	}
+	if !topologyService.lastIn.DeferTopologyMaterialization {
+		t.Fatal("tracked bootstrap materialized topology before map-scoped reconciliation")
+	}
 	topologyService.mu.Unlock()
 	select {
 	case <-topologyNotify:
 	default:
 		t.Fatal("expected topology notification after bootstrap discovery")
+	}
+	if len(observer.started) != 1 || observer.started[0] != deviceID {
+		t.Fatalf("topology observer starts = %#v, want [%s]", observer.started, deviceID)
+	}
+	if len(observer.completed) != 1 || len(observer.completedID) != 1 || observer.completedID[0] != deviceID {
+		t.Fatalf("topology observer completions = %#v ids=%#v", observer.completed, observer.completedID)
+	}
+	if observer.completed[0].DiscoveryErr != nil || observer.completed[0].PersistenceErr != nil {
+		t.Fatalf("topology observer outcome errors = %#v", observer.completed[0])
+	}
+	if observer.completed[0].NeighborCount != 1 || observer.completed[0].LinksCreated != 0 {
+		t.Fatalf("topology observer outcome = %#v", observer.completed[0])
+	}
+}
+
+func TestPipelineOrchestratorBootstrapTaskReportsCollectorFailure(t *testing.T) {
+	deviceID := uuid.New()
+	staticCollector := collector.NewStaticCollector(
+		buildEmptyVendorRegistry(),
+		func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+			return nil, errors.New("SNMP secret must stay in logs")
+		},
+	)
+	topologyService := &fakeTopologyService{}
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		state.NewStore(),
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		staticCollector,
+		nil,
+		topologyService,
+		newMockWorkerSettingsRepo(),
+		nil,
+		nil,
+		nil,
+	)
+	observer := &fakeDeviceImportTopologyObserver{runID: uuid.New()}
+	pipeline.SetDeviceImportTopologyObserver(observer)
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		Kind:            polling.TaskKindBootstrap,
+		Lane:            polling.LaneBootstrap,
+		VolatilityClass: domain.VolatilityClassStatic,
+		Device: domain.Device{
+			ID:                    deviceID,
+			IP:                    "192.0.2.99",
+			TopologyDiscoveryMode: domain.TopologyDiscoveryModeBootstrapOnce,
+			SNMPCredentials: domain.SNMPCredentials{
+				Version: domain.SNMPVersionV2c,
+				V2c:     &domain.SNMPv2cCredentials{Community: "secret"},
+			},
+		},
+	})
+
+	if len(observer.completed) != 1 || observer.completed[0].DiscoveryErr == nil {
+		t.Fatalf("topology observer completions = %#v, want discovery failure", observer.completed)
+	}
+	if observer.completed[0].PersistenceErr != nil {
+		t.Fatalf("persistence error = %v, want nil", observer.completed[0].PersistenceErr)
+	}
+	if topologyService.calls != 0 {
+		t.Fatalf("topology persistence calls = %d, want 0", topologyService.calls)
+	}
+}
+
+func TestPipelineOrchestratorTrackedBootstrapSkipsSNMPWhenEssentialMarkedUnreachable(t *testing.T) {
+	deviceID := uuid.New()
+	store := state.NewStore()
+	store.Update(state.StateUpdate{
+		DeviceID:         deviceID,
+		ExpectedInterval: 10 * time.Second,
+		Timestamp:        time.Now().UTC(),
+		Essential: &state.EssentialUpdate{
+			PollStatus:       polling.PollStatusFailed,
+			NetworkReachable: polling.TriStateTrue,
+			SNMPReachable:    polling.TriStateFalse,
+			Uptime:           polling.FieldStateError,
+			CPU:              polling.FieldStateError,
+			Memory:           polling.FieldStateError,
+		},
+	})
+
+	var snmpCalls int
+	staticCollector := collector.NewStaticCollector(
+		buildEmptyVendorRegistry(),
+		func(string, domain.SNMPCredentials, time.Duration, int) (collector.SNMPClient, error) {
+			snmpCalls++
+			return nil, errors.New("offline bootstrap must not attempt SNMP")
+		},
+	)
+	topologyService := &fakeTopologyService{}
+	pipeline := NewPipelineOrchestrator(
+		newPipelineTestScheduler(),
+		store,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		staticCollector,
+		nil,
+		topologyService,
+		newMockWorkerSettingsRepo(),
+		nil,
+		nil,
+		nil,
+	)
+	observer := &fakeDeviceImportTopologyObserver{runID: uuid.New()}
+	pipeline.SetDeviceImportTopologyObserver(observer)
+	pipeline.taskRunner.runTask(context.Background(), scheduler.PollTask{
+		Kind:            polling.TaskKindBootstrap,
+		Lane:            polling.LaneBootstrap,
+		VolatilityClass: domain.VolatilityClassStatic,
+		Device: domain.Device{
+			ID:                    deviceID,
+			IP:                    "192.0.2.100",
+			TopologyDiscoveryMode: domain.TopologyDiscoveryModeBootstrapOnce,
+			SNMPCredentials: domain.SNMPCredentials{
+				Version: domain.SNMPVersionV2c,
+				V2c:     &domain.SNMPv2cCredentials{Community: "offline"},
+			},
+		},
+	})
+
+	if snmpCalls != 0 {
+		t.Fatalf("SNMP collector calls = %d, want 0", snmpCalls)
+	}
+	if len(observer.completed) != 1 || observer.completed[0].DiscoveryErr == nil {
+		t.Fatalf("topology observer completions = %#v, want immediate unreachable outcome", observer.completed)
+	}
+	if topologyService.calls != 0 {
+		t.Fatalf("topology persistence calls = %d, want 0", topologyService.calls)
 	}
 }
 

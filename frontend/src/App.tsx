@@ -15,6 +15,7 @@ import {
 } from './api/client';
 import { AdminDashboard } from './components/AdminDashboard';
 import Canvas from './components/Canvas';
+import type { ImportedNodePlacementRequest } from './components/canvas/importedNodePlacementRequest';
 import { Dashboard } from './components/Dashboard';
 import NavigationPill from './components/NavigationPill';
 import UserSettingsPage from './components/settings/UserSettingsPage';
@@ -102,6 +103,8 @@ function App() {
   const [deleteMapLoading, setDeleteMapLoading] = useState(false);
   const [fitViewRevision, setFitViewRevision] = useState(0);
   const [topologyRefreshRevision, setTopologyRefreshRevision] = useState(0);
+  const [importedNodePlacementRequest, setImportedNodePlacementRequest] =
+    useState<ImportedNodePlacementRequest | null>(null);
   const [canvasInteractionActive, setCanvasInteractionActive] = useState(false);
   const [canvasChromeHidden, setCanvasChromeHidden] = useState(initialCanvasChromeHidden);
   const runtimeUpdatesPaused = useRuntimeUpdatePause(canvasInteractionActive);
@@ -111,6 +114,13 @@ function App() {
   const canUpdateSettings = hasPermission('settings:update');
   const canOpenSettings = canViewAdmin && canReadSettings && canUpdateSettings;
   const canOpenUserSettings = hasPermission('account:manage');
+  const canCoordinateTopologyImport =
+    canViewAdmin &&
+    hasPermission('devices:read') &&
+    hasPermission('devices:create') &&
+    hasPermission('topology:read') &&
+    hasPermission('topology:update') &&
+    hasPermission('credentials:read');
 
   const { snapshot, alerts, reconnecting, prometheusStatus } = useWebSocket(
     '/api/v1/ws',
@@ -232,12 +242,21 @@ function App() {
   );
 
   const handleOpenMap = useCallback(
-    (map: CanvasMap) => {
+    (map: CanvasMap, placementRequest?: ImportedNodePlacementRequest) => {
+      if (placementRequest?.mapId === map.id) {
+        setImportedNodePlacementRequest(placementRequest);
+      }
       handleSelectMapContext(map);
       openCanvasView();
     },
     [handleSelectMapContext, openCanvasView],
   );
+
+  const handleImportedNodePlacementConsumed = useCallback((requestId: string) => {
+    setImportedNodePlacementRequest((current) =>
+      current?.requestId === requestId ? null : current,
+    );
+  }, []);
 
   const handleNavigationMapSelect = useCallback(
     (map: CanvasMap) => {
@@ -565,6 +584,9 @@ function App() {
                 visible={activeView === 'canvas'}
                 fitViewRevision={fitViewRevision}
                 topologyRefreshRevision={topologyRefreshRevision}
+                topologyImportEnabled={canCoordinateTopologyImport}
+                importedNodePlacementRequest={importedNodePlacementRequest}
+                onImportedNodePlacementConsumed={handleImportedNodePlacementConsumed}
                 chromeHidden={canvasChromeHidden}
                 onDevicesChange={handleCanvasDevicesChange}
                 onLinksChange={handleCanvasLinksChange}
@@ -601,7 +623,7 @@ function App() {
             {...viewLayerStateProps(activeView === 'admin')}
             className={viewLayerClass(activeView === 'admin', 'overflow-y-auto')}
           >
-            <AdminDashboard visible={activeView === 'admin'} />
+            <AdminDashboard visible={activeView === 'admin'} onOpenMap={handleOpenMap} />
           </div>
         )}
         {canOpenUserSettings && (

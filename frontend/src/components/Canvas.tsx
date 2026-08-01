@@ -48,7 +48,9 @@ import {
   type CanvasRenderProjectionNodeCacheEntry,
   projectCanvasRenderGraph,
 } from './canvas/canvasRenderProjection';
+import { DeviceImportTopologyOverlay } from './canvas/DeviceImportTopologyOverlay';
 import { getCanvasDetailDeviceId } from './canvas/detailSubscription';
+import type { ImportedNodePlacementRequest } from './canvas/importedNodePlacementRequest';
 import type { ScreenRect } from './canvas/newNodePlacement';
 import { buildRuntimeState } from './canvas/runtimeAdapters';
 import { resolveTopologyZoomBand, type TopologyZoomBand } from './canvas/topologyZoom';
@@ -64,6 +66,8 @@ import { useCanvasLinkRoutes } from './canvas/useCanvasLinkRoutes';
 import { useCanvasMenus } from './canvas/useCanvasMenus';
 import { useCanvasSelection } from './canvas/useCanvasSelection';
 import { useCanvasSnapPreference } from './canvas/useCanvasSnapPreference';
+import { useDeviceImportTopologyRun } from './canvas/useDeviceImportTopologyRun';
+import { useImportedNodePlacementRequest } from './canvas/useImportedNodePlacementRequest';
 import DeviceCard, { type DeviceNode, resolveDeviceNodeReadabilityScale } from './DeviceCard';
 import { minimapColorForDevice } from './deviceVisualState';
 import { FloatingConnectionLine } from './FloatingConnectionLine';
@@ -182,6 +186,9 @@ interface CanvasProps {
   visible?: boolean;
   fitViewRevision?: number;
   topologyRefreshRevision?: number;
+  topologyImportEnabled?: boolean;
+  importedNodePlacementRequest?: ImportedNodePlacementRequest | null;
+  onImportedNodePlacementConsumed?: (requestId: string) => void;
   maps?: CanvasMap[];
   areas?: Area[];
   onDevicesChange?: (devices: Device[]) => void;
@@ -214,6 +221,9 @@ export default function Canvas({
   visible = true,
   fitViewRevision,
   topologyRefreshRevision,
+  topologyImportEnabled = false,
+  importedNodePlacementRequest,
+  onImportedNodePlacementConsumed,
   onDevicesChange,
   onLinksChange,
   onAreaSelect,
@@ -224,7 +234,14 @@ export default function Canvas({
   chromeHidden,
   onChromeHiddenChange,
 }: CanvasProps) {
+  const requestedTopologyRunID =
+    importedNodePlacementRequest?.mapId === mapId
+      ? importedNodePlacementRequest.topologyRunId
+      : undefined;
+  const topologyRunLookupScopeKey =
+    topologyImportEnabled && mapId ? `${mapId}:${requestedTopologyRunID ?? 'active'}` : null;
   const { snapToGrid, toggleSnapToGrid } = useCanvasSnapPreference();
+  const topologyManualEditRef = useRef<() => Promise<void>>(async () => undefined);
   const {
     nodes,
     edges,
@@ -252,7 +269,12 @@ export default function Canvas({
       if (editToken.owner !== routeOwnerToken) {
         return;
       }
-      commitOwnedLinkRoute(edgeId, route, editToken);
+      void topologyManualEditRef
+        .current()
+        .then(() => {
+          commitOwnedLinkRoute(edgeId, route, editToken);
+        })
+        .catch(() => undefined);
     };
   }, [commitOwnedLinkRoute, routeOwnerToken]);
   const { diagnosticsVisible, closeDiagnostics } = useCanvasDiagnosticsToggle();
@@ -298,6 +320,9 @@ export default function Canvas({
     shortcuts,
     getPanelTitle,
   } = useCanvasMenus({ reactFlow });
+  const previousEditModeRef = useRef(editMode);
+  const previousTopologyRunLookupScopeRef = useRef(topologyRunLookupScopeKey);
+  const pendingEditModeEntryScopeRef = useRef<string | null>(null);
   const {
     selectedNodeCount,
     selectedRealNodeIds,
@@ -454,7 +479,31 @@ export default function Canvas({
     [setDeviceNodeReadabilityScale, setLinkBadgeReadabilityScale, setTopologyZoomBand],
   );
 
-  useKeyboardShortcuts(shortcuts);
+  const topologySafeShortcuts = useMemo(
+    () => ({
+      ...shortcuts,
+      addDevice: {
+        ...shortcuts.addDevice,
+        handler: () => {
+          void topologyManualEditRef
+            .current()
+            .then(() => setPanelContent({ type: 'addDevice' }))
+            .catch(() => undefined);
+        },
+      },
+      createLink: {
+        ...shortcuts.createLink,
+        handler: () => {
+          void topologyManualEditRef
+            .current()
+            .then(() => setPanelContent({ type: 'create-link' }))
+            .catch(() => undefined);
+        },
+      },
+    }),
+    [setPanelContent, shortcuts],
+  );
+  useKeyboardShortcuts(topologySafeShortcuts);
 
   const openEdgeMenu = useCallback(
     (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => {
@@ -498,6 +547,8 @@ export default function Canvas({
     renderedMapKey,
     loadTopology,
     requestNewNodePlacement,
+    requestImportedNodePlacement,
+    withPositionSaveFence,
     runtimeSummary,
     grafanaUrlRef,
     grafanaDashboardConfigRef,
@@ -532,10 +583,87 @@ export default function Canvas({
     onLinksChange,
     onTopologyAreasChange,
   });
+  const topologyNodePositions = useMemo(
+    () =>
+      new Map(
+        nodes.map((node) => [
+          node.id,
+          { x: node.position.x, y: node.position.y, pinned: node.data.pinned },
+        ]),
+      ),
+    [nodes],
+  );
+  const topologyRun = useDeviceImportTopologyRun({
+    mapId: topologyImportEnabled ? mapId : null,
+    request: importedNodePlacementRequest,
+    renderedMapKey,
+    nodePositions: topologyNodePositions,
+    reloadTopology: loadTopology,
+    withPositionSaveFence,
+    onConsumed: onImportedNodePlacementConsumed,
+  });
+  topologyManualEditRef.current = topologyRun.markManualEdit;
+  useEffect(() => {
+    const lookupScopeChanged =
+      previousTopologyRunLookupScopeRef.current !== topologyRunLookupScopeKey;
+    previousTopologyRunLookupScopeRef.current = topologyRunLookupScopeKey;
+    if (lookupScopeChanged) pendingEditModeEntryScopeRef.current = null;
+    const enteredEditMode = editMode && !previousEditModeRef.current;
+    previousEditModeRef.current = editMode;
+    if (!editMode) {
+      pendingEditModeEntryScopeRef.current = null;
+      return;
+    }
+    if (enteredEditMode) pendingEditModeEntryScopeRef.current = topologyRunLookupScopeKey;
+    // Lifecycle updates are not edits unless an operator transition is waiting for run lookup.
+    const pendingScopeKey = pendingEditModeEntryScopeRef.current;
+    if (pendingScopeKey === null || pendingScopeKey !== topologyRunLookupScopeKey) return;
+    void topologyRun
+      .markManualEdit()
+      .then(() => {
+        if (pendingEditModeEntryScopeRef.current === pendingScopeKey) {
+          pendingEditModeEntryScopeRef.current = null;
+        }
+      })
+      .catch(() => undefined);
+  }, [editMode, topologyRun.markManualEdit, topologyRunLookupScopeKey]);
+  const legacyImportedNodePlacementRequest = importedNodePlacementRequest?.topologyRunId
+    ? null
+    : importedNodePlacementRequest;
+  const importedPlacementTopologyRevision = useMemo(() => {
+    if (!legacyImportedNodePlacementRequest) return '';
+    return JSON.stringify({
+      deviceIds: devices
+        .map((device) => device.id)
+        .sort((left, right) => left.localeCompare(right)),
+      nodePositions: nodes
+        .map((node) => ({ id: node.id, x: node.position.x, y: node.position.y }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+    });
+  }, [devices, legacyImportedNodePlacementRequest, nodes]);
+  const importedNodeCount =
+    legacyImportedNodePlacementRequest?.mapId === mapId
+      ? legacyImportedNodePlacementRequest.deviceIds.length
+      : undefined;
+
+  useImportedNodePlacementRequest({
+    request: legacyImportedNodePlacementRequest,
+    activeMapId: mapId,
+    renderedMapKey,
+    topologyRevision: importedPlacementTopologyRevision,
+    placeImportedNodes: requestImportedNodePlacement,
+    onConsumed: onImportedNodePlacementConsumed,
+  });
 
   useEffect(() => {
-    setEdges((currentEdges) => setLinkRouteAvailability(currentEdges, editMode, onLinkRouteCommit));
-  }, [editMode, onLinkRouteCommit, setEdges]);
+    setEdges((currentEdges) =>
+      setLinkRouteAvailability(
+        currentEdges,
+        editMode && !topologyRun.mutationBlocked,
+        onLinkRouteCommit,
+      ),
+    );
+  }, [editMode, onLinkRouteCommit, setEdges, topologyRun.mutationBlocked]);
 
   useEffect(() => {
     onTopologyLoadingChange?.(loading);
@@ -560,11 +688,12 @@ export default function Canvas({
       if (!mapId) {
         return;
       }
+      await topologyRun.markManualEdit();
       await removeDeviceFromCanvasMap(mapId, deviceId);
       setPanelContent(null);
       await loadTopology(true);
     },
-    [loadTopology, mapId, setPanelContent],
+    [loadTopology, mapId, setPanelContent, topologyRun.markManualEdit],
   );
 
   const effectiveAreaId = selectedAreaId;
@@ -680,6 +809,16 @@ export default function Canvas({
   const renderEdges = useMemo(
     () => setEdgeInteractionMode(displayEdges, canvasInteractionActive ? 'interactive' : 'idle'),
     [displayEdges, canvasInteractionActive],
+  );
+  const topologyDeviceNames = useMemo(
+    () =>
+      new Map(
+        devices.map((device) => [
+          device.id,
+          device.tags?.display_name || device.sys_name || device.hostname || device.ip,
+        ]),
+      ),
+    [devices],
   );
 
   useEffect(() => {
@@ -809,15 +948,20 @@ export default function Canvas({
         connection.source === connection.target
       )
         return;
-      setPanelContent({
-        type: 'create-link',
-        data: {
-          initialSourceDeviceId: connection.source,
-          initialTargetDeviceId: connection.target,
-        },
-      });
+      void topologyRun
+        .markManualEdit()
+        .then(() => {
+          setPanelContent({
+            type: 'create-link',
+            data: {
+              initialSourceDeviceId: connection.source!,
+              initialTargetDeviceId: connection.target!,
+            },
+          });
+        })
+        .catch(() => undefined);
     },
-    [editMode, setPanelContent],
+    [editMode, setPanelContent, topologyRun.markManualEdit],
   );
 
   function focusOnDevice(deviceID: string) {
@@ -866,6 +1010,9 @@ export default function Canvas({
   }
 
   if (loading) {
+    if (importedNodeCount !== undefined) {
+      return <CanvasLoadingState importedNodeCount={importedNodeCount} />;
+    }
     return <CanvasLoadingState />;
   }
 
@@ -885,7 +1032,14 @@ export default function Canvas({
       ref={canvasRootRef}
       data-testid="topology-canvas-root"
       data-topology-zoom-band={topologyZoomBandRef.current}
-      className={`topology-backdrop relative h-full w-full bg-bg ${canvasInteractionActive ? 'topology-interacting' : ''}`}
+      aria-busy={
+        importedNodeCount !== undefined ||
+        (topologyRun.phase !== null && topologyRun.phase !== 'complete') ||
+        undefined
+      }
+      className={`topology-import-placement-surface topology-backdrop relative h-full w-full bg-bg ${
+        importedNodeCount !== undefined ? 'topology-import-placement-pending' : ''
+      } ${canvasInteractionActive ? 'topology-interacting' : ''}`}
     >
       <CanvasChromeControls
         chromeHidden={effectiveChromeHidden}
@@ -905,8 +1059,18 @@ export default function Canvas({
       {!effectiveChromeHidden && (
         <Toolbar
           onSearch={() => setShowSearch((s) => !s)}
-          onAddDevice={() => setPanelContent({ type: 'addDevice' })}
-          onCreateLink={() => setPanelContent({ type: 'create-link' })}
+          onAddDevice={() => {
+            void topologyRun
+              .markManualEdit()
+              .then(() => setPanelContent({ type: 'addDevice' }))
+              .catch(() => undefined);
+          }}
+          onCreateLink={() => {
+            void topologyRun
+              .markManualEdit()
+              .then(() => setPanelContent({ type: 'create-link' }))
+              .catch(() => undefined);
+          }}
           onAlerts={() => setPanelContent({ type: 'alerts' })}
           onToggleEditMode={() => setEditMode((m) => !m)}
           onToggleSnapToGrid={toggleSnapToGrid}
@@ -929,7 +1093,12 @@ export default function Canvas({
         setEdgeMenu={setEdgeMenu}
         setPanelContent={setPanelContent}
         editMode={editMode}
-        resetLinkRoute={resetLinkRoute}
+        resetLinkRoute={(edgeID) => {
+          void topologyRun
+            .markManualEdit()
+            .then(() => resetLinkRoute(edgeID))
+            .catch(() => undefined);
+        }}
       />
 
       <SidePanel
@@ -953,6 +1122,7 @@ export default function Canvas({
           mapId={mapId}
           mapName={mapName}
           editMode={editMode}
+          mutationBlocked={topologyRun.mutationBlocked}
           onRemoveDeviceFromMap={handleRemoveDeviceFromMap}
           onSettingsChange={refreshSettings}
           onWinBoxAvailabilityChange={(deviceId, hasWinboxProfile) => {
@@ -976,6 +1146,30 @@ export default function Canvas({
         selectedNodeCount={selectedNodeCount}
         prometheusDiagnosticsVisible={runtimeSummary.prometheusDiagnosticsVisible}
         onBulkEditClick={openBulkEditPanel}
+      />
+      <DeviceImportTopologyOverlay
+        snapshot={topologyRun.snapshot}
+        phase={topologyRun.phase}
+        progress={topologyRun.progress}
+        applyingLayout={topologyRun.applyingLayout}
+        retryPending={topologyRun.retryPending}
+        error={topologyRun.error}
+        deviceNames={topologyDeviceNames}
+        onContinue={() => void topologyRun.continuePartial()}
+        onRetry={(deviceIDs) => void topologyRun.retry(deviceIDs)}
+        onConfigureDevice={(deviceID) => {
+          setPanelContent({ type: 'deviceConfig', data: { deviceId: deviceID } });
+        }}
+        onCreateManualLink={() => {
+          void topologyRun
+            .markManualEdit()
+            .then(() => {
+              setEditMode(true);
+              setPanelContent({ type: 'create-link' });
+            })
+            .catch(() => undefined);
+        }}
+        onRefresh={() => void topologyRun.refresh()}
       />
       {/* WinBox launch error toast */}
       {winboxError && (
@@ -1075,11 +1269,17 @@ export default function Canvas({
             data: { link: lk },
           });
         }}
-        onNodeDragStart={beginCanvasInteraction}
+        onNodeDragStart={() => {
+          void topologyRun.markManualEdit().catch(() => undefined);
+          beginCanvasInteraction();
+        }}
         onNodeDragStop={(_ev, node) => {
           endCanvasInteraction();
           if (isGhostDeviceNode(node)) return;
-          updateNodePosition(node.id, node.position);
+          void topologyManualEditRef
+            .current()
+            .then(() => updateNodePosition(node.id, node.position))
+            .catch(() => undefined);
         }}
         selectionOnDrag={editMode}
         selectionMode={SelectionMode.Partial}
@@ -1090,7 +1290,8 @@ export default function Canvas({
         fitView
         fitViewOptions={{ padding: currentTopologyFitViewPadding }}
         onlyRenderVisibleElements
-        nodesDraggable={editMode}
+        nodesDraggable={editMode && !topologyRun.mutationBlocked}
+        nodesConnectable={editMode && !topologyRun.mutationBlocked}
         snapToGrid={snapToGrid}
         snapGrid={canvasSnapGrid}
         panOnDrag
@@ -1105,6 +1306,9 @@ export default function Canvas({
         <LinkLabelLayer />
         {!effectiveChromeHidden && <TopologyMiniMap />}
       </ReactFlow>
+      {importedNodeCount !== undefined && (
+        <CanvasLoadingState importedNodeCount={importedNodeCount} overlay />
+      )}
     </div>
   );
 }

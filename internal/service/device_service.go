@@ -59,6 +59,24 @@ type DeviceUpdate struct {
 	AreaIDs               *[]uuid.UUID // nil=not set, non-nil=replace all area assignments
 }
 
+// DeviceDraftInput holds the named inputs used to construct a normalized device draft.
+type DeviceDraftInput struct {
+	IP                    string
+	Hostname              string
+	DeviceType            domain.DeviceType
+	SNMPCredentials       domain.SNMPCredentials
+	Tags                  map[string]string
+	Vendor                string
+	MetricsSource         domain.MetricsSource
+	PrometheusLabelName   string
+	PrometheusLabelValue  string
+	TopologyDiscoveryMode domain.TopologyDiscoveryMode
+	AreaIDs               []uuid.UUID
+	ProbePorts            []int
+	Addresses             []domain.DeviceAddress
+	Notes                 *string
+}
+
 // DeviceService orchestrates device management, combining SNMP discovery
 // with persistence through repositories.
 type DeviceService struct {
@@ -265,6 +283,80 @@ func (s *DeviceService) Stop() {
 	s.WaitForProbes()
 }
 
+// BuildDeviceDraft applies AddDevice defaults and normalization without persistence or probes.
+func (s *DeviceService) BuildDeviceDraft(input DeviceDraftInput) (*domain.Device, error) {
+	tags := input.Tags
+	if tags == nil {
+		tags = map[string]string{}
+	}
+
+	deviceType := input.DeviceType
+	if deviceType == "" {
+		deviceType = domain.DeviceTypeUnknown
+	}
+
+	metricsSource := input.MetricsSource
+	if metricsSource == "" {
+		metricsSource = domain.MetricsSourcePrometheus
+	}
+
+	prometheusLabelName := input.PrometheusLabelName
+	if prometheusLabelName == "" {
+		prometheusLabelName = "instance"
+	}
+	prometheusLabelValue := input.PrometheusLabelValue
+	if prometheusLabelValue == "" {
+		prometheusLabelValue = input.IP
+	}
+
+	if deviceType == domain.DeviceTypeVirtual {
+		metricsSource = domain.MetricsSourceNone
+	}
+
+	initialStatus := domain.DeviceStatusProbing
+	if deviceType == domain.DeviceTypeVirtual {
+		initialStatus = domain.DeviceStatusUnknown
+	}
+	pollingEnabled := true
+	pollIntervalOverride := initialPollIntervalOverride(s.settingsRepo, deviceType)
+	normalizedProbePorts, err := domain.NormalizeProbePorts(input.ProbePorts)
+	if err != nil {
+		return nil, err
+	}
+
+	device := &domain.Device{
+		ID:                     uuid.New(),
+		Hostname:               input.Hostname,
+		IP:                     input.IP,
+		Notes:                  domain.NormalizeDeviceNotes(input.Notes),
+		SNMPCredentials:        input.SNMPCredentials,
+		DeviceType:             deviceType,
+		PollClass:              domain.ClassifyPollClass(deviceType),
+		PollIntervalOverride:   pollIntervalOverride,
+		PollingEnabled:         &pollingEnabled,
+		Status:                 initialStatus,
+		Vendor:                 input.Vendor,
+		Managed:                true,
+		Tags:                   tags,
+		MetricsSource:          metricsSource,
+		PrometheusLabelName:    prometheusLabelName,
+		PrometheusLabelValue:   prometheusLabelValue,
+		TopologyDiscoveryMode:  input.TopologyDiscoveryMode,
+		TopologyBootstrapState: domain.TopologyBootstrapStateIdle,
+		AreaIDs:                input.AreaIDs,
+		ProbePorts:             normalizedProbePorts,
+		Addresses:              append([]domain.DeviceAddress(nil), input.Addresses...),
+	}
+	domain.NormalizeDeviceAddresses(device)
+	device.TopologyDiscoveryMode = domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
+	if domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode()) == domain.TopologyDiscoveryModeBootstrapOnce {
+		device.TopologyBootstrapState = domain.TopologyBootstrapStatePending
+	}
+	domain.NormalizeVirtualDevice(device)
+
+	return device, nil
+}
+
 // AddDevice creates a new device and triggers an async SNMP probe for
 // non-virtual devices. Virtual devices skip probing and start with status
 // "unknown". The device is returned immediately before any probe completes.
@@ -428,6 +520,21 @@ func (s *DeviceService) hasIncompleteLLDPLinks(deviceID uuid.UUID) bool {
 	}
 
 	return false
+}
+
+// TopologyBootstrapFollowupDeviceIDs returns deterministic map-scoped devices
+// whose LLDP link endpoints still lack interface details after reconciliation.
+func (s *DeviceService) TopologyBootstrapFollowupDeviceIDs(deviceIDs []uuid.UUID) []uuid.UUID {
+	if s == nil || s.linkRepo == nil {
+		return nil
+	}
+	result := make([]uuid.UUID, 0, len(deviceIDs))
+	for _, deviceID := range normalizedTopologyBootstrapDeviceIDs(deviceIDs) {
+		if s.hasIncompleteLLDPLinks(deviceID) {
+			result = append(result, deviceID)
+		}
+	}
+	return result
 }
 
 func (s *DeviceService) lldpPeerIDs(deviceID uuid.UUID) []uuid.UUID {
@@ -665,6 +772,17 @@ func (s *DeviceService) ProbeDevice(ctx context.Context, id uuid.UUID) error {
 // (up/down) is kept until the probe result is known.
 func (s *DeviceService) ReprobeDevice(ctx context.Context, id uuid.UUID) error {
 	return s.discovery.ReprobeDevice(ctx, id)
+}
+
+// NotifyTopologyChanged emits one non-blocking topology invalidation signal.
+func (s *DeviceService) NotifyTopologyChanged() {
+	if s == nil || s.TopologyNotify == nil {
+		return
+	}
+	select {
+	case s.TopologyNotify <- struct{}{}:
+	default:
+	}
 }
 
 func (s *DeviceService) RunTopologyDiscoveryNow(ctx context.Context, id uuid.UUID) error {

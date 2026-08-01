@@ -48,6 +48,8 @@ const (
 	MessageTypeResyncRequired = "resync_required"
 	// MessageTypeTopologyChanged notifies clients that the topology has changed (new links discovered).
 	MessageTypeTopologyChanged = "topology_changed"
+	// MessageTypeDeviceImportTopologyRunChanged invalidates one map-scoped import progress snapshot.
+	MessageTypeDeviceImportTopologyRunChanged = "device_import_topology_run_changed"
 	// MessageTypeHello lets clients announce the canvas versions they already have.
 	MessageTypeHello = "hello"
 	// MessageTypeReady confirms the exact runtime cursor reached by a synchronization result.
@@ -160,6 +162,12 @@ type TopologyChangedPayload struct {
 	RecommendedEndpoint string `json:"recommended_endpoint,omitempty"`
 }
 
+// DeviceImportTopologyRunChangedPayload identifies the durable run snapshot to refresh.
+type DeviceImportTopologyRunChangedPayload struct {
+	RunID uuid.UUID `json:"run_id"`
+	MapID uuid.UUID `json:"map_id"`
+}
+
 // ReadyPayload confirms the exact cursor and mode selected by runtime synchronization.
 type ReadyPayload struct {
 	RuntimeVersion  uint64 `json:"runtime_version"`
@@ -253,6 +261,17 @@ func NewTopologyChangedMessage(topologyVersion uint64, reason string) Message {
 			TopologyVersion:     topologyVersion,
 			Reason:              reason,
 			RecommendedEndpoint: CanvasTopologyEndpoint,
+		},
+	}
+}
+
+// NewDeviceImportTopologyRunChangedMessage builds a low-cardinality progress invalidation.
+func NewDeviceImportTopologyRunChangedMessage(runID, mapID uuid.UUID) Message {
+	return Message{
+		Type: MessageTypeDeviceImportTopologyRunChanged,
+		Payload: DeviceImportTopologyRunChangedPayload{
+			RunID: runID,
+			MapID: mapID,
 		},
 	}
 }

@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
+import type { ImportedNodePlacementRequest } from './components/canvas/importedNodePlacementRequest';
 import type { Area, CanvasMap, Device, Link } from './types/api';
 import type { DeviceRuntimeDTO, SnapshotPayload } from './types/metrics';
 
@@ -167,6 +168,8 @@ vi.mock('./components/Canvas', () => ({
     selectedAreaId,
     fitViewRevision,
     topologyRefreshRevision,
+    importedNodePlacementRequest,
+    onImportedNodePlacementConsumed,
     chromeHidden,
     onChromeHiddenChange,
     onDevicesChange,
@@ -179,6 +182,8 @@ vi.mock('./components/Canvas', () => ({
     selectedAreaId: string | null;
     fitViewRevision?: number;
     topologyRefreshRevision?: number;
+    importedNodePlacementRequest?: ImportedNodePlacementRequest | null;
+    onImportedNodePlacementConsumed?: (requestId: string) => void;
     chromeHidden?: boolean;
     onChromeHiddenChange?: (hidden: boolean) => void;
     onDevicesChange: (devices: Device[]) => void;
@@ -275,7 +280,17 @@ vi.mock('./components/Canvas', () => ({
         <span>{`area:${selectedAreaId ?? 'all'}`}</span>
         <span>{`fit:${fitViewRevision ?? 0}`}</span>
         <span>{`refresh:${topologyRefreshRevision ?? 0}`}</span>
+        <span>{`placement:${importedNodePlacementRequest?.requestId ?? 'none'}:${importedNodePlacementRequest?.deviceIds.join('|') ?? ''}`}</span>
         <span>{`chrome:${chromeHidden ? 'hidden' : 'visible'}`}</span>
+        <button
+          type="button"
+          onClick={() =>
+            importedNodePlacementRequest &&
+            onImportedNodePlacementConsumed?.(importedNodePlacementRequest.requestId)
+          }
+        >
+          Complete imported placement
+        </button>
         <button type="button" onClick={() => onChromeHiddenChange?.(!chromeHidden)}>
           Toggle canvas chrome
         </button>
@@ -405,9 +420,43 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
 }));
 
 vi.mock('./components/AdminDashboard', () => ({
-  AdminDashboard: (props: { visible?: boolean }) => {
+  AdminDashboard: (props: {
+    visible?: boolean;
+    onOpenMap?: (map: CanvasMap, placementRequest?: ImportedNodePlacementRequest) => void;
+  }) => {
     adminDashboardPropsMock(props);
-    return <div data-testid="admin-dashboard">Admin</div>;
+    return (
+      <div data-testid="admin-dashboard">
+        Admin
+        <button
+          type="button"
+          onClick={() =>
+            props.onOpenMap?.(
+              {
+                id: 'import-map',
+                name: 'Imported Nodes',
+                description: '',
+                source_area_id: null,
+                filter: {},
+                is_default: false,
+                device_count: 1,
+                link_count: 0,
+                position_count: 0,
+                created_at: '2026-01-01T00:00:00Z',
+                updated_at: '2026-01-02T00:00:00Z',
+              },
+              {
+                requestId: 'import-placement-request',
+                mapId: 'import-map',
+                deviceIds: ['imported-b', 'imported-a'],
+              },
+            )
+          }
+        >
+          Open imported destination map
+        </button>
+      </div>
+    );
   },
 }));
 
@@ -574,12 +623,45 @@ describe('App', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Admin' }));
     await waitFor(() => {
-      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({ visible: true });
+      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({
+        visible: true,
+        onOpenMap: expect.any(Function),
+      });
     });
     await clickButton('Dashboard');
     await waitFor(() => {
-      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({ visible: false });
+      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({
+        visible: false,
+        onOpenMap: expect.any(Function),
+      });
     });
+  });
+
+  it('opens the imported destination map on canvas and requests fit view', async () => {
+    hasPermissionMock.mockImplementation(
+      (permission: string) => permission === 'admin:dashboard:read',
+    );
+
+    await renderApp();
+    await clickButton('Admin');
+    expect(screen.getByTestId('canvas')).toHaveTextContent('fit:0');
+
+    await clickButton('Open imported destination map');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('canvas')).toHaveTextContent('map:import-map:Imported Nodes');
+      expect(screen.getByTestId('canvas')).toHaveTextContent('fit:1');
+      expect(screen.getByTestId('canvas')).toHaveTextContent(
+        'placement:import-placement-request:imported-b|imported-a',
+      );
+    });
+    expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({
+      visible: false,
+      onOpenMap: expect.any(Function),
+    });
+
+    await clickButton('Complete imported placement');
+    expect(screen.getByTestId('canvas')).toHaveTextContent('placement:none:');
   });
 
   it('uses the loaded default saved map id instead of the legacy global map context', async () => {

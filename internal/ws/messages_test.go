@@ -675,6 +675,26 @@ func TestNewTopologyChangedMessageUsesVersionedInvalidationEnvelope(t *testing.T
 	}
 }
 
+func TestNewDeviceImportTopologyRunChangedMessageIsMapScoped(t *testing.T) {
+	runID := uuid.New()
+	mapID := uuid.New()
+	msg := NewDeviceImportTopologyRunChangedMessage(runID, mapID)
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	serialized := string(raw)
+	for _, want := range []string{
+		`"type":"device_import_topology_run_changed"`,
+		`"run_id":"` + runID.String() + `"`,
+		`"map_id":"` + mapID.String() + `"`,
+	} {
+		if !strings.Contains(serialized, want) {
+			t.Fatalf("message = %s, want %s", raw, want)
+		}
+	}
+}
+
 func TestNewReadyMessageUsesVersionedHandshakeEnvelope(t *testing.T) {
 	msg := NewReadyMessage(42, 7, "rt-sha256:abc")
 	raw, err := json.Marshal(msg)

@@ -3,7 +3,9 @@ package postgres
 // This file exercises migrations behavior so refactors preserve the documented contract.
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"io/fs"
 	"strings"
 	"testing"
@@ -372,6 +374,111 @@ func TestRunMigrationsOnConfiguredPostgresTestDB(t *testing.T) {
 		if assignedCount != len(domain.SystemRolePermissionKeys(roleName)) {
 			t.Fatalf("permission count for role %q = %d, want %d", roleName, assignedCount, len(domain.SystemRolePermissionKeys(roleName)))
 		}
+	}
+}
+
+func TestRunMigrationsRepairsEarlyDeviceImportTopologyRunSchema(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() {
+		if _, err := db.Exec(`
+			DROP TABLE IF EXISTS device_import_topology_run_items;
+			DROP TABLE IF EXISTS device_import_topology_runs;
+			UPDATE schema_migrations SET version = 26, dirty = FALSE;
+		`); err != nil {
+			t.Errorf("resetting early topology schema fixture: %v", err)
+			return
+		}
+		if err := RunMigrations(db); err != nil {
+			t.Errorf("restoring topology migrations: %v", err)
+		}
+	})
+
+	if _, err := db.Exec(`
+		ALTER TABLE device_import_topology_runs
+			DROP COLUMN layout_application_digest,
+			DROP COLUMN failure_code,
+			DROP COLUMN failure_message,
+			DROP COLUMN failure_reference,
+			DROP COLUMN reconcile_attempts;
+		ALTER TABLE device_import_topology_runs
+			DROP CONSTRAINT device_import_topology_runs_state_check;
+		ALTER TABLE device_import_topology_runs
+			ADD CONSTRAINT device_import_topology_runs_state_check
+			CHECK (state IN ('importing', 'discovering', 'reconciling', 'followup', 'ready_for_layout', 'completed', 'superseded'));
+		DROP INDEX device_import_topology_runs_one_active_per_map;
+		CREATE UNIQUE INDEX device_import_topology_runs_one_active_per_map
+			ON device_import_topology_runs(map_id)
+			WHERE state IN ('importing', 'discovering', 'reconciling', 'followup', 'ready_for_layout');
+		UPDATE schema_migrations SET version = 27, dirty = FALSE;
+	`); err != nil {
+		t.Fatalf("creating early topology schema fixture: %v", err)
+	}
+
+	ctx := context.Background()
+	mapID := uuid.New()
+	actorID := uuid.New()
+	insertDeviceImportTestMap(t, db, mapID)
+	insertDeviceImportTopologyTestUser(t, db, actorID)
+	repo := NewDeviceImportTopologyRunRepo(db)
+	run := &domain.DeviceImportTopologyRun{
+		ID:                uuid.New(),
+		MapID:             mapID,
+		ActorUserID:       actorID,
+		FileDigest:        "sha256:early-topology-schema",
+		LayoutScope:       domain.DeviceImportTopologyLayoutScopeReorganize,
+		State:             domain.DeviceImportTopologyRunStateImporting,
+		AutoLayoutAllowed: true,
+	}
+	if err := repo.Create(ctx, run); err != nil {
+		t.Fatalf("Create before compatibility migration: %v", err)
+	}
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("migrating early topology schema: %v", err)
+	}
+	if _, err := repo.Get(ctx, run.ID); err != nil {
+		t.Fatalf("Get preserved run after compatibility migration: %v", err)
+	}
+
+	var layoutDigest string
+	var reconcileAttempts int
+	if err := db.QueryRow(
+		`SELECT layout_application_digest, reconcile_attempts
+		 FROM device_import_topology_runs WHERE id = $1`,
+		run.ID.String(),
+	).Scan(&layoutDigest, &reconcileAttempts); err != nil {
+		t.Fatalf("reading repaired topology defaults: %v", err)
+	}
+	if layoutDigest != "" || reconcileAttempts != 0 {
+		t.Fatalf("repaired topology defaults = (%q, %d), want (empty, 0)", layoutDigest, reconcileAttempts)
+	}
+	if _, err := db.Exec(
+		`UPDATE device_import_topology_runs SET reconcile_attempts = 3 WHERE id = $1`,
+		run.ID.String(),
+	); err == nil {
+		t.Fatal("reconcile_attempts = 3 succeeded, want repaired upper-bound constraint")
+	}
+
+	failure := domain.DeviceImportTopologyRunFailure{
+		Code:      domain.DeviceImportTopologyResultInternal,
+		Message:   "Bootstrap could not start.",
+		Reference: "repair-test",
+	}
+	if err := repo.FailImport(ctx, run.ID, failure); err != nil {
+		t.Fatalf("FailImport after compatibility migration: %v", err)
+	}
+	snapshot, err := repo.Get(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Get failed run after compatibility migration: %v", err)
+	}
+	if snapshot.Run.State != domain.DeviceImportTopologyRunStateFailed ||
+		snapshot.Run.FailureCode != failure.Code || snapshot.Run.FailureReference != failure.Reference {
+		t.Fatalf("failed run = %#v, want persisted compatibility failure", snapshot.Run)
+	}
+
+	conflicting := *run
+	conflicting.ID = uuid.New()
+	if err := repo.Create(ctx, &conflicting); !errors.Is(err, ErrDeviceImportTopologyRunConflict) {
+		t.Fatalf("Create beside failed active run error = %v, want conflict", err)
 	}
 }
 

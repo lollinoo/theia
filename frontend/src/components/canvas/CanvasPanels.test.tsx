@@ -94,6 +94,7 @@ vi.mock('../DeviceDetailsPanel', () => ({
       </div>
       <div>Address reachability results:{props.addressReachabilityState?.results.length ?? 0}</div>
       <div>Address reachability error:{props.addressReachabilityState?.error ?? 'none'}</div>
+      <div>Address promotion enabled:{String(Boolean(props.onPromoteAddress))}</div>
       <button type="button" onClick={() => props.onCheckAddressReachability?.(props.device.id)}>
         Check mocked address reachability
       </button>
@@ -261,6 +262,34 @@ describe('CanvasPanels', () => {
     expect(setPanelContent).toHaveBeenCalledWith(null);
     expect(requestNewNodePlacement).toHaveBeenCalledWith('new-dev');
     expect(loadTopology).not.toHaveBeenCalled();
+  });
+
+  it('replaces mutation-only panels while topology bootstrap owns the map', () => {
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'addDevice' }}
+        setPanelContent={vi.fn()}
+        devices={[]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        runtimeState={buildRuntimeState({
+          devices: [],
+          links: [],
+          snapshot: null,
+          alerts: [],
+          prometheusStatus: null,
+        })}
+        mutationBlocked
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Complete mocked add' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Manual changes are paused while Bootstrap-Once owns the map.',
+    );
   });
 
   it('forwards WinBox availability updates for the open device config panel', () => {
@@ -629,6 +658,36 @@ describe('CanvasPanels', () => {
     expect(screen.getByText('Link Details Editable:ether2')).toBeInTheDocument();
   });
 
+  it('keeps link details read-only while topology bootstrap owns the map', () => {
+    const sourceDevice = mockDevice();
+    const targetDevice = mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' });
+    const link = mockLink();
+
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'link-details', data: { link } }}
+        setPanelContent={vi.fn()}
+        devices={[sourceDevice, targetDevice]}
+        topologyLinks={[link]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        runtimeState={buildRuntimeState({
+          devices: [sourceDevice, targetDevice],
+          links: [link],
+          snapshot: null,
+          alerts: [],
+          prometheusStatus: null,
+        })}
+        editMode
+        mutationBlocked
+      />,
+    );
+
+    expect(screen.getByText('Link Details Read Only:ether2')).toBeInTheDocument();
+  });
+
   it('renders live device details from a deviceDetails panel target', () => {
     const staleDevice = mockDevice({ hostname: 'stale-router' });
     const liveDevice = mockDevice({ hostname: 'live-router' });
@@ -836,6 +895,33 @@ describe('CanvasPanels', () => {
     await waitFor(() => {
       expect(loadTopology).toHaveBeenCalledWith(true);
     });
+  });
+
+  it('disables address promotion while topology bootstrap owns the map', () => {
+    const device = mockDevice();
+
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'deviceDetails', data: { deviceId: device.id } }}
+        setPanelContent={vi.fn()}
+        devices={[device]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={vi.fn()}
+        runtimeState={buildRuntimeState({
+          devices: [device],
+          links: [],
+          snapshot: null,
+          alerts: [],
+          prometheusStatus: null,
+        })}
+        mutationBlocked
+      />,
+    );
+
+    expect(screen.getByText('Address promotion enabled:false')).toBeInTheDocument();
   });
 
   it('prefers the live topology link over stale panel data for link details', () => {

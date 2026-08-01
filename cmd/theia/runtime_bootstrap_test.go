@@ -53,12 +53,55 @@ type stubRuntimeServer struct {
 	listenErr error
 }
 
+type orderedRuntimePipelineStarter struct {
+	events *[]string
+}
+
+func (s orderedRuntimePipelineStarter) Start(context.Context) error {
+	*s.events = append(*s.events, "pipeline-start")
+	return nil
+}
+
+type orderedTopologyRecoveryCoordinator struct {
+	events *[]string
+}
+
+func (c orderedTopologyRecoveryCoordinator) PrepareRecovery(
+	context.Context,
+) (service.DeviceImportTopologyRecoveryPlan, error) {
+	*c.events = append(*c.events, "recovery-prepare")
+	return service.DeviceImportTopologyRecoveryPlan{}, nil
+}
+
+func (c orderedTopologyRecoveryCoordinator) ResumeRecovery(
+	context.Context,
+	service.DeviceImportTopologyRecoveryPlan,
+) error {
+	*c.events = append(*c.events, "recovery-resume")
+	return nil
+}
+
 func (s stubRuntimeServer) ListenAndServe() error {
 	return s.listenErr
 }
 
 func (stubRuntimeServer) Shutdown(context.Context) error {
 	return nil
+}
+
+func TestStartPipelineWithTopologyRecoveryRepairsStateBeforeWorkers(t *testing.T) {
+	events := make([]string, 0, 3)
+	err := startPipelineWithTopologyRecovery(
+		context.Background(),
+		orderedRuntimePipelineStarter{events: &events},
+		orderedTopologyRecoveryCoordinator{events: &events},
+	)
+	if err != nil {
+		t.Fatalf("startPipelineWithTopologyRecovery: %v", err)
+	}
+	if got, want := fmt.Sprint(events), "[recovery-prepare pipeline-start recovery-resume]"; got != want {
+		t.Fatalf("startup order = %s, want %s", got, want)
+	}
 }
 
 type runtimeDebugSettingsRepo struct {

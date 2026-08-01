@@ -62,6 +62,8 @@ export function usePositions(mapId: string | null) {
   const endpointRef = useRef(positionsEndpoint(mapId));
   const fetchSequenceRef = useRef(0);
   const latestSaveTokenRef = useRef(0);
+  const saveQueueByEndpointRef = useRef(new Map<string, Promise<void>>());
+  const positionSaveFenceDepthByEndpointRef = useRef(new Map<string, number>());
 
   const fetchPositions = useCallback(async () => {
     const requestEndpoint = endpointRef.current;
@@ -177,6 +179,27 @@ export function usePositions(mapId: string | null) {
     [],
   );
 
+  const enqueuePositionsCommit = useCallback(
+    (endpoint: string, nextPositions: PositionPayload[], token: number): Promise<void> => {
+      const previousCommit = saveQueueByEndpointRef.current.get(endpoint);
+      const queuedCommit = previousCommit
+        ? previousCommit
+            .catch(() => undefined)
+            .then(() => commitPositionsToEndpoint(endpoint, nextPositions, token))
+        : commitPositionsToEndpoint(endpoint, nextPositions, token);
+      saveQueueByEndpointRef.current.set(endpoint, queuedCommit);
+
+      const clearCompletedCommit = () => {
+        if (saveQueueByEndpointRef.current.get(endpoint) === queuedCommit) {
+          saveQueueByEndpointRef.current.delete(endpoint);
+        }
+      };
+      void queuedCommit.then(clearCompletedCommit, clearCompletedCommit);
+      return queuedCommit;
+    },
+    [commitPositionsToEndpoint],
+  );
+
   const handleSaveFailure = useCallback((error: unknown, positionCount: number, token: number) => {
     console.error(error);
 
@@ -207,6 +230,28 @@ export function usePositions(mapId: string | null) {
     });
   }, []);
 
+  const schedulePendingSave = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+    }
+
+    timerRef.current = window.setTimeout(() => {
+      const payload = pendingRef.current;
+      pendingRef.current = null;
+      timerRef.current = null;
+
+      if (!payload) {
+        return;
+      }
+
+      void enqueuePositionsCommit(payload.endpoint, payload.positions, payload.token).catch(
+        (error) => {
+          handleSaveFailure(error, payload.positions.length, payload.token);
+        },
+      );
+    }, 1000);
+  }, [enqueuePositionsCommit, handleSaveFailure]);
+
   useEffect(() => {
     const nextEndpoint = positionsEndpoint(mapId);
     if (endpointRef.current === nextEndpoint) {
@@ -225,7 +270,7 @@ export function usePositions(mapId: string | null) {
     setLoading(false);
 
     if (pendingPayload !== null) {
-      void commitPositionsToEndpoint(
+      void enqueuePositionsCommit(
         pendingPayload.endpoint,
         pendingPayload.positions,
         pendingPayload.token,
@@ -233,10 +278,13 @@ export function usePositions(mapId: string | null) {
         handleSaveFailure(error, pendingPayload.positions.length, pendingPayload.token);
       });
     }
-  }, [commitPositionsToEndpoint, handleSaveFailure, mapId]);
+  }, [enqueuePositionsCommit, handleSaveFailure, mapId]);
 
   const savePositions = useCallback(
     async (nextPositions: PositionPayload[]) => {
+      if ((positionSaveFenceDepthByEndpointRef.current.get(endpointRef.current) ?? 0) > 0) {
+        return;
+      }
       setPositions(toPositionMap(nextPositions));
       const token = latestSaveTokenRef.current + 1;
       latestSaveTokenRef.current = token;
@@ -260,27 +308,166 @@ export function usePositions(mapId: string | null) {
         },
       });
 
+      schedulePendingSave();
+    },
+    [schedulePendingSave],
+  );
+
+  const savePositionsImmediately = useCallback(
+    async (nextPositions: PositionPayload[]) => {
+      if ((positionSaveFenceDepthByEndpointRef.current.get(endpointRef.current) ?? 0) > 0) {
+        return false;
+      }
+      const displacedPendingSave = pendingRef.current;
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      pendingRef.current = null;
+
+      const endpoint = endpointRef.current;
+      const token = latestSaveTokenRef.current + 1;
+      latestSaveTokenRef.current = token;
+      pendingSaveCountRef.current = 1;
+      updateCanvasDiagnosticsState({
+        positions: {
+          pendingSaveCount: 1,
+          lastSaveStatus: 'pending',
+          lastSaveError: undefined,
+        },
+      });
+      recordCanvasDiagnosticEvent({
+        level: 'debug',
+        source: 'positions',
+        event: 'positions.save.queued',
+        message: 'Canvas position save queued',
+        metadata: {
+          positionCount: nextPositions.length,
+          token,
+          immediate: true,
+        },
+      });
+
+      try {
+        await enqueuePositionsCommit(endpoint, nextPositions, token);
+      } catch (error) {
+        handleSaveFailure(error, nextPositions.length, token);
+        const canRestorePendingSave =
+          displacedPendingSave !== null &&
+          displacedPendingSave.endpoint === endpoint &&
+          endpoint === endpointRef.current &&
+          token === latestSaveTokenRef.current &&
+          pendingRef.current === null;
+        if (canRestorePendingSave) {
+          const restoredToken = latestSaveTokenRef.current + 1;
+          latestSaveTokenRef.current = restoredToken;
+          pendingRef.current = {
+            ...displacedPendingSave,
+            token: restoredToken,
+          };
+          pendingSaveCountRef.current = 1;
+          updateCanvasDiagnosticsState({
+            positions: {
+              pendingSaveCount: 1,
+              lastSaveStatus: 'pending',
+              lastSaveError: undefined,
+            },
+          });
+          recordCanvasDiagnosticEvent({
+            level: 'debug',
+            source: 'positions',
+            event: 'positions.save.queued',
+            message: 'Canvas position save restored after immediate save failure',
+            metadata: {
+              positionCount: displacedPendingSave.positions.length,
+              token: restoredToken,
+              restored: true,
+            },
+          });
+          schedulePendingSave();
+        } else if (
+          displacedPendingSave !== null &&
+          displacedPendingSave.endpoint !== endpointRef.current
+        ) {
+          void enqueuePositionsCommit(
+            displacedPendingSave.endpoint,
+            displacedPendingSave.positions,
+            displacedPendingSave.token,
+          ).catch((flushError) => {
+            handleSaveFailure(
+              flushError,
+              displacedPendingSave.positions.length,
+              displacedPendingSave.token,
+            );
+          });
+        }
+        throw error;
       }
 
-      timerRef.current = window.setTimeout(() => {
-        const payload = pendingRef.current;
-        pendingRef.current = null;
-        timerRef.current = null;
-
-        if (!payload) {
-          return;
-        }
-
-        void commitPositionsToEndpoint(payload.endpoint, payload.positions, payload.token).catch(
-          (error) => {
-            handleSaveFailure(error, payload.positions.length, payload.token);
-          },
-        );
-      }, 1000);
+      const saveRemainsCurrent =
+        token === latestSaveTokenRef.current && endpoint === endpointRef.current;
+      if (saveRemainsCurrent) {
+        setPositions(toPositionMap(nextPositions));
+      }
+      return saveRemainsCurrent;
     },
-    [commitPositionsToEndpoint, handleSaveFailure],
+    [enqueuePositionsCommit, handleSaveFailure, schedulePendingSave],
+  );
+
+  // Serializes a server-authoritative layout after older canvas saves and suppresses
+  // provisional writes until the authoritative topology has been rendered.
+  const withPositionSaveFence = useCallback(
+    async <Result>(operation: () => Promise<Result>): Promise<Result> => {
+      const endpoint = endpointRef.current;
+      positionSaveFenceDepthByEndpointRef.current.set(
+        endpoint,
+        (positionSaveFenceDepthByEndpointRef.current.get(endpoint) ?? 0) + 1,
+      );
+
+      const pendingPayload = pendingRef.current;
+      if (pendingPayload?.endpoint === endpoint) {
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        pendingRef.current = null;
+        latestSaveTokenRef.current += 1;
+        pendingSaveCountRef.current = 0;
+        updateCanvasDiagnosticsState({
+          positions: {
+            pendingSaveCount: 0,
+            lastSaveStatus: 'idle',
+            lastSaveError: undefined,
+          },
+        });
+        recordCanvasDiagnosticEvent({
+          level: 'debug',
+          source: 'positions',
+          event: 'positions.save.discarded',
+          message: 'Queued canvas positions discarded before an authoritative update',
+          metadata: {
+            positionCount: pendingPayload.positions.length,
+            token: pendingPayload.token,
+          },
+        });
+      }
+
+      try {
+        const inFlightSave = saveQueueByEndpointRef.current.get(endpoint);
+        if (inFlightSave) {
+          await inFlightSave.catch(() => undefined);
+        }
+        return await operation();
+      } finally {
+        const remainingDepth = (positionSaveFenceDepthByEndpointRef.current.get(endpoint) ?? 1) - 1;
+        if (remainingDepth > 0) {
+          positionSaveFenceDepthByEndpointRef.current.set(endpoint, remainingDepth);
+        } else {
+          positionSaveFenceDepthByEndpointRef.current.delete(endpoint);
+        }
+      }
+    },
+    [],
   );
 
   useEffect(() => {
@@ -296,5 +483,7 @@ export function usePositions(mapId: string | null) {
     loading,
     fetchPositions,
     savePositions,
+    savePositionsImmediately,
+    withPositionSaveFence,
   };
 }

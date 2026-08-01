@@ -698,6 +698,29 @@ func (s *Scheduler) popReady() *heapItem {
 }
 
 func (s *Scheduler) popReadyEligible(limits dispatchLimits, scanState *dispatchScanState) *heapItem {
+	// Bootstrap-Once is bounded operator-initiated work. Prefer it after essential health checks,
+	// but before recurring background queues so an overloaded profile cannot starve discovery.
+	for _, kind := range []polling.TaskKind{
+		polling.TaskKindEssential,
+		polling.TaskKindBootstrap,
+		"",
+	} {
+		if item := s.popReadyEligibleKind(limits, scanState, kind); item != nil {
+			return item
+		}
+	}
+
+	scanState.flushBlockedMetrics()
+	return nil
+}
+
+// popReadyEligibleKind selects one preferred task kind. An empty kind selects all remaining
+// recurring background tasks after essential and bootstrap work have been considered.
+func (s *Scheduler) popReadyEligibleKind(
+	limits dispatchLimits,
+	scanState *dispatchScanState,
+	kind polling.TaskKind,
+) *heapItem {
 	for priority := range s.ready {
 		if len(s.ready[priority]) == 0 {
 			continue
@@ -705,6 +728,13 @@ func (s *Scheduler) popReadyEligible(limits dispatchLimits, scanState *dispatchS
 
 		for index, item := range s.ready[priority] {
 			item.task = normalizeTask(item.task)
+			if kind == "" {
+				if item.task.Kind == polling.TaskKindEssential || item.task.Kind == polling.TaskKindBootstrap {
+					continue
+				}
+			} else if item.task.Kind != kind {
+				continue
+			}
 			if scanState.isKnownBlocked(item.task) {
 				continue
 			}
@@ -721,8 +751,6 @@ func (s *Scheduler) popReadyEligible(limits dispatchLimits, scanState *dispatchS
 			return item
 		}
 	}
-
-	scanState.flushBlockedMetrics()
 	return nil
 }
 

@@ -4,6 +4,7 @@ import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
 import { type DeviceCardVariant, resolveDeviceCardVariant } from '../deviceCardVariant';
 import type { LinkEdgeType } from '../LinkEdge';
+import { findCollisionFreeExpandingPlacement } from './expandingNodePlacement';
 import {
   findNewNodePlacement,
   NEW_NODE_PREFERRED_GAP_PX,
@@ -22,12 +23,14 @@ export interface BuildExplicitNodePlacementsInput {
   links: Link[];
   deviceIds: ReadonlySet<string>;
   snapGrid?: SnapGrid | null;
+  collisionPolicy?: 'viewport' | 'expand-collision-free';
 }
 
 /** Flow-coordinate positions successfully resolved for exact pending device IDs. */
 export interface BuildExplicitNodePlacementsResult {
   positions: Map<string, { x: number; y: number }>;
   placedDeviceIds: Set<string>;
+  unplacedDeviceIds: Set<string>;
 }
 
 const conservativeFlowSizeByVariant: Record<DeviceCardVariant, ScreenSize> = {
@@ -45,6 +48,15 @@ function emptyResult(): BuildExplicitNodePlacementsResult {
   return {
     positions: new Map(),
     placedDeviceIds: new Set(),
+    unplacedDeviceIds: new Set(),
+  };
+}
+
+function strictFailure(deviceIds: ReadonlySet<string>): BuildExplicitNodePlacementsResult {
+  return {
+    positions: new Map(),
+    placedDeviceIds: new Set(),
+    unplacedDeviceIds: new Set([...deviceIds].sort((left, right) => left.localeCompare(right))),
   };
 }
 
@@ -191,6 +203,7 @@ function selectProjectedGridCandidate({
   obstacles,
   mode,
   snapGrid,
+  allowOutsideViewport,
 }: {
   reactFlow: ReactFlowInstance<DeviceNode, LinkEdgeType>;
   baseFlowPosition: XYPosition;
@@ -200,6 +213,7 @@ function selectProjectedGridCandidate({
   obstacles: ScreenRect[];
   mode: PlacementMode;
   snapGrid: SnapGrid | null;
+  allowOutsideViewport: boolean;
 }): ProjectedGridCandidate | null {
   const usableViewport = {
     x: canvasRect.x + NEW_NODE_VIEWPORT_MARGIN_PX,
@@ -225,7 +239,7 @@ function selectProjectedGridCandidate({
       if (!rectanglesIntersect(screenRect, canvasRect)) continue;
       rank = [distance, candidateIndex];
     } else {
-      if (!isContainedInViewport(screenRect, usableViewport)) continue;
+      if (!allowOutsideViewport && !isContainedInViewport(screenRect, usableViewport)) continue;
       const gap = mode === 'preferred-gap' ? NEW_NODE_PREFERRED_GAP_PX : 0;
       const collision = collisionRank(candidate, obstacles, gap);
       if (mode !== 'least-overlap' && collision.overlapCount > 0) continue;
@@ -291,9 +305,13 @@ export function buildExplicitNodePlacements({
   links,
   deviceIds,
   snapGrid = null,
+  collisionPolicy = 'viewport',
 }: BuildExplicitNodePlacementsInput): BuildExplicitNodePlacementsResult {
+  const strictCollisionFree = collisionPolicy === 'expand-collision-free';
   const zoom = reactFlow.getViewport().zoom;
-  if (!isFinitePositive(zoom) || !isValidScreenRect(canvasRect)) return emptyResult();
+  if (!isFinitePositive(zoom) || !isValidScreenRect(canvasRect)) {
+    return strictCollisionFree ? strictFailure(deviceIds) : emptyResult();
+  }
 
   const devicesById = new Map(devices.map((device) => [device.id, device]));
   const pendingTargets: PendingTarget[] = [...deviceIds]
@@ -312,7 +330,12 @@ export function buildExplicitNodePlacements({
         },
       ];
     });
-  if (pendingTargets.length === 0) return emptyResult();
+  if (pendingTargets.length === 0) {
+    return strictCollisionFree && deviceIds.size > 0 ? strictFailure(deviceIds) : emptyResult();
+  }
+  if (strictCollisionFree && pendingTargets.length !== deviceIds.size) {
+    return strictFailure(deviceIds);
+  }
 
   const largestTargetSize = pendingTargets.reduce<ScreenSize>(
     (largest, target) => ({
@@ -326,7 +349,13 @@ export function buildExplicitNodePlacements({
   const obstacleRectsById = new Map<string, ScreenRect>();
 
   for (const node of reactFlow.getNodes()) {
-    if (deviceIds.has(node.id) || node.hidden === true) continue;
+    if (
+      deviceIds.has(node.id) ||
+      (!strictCollisionFree && node.hidden === true) ||
+      (strictCollisionFree && !devicesById.has(node.id))
+    ) {
+      continue;
+    }
 
     const flowSize = resolveNodeFlowSize(node, devicesById.get(node.id));
     const [originX, originY] = node.origin ?? [0, 0];
@@ -339,7 +368,10 @@ export function buildExplicitNodePlacements({
       width: flowSize.width * zoom,
       height: flowSize.height * zoom,
     };
-    if (!isValidScreenRect(screenRect) || !rectanglesIntersect(screenRect, obstacleFilter)) {
+    if (
+      !isValidScreenRect(screenRect) ||
+      (!strictCollisionFree && !rectanglesIntersect(screenRect, obstacleFilter))
+    ) {
       continue;
     }
     obstacles.push(screenRect);
@@ -350,7 +382,7 @@ export function buildExplicitNodePlacements({
   const placedDeviceIds = new Set<string>();
 
   for (const target of pendingTargets) {
-    const placement = findNewNodePlacement({
+    const placementInput = {
       viewport: canvasRect,
       nodeSize: target.screenSize,
       obstacles,
@@ -360,14 +392,23 @@ export function buildExplicitNodePlacements({
         obstacleRectsById,
         canvasRect,
       ),
-    });
-    if (!placement) continue;
+    };
+    const placement = strictCollisionFree
+      ? findCollisionFreeExpandingPlacement(placementInput)
+      : findNewNodePlacement(placementInput);
+    if (!placement) {
+      if (strictCollisionFree) return strictFailure(deviceIds);
+      continue;
+    }
 
     const baseFlowPosition = reactFlow.screenToFlowPosition(
       placement.topLeft,
       snapGrid ? { snapToGrid: true, snapGrid } : { snapToGrid: false },
     );
-    if (!Number.isFinite(baseFlowPosition.x) || !Number.isFinite(baseFlowPosition.y)) continue;
+    if (!Number.isFinite(baseFlowPosition.x) || !Number.isFinite(baseFlowPosition.y)) {
+      if (strictCollisionFree) return strictFailure(deviceIds);
+      continue;
+    }
 
     const selectedCandidate = selectProjectedGridCandidate({
       reactFlow,
@@ -378,8 +419,12 @@ export function buildExplicitNodePlacements({
       obstacles,
       mode: placement.mode,
       snapGrid,
+      allowOutsideViewport: strictCollisionFree,
     });
-    if (!selectedCandidate) continue;
+    if (!selectedCandidate) {
+      if (strictCollisionFree) return strictFailure(deviceIds);
+      continue;
+    }
 
     positions.set(target.id, selectedCandidate.flowPosition);
     placedDeviceIds.add(target.id);
@@ -387,5 +432,5 @@ export function buildExplicitNodePlacements({
     obstacleRectsById.set(target.id, selectedCandidate.screenRect);
   }
 
-  return { positions, placedDeviceIds };
+  return { positions, placedDeviceIds, unplacedDeviceIds: new Set() };
 }

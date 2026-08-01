@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -491,6 +492,338 @@ type recordingTopologyObservationStore struct {
 	unresolvedNeighbors []topology.UnresolvedNeighbor
 }
 
+func TestReconcileStoredTopologyResolvesBatchIdentityAndCreatesLink(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	local := &domain.Device{ID: uuid.New(), IP: "192.0.2.10", Hostname: "edge-01", SysName: "edge-01", Managed: true}
+	remote := &domain.Device{ID: uuid.New(), IP: "192.0.2.11", Hostname: "core-01", SysName: "core-01", Managed: true}
+	if err := deviceRepo.Create(local); err != nil {
+		t.Fatalf("create local device: %v", err)
+	}
+	if err := deviceRepo.Create(remote); err != nil {
+		t.Fatalf("create remote device: %v", err)
+	}
+	store := &recordingTopologyObservationStore{
+		observations: []topology.Observation{{
+			ID: uuid.New(), LocalDeviceID: local.ID, RemoteIdentity: "core-01",
+			LocalPort: "ether1", RemotePort: "ether48", Protocol: domain.DiscoveryProtocolLLDP,
+			LastObservedAt: time.Now().UTC(),
+		}},
+		unresolvedNeighbors: []topology.UnresolvedNeighbor{{
+			LocalDeviceID: local.ID, RemoteIdentity: "core-01", Protocol: domain.DiscoveryProtocolLLDP,
+		}},
+	}
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil, WithTopologyObservationStore(store))
+
+	result, err := svc.ReconcileStoredTopology([]uuid.UUID{local.ID, remote.ID})
+	if err != nil {
+		t.Fatalf("ReconcileStoredTopology: %v", err)
+	}
+	if !result.TopologyChanged || result.LinksCreated != 1 || result.UnresolvedNeighbors != 0 {
+		t.Fatalf("reconciliation result = %#v", result)
+	}
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("links = %#v, want one", links)
+	}
+	if links[0].SourceDeviceID != local.ID || links[0].TargetDeviceID != remote.ID ||
+		links[0].SourceIfName != "ether1" || links[0].TargetIfName != "ether48" {
+		t.Fatalf("reconciled link = %#v", links[0])
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.resolveUnresolved != 1 {
+		t.Fatalf("resolved-neighbor calls = %d, want 1", store.resolveUnresolved)
+	}
+	if len(store.observations) < 2 || store.observations[len(store.observations)-1].RemoteDeviceID != remote.ID {
+		t.Fatalf("updated observations = %#v", store.observations)
+	}
+}
+
+func TestReconcileStoredTopologyNeverLinksOrCreatesNeighborsOutsideMapScope(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	local := &domain.Device{ID: uuid.New(), IP: "192.0.2.20", Hostname: "edge-02", SysName: "edge-02", Managed: true}
+	outside := &domain.Device{ID: uuid.New(), IP: "192.0.2.21", Hostname: "outside-01", SysName: "outside-01", Managed: true}
+	for _, device := range []*domain.Device{local, outside} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("create device: %v", err)
+		}
+	}
+	store := &recordingTopologyObservationStore{observations: []topology.Observation{
+		{
+			ID: uuid.New(), LocalDeviceID: local.ID, RemoteIdentity: outside.SysName,
+			RemoteDeviceID: outside.ID, LocalPort: "ether1", RemotePort: "ether1",
+			Protocol: domain.DiscoveryProtocolLLDP, LastObservedAt: time.Now().UTC(),
+		},
+		{
+			ID: uuid.New(), LocalDeviceID: local.ID, RemoteIdentity: "not-imported",
+			LocalPort: "ether2", RemotePort: "ether2", Protocol: domain.DiscoveryProtocolCDP,
+			LastObservedAt: time.Now().UTC(),
+		},
+	}}
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil, WithTopologyObservationStore(store))
+
+	result, err := svc.ReconcileStoredTopologyForImport(
+		[]uuid.UUID{local.ID},
+		[]uuid.UUID{local.ID},
+	)
+	if err != nil {
+		t.Fatalf("ReconcileStoredTopology: %v", err)
+	}
+	if result.TopologyChanged || result.LinksCreated != 0 || result.UnresolvedNeighbors != 2 {
+		t.Fatalf("reconciliation result = %#v, want two unresolved and no links", result)
+	}
+	if itemResult := result.DeviceResults[local.ID]; itemResult.UnresolvedNeighbors != 2 || itemResult.LinksCreated != 0 {
+		t.Fatalf("per-device reconciliation result = %#v, want two unresolved and no links", itemResult)
+	}
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links: %v", err)
+	}
+	if len(links) != 0 {
+		t.Fatalf("links = %#v, want none", links)
+	}
+	devices, err := deviceRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll devices: %v", err)
+	}
+	if len(devices) != 2 {
+		t.Fatalf("device count = %d, want unchanged count 2", len(devices))
+	}
+}
+
+func TestReconcileStoredTopologyForImportDeletesOnlyStaleImportedAutomaticLinks(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	imported := &domain.Device{ID: uuid.New(), IP: "192.0.2.40", SysName: "imported-01", Managed: true}
+	remote := &domain.Device{ID: uuid.New(), IP: "192.0.2.41", SysName: "remote-01", Managed: true}
+	existing := &domain.Device{ID: uuid.New(), IP: "192.0.2.42", SysName: "existing-01", Managed: true}
+	for _, device := range []*domain.Device{imported, remote, existing} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("create device: %v", err)
+		}
+	}
+	staleImportedLink := &domain.Link{
+		ID: uuid.New(), SourceDeviceID: imported.ID, TargetDeviceID: remote.ID,
+		SourceIfName: "ether1", TargetIfName: "ether2", DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	manualImportedLink := &domain.Link{
+		ID: uuid.New(), SourceDeviceID: imported.ID, TargetDeviceID: existing.ID,
+		SourceIfName: "ether3", TargetIfName: "ether4", DiscoveryProtocol: domain.DiscoveryProtocolManual,
+	}
+	unrelatedAutomaticLink := &domain.Link{
+		ID: uuid.New(), SourceDeviceID: existing.ID, TargetDeviceID: remote.ID,
+		SourceIfName: "ether5", TargetIfName: "ether6", DiscoveryProtocol: domain.DiscoveryProtocolCDP,
+	}
+	peerAuthoritativeLink := &domain.Link{
+		ID: uuid.New(), SourceDeviceID: existing.ID, TargetDeviceID: imported.ID,
+		SourceIfName: "ether7", TargetIfName: "ether8", DiscoveryProtocol: domain.DiscoveryProtocolCDP,
+	}
+	for _, link := range []*domain.Link{
+		staleImportedLink,
+		manualImportedLink,
+		unrelatedAutomaticLink,
+		peerAuthoritativeLink,
+	} {
+		if err := linkRepo.Create(link); err != nil {
+			t.Fatalf("create link: %v", err)
+		}
+	}
+	observationStore := &recordingTopologyObservationStore{observations: []topology.Observation{{
+		ID: uuid.New(), LocalDeviceID: existing.ID, RemoteIdentity: imported.SysName,
+		RemoteDeviceID: imported.ID, LocalPort: "ether7", RemotePort: "",
+		Protocol: domain.DiscoveryProtocolCDP, LastObservedAt: time.Now().UTC(),
+	}}}
+	svc := NewDeviceService(
+		deviceRepo,
+		linkRepo,
+		settingsRepo,
+		nil,
+		nil,
+		WithTopologyObservationStore(observationStore),
+	)
+
+	result, err := svc.ReconcileStoredTopologyForImport(
+		[]uuid.UUID{imported.ID, remote.ID, existing.ID},
+		[]uuid.UUID{imported.ID},
+	)
+	if err != nil {
+		t.Fatalf("ReconcileStoredTopologyForImport: %v", err)
+	}
+	if !result.TopologyChanged {
+		t.Fatal("reconciliation did not report stale-link removal")
+	}
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links: %v", err)
+	}
+	remaining := make(map[uuid.UUID]struct{}, len(links))
+	for _, link := range links {
+		remaining[link.ID] = struct{}{}
+	}
+	if _, exists := remaining[staleImportedLink.ID]; exists {
+		t.Fatalf("stale imported automatic link %s was not deleted", staleImportedLink.ID)
+	}
+	for _, preservedID := range []uuid.UUID{
+		manualImportedLink.ID,
+		unrelatedAutomaticLink.ID,
+		peerAuthoritativeLink.ID,
+	} {
+		if _, exists := remaining[preservedID]; !exists {
+			t.Fatalf("unrelated or manual link %s was deleted", preservedID)
+		}
+	}
+}
+
+func TestReconcileStoredTopologyForImportScopesAmbiguousProtocolSafetyPerImportedDevice(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	importedA := &domain.Device{ID: uuid.New(), IP: "192.0.2.50", SysName: "imported-a", Managed: true}
+	importedB := &domain.Device{ID: uuid.New(), IP: "192.0.2.51", SysName: "imported-b", Managed: true}
+	remoteA := &domain.Device{ID: uuid.New(), IP: "192.0.2.52", SysName: "remote-a", Managed: true}
+	remoteB := &domain.Device{ID: uuid.New(), IP: "192.0.2.53", SysName: "remote-b", Managed: true}
+	for _, device := range []*domain.Device{importedA, importedB, remoteA, remoteB} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("create device: %v", err)
+		}
+	}
+	staleA := &domain.Link{
+		ID: uuid.New(), SourceDeviceID: importedA.ID, TargetDeviceID: remoteA.ID,
+		SourceIfName: "ether1", TargetIfName: "ether2", DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	ambiguousB := &domain.Link{
+		ID: uuid.New(), SourceDeviceID: importedB.ID, TargetDeviceID: remoteB.ID,
+		SourceIfName: "ether3", TargetIfName: "ether4", DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}
+	for _, link := range []*domain.Link{staleA, ambiguousB} {
+		if err := linkRepo.Create(link); err != nil {
+			t.Fatalf("create link: %v", err)
+		}
+	}
+	store := &recordingTopologyObservationStore{observations: []topology.Observation{{
+		ID: uuid.New(), LocalDeviceID: importedB.ID, RemoteIdentity: remoteB.SysName,
+		RemoteDeviceID: remoteB.ID, Protocol: domain.DiscoveryProtocolLLDP,
+		LastObservedAt: time.Now().UTC(),
+	}}}
+	svc := NewDeviceService(
+		deviceRepo,
+		linkRepo,
+		settingsRepo,
+		nil,
+		nil,
+		WithTopologyObservationStore(store),
+	)
+
+	if _, err := svc.ReconcileStoredTopologyForImport(
+		[]uuid.UUID{importedA.ID, importedB.ID, remoteA.ID, remoteB.ID},
+		[]uuid.UUID{importedA.ID, importedB.ID},
+	); err != nil {
+		t.Fatalf("ReconcileStoredTopologyForImport: %v", err)
+	}
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links: %v", err)
+	}
+	remaining := make(map[uuid.UUID]struct{}, len(links))
+	for _, link := range links {
+		remaining[link.ID] = struct{}{}
+	}
+	if _, exists := remaining[staleA.ID]; exists {
+		t.Fatalf("ambiguous observation for device B suppressed stale cleanup for device A link %s", staleA.ID)
+	}
+	if _, exists := remaining[ambiguousB.ID]; !exists {
+		t.Fatalf("ambiguous but current device B link %s was deleted", ambiguousB.ID)
+	}
+}
+
+func TestApplyStaticDiscoveryDeferredTopologyRecordsObservationWithoutCreatingLink(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	local := &domain.Device{ID: uuid.New(), IP: "192.0.2.30", Hostname: "edge-03", SysName: "edge-03", Managed: true}
+	outside := &domain.Device{ID: uuid.New(), IP: "192.0.2.31", Hostname: "outside-02", SysName: "outside-02", Managed: true}
+	for _, device := range []*domain.Device{local, outside} {
+		if err := deviceRepo.Create(device); err != nil {
+			t.Fatalf("create device: %v", err)
+		}
+	}
+	store := &recordingTopologyObservationStore{}
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil, WithTopologyObservationStore(store))
+
+	result, err := svc.ApplyStaticDiscovery(local.ID, StaticDiscoveryInput{
+		SysName: local.SysName,
+		Neighbors: []snmp.NeighborInfo{{
+			RemoteSysName: outside.SysName, LocalIfName: "ether1", RemotePortID: "ether2",
+			Protocol: domain.DiscoveryProtocolLLDP,
+		}},
+		NeighborDiscoveryProtocols:   []domain.DiscoveryProtocol{domain.DiscoveryProtocolLLDP},
+		DeferTopologyMaterialization: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyStaticDiscovery: %v", err)
+	}
+	if result.TopologyMaterialized || result.LinksCreated != 0 {
+		t.Fatalf("deferred persistence result = %#v, want no materialized links", result)
+	}
+	links, err := linkRepo.GetAll()
+	if err != nil {
+		t.Fatalf("GetAll links: %v", err)
+	}
+	if len(links) != 0 {
+		t.Fatalf("links = %#v, want none before map-scoped reconciliation", links)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.upsertObservations != 1 || len(store.observations) != 1 {
+		t.Fatalf("recorded observations = %d/%d, want one", store.upsertObservations, len(store.observations))
+	}
+	if store.observations[0].RemoteDeviceID != outside.ID {
+		t.Fatalf("recorded remote device = %s, want %s", store.observations[0].RemoteDeviceID, outside.ID)
+	}
+}
+
+func TestTopologyBootstrapFollowupDeviceIDsReturnsOnlyIncompleteLLDPEndpoints(t *testing.T) {
+	deviceRepo := newMockDeviceRepo()
+	linkRepo := newMockLinkRepo()
+	settingsRepo := newMockSettingsRepo()
+	first := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	second := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	third := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+	if _, err := linkRepo.UpsertDetailed(&domain.Link{
+		SourceDeviceID: first, TargetDeviceID: second,
+		SourceIfName: "ether1", TargetIfName: "", DiscoveryProtocol: domain.DiscoveryProtocolLLDP,
+	}); err != nil {
+		t.Fatalf("create incomplete LLDP link: %v", err)
+	}
+	if _, err := linkRepo.UpsertDetailed(&domain.Link{
+		SourceDeviceID: second, TargetDeviceID: third,
+		SourceIfName: "ether2", TargetIfName: "ether3", DiscoveryProtocol: domain.DiscoveryProtocolCDP,
+	}); err != nil {
+		t.Fatalf("create complete CDP link: %v", err)
+	}
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, nil, nil)
+
+	got := svc.TopologyBootstrapFollowupDeviceIDs([]uuid.UUID{third, second, first, second})
+
+	want := []uuid.UUID{first, second}
+	if len(got) != len(want) {
+		t.Fatalf("follow-up IDs = %#v, want %#v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("follow-up IDs = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func (s *recordingTopologyObservationStore) UpsertObservation(observation *topology.Observation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -672,6 +1005,249 @@ func (s schedulerDeviceSource) GetDevices() ([]domain.Device, error) {
 }
 
 // --- Tests ---
+
+func TestDeviceServiceBuildDeviceDraft(t *testing.T) {
+	t.Run("applies AddDevice defaults and normalizes input", func(t *testing.T) {
+		deviceRepo := newMockDeviceRepo()
+		linkRepo := newMockLinkRepo()
+		settingsRepo := newMockSettingsRepo()
+		if err := settingsRepo.Set(domain.SettingPollingInterval, "75"); err != nil {
+			t.Fatalf("Set polling interval: %v", err)
+		}
+		if err := settingsRepo.Set(domain.SettingTopologyDiscoveryDefaultMode, string(domain.TopologyDiscoveryModeBootstrapOnce)); err != nil {
+			t.Fatalf("Set topology discovery mode: %v", err)
+		}
+
+		discoverCalls := 0
+		scheduler := &recordingBootstrapScheduler{}
+		svc := NewDeviceService(
+			deviceRepo,
+			linkRepo,
+			settingsRepo,
+			func(string, domain.SNMPCredentials, domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+				discoverCalls++
+				return nil, fmt.Errorf("draft construction must not probe")
+			},
+			nil,
+			WithBootstrapScheduler(scheduler),
+		)
+
+		notes := "  Core router in rack A  "
+		areaID := uuid.New()
+		draft, err := svc.BuildDeviceDraft(DeviceDraftInput{
+			IP:       "10.20.0.1",
+			Hostname: "edge-router",
+			Vendor:   "mikrotik",
+			AreaIDs:  []uuid.UUID{areaID},
+			ProbePorts: []int{
+				443,
+				22,
+				443,
+			},
+			Addresses: []domain.DeviceAddress{
+				{
+					Address:  " 198.51.100.20 ",
+					Label:    " backup ",
+					Role:     domain.DeviceAddressRole(" BACKUP "),
+					Priority: 10,
+				},
+				{
+					Address: "198.51.100.20",
+					Role:    domain.DeviceAddressRoleBackup,
+				},
+			},
+			Notes: &notes,
+		})
+		if err != nil {
+			t.Fatalf("BuildDeviceDraft failed: %v", err)
+		}
+
+		if draft.ID == uuid.Nil {
+			t.Fatal("draft ID is nil")
+		}
+		if draft.Hostname != "edge-router" || draft.IP != "10.20.0.1" {
+			t.Fatalf("draft identity = (%q, %q), want (edge-router, 10.20.0.1)", draft.Hostname, draft.IP)
+		}
+		if draft.Notes == nil || *draft.Notes != "Core router in rack A" {
+			t.Fatalf("draft notes = %#v, want normalized notes", draft.Notes)
+		}
+		if draft.DeviceType != domain.DeviceTypeUnknown {
+			t.Fatalf("device type = %q, want unknown", draft.DeviceType)
+		}
+		if draft.PollClass != domain.PollClassStandard {
+			t.Fatalf("poll class = %q, want standard", draft.PollClass)
+		}
+		if draft.PollIntervalOverride == nil || *draft.PollIntervalOverride != 75 {
+			t.Fatalf("poll interval override = %#v, want 75", draft.PollIntervalOverride)
+		}
+		if draft.PollingEnabled == nil || !*draft.PollingEnabled {
+			t.Fatalf("polling enabled = %#v, want true", draft.PollingEnabled)
+		}
+		if draft.Status != domain.DeviceStatusProbing || !draft.Managed {
+			t.Fatalf("status/managed = (%q, %t), want (probing, true)", draft.Status, draft.Managed)
+		}
+		if draft.Tags == nil || len(draft.Tags) != 0 {
+			t.Fatalf("tags = %#v, want non-nil empty map", draft.Tags)
+		}
+		if draft.MetricsSource != domain.MetricsSourcePrometheus {
+			t.Fatalf("metrics source = %q, want prometheus", draft.MetricsSource)
+		}
+		if draft.PrometheusLabelName != "instance" || draft.PrometheusLabelValue != "10.20.0.1" {
+			t.Fatalf(
+				"Prometheus labels = (%q, %q), want (instance, 10.20.0.1)",
+				draft.PrometheusLabelName,
+				draft.PrometheusLabelValue,
+			)
+		}
+		if draft.TopologyDiscoveryMode != domain.TopologyDiscoveryModeInherit {
+			t.Fatalf("topology discovery mode = %q, want inherit", draft.TopologyDiscoveryMode)
+		}
+		if draft.TopologyBootstrapState != domain.TopologyBootstrapStatePending {
+			t.Fatalf("topology bootstrap state = %q, want pending", draft.TopologyBootstrapState)
+		}
+		if len(draft.AreaIDs) != 1 || draft.AreaIDs[0] != areaID {
+			t.Fatalf("area IDs = %#v, want [%s]", draft.AreaIDs, areaID)
+		}
+		if !reflect.DeepEqual(draft.ProbePorts, []int{443, 22}) {
+			t.Fatalf("probe ports = %#v, want [443 22]", draft.ProbePorts)
+		}
+		if len(draft.Addresses) != 2 {
+			t.Fatalf("addresses = %#v, want normalized primary and backup", draft.Addresses)
+		}
+		if draft.Addresses[0].DeviceID != draft.ID || !draft.Addresses[0].IsPrimary {
+			t.Fatalf("primary address = %#v, want draft-owned primary", draft.Addresses[0])
+		}
+		if got := domain.BackupAddress(*draft); got != "198.51.100.20" {
+			t.Fatalf("backup address = %q, want 198.51.100.20", got)
+		}
+
+		svc.WaitForProbes()
+		if got := len(deviceRepo.devices); got != 0 {
+			t.Fatalf("repository rows = %d, want 0", got)
+		}
+		if deviceRepo.findIPConflictCalls != 0 {
+			t.Fatalf("conflict lookups = %d, want 0", deviceRepo.findIPConflictCalls)
+		}
+		if discoverCalls != 0 {
+			t.Fatalf("probe calls = %d, want 0", discoverCalls)
+		}
+		if got := len(scheduler.devices); got != 0 {
+			t.Fatalf("bootstrap schedules = %d, want 0", got)
+		}
+	})
+
+	t.Run("preserves explicit labels and SNMP credentials without a hostname", func(t *testing.T) {
+		deviceRepo := newMockDeviceRepo()
+		creds := domain.SNMPCredentials{
+			Version: domain.SNMPVersionV3,
+			V3: &domain.SNMPv3Credentials{
+				Username:      "theia-import",
+				AuthProtocol:  "SHA",
+				AuthPassword:  "auth-secret",
+				PrivProtocol:  "AES",
+				PrivPassword:  "priv-secret",
+				SecurityLevel: "authPriv",
+			},
+		}
+		svc := NewDeviceService(deviceRepo, newMockLinkRepo(), newMockSettingsRepo(), nil, nil)
+
+		draft, err := svc.BuildDeviceDraft(DeviceDraftInput{
+			IP:                   "192.0.2.40",
+			Hostname:             "",
+			DeviceType:           domain.DeviceTypeRouter,
+			SNMPCredentials:      creds,
+			MetricsSource:        domain.MetricsSourceSNMP,
+			PrometheusLabelName:  "  imported_target  ",
+			PrometheusLabelValue: "  edge/site-a  ",
+		})
+		if err != nil {
+			t.Fatalf("BuildDeviceDraft failed: %v", err)
+		}
+		if draft.Hostname != "" {
+			t.Fatalf("hostname = %q, want empty pure-SNMP hostname", draft.Hostname)
+		}
+		if draft.MetricsSource != domain.MetricsSourceSNMP {
+			t.Fatalf("metrics source = %q, want snmp", draft.MetricsSource)
+		}
+		if draft.PrometheusLabelName != "  imported_target  " || draft.PrometheusLabelValue != "  edge/site-a  " {
+			t.Fatalf(
+				"Prometheus labels = (%q, %q), want exact input values",
+				draft.PrometheusLabelName,
+				draft.PrometheusLabelValue,
+			)
+		}
+		if !reflect.DeepEqual(draft.SNMPCredentials, creds) {
+			t.Fatalf("SNMP credentials = %#v, want %#v", draft.SNMPCredentials, creds)
+		}
+	})
+
+	t.Run("keeps virtual AddDevice behavior", func(t *testing.T) {
+		deviceRepo := newMockDeviceRepo()
+		discoverCalls := 0
+		svc := NewDeviceService(
+			deviceRepo,
+			newMockLinkRepo(),
+			newMockSettingsRepo(),
+			func(string, domain.SNMPCredentials, domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+				discoverCalls++
+				return nil, fmt.Errorf("virtual devices must not probe")
+			},
+			nil,
+		)
+
+		input := DeviceDraftInput{
+			IP:            "203.0.113.50",
+			DeviceType:    domain.DeviceTypeVirtual,
+			MetricsSource: domain.MetricsSourceSNMP,
+		}
+		draft, err := svc.BuildDeviceDraft(input)
+		if err != nil {
+			t.Fatalf("BuildDeviceDraft failed: %v", err)
+		}
+		if draft.Status != domain.DeviceStatusUnknown {
+			t.Fatalf("draft status = %q, want unknown", draft.Status)
+		}
+		if draft.MetricsSource != domain.MetricsSourceNone {
+			t.Fatalf("draft metrics source = %q, want none", draft.MetricsSource)
+		}
+		if draft.PollClass != domain.PollClassLow || draft.PollIntervalOverride != nil {
+			t.Fatalf(
+				"draft polling defaults = (%q, %#v), want (low, nil)",
+				draft.PollClass,
+				draft.PollIntervalOverride,
+			)
+		}
+
+		created, err := svc.AddDevice(
+			context.Background(),
+			input.IP,
+			input.Hostname,
+			input.DeviceType,
+			input.SNMPCredentials,
+			input.Tags,
+			input.Vendor,
+			input.MetricsSource,
+			input.PrometheusLabelName,
+			input.PrometheusLabelValue,
+			input.TopologyDiscoveryMode,
+			input.AreaIDs,
+		)
+		if err != nil {
+			t.Fatalf("AddDevice failed: %v", err)
+		}
+		svc.WaitForProbes()
+
+		if created.Status != draft.Status || created.MetricsSource != draft.MetricsSource || created.PollClass != draft.PollClass {
+			t.Fatalf("AddDevice virtual defaults differ from draft: created=%#v draft=%#v", created, draft)
+		}
+		if discoverCalls != 0 {
+			t.Fatalf("virtual probe calls = %d, want 0", discoverCalls)
+		}
+		if got := len(deviceRepo.devices); got != 1 {
+			t.Fatalf("repository rows after AddDevice = %d, want 1", got)
+		}
+	})
+}
 
 func TestAddDevice_CreatesWithStatusProbing(t *testing.T) {
 	svc, deviceRepo, _ := newTestService(&snmp.DiscoveryResult{
