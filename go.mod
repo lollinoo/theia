@@ -1,6 +1,6 @@
 module github.com/lollinoo/theia
 
-go 1.25.0
+go 1.25.11
 
 toolchain go1.26.5
 
@@ -12,7 +12,7 @@ require (
 
 require (
 	fyne.io/systray v1.12.2
-	github.com/golang-migrate/migrate/v4 v4.19.1
+	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pkg/sftp v1.13.11
