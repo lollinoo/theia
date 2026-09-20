@@ -16,7 +16,7 @@ services:
 
 steps:
   - name: changes
-    image: alpine:3.22
+    image: alpine:3.24
     commands:
       - apk add --no-cache jq
       - |
@@ -88,7 +88,7 @@ steps:
         } > .ci/changed-areas.env
 
   - name: backend-fast
-    image: golang:1.26.5-bookworm
+    image: golang:1.27.1-bookworm
     commands:
       - |
         set -eu
@@ -103,7 +103,7 @@ steps:
         make backend-fast
 
   - name: frontend-fast
-    image: node:22-bookworm
+    image: node:26-bookworm
     commands:
       - |
         set -eu
@@ -116,7 +116,7 @@ steps:
         make frontend-fast
 
   - name: browser-e2e
-    image: node:22-bookworm
+    image: node:26-bookworm
     commands:
       - |
         set -eu
@@ -133,7 +133,7 @@ steps:
 
         apt-get update
         apt-get install -y --no-install-recommends ca-certificates curl postgresql-client
-        curl -fsSL https://go.dev/dl/go1.26.5.linux-amd64.tar.gz -o /tmp/go.tar.gz
+        curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o /tmp/go.tar.gz
         rm -rf /usr/local/go
         tar -C /usr/local -xzf /tmp/go.tar.gz
         export PATH="/usr/local/go/bin:$PATH"
@@ -146,7 +146,7 @@ steps:
         make browser-e2e
 
   - name: build-bridge
-    image: golang:1.26.5-bookworm
+    image: golang:1.27.1-bookworm
     when:
       - event: release
         evaluate: 'CI_COMMIT_PRERELEASE == "false"'
@@ -158,7 +158,7 @@ steps:
       - test -f bridge_binaries/winbox-bridge-linux-arm64
 
   - name: upload-bridge-assets
-    image: golang:1.26.5-bookworm
+    image: golang:1.27.1-bookworm
     environment:
       GH_TOKEN:
         from_secret: GITHUB_TOKEN
@@ -185,7 +185,7 @@ steps:
         gh release upload "$release_tag" bridge_binaries/winbox-bridge-windows-amd64.exe bridge_binaries/winbox-bridge-windows-arm64.exe bridge_binaries/winbox-bridge-linux-amd64 bridge_binaries/winbox-bridge-linux-arm64 --clobber --repo "$CI_REPO"
 
   - name: publish-master-images
-    image: docker:28-cli
+    image: docker:29-cli
     environment:
       GHCR_USERNAME:
         from_secret: GHCR_USERNAME
@@ -207,7 +207,7 @@ steps:
         docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag ghcr.io/lollinoo/theia-frontend:master --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
 
   - name: publish-branch-images
-    image: docker:28-cli
+    image: docker:29-cli
     environment:
       GHCR_USERNAME:
         from_secret: GHCR_USERNAME
@@ -236,7 +236,7 @@ steps:
         docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$branch_tag" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
 
   - name: publish-release-images
-    image: docker:28-cli
+    image: docker:29-cli
     environment:
       GHCR_USERNAME:
         from_secret: GHCR_USERNAME
