@@ -108,7 +108,8 @@ func (r *BackupJobRepo) Update(job *domain.BackupJob) error {
 	return nil
 }
 
-// Delete removes a backup job by ID.
+// Delete removes a backup job by ID; the foreign-key cascade also removes its
+// file metadata and durably queues file cleanup in the same transaction.
 func (r *BackupJobRepo) Delete(id uuid.UUID) error {
 	return r.DeleteContext(context.Background(), id)
 }

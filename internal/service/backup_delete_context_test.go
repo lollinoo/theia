@@ -46,7 +46,7 @@ func (r *contextualDeleteBulkRuns) BackupJobReferencedByActiveRunContext(ctx con
 }
 
 func TestDeleteBackupJobDatabaseOperationsRespectDeadline(t *testing.T) {
-	for _, stage := range []string{"job", "references", "files", "delete files", "delete job"} {
+	for _, stage := range []string{"job", "references", "files", "delete job"} {
 		t.Run(stage, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 			defer cancel()
@@ -71,8 +71,11 @@ func TestDeleteBackupJobDatabaseOperationsRespectDeadline(t *testing.T) {
 				delete: func(ctx context.Context, _ uuid.UUID) error { return step(ctx, "delete job") },
 			}
 			files := &contextualDeleteFiles{
-				get:    func(ctx context.Context, _ uuid.UUID) ([]domain.BackupFile, error) { return nil, step(ctx, "files") },
-				delete: func(ctx context.Context, _ uuid.UUID) error { return step(ctx, "delete files") },
+				get: func(ctx context.Context, _ uuid.UUID) ([]domain.BackupFile, error) { return nil, step(ctx, "files") },
+				delete: func(context.Context, uuid.UUID) error {
+					t.Fatal("file metadata deletion must be part of the job deletion")
+					return nil
+				},
 			}
 			runs := &contextualDeleteBulkRuns{check: func(ctx context.Context, _ uuid.UUID) (bool, error) { return false, step(ctx, "references") }}
 			svc := &BackupService{jobRepo: jobs, fileRepo: files, bulkRunRepo: runs}

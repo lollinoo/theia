@@ -977,54 +977,6 @@ func TestBackupVendorRegistry(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: TestDeleteBackupJobFileError (BUG-01)
-// ---------------------------------------------------------------------------
-// Verifies that DeleteBackupJob propagates file repository errors rather
-// than silently swallowing them.
-func TestDeleteBackupJobFileError(t *testing.T) {
-	jobRepo := newMockBackupJobRepo()
-	fileRepo := newMockBackupFileRepo()
-	credentialProfileRepo := newMockCredentialProfileRepo()
-	deviceRepo := newMockDeviceRepo()
-	settingsRepo := newMockBackupSettingsRepo()
-	registry := buildTestVendorRegistry("", false)
-	dialer := &mockSSHDialer{}
-
-	svc := NewBackupService(
-		jobRepo, fileRepo, credentialProfileRepo, deviceRepo, settingsRepo,
-		registry, dialer, []byte("0123456789abcdef"), t.TempDir(),
-		ssh.InsecureIgnoreHostKey(),
-	)
-
-	// Create a job with a file pointing to a non-existent path
-	jobID := uuid.New()
-	deviceID := uuid.New()
-	jobRepo.Create(&domain.BackupJob{
-		ID:       jobID,
-		DeviceID: deviceID,
-		Status:   domain.BackupStatusSuccess,
-	})
-	fileRepo.Create(&domain.BackupFile{
-		ID:       uuid.New(),
-		JobID:    jobID,
-		FileType: "running",
-		FileName: "test.rsc",
-		FilePath: "/nonexistent/path/test.rsc",
-	})
-
-	// Make DeleteByJobID return an error to simulate a repository failure
-	fileRepo.deleteByJobErr = fmt.Errorf("simulated file repo delete error")
-
-	err := svc.DeleteBackupJob(context.Background(), jobID)
-
-	// The fix: DeleteBackupJob should check and return the error from
-	// fileRepo.DeleteByJobID. Before the fix, this error was silently swallowed.
-	if err == nil {
-		t.Fatal("BUG-01: DeleteBackupJob silently swallowed fileRepo.DeleteByJobID error -- " +
-			"expected error to be returned or file cleanup failure to be reported")
-	}
-}
-
 func TestDeleteBackupJobRejectsActiveJobAndKeepsFile(t *testing.T) {
 	jobRepo := newMockBackupJobRepo()
 	fileRepo := newMockBackupFileRepo()
