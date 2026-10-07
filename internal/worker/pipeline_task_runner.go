@@ -845,28 +845,34 @@ func (r *pipelineTaskRunner) publishSubscribedDetailDelta(device domain.Device) 
 
 	p.runtime.mu.RLock()
 	promStatus := p.runtime.promStatus
-	alerts := cloneAlertGroups(p.runtime.alerts)
+	alerts := append([]domain.AlertState(nil), p.runtime.alerts[device.ID]...)
 	version := p.runtime.overviewVersion
 	p.runtime.mu.RUnlock()
 
-	states := p.stateStore.Snapshot()
 	devicesByID := map[uuid.UUID]domain.Device{device.ID: device}
 	var linkRuntimes []ws.LinkRuntimeDTO
 	if p.cache != nil {
-		if cachedDevices, err := p.cache.GetDevices(); err == nil {
-			for _, cachedDevice := range cachedDevices {
-				devicesByID[cachedDevice.ID] = cachedDevice
+		if endpoints, links, err := p.cache.GetDeviceTopology(device.ID); err == nil {
+			for id, endpoint := range endpoints {
+				devicesByID[id] = endpoint
 			}
-		}
-		if links, err := p.cache.GetLinks(); err == nil {
+			peerIDs := make([]uuid.UUID, 0, len(links)*2)
+			for _, link := range links {
+				if link.SourceDeviceID != device.ID {
+					peerIDs = append(peerIDs, link.SourceDeviceID)
+				}
+				if link.TargetDeviceID != device.ID {
+					peerIDs = append(peerIDs, link.TargetDeviceID)
+				}
+			}
+			states := p.stateStore.SnapshotFor(peerIDs)
+			states[device.ID] = deviceState
 			linkRuntimes = buildDeviceLinkRuntimeDTOs(device, deviceState, devicesByID, states, links, promStatus)
 		}
 	}
 
-	delta := buildDeviceDetailDeltaWithLinks(device, deviceState, linkRuntimes, alerts[device.ID], promStatus)
-	for _, client := range subscribers {
-		p.hub.SendTo(client, ws.NewSnapshotDeltaMessage(delta, version, version))
-	}
+	delta := buildDeviceDetailDeltaWithLinks(device, deviceState, linkRuntimes, alerts, promStatus)
+	p.hub.SendToMany(subscribers, ws.NewSnapshotDeltaMessage(delta, version, version))
 }
 
 func (r *pipelineTaskRunner) snmpTimeout() time.Duration {

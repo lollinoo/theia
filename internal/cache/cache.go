@@ -53,6 +53,7 @@ type DeviceLinkCache struct {
 	devicesBySysName map[string]uuid.UUID
 	linksByID        map[uuid.UUID]domain.Link
 	linksByEndpoint  map[linkEndpointKey]uuid.UUID
+	linksByDevice    map[uuid.UUID]map[uuid.UUID]struct{}
 
 	devices []domain.Device
 	links   []domain.Link
@@ -81,6 +82,7 @@ func NewDeviceLinkCache(deviceRepo domain.DeviceRepository, linkRepo domain.Link
 		devicesBySysName: make(map[string]uuid.UUID),
 		linksByID:        make(map[uuid.UUID]domain.Link),
 		linksByEndpoint:  make(map[linkEndpointKey]uuid.UUID),
+		linksByDevice:    make(map[uuid.UUID]map[uuid.UUID]struct{}),
 		devicesDirty:     true,
 		linksDirty:       true,
 		needsFullReload:  true,
@@ -205,6 +207,37 @@ func (c *DeviceLinkCache) GetLinkByEndpointPair(sourceDeviceID uuid.UUID, source
 	}
 	link, ok := c.linksByID[linkID]
 	return link, ok, nil
+}
+
+// GetDeviceTopology returns only incident links and their cached endpoints.
+// The returned containers belong to the caller; work scales with the device's degree.
+func (c *DeviceLinkCache) GetDeviceTopology(id uuid.UUID) (map[uuid.UUID]domain.Device, []domain.Link, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.prepareLocked(); err != nil {
+		return nil, nil, err
+	}
+	devices := make(map[uuid.UUID]domain.Device)
+	if device, ok := c.devicesByID[id]; ok {
+		devices[id] = device
+	}
+	links := make([]domain.Link, 0, len(c.linksByDevice[id]))
+	for linkID := range c.linksByDevice[id] {
+		link := c.linksByID[linkID]
+		links = append(links, link)
+		for _, endpoint := range []uuid.UUID{link.SourceDeviceID, link.TargetDeviceID} {
+			if device, ok := c.devicesByID[endpoint]; ok {
+				devices[endpoint] = device
+			}
+		}
+	}
+	sort.Slice(links, func(i, j int) bool {
+		if !links[i].CreatedAt.Equal(links[j].CreatedAt) {
+			return links[i].CreatedAt.Before(links[j].CreatedAt)
+		}
+		return links[i].ID.String() < links[j].ID.String()
+	})
+	return devices, links, nil
 }
 
 func (c *DeviceLinkCache) prepareLocked() error {
@@ -334,11 +367,13 @@ func (c *DeviceLinkCache) reloadLocked() error {
 		}
 	}
 
+	c.linksByDevice = make(map[uuid.UUID]map[uuid.UUID]struct{})
 	c.linksByID = make(map[uuid.UUID]domain.Link, len(links))
 	c.linksByEndpoint = make(map[linkEndpointKey]uuid.UUID, len(links))
 	for _, link := range links {
 		c.linksByID[link.ID] = link
 		c.linksByEndpoint[makeLinkEndpointKey(link)] = link.ID
+		c.indexLinkEndpointsLocked(link)
 	}
 
 	c.devices = devices
@@ -381,11 +416,13 @@ func (c *DeviceLinkCache) deleteDeviceLocked(deviceID uuid.UUID) {
 
 func (c *DeviceLinkCache) upsertLinkLocked(link domain.Link) {
 	if existing, ok := c.linksByID[link.ID]; ok {
+		c.unindexLinkEndpointsLocked(existing)
 		delete(c.linksByEndpoint, makeLinkEndpointKey(existing))
 	}
 
 	c.linksByID[link.ID] = link
 	c.linksByEndpoint[makeLinkEndpointKey(link)] = link.ID
+	c.indexLinkEndpointsLocked(link)
 	c.linksDirty = true
 }
 
@@ -395,9 +432,28 @@ func (c *DeviceLinkCache) deleteLinkLocked(linkID uuid.UUID) {
 		return
 	}
 
+	c.unindexLinkEndpointsLocked(existing)
 	delete(c.linksByID, linkID)
 	delete(c.linksByEndpoint, makeLinkEndpointKey(existing))
 	c.linksDirty = true
+}
+
+func (c *DeviceLinkCache) indexLinkEndpointsLocked(link domain.Link) {
+	for _, id := range []uuid.UUID{link.SourceDeviceID, link.TargetDeviceID} {
+		if c.linksByDevice[id] == nil {
+			c.linksByDevice[id] = make(map[uuid.UUID]struct{})
+		}
+		c.linksByDevice[id][link.ID] = struct{}{}
+	}
+}
+
+func (c *DeviceLinkCache) unindexLinkEndpointsLocked(link domain.Link) {
+	for _, id := range []uuid.UUID{link.SourceDeviceID, link.TargetDeviceID} {
+		delete(c.linksByDevice[id], link.ID)
+		if len(c.linksByDevice[id]) == 0 {
+			delete(c.linksByDevice, id)
+		}
+	}
 }
 
 func buildSortedDevices(devicesByID map[uuid.UUID]domain.Device) []domain.Device {
