@@ -261,12 +261,23 @@ func (s *DeviceService) startLifecycleProbe(device *domain.Device) bool {
 	if !ok {
 		return false
 	}
+	// Snapshot discovery inputs before async work; the caller owns the device.
+	probeDevice := *device
+	probeDevice.Addresses = append([]domain.DeviceAddress(nil), device.Addresses...)
+	if device.SNMPCredentials.V2c != nil {
+		credentials := *device.SNMPCredentials.V2c
+		probeDevice.SNMPCredentials.V2c = &credentials
+	}
+	if device.SNMPCredentials.V3 != nil {
+		credentials := *device.SNMPCredentials.V3
+		probeDevice.SNMPCredentials.V3 = &credentials
+	}
 	go func() {
 		defer done()
 		if workCtx.Err() != nil {
 			return
 		}
-		s.probeDevice(device)
+		s.probeDevice(&probeDevice)
 	}()
 	return true
 }
@@ -398,16 +409,9 @@ func (s *DeviceService) AddDeviceWithAddresses(
 	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, probePorts, addresses, notes...)
 }
 
-// probeDevice performs SNMP discovery and updates the device in the repository.
-// It re-fetches the device from the repo to avoid racing on the pointer
-// that was returned to the caller of AddDevice.
+// updateDeviceStatus persists runtime state without saving a stale device aggregate.
 func (s *DeviceService) updateDeviceStatus(deviceID uuid.UUID, status domain.DeviceStatus) error {
-	fresh, err := s.deviceRepo.GetByID(deviceID)
-	if err != nil {
-		return err
-	}
-	fresh.Status = status
-	return s.deviceRepo.Update(fresh)
+	return s.deviceRepo.UpdateStatus(deviceID, status)
 }
 
 func (s *DeviceService) markDeviceStatus(deviceID uuid.UUID, deviceIP string, status domain.DeviceStatus) {

@@ -310,11 +310,10 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*LoginResult
 	}
 
 	now := s.now()
-	user.FailedLoginAttempts = 0
-	user.LockedUntil = nil
-	user.LastLoginAt = &now
-	user.UpdatedAt = now
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	if err := s.users.RecordSuccessfulLogin(ctx, user.ID, user.PasswordHash, now); err != nil {
+		if errors.Is(err, domain.ErrAuthUserNotFound) {
+			return nil, ErrInvalidCredentials
+		}
 		return nil, fmt.Errorf("updating successful auth login: %w", err)
 	}
 
@@ -451,20 +450,16 @@ func (s *AuthService) ChangePassword(ctx context.Context, input PasswordChangeIn
 	if err != nil {
 		return fmt.Errorf("hashing changed password: %w", err)
 	}
-	user.PasswordHash = passwordHash
-	user.MustChangePassword = false
-	user.PasswordChangedAt = &now
-	user.UpdatedAt = now
-	user.FailedLoginAttempts = 0
-	user.LockedUntil = nil
-	if err := s.users.UpdateUser(ctx, user); err != nil {
-		return fmt.Errorf("updating changed password: %w", err)
+	audit := &domain.AuditLog{
+		ID: uuid.New(), ActorUserID: &user.ID, TargetUserID: &user.ID,
+		Action: "auth.password_changed", Resource: "auth", ResourceID: user.ID.String(),
+		MetadataJSON: `{}`, CreatedAt: now,
 	}
-	if err := s.sessions.RevokeUserSessions(ctx, user.ID, input.CurrentSessionID, now); err != nil {
-		return fmt.Errorf("revoking auth sessions after password change: %w", err)
-	}
-	if err := s.appendAuditLog(ctx, &user.ID, &user.ID, "auth.password_changed", "auth", user.ID.String(), `{}`); err != nil {
-		return err
+	if err := s.users.ChangeUserPassword(ctx, user.ID, user.PasswordHash, passwordHash, input.CurrentSessionID, now, audit); err != nil {
+		if errors.Is(err, domain.ErrAuthUserNotFound) {
+			return ErrInvalidCredentials
+		}
+		return fmt.Errorf("changing password: %w", err)
 	}
 	return nil
 }
@@ -610,20 +605,14 @@ func (s *AuthService) resetExpiredLockState(user *domain.User) {
 
 func (s *AuthService) recordFailedLogin(ctx context.Context, user *domain.User, ipAddress, userAgent string) error {
 	now := s.now()
-	if user.LockedUntil != nil && !user.LockedUntil.After(now) {
-		user.LockedUntil = nil
-		user.FailedLoginAttempts = 0
-	}
-	user.FailedLoginAttempts++
-	user.UpdatedAt = now
-	if user.FailedLoginAttempts >= s.failedThreshold {
-		lockedUntil := now.Add(s.failedLockDuration)
-		user.LockedUntil = &lockedUntil
-	}
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	attempts, err := s.users.RecordFailedLogin(ctx, user.ID, user.PasswordHash, now, s.failedThreshold, now.Add(s.failedLockDuration))
+	if err != nil {
+		if errors.Is(err, domain.ErrAuthUserNotFound) {
+			return ErrInvalidCredentials
+		}
 		return fmt.Errorf("updating failed auth login: %w", err)
 	}
-	if user.FailedLoginAttempts >= s.failedDelayAfter && s.failedDelay > 0 {
+	if attempts >= s.failedDelayAfter && s.failedDelay > 0 {
 		s.failedSleeper(s.failedDelay)
 	}
 	if err := s.appendAuditLog(ctx, nil, &user.ID, "auth.login_failed", "auth", user.ID.String(), `{"reason":"invalid_credentials"}`); err != nil {
