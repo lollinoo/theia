@@ -379,7 +379,27 @@ func TestRunMigrationsOnConfiguredPostgresTestDB(t *testing.T) {
 
 func TestRunMigrationsRepairsEarlyDeviceImportTopologyRunSchema(t *testing.T) {
 	db := setupTestDB(t)
+	cleanupDown, err := migrationsFS.ReadFile("migrations/000029_backup_file_deletions.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rewinding the version must also undo later schema objects before replaying them.
+	removeCleanupSchema := func() error {
+		var exists bool
+		if err := db.QueryRow(`SELECT to_regclass('backup_file_deletions') IS NOT NULL`).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			_, err := db.Exec(string(cleanupDown))
+			return err
+		}
+		return nil
+	}
 	t.Cleanup(func() {
+		if err := removeCleanupSchema(); err != nil {
+			t.Errorf("removing later cleanup schema: %v", err)
+			return
+		}
 		if _, err := db.Exec(`
 			DROP TABLE IF EXISTS device_import_topology_run_items;
 			DROP TABLE IF EXISTS device_import_topology_runs;
@@ -393,6 +413,9 @@ func TestRunMigrationsRepairsEarlyDeviceImportTopologyRunSchema(t *testing.T) {
 		}
 	})
 
+	if err := removeCleanupSchema(); err != nil {
+		t.Fatalf("removing later cleanup schema before rewind: %v", err)
+	}
 	if _, err := db.Exec(`
 		ALTER TABLE device_import_topology_runs
 			DROP COLUMN layout_application_digest,
@@ -434,6 +457,14 @@ func TestRunMigrationsRepairsEarlyDeviceImportTopologyRunSchema(t *testing.T) {
 	}
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("migrating early topology schema: %v", err)
+	}
+	var version int
+	var dirty bool
+	if err := db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty); err != nil || version != 29 || dirty {
+		t.Fatalf("migration replay left version=%d dirty=%v error=%v", version, dirty, err)
+	}
+	if count := importTestCount(t, db, `SELECT COUNT(*) FROM backup_file_deletions`); count != 0 {
+		t.Fatal("replayed cleanup queue is not empty")
 	}
 	if _, err := repo.Get(ctx, run.ID); err != nil {
 		t.Fatalf("Get preserved run after compatibility migration: %v", err)
