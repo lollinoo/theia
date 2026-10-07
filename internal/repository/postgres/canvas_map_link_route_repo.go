@@ -82,7 +82,7 @@ func (r *CanvasMapLinkRouteRepo) UpsertForMap(
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExistsContext(ctx, tx, mapID); err != nil {
+	if err := lockCanvasMapForLinkRoute(ctx, tx, mapID); err != nil {
 		return domain.CanvasMapLinkRoute{}, err
 	}
 	if err := lockCanvasMapLinkMembership(ctx, tx, mapID, route.LinkID); err != nil {
@@ -127,7 +127,7 @@ func (r *CanvasMapLinkRouteRepo) DeleteForMap(ctx context.Context, mapID uuid.UU
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExistsContext(ctx, tx, mapID); err != nil {
+	if err := lockCanvasMapForLinkRoute(ctx, tx, mapID); err != nil {
 		return err
 	}
 	if err := lockCanvasMapLinkMembership(ctx, tx, mapID, linkID); err != nil {
@@ -143,6 +143,18 @@ func (r *CanvasMapLinkRouteRepo) DeleteForMap(ctx context.Context, mapID uuid.UU
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing canvas map link route delete for %s: %w", linkID, err)
+	}
+	return nil
+}
+
+func lockCanvasMapForLinkRoute(ctx context.Context, tx *Tx, mapID uuid.UUID) error {
+	// Membership removal locks the map first. Match that order before taking the
+	// membership lock; KEY SHARE still allows independent route writes in this map.
+	var marker int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM canvas_maps WHERE id = ? FOR KEY SHARE`, mapID.String()).Scan(&marker); err == sql.ErrNoRows {
+		return fmt.Errorf("canvas map not found: %s", mapID)
+	} else if err != nil {
+		return fmt.Errorf("locking canvas map for link route %s: %w", mapID, err)
 	}
 	return nil
 }

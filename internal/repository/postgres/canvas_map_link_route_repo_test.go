@@ -855,7 +855,8 @@ func waitForCanvasMapLinkRemovalState(
 			 WHERE datname = current_database()
 			   AND pid <> pg_backend_pid()
 			   AND wait_event_type = 'Lock'
-			   AND query LIKE '%DELETE FROM canvas_map_links%'`,
+			   AND (query LIKE '%DELETE FROM canvas_map_links%'
+			        OR (query LIKE '%FROM canvas_maps%' AND query LIKE '%FOR UPDATE%'))`,
 		).Scan(&count); err != nil {
 			t.Fatalf("query blocked membership removal: %v", err)
 		}
