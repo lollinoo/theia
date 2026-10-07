@@ -287,34 +287,11 @@ func (s *BackupService) ResumeBulkBackupRuns(ctx context.Context) {
 		if err := contextError(ctx); err != nil {
 			return
 		}
-		for _, item := range run.Items {
-			if !bulkRunItemTerminal(item.Status) {
-				if item.BackupJobID != nil {
-					s.markInterruptedBackupJobFailed(*item.BackupJobID)
-				}
-				item.Status = domain.BulkBackupRunItemStatusChecking
-				item.Reason = ""
-				item.BackupJobID = nil
-				item.CompletedAt = nil
-				item.UpdatedAt = time.Now().UTC()
-				if err := s.bulkRunRepo.UpdateRunItem(&item); err != nil {
-					log.Printf("Warning: failed to reset bulk backup run item %s: %v", item.ID, err)
-				}
-			}
-		}
-		if run.Status == domain.BulkBackupRunStatusPausing {
-			run.Status = domain.BulkBackupRunStatusPaused
-			run.CancelRequested = false
-			if err := s.bulkRunRepo.UpdateRun(&run); err != nil {
-				log.Printf("Warning: failed to pause bulk backup run %s after restart: %v", run.ID, err)
-			}
-			continue
-		}
-		go s.processBulkBackupRun(run.ID)
+		go s.processBulkBackupRun(run.ID, true)
 	}
 }
 
-func (s *BackupService) processBulkBackupRun(runID uuid.UUID) {
+func (s *BackupService) processBulkBackupRun(runID uuid.UUID, recoverInterrupted ...bool) {
 	if s.bulkRunRepo == nil {
 		return
 	}
@@ -334,8 +311,65 @@ func (s *BackupService) processBulkBackupRun(runID uuid.UUID) {
 			}
 		}()
 	}
+	repo := s.bulkRunRepo
+	if scoped, ok := repo.(interface {
+		ForProcessor(uuid.UUID, string) domain.BulkBackupRunRepository
+	}); ok {
+		repo = scoped.ForProcessor(runID, processorOwner)
+	}
+	processor := &bulkRunProcessor{BackupService: s, bulkRunRepo: repo}
+	if len(recoverInterrupted) > 0 && recoverInterrupted[0] {
+		if err := processor.recoverBulkRun(runID); err != nil {
+			log.Printf("Bulk run recovery %s failed: %v", runID, err)
+			return
+		}
+	}
+	processor.processAcquiredBulkRun(runID, processorOwner)
+}
+
+type bulkRunProcessor struct {
+	*BackupService
+	bulkRunRepo domain.BulkBackupRunRepository
+}
+
+func (s *bulkRunProcessor) recoverBulkRun(runID uuid.UUID) error {
+	if recovery, ok := s.bulkRunRepo.(interface{ RecoverBulkRun(uuid.UUID) error }); ok {
+		return recovery.RecoverBulkRun(runID)
+	}
+	run, err := s.bulkRunRepo.GetRun(runID)
+	if err != nil || run == nil {
+		return err
+	}
+	for _, item := range run.Items {
+		if bulkRunItemTerminal(item.Status) {
+			continue
+		}
+		if item.BackupJobID != nil {
+			s.markInterruptedBackupJobFailed(*item.BackupJobID)
+		}
+		item.Status = domain.BulkBackupRunItemStatusChecking
+		item.Reason = ""
+		item.BackupJobID = nil
+		item.CompletedAt = nil
+		item.UpdatedAt = time.Now().UTC()
+		if err := s.bulkRunRepo.UpdateRunItem(&item); err != nil {
+			return err
+		}
+	}
+	if run.Status == domain.BulkBackupRunStatusPausing {
+		run.Status = domain.BulkBackupRunStatusPaused
+		run.CancelRequested = false
+		return s.bulkRunRepo.UpdateRun(run)
+	}
+	return nil
+}
+
+func (s *bulkRunProcessor) processAcquiredBulkRun(runID uuid.UUID, processorOwner string) {
 	for {
-		s.refreshBulkRunProcessor(runID, processorOwner)
+		if err := s.refreshBulkRunProcessor(runID, processorOwner); err != nil {
+			log.Printf("Bulk processor %s stopped: %v", runID, err)
+			return
+		}
 		run, err := s.bulkRunRepo.GetRun(runID)
 		if err != nil {
 			log.Printf("Warning: failed to load bulk backup run %s: %v", runID, err)
@@ -399,20 +433,21 @@ func (s *BackupService) processBulkBackupRun(runID uuid.UUID) {
 	}
 }
 
-func (s *BackupService) refreshBulkRunProcessor(runID uuid.UUID, owner string) {
+func (s *bulkRunProcessor) refreshBulkRunProcessor(runID uuid.UUID, owner string) error {
 	if owner == "" {
-		return
+		return nil
 	}
 	processors, ok := s.bulkRunRepo.(bulkBackupRunProcessorRepository)
 	if !ok {
-		return
+		return nil
 	}
 	if err := processors.RefreshBulkRunProcessor(runID, owner, time.Now().UTC().Add(bulkBackupRunProcessorLeaseTTL)); err != nil {
-		log.Printf("Warning: failed to refresh bulk backup run processor lease %s: %v", runID, err)
+		return err
 	}
+	return nil
 }
 
-func (s *BackupService) prepareBulkRunBatch(items []domain.BulkBackupRunItem) []queuedDeviceBackup {
+func (s *bulkRunProcessor) prepareBulkRunBatch(items []domain.BulkBackupRunItem) []queuedDeviceBackup {
 	queued := make([]queuedDeviceBackup, 0, len(items))
 	now := time.Now().UTC()
 	activeItems := s.claimBulkRunBatch(items)
@@ -460,7 +495,7 @@ func (s *BackupService) prepareBulkRunBatch(items []domain.BulkBackupRunItem) []
 	return queued
 }
 
-func (s *BackupService) claimBulkRunBatch(items []domain.BulkBackupRunItem) []domain.BulkBackupRunItem {
+func (s *bulkRunProcessor) claimBulkRunBatch(items []domain.BulkBackupRunItem) []domain.BulkBackupRunItem {
 	if claimer, ok := s.bulkRunRepo.(bulkBackupRunItemClaimRepository); ok {
 		claimed := make([]domain.BulkBackupRunItem, 0, len(items))
 		for _, item := range items {
@@ -480,7 +515,7 @@ func (s *BackupService) claimBulkRunBatch(items []domain.BulkBackupRunItem) []do
 	return s.markBulkRunBatchActive(items)
 }
 
-func (s *BackupService) markBulkRunBatchActive(items []domain.BulkBackupRunItem) []domain.BulkBackupRunItem {
+func (s *bulkRunProcessor) markBulkRunBatchActive(items []domain.BulkBackupRunItem) []domain.BulkBackupRunItem {
 	now := time.Now().UTC()
 	activeItems := make([]domain.BulkBackupRunItem, 0, len(items))
 	for _, item := range items {
@@ -498,7 +533,7 @@ func (s *BackupService) markBulkRunBatchActive(items []domain.BulkBackupRunItem)
 	return activeItems
 }
 
-func (s *BackupService) createBulkRunJob(item *domain.BulkBackupRunItem, job *domain.BackupJob) error {
+func (s *bulkRunProcessor) createBulkRunJob(item *domain.BulkBackupRunItem, job *domain.BackupJob) error {
 	if atomic, ok := s.bulkRunRepo.(interface {
 		CreateBulkRunJob(*domain.BulkBackupRunItem, *domain.BackupJob) error
 	}); ok {
@@ -517,14 +552,14 @@ func (s *BackupService) createBulkRunJob(item *domain.BulkBackupRunItem, job *do
 	return nil
 }
 
-func (s *BackupService) waitForBulkRunBatch(runID uuid.UUID, batch []domain.BulkBackupRunItem, processorOwner ...string) error {
+func (s *bulkRunProcessor) waitForBulkRunBatch(runID uuid.UUID, batch []domain.BulkBackupRunItem, processorOwner ...string) error {
 	waves := (len(batch) + defaultBulkBackupWorkerCount - 1) / defaultBulkBackupWorkerCount
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(waves)*5*time.Minute+time.Minute)
 	defer cancel()
 	return s.waitForBulkRunBatchContext(ctx, runID, batch, processorOwner...)
 }
 
-func (s *BackupService) waitForBulkRunBatchContext(ctx context.Context, runID uuid.UUID, batch []domain.BulkBackupRunItem, processorOwner ...string) error {
+func (s *bulkRunProcessor) waitForBulkRunBatchContext(ctx context.Context, runID uuid.UUID, batch []domain.BulkBackupRunItem, processorOwner ...string) error {
 	owner := ""
 	if len(processorOwner) > 0 {
 		owner = processorOwner[0]
@@ -541,7 +576,9 @@ func (s *BackupService) waitForBulkRunBatchContext(ctx context.Context, runID uu
 			return ctx.Err()
 		case <-ticker.C:
 		}
-		s.refreshBulkRunProcessor(runID, owner)
+		if err := s.refreshBulkRunProcessor(runID, owner); err != nil {
+			return err
+		}
 		run, err := s.bulkRunRepo.GetRun(runID)
 		if err != nil {
 			return err
@@ -594,7 +631,7 @@ func (s *BackupService) waitForBulkRunBatchContext(ctx context.Context, runID uu
 	}
 }
 
-func (s *BackupService) completeBulkRunItem(item domain.BulkBackupRunItem, status domain.BulkBackupRunItemStatus, reason string, jobID *uuid.UUID) error {
+func (s *bulkRunProcessor) completeBulkRunItem(item domain.BulkBackupRunItem, status domain.BulkBackupRunItemStatus, reason string, jobID *uuid.UUID) error {
 	now := time.Now().UTC()
 	item.Status = status
 	item.Reason = reason
@@ -609,7 +646,7 @@ func (s *BackupService) completeBulkRunItem(item domain.BulkBackupRunItem, statu
 	return nil
 }
 
-func (s *BackupService) cancelPendingBulkRunItems(runID uuid.UUID, items []domain.BulkBackupRunItem) {
+func (s *bulkRunProcessor) cancelPendingBulkRunItems(runID uuid.UUID, items []domain.BulkBackupRunItem) {
 	for _, item := range items {
 		if bulkRunItemTerminal(item.Status) ||
 			item.Status == domain.BulkBackupRunItemStatusActive ||
@@ -632,7 +669,7 @@ func runningBulkRunItems(items []domain.BulkBackupRunItem) []domain.BulkBackupRu
 	return running
 }
 
-func (s *BackupService) finishBulkBackupRun(runID uuid.UUID) {
+func (s *bulkRunProcessor) finishBulkBackupRun(runID uuid.UUID) {
 	run, err := s.bulkRunRepo.RecalculateRunCounters(runID)
 	if err != nil || run == nil {
 		if err != nil {
@@ -694,7 +731,7 @@ func (s *BackupService) finishBulkBackupRun(runID uuid.UUID) {
 	)
 }
 
-func (s *BackupService) recalculateBulkRunCounters(runID uuid.UUID) {
+func (s *bulkRunProcessor) recalculateBulkRunCounters(runID uuid.UUID) {
 	if _, err := s.bulkRunRepo.RecalculateRunCounters(runID); err != nil {
 		log.Printf("Warning: failed to recalculate bulk backup run %s: %v", runID, err)
 	}
@@ -754,4 +791,28 @@ func bulkRunItemTerminal(status domain.BulkBackupRunItemStatus) bool {
 	default:
 		return false
 	}
+}
+
+// These entry points keep direct service callers on the unscoped repository;
+// active processors use the private scope to fence every persisted transition.
+func (s *BackupService) prepareBulkRunBatch(items []domain.BulkBackupRunItem) []queuedDeviceBackup {
+	return (&bulkRunProcessor{BackupService: s, bulkRunRepo: s.bulkRunRepo}).prepareBulkRunBatch(items)
+}
+func (s *BackupService) waitForBulkRunBatch(id uuid.UUID, batch []domain.BulkBackupRunItem, owner ...string) error {
+	return (&bulkRunProcessor{BackupService: s, bulkRunRepo: s.bulkRunRepo}).waitForBulkRunBatch(id, batch, owner...)
+}
+func (s *BackupService) waitForBulkRunBatchContext(ctx context.Context, id uuid.UUID, batch []domain.BulkBackupRunItem, owner ...string) error {
+	return (&bulkRunProcessor{BackupService: s, bulkRunRepo: s.bulkRunRepo}).waitForBulkRunBatchContext(ctx, id, batch, owner...)
+}
+
+func (s *BackupService) markBulkRunBatchActive(items []domain.BulkBackupRunItem) []domain.BulkBackupRunItem {
+	return (&bulkRunProcessor{BackupService: s, bulkRunRepo: s.bulkRunRepo}).markBulkRunBatchActive(items)
+}
+
+func (s *BackupService) cancelPendingBulkRunItems(id uuid.UUID, items []domain.BulkBackupRunItem) {
+	(&bulkRunProcessor{BackupService: s, bulkRunRepo: s.bulkRunRepo}).cancelPendingBulkRunItems(id, items)
+}
+
+func (s *BackupService) finishBulkBackupRun(id uuid.UUID) {
+	(&bulkRunProcessor{BackupService: s, bulkRunRepo: s.bulkRunRepo}).finishBulkBackupRun(id)
 }

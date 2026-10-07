@@ -14,6 +14,9 @@ func (r *BulkBackupRunRepo) CreateBulkRunJob(item *domain.BulkBackupRunItem, job
 		return err
 	}
 	defer tx.Rollback()
+	if err := r.lockProcessor(tx, item.RunID); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	if _, err := tx.Exec(`INSERT INTO backup_jobs (id,device_id,status,error_message,created_at) VALUES (?,?,?,?,?)`, job.ID.String(), job.DeviceID.String(), string(job.Status), job.ErrorMessage, now); err != nil {
 		return fmt.Errorf("creating bulk job: %w", err)

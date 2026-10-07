@@ -3,6 +3,7 @@ package domain
 // This file defines backup domain contracts and lifecycle invariants.
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -153,6 +154,9 @@ type BulkBackupRunRepository interface {
 	UpdateRunItem(item *BulkBackupRunItem) error
 	RecalculateRunCounters(runID uuid.UUID) (*BulkBackupRun, error)
 }
+
+// ErrBulkBackupProcessorLeaseLost prevents a stale processor from continuing mutations.
+var ErrBulkBackupProcessorLeaseLost = errors.New("bulk backup processor lease lost")
 
 // BackupFileRepository defines persistence operations for backup files.
 type BackupFileRepository interface {
