@@ -176,3 +176,9 @@ type BackupFileDeletionRepository interface {
 	CompleteFileDeletion(ctx context.Context, id uuid.UUID) error
 	DeferFileDeletion(ctx context.Context, id uuid.UUID) error
 }
+
+// BackupFileTotals contains grouped counts without loading individual file paths.
+type BackupFileTotals struct {
+	FileCount int
+	ByteCount int64
+}

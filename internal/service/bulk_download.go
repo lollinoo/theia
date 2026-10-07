@@ -39,6 +39,11 @@ func (s *BackupService) GetBulkDownloadFiles(ctx context.Context, deviceIDs []uu
 		}
 	}
 
+	metadata, err := s.bulkDownloadMetadata(ctx, deviceIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	var entries []BulkDownloadEntry
 	var totalBytes int64
 	var backupRoot string
@@ -46,26 +51,42 @@ func (s *BackupService) GetBulkDownloadFiles(ctx context.Context, deviceIDs []uu
 		if err := contextError(ctx); err != nil {
 			return nil, err
 		}
-		device, err := s.deviceRepo.GetByID(did)
-		if errors.Is(err, domain.ErrDeviceNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("loading device %s for bulk download: %w", did, err)
-		}
-		if device == nil {
-			continue
-		}
-		job, err := s.jobRepo.GetLatestByDeviceID(did)
-		if err != nil {
-			return nil, fmt.Errorf("loading latest backup for device %s: %w", did, err)
-		}
-		if job == nil {
-			continue
-		}
-		files, err := s.fileRepo.GetByJobID(job.ID)
-		if err != nil {
-			return nil, fmt.Errorf("loading files for backup job %s: %w", job.ID, err)
+		var device *domain.Device
+		var files []domain.BackupFile
+		if metadata != nil {
+			selected, found := metadata.devices[did]
+			if !found {
+				continue
+			}
+			job, found := metadata.jobs[did]
+			if !found {
+				continue
+			}
+			device = &selected
+			files = metadata.files[job.ID]
+		} else {
+			var err error
+			device, err = s.deviceRepo.GetByID(did)
+			if errors.Is(err, domain.ErrDeviceNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("loading device %s for bulk download: %w", did, err)
+			}
+			if device == nil {
+				continue
+			}
+			job, err := s.jobRepo.GetLatestByDeviceID(did)
+			if err != nil {
+				return nil, fmt.Errorf("loading latest backup for device %s: %w", did, err)
+			}
+			if job == nil {
+				continue
+			}
+			files, err = s.fileRepo.GetByJobID(job.ID)
+			if err != nil {
+				return nil, fmt.Errorf("loading files for backup job %s: %w", job.ID, err)
+			}
 		}
 		dirName := device.Tags["display_name"]
 		if dirName == "" {
