@@ -46,7 +46,12 @@ func (r *BackupJobRepo) CreateContext(ctx context.Context, job *domain.BackupJob
 
 // GetByID returns a backup job by ID.
 func (r *BackupJobRepo) GetByID(id uuid.UUID) (*domain.BackupJob, error) {
-	row := r.db.QueryRow(
+	return r.GetByIDContext(context.Background(), id)
+}
+
+// GetByIDContext carries caller cancellation across this repository operation.
+func (r *BackupJobRepo) GetByIDContext(ctx context.Context, id uuid.UUID) (*domain.BackupJob, error) {
+	row := r.db.QueryRowContext(ctx,
 		`SELECT id, device_id, status, error_message, created_at FROM backup_jobs WHERE id = ?`,
 		id.String(),
 	)
@@ -105,7 +110,12 @@ func (r *BackupJobRepo) Update(job *domain.BackupJob) error {
 
 // Delete removes a backup job by ID.
 func (r *BackupJobRepo) Delete(id uuid.UUID) error {
-	res, err := r.db.Exec(`DELETE FROM backup_jobs WHERE id = ?`, id.String())
+	return r.DeleteContext(context.Background(), id)
+}
+
+// DeleteContext carries caller cancellation across this repository operation.
+func (r *BackupJobRepo) DeleteContext(ctx context.Context, id uuid.UUID) error {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM backup_jobs WHERE id = ?`, id.String())
 	if err != nil {
 		return err
 	}
@@ -124,7 +134,12 @@ func (r *BackupJobRepo) DeleteByDeviceID(deviceID uuid.UUID) error {
 
 // ListSuccessfulByDeviceOldest returns all successful backup jobs for a device, oldest first.
 func (r *BackupJobRepo) ListSuccessfulByDeviceOldest(deviceID uuid.UUID) ([]domain.BackupJob, error) {
-	rows, err := r.db.Query(
+	return r.ListSuccessfulByDeviceOldestContext(context.Background(), deviceID)
+}
+
+// ListSuccessfulByDeviceOldestContext carries caller cancellation across this repository operation.
+func (r *BackupJobRepo) ListSuccessfulByDeviceOldestContext(ctx context.Context, deviceID uuid.UUID) ([]domain.BackupJob, error) {
+	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, device_id, status, error_message, created_at
 		 FROM backup_jobs WHERE device_id = ? AND status = 'success'
 		 ORDER BY created_at ASC`,
@@ -148,7 +163,12 @@ func (r *BackupJobRepo) ListSuccessfulByDeviceOldest(deviceID uuid.UUID) ([]doma
 
 // ListAllDeviceIDs returns distinct device IDs from backup_jobs table.
 func (r *BackupJobRepo) ListAllDeviceIDs() ([]uuid.UUID, error) {
-	rows, err := r.db.Query(`SELECT DISTINCT device_id FROM backup_jobs`)
+	return r.ListAllDeviceIDsContext(context.Background())
+}
+
+// ListAllDeviceIDsContext carries caller cancellation across this repository operation.
+func (r *BackupJobRepo) ListAllDeviceIDsContext(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT device_id FROM backup_jobs`)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +191,12 @@ func (r *BackupJobRepo) ListAllDeviceIDs() ([]uuid.UUID, error) {
 
 // DeleteFailedOlderThan removes failed backup job records older than cutoff.
 func (r *BackupJobRepo) DeleteFailedOlderThan(cutoff time.Time) (int, error) {
-	res, err := r.db.Exec(
+	return r.DeleteFailedOlderThanContext(context.Background(), cutoff)
+}
+
+// DeleteFailedOlderThanContext carries caller cancellation across this repository operation.
+func (r *BackupJobRepo) DeleteFailedOlderThanContext(ctx context.Context, cutoff time.Time) (int, error) {
+	res, err := r.db.ExecContext(ctx,
 		`DELETE FROM backup_jobs WHERE status = 'failed' AND created_at < ?`,
 		cutoff,
 	)

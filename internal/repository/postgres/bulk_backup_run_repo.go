@@ -178,6 +178,20 @@ func (r *BulkBackupRunRepo) GetActiveRun() (*domain.BulkBackupRun, error) {
 	return run, nil
 }
 
+// BackupJobReferencedByActiveRunContext checks retention safety without loading
+// all run items and respects the retention deadline while waiting on the pool.
+func (r *BulkBackupRunRepo) BackupJobReferencedByActiveRunContext(ctx context.Context, jobID uuid.UUID) (bool, error) {
+	var referenced bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM backup_bulk_run_items i
+		JOIN backup_bulk_runs r ON r.id = i.run_id
+		WHERE i.backup_job_id = ?
+		AND r.status IN ('running', 'pausing', 'paused', 'cancelling')
+		AND i.status IN ('checking', 'active', 'queued', 'running')
+	)`, jobID.String()).Scan(&referenced)
+	return referenced, err
+}
+
 // ListResumableRuns returns interrupted non-terminal runs in creation order for startup reconciliation.
 func (r *BulkBackupRunRepo) ListResumableRuns() ([]domain.BulkBackupRun, error) {
 	rows, err := r.db.Query(

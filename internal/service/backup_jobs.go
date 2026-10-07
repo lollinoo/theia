@@ -166,7 +166,13 @@ func (s *BackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error
 	if err := contextError(ctx); err != nil {
 		return err
 	}
-	job, err := s.jobRepo.GetByID(id)
+	getJob := s.jobRepo.GetByID
+	if repo, ok := s.jobRepo.(interface {
+		GetByIDContext(context.Context, uuid.UUID) (*domain.BackupJob, error)
+	}); ok {
+		getJob = func(id uuid.UUID) (*domain.BackupJob, error) { return repo.GetByIDContext(ctx, id) }
+	}
+	job, err := getJob(id)
 	if err != nil {
 		return err
 	}
@@ -176,11 +182,28 @@ func (s *BackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error
 	if job.Status == domain.BackupStatusPending || job.Status == domain.BackupStatusRunning {
 		return ErrBackupJobActive
 	}
-	if s.backupJobReferencedByActiveBulkRun(id) {
+	referenced := false
+	if repo, ok := s.bulkRunRepo.(interface {
+		BackupJobReferencedByActiveRunContext(context.Context, uuid.UUID) (bool, error)
+	}); ok {
+		referenced, err = repo.BackupJobReferencedByActiveRunContext(ctx, id)
+		if err != nil {
+			return fmt.Errorf("checking active bulk run references: %w", err)
+		}
+	} else {
+		referenced = s.backupJobReferencedByActiveBulkRun(id)
+	}
+	if referenced {
 		return ErrBackupJobReferencedByActiveBulkRun
 	}
 
-	files, err := s.fileRepo.GetByJobID(id)
+	getFiles := s.fileRepo.GetByJobID
+	if repo, ok := s.fileRepo.(interface {
+		GetByJobIDContext(context.Context, uuid.UUID) ([]domain.BackupFile, error)
+	}); ok {
+		getFiles = func(id uuid.UUID) ([]domain.BackupFile, error) { return repo.GetByJobIDContext(ctx, id) }
+	}
+	files, err := getFiles(id)
 	if err != nil {
 		return fmt.Errorf("loading file records: %w", err)
 	}
@@ -190,6 +213,9 @@ func (s *BackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error
 	}
 	var fileWarnings []string
 	for _, f := range files {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
 		if f.FilePath != "" {
 			removePath, err := validateBackupDeletionPath(backupRoot, f.FilePath)
 			if err != nil {
@@ -201,11 +227,29 @@ func (s *BackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error
 		}
 	}
 	// Delete file records
-	if err := s.fileRepo.DeleteByJobID(id); err != nil {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	deleteFiles := s.fileRepo.DeleteByJobID
+	if repo, ok := s.fileRepo.(interface {
+		DeleteByJobIDContext(context.Context, uuid.UUID) error
+	}); ok {
+		deleteFiles = func(id uuid.UUID) error { return repo.DeleteByJobIDContext(ctx, id) }
+	}
+	if err := deleteFiles(id); err != nil {
 		return fmt.Errorf("deleting file records: %w", err)
 	}
 	// Delete job
-	if err := s.jobRepo.Delete(id); err != nil {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	deleteJob := s.jobRepo.Delete
+	if repo, ok := s.jobRepo.(interface {
+		DeleteContext(context.Context, uuid.UUID) error
+	}); ok {
+		deleteJob = func(id uuid.UUID) error { return repo.DeleteContext(ctx, id) }
+	}
+	if err := deleteJob(id); err != nil {
 		return fmt.Errorf("deleting job: %w", err)
 	}
 	if len(fileWarnings) > 0 {

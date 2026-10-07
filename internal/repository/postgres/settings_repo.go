@@ -3,6 +3,7 @@ package postgres
 // This file defines settings repo persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -24,8 +25,13 @@ func NewSettingsRepo(db *sql.DB) *SettingsRepo {
 // Get retrieves a single setting value by key.
 // Returns domain.ErrSettingNotFound if the key is not found.
 func (r *SettingsRepo) Get(key string) (string, error) {
+	return r.GetContext(context.Background(), key)
+}
+
+// GetContext reads a setting within the caller's cancellation budget.
+func (r *SettingsRepo) GetContext(ctx context.Context, key string) (string, error) {
 	var value string
-	err := r.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
+	err := r.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", fmt.Errorf("%w: %s", domain.ErrSettingNotFound, key)
