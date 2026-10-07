@@ -53,17 +53,22 @@ func (s *BackupService) TriggerBackup(ctx context.Context, deviceID uuid.UUID) (
 	return job, nil
 }
 
-func (s *BackupService) updateJobStatus(jobID uuid.UUID, status domain.BackupStatus, errMsg string) {
+func (s *BackupService) updateJobStatus(jobID uuid.UUID, status domain.BackupStatus, errMsg string) error {
 	job, err := s.jobRepo.GetByID(jobID)
 	if err != nil || job == nil {
 		log.Printf("Failed to fetch job %s for update: %v", jobID, err)
-		return
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("backup job %s not found", jobID)
 	}
 	job.Status = status
 	job.ErrorMessage = errMsg
 	if err := s.jobRepo.Update(job); err != nil {
 		log.Printf("Failed to update job %s: %v", jobID, err)
+		return err
 	}
+	return nil
 }
 
 func (s *BackupService) failJob(jobID uuid.UUID, errMsg string) {
