@@ -401,16 +401,11 @@ func (r *BulkBackupRunRepo) ClaimBulkRunItem(runID uuid.UUID, itemID uuid.UUID) 
 	if n == 0 {
 		return nil, false, nil
 	}
-	items, err := r.ListRunItems(runID)
+	item, err := scanBulkBackupRunItemRows(r.db.QueryRow(`SELECT id,run_id,device_id,device_name,status,reason,backup_job_id,created_at,updated_at,completed_at FROM backup_bulk_run_items WHERE id=? AND run_id=?`, itemID.String(), runID.String()))
 	if err != nil {
 		return nil, false, err
 	}
-	for i := range items {
-		if items[i].ID == itemID {
-			return &items[i], true, nil
-		}
-	}
-	return nil, false, nil
+	return item, true, nil
 }
 
 // ListRunItems lists run items data from the persistence boundary.
@@ -465,41 +460,10 @@ func (r *BulkBackupRunRepo) UpdateRunItem(item *domain.BulkBackupRunItem) error 
 }
 
 func (r *BulkBackupRunRepo) RecalculateRunCounters(runID uuid.UUID) (*domain.BulkBackupRun, error) {
-	items, err := r.ListRunItems(runID)
-	if err != nil {
+	if _, err := r.execProcessorMutation(runID, bulkCountersSQL, runID.String(), runID.String()); err != nil {
 		return nil, err
 	}
-	run, err := r.GetRun(runID)
-	if err != nil || run == nil {
-		return run, err
-	}
-	run.TotalCount = len(items)
-	run.QueuedCount = 0
-	run.SuccessCount = 0
-	run.FailedCount = 0
-	run.SkippedCount = 0
-	run.CancelledCount = 0
-	for _, item := range items {
-		switch item.Status {
-		case domain.BulkBackupRunItemStatusActive,
-			domain.BulkBackupRunItemStatusQueued,
-			domain.BulkBackupRunItemStatusRunning:
-			run.QueuedCount++
-		case domain.BulkBackupRunItemStatusSuccess:
-			run.SuccessCount++
-		case domain.BulkBackupRunItemStatusFailed:
-			run.FailedCount++
-		case domain.BulkBackupRunItemStatusSkipped:
-			run.SkippedCount++
-		case domain.BulkBackupRunItemStatusCancelled:
-			run.CancelledCount++
-		}
-	}
-	run.Items = items
-	if err := r.updateRunCounters(run); err != nil {
-		return nil, err
-	}
-	return run, nil
+	return r.GetRun(runID)
 }
 
 func (r *BulkBackupRunRepo) updateRunCounters(run *domain.BulkBackupRun) error {
@@ -629,7 +593,7 @@ func scanBulkBackupRunRows(rows *sql.Rows) (*domain.BulkBackupRun, error) {
 	return &run, nil
 }
 
-func scanBulkBackupRunItemRows(rows *sql.Rows) (*domain.BulkBackupRunItem, error) {
+func scanBulkBackupRunItemRows(rows interface{ Scan(...interface{}) error }) (*domain.BulkBackupRunItem, error) {
 	var idStr, runIDStr, deviceIDStr, status string
 	var backupJobID sql.NullString
 	var completedAt sql.NullTime

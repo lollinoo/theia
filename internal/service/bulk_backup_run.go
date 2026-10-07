@@ -564,11 +564,14 @@ func (s *bulkRunProcessor) waitForBulkRunBatchContext(ctx context.Context, runID
 	if len(processorOwner) > 0 {
 		owner = processorOwner[0]
 	}
+	ids := make([]uuid.UUID, 0, len(batch))
 	batchIDs := make(map[uuid.UUID]struct{}, len(batch))
 	for _, item := range batch {
 		batchIDs[item.ID] = struct{}{}
+		ids = append(ids, item.ID)
 	}
-	ticker := time.NewTicker(50 * time.Millisecond)
+	nextRefresh := time.Now()
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
@@ -576,8 +579,23 @@ func (s *bulkRunProcessor) waitForBulkRunBatchContext(ctx context.Context, runID
 			return ctx.Err()
 		case <-ticker.C:
 		}
-		if err := s.refreshBulkRunProcessor(runID, owner); err != nil {
-			return err
+		if !time.Now().Before(nextRefresh) {
+			if err := s.refreshBulkRunProcessor(runID, owner); err != nil {
+				return err
+			}
+			nextRefresh = time.Now().Add(bulkBackupRunProcessorLeaseTTL / 3)
+		}
+		if reconciler, ok := s.bulkRunRepo.(interface {
+			ReconcileBulkRunBatch(uuid.UUID, []uuid.UUID) (bool, error)
+		}); ok {
+			complete, err := reconciler.ReconcileBulkRunBatch(runID, ids)
+			if err != nil {
+				return err
+			}
+			if complete {
+				return nil
+			}
+			continue
 		}
 		run, err := s.bulkRunRepo.GetRun(runID)
 		if err != nil {
@@ -591,7 +609,6 @@ func (s *bulkRunProcessor) waitForBulkRunBatchContext(ctx context.Context, runID
 			if _, ok := batchIDs[item.ID]; !ok || bulkRunItemTerminal(item.Status) {
 				continue
 			}
-			complete = false
 			if item.BackupJobID == nil {
 				if err := s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusFailed, "active item has no backup job", nil); err != nil {
 					return err
@@ -610,6 +627,10 @@ func (s *bulkRunProcessor) waitForBulkRunBatchContext(ctx context.Context, runID
 			}
 			switch job.Status {
 			case domain.BackupStatusRunning:
+				complete = false
+				if item.Status == domain.BulkBackupRunItemStatusRunning {
+					continue
+				}
 				item.Status = domain.BulkBackupRunItemStatusRunning
 				item.UpdatedAt = time.Now().UTC()
 				if err := s.bulkRunRepo.UpdateRunItem(&item); err != nil {
@@ -623,6 +644,8 @@ func (s *bulkRunProcessor) waitForBulkRunBatchContext(ctx context.Context, runID
 				if err := s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusFailed, job.ErrorMessage, item.BackupJobID); err != nil {
 					return err
 				}
+			default:
+				complete = false
 			}
 		}
 		if complete {
