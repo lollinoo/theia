@@ -300,7 +300,7 @@ func TestDeviceRepoGetByIDsForTopologySkipsSNMPDecryption(t *testing.T) {
 	}
 
 	_, err := db.Exec(
-		`UPDATE devices SET snmp_credentials_json = ? WHERE id = ?`,
+		`UPDATE devices SET snmp_credentials_json = $1 WHERE id = $2`,
 		`{"version":"2c","v2c":{"community":"plaintext-community"}}`,
 		device.ID.String(),
 	)
@@ -324,7 +324,7 @@ func TestDeviceRepoGetByIDsForTopologySkipsSNMPDecryption(t *testing.T) {
 	}
 
 	var stored sql.NullString
-	if err := db.QueryRow(`SELECT snmp_credentials_json FROM devices WHERE id = ?`, device.ID.String()).Scan(&stored); err != nil {
+	if err := db.QueryRow(`SELECT snmp_credentials_json FROM devices WHERE id = $1`, device.ID.String()).Scan(&stored); err != nil {
 		t.Fatalf("reading stored credentials failed: %v", err)
 	}
 	if !stored.Valid || stored.String == "" {
@@ -384,7 +384,7 @@ func TestDeviceRepoUpdateStaticDiscoverySkipsSNMPCredentials(t *testing.T) {
 
 	rawCredentials := `{"version":"2c","v2c":{"community":"plaintext-community"}}`
 	if _, err := db.Exec(
-		`UPDATE devices SET snmp_credentials_json = ? WHERE id = ?`,
+		`UPDATE devices SET snmp_credentials_json = $1 WHERE id = $2`,
 		rawCredentials,
 		device.ID.String(),
 	); err != nil {
@@ -439,7 +439,7 @@ func TestDeviceRepoUpdateStaticDiscoverySkipsSNMPCredentials(t *testing.T) {
 	if err := db.QueryRow(
 		`SELECT snmp_credentials_json, probe_ports, metrics_source, polling_enabled, notes, tags_json,
 			topology_discovery_mode, last_topology_discovery_result
-		FROM devices WHERE id = ?`,
+		FROM devices WHERE id = $1`,
 		device.ID.String(),
 	).Scan(&storedCreds, &storedProbePorts, &storedMetricsSource, &storedPollingEnabled, &storedNotes, &storedTags, &storedTopologyMode, &storedTopologyResult); err != nil {
 		t.Fatalf("reading raw device row failed: %v", err)
@@ -609,7 +609,7 @@ func TestDeviceRepoCreateHydratesLegacyPrimaryAddress(t *testing.T) {
 		t.Fatalf("IP = %q, want trimmed legacy primary", got.IP)
 	}
 	assertDeviceAddresses(t, got.Addresses, []addressExpectation{
-		{address: "10.90.0.1", role: domain.DeviceAddressRolePrimary, isPrimary: true, priority: 0},
+		{address: "10.90.0.1", label: "Primary", role: domain.DeviceAddressRolePrimary, isPrimary: true, priority: 0},
 	})
 }
 
