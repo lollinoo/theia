@@ -124,6 +124,8 @@ make wisp-lab
 make wisp-seed-all
 ```
 
+Before seeding, export `THEIA_API_USERNAME=administrator` and `THEIA_API_PASSWORD` with your **current Theia login password** (the new password after the first-login change). See [WISP seed authentication](SETUP.md#wisp-seed-authentication) for Bash and PowerShell examples; the seed targets do not load these variables from `.env` automatically.
+
 For the full setup guide, including production, staging, configuration, keyring rotation, API auth, troubleshooting, and WISP lab details, read [SETUP.md](SETUP.md).
 
 > [!IMPORTANT]

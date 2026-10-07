@@ -79,6 +79,8 @@ make wisp-lab
 make wisp-seed-all
 ```
 
+Before seeding, set `THEIA_API_USERNAME` and `THEIA_API_PASSWORD` in the shell running `make`. Use your current Theia login password, after completing the first-login password change. See [WISP seed authentication](SETUP.md#wisp-seed-authentication) for Bash and PowerShell examples and unattended-run requirements.
+
 Useful commands:
 
 ```bash
