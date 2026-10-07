@@ -103,6 +103,11 @@ func (r *mockWorkerDeviceRepo) Update(_ *domain.Device) error {
 
 func (r *mockWorkerDeviceRepo) Delete(_ uuid.UUID) error { return nil }
 
+func (r *mockWorkerDeviceRepo) UpdateStatus(_ uuid.UUID, _ domain.DeviceStatus) error {
+	atomic.AddInt32(&r.updateCalls, 1)
+	return nil
+}
+
 type mockWorkerLinkRepo struct {
 	links []domain.Link
 }

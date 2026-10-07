@@ -249,5 +249,8 @@ type DeviceRepository interface {
 	GetBySysName(sysName string) (*Device, error)
 	GetAll() ([]Device, error)
 	Update(device *Device) error
+	// UpdateStatus changes runtime status without rewriting configuration or relationships.
+	// A successful Prometheus probe also refreshes the derived poll class when no override is set.
+	UpdateStatus(id uuid.UUID, status DeviceStatus) error
 	Delete(id uuid.UUID) error
 }
