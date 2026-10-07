@@ -20,6 +20,13 @@ func (r *CanvasMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership,
 		return domain.CanvasMapMembership{}, err
 	}
 
+	return r.GetMembershipForExistingMap(id)
+}
+
+// GetMembershipForExistingMap skips a duplicate existence query after the caller
+// has loaded the map. It returns the same membership projection as GetMembership.
+func (r *CanvasMapRepo) GetMembershipForExistingMap(id uuid.UUID) (domain.CanvasMapMembership, error) {
+
 	membership := domain.CanvasMapMembership{
 		Devices: []domain.CanvasMapDeviceMembership{},
 		LinkIDs: []uuid.UUID{},

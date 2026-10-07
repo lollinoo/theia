@@ -162,7 +162,9 @@ func IsolateVirtualDevices(
 }
 
 // LoadLinksByIDs loads requested links using a batch repository when present, with GetAll fallback for compatibility.
-func LoadLinksByIDs(repo VirtualIsolationLinkRepository, ids []uuid.UUID) ([]domain.Link, error) {
+type TopologyLinkRepository interface{ GetAll() ([]domain.Link, error) }
+
+func LoadLinksByIDs(repo TopologyLinkRepository, ids []uuid.UUID) ([]domain.Link, error) {
 	if len(ids) == 0 {
 		return []domain.Link{}, nil
 	}
