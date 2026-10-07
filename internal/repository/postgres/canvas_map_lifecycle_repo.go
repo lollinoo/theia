@@ -160,7 +160,7 @@ func (r *CanvasMapRepo) SetPrimary(id uuid.UUID) (domain.CanvasMap, error) {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return domain.CanvasMap{}, err
 	}
 

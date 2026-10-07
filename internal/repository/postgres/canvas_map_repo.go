@@ -8,12 +8,17 @@ import (
 
 // CanvasMapRepo implements domain.CanvasMapRepository using PostgreSQL SQL.
 type CanvasMapRepo struct {
-	db *DB
+	db       *DB
+	onChange chan<- struct{}
 }
 
 // NewCanvasMapRepo creates a new PostgreSQL-backed canvas map repository.
-func NewCanvasMapRepo(db *sql.DB) *CanvasMapRepo {
-	return &CanvasMapRepo{db: wrapDB(db)}
+func NewCanvasMapRepo(db *sql.DB, onChange ...chan struct{}) *CanvasMapRepo {
+	r := &CanvasMapRepo{db: wrapDB(db)}
+	if len(onChange) > 0 {
+		r.onChange = onChange[0]
+	}
+	return r
 }
 
 // CanvasMapPositionRepo implements domain.CanvasMapPositionRepository using PostgreSQL SQL.

@@ -202,7 +202,7 @@ func (r *CanvasMapRepo) ReplaceMembership(id uuid.UUID, membership domain.Canvas
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 
@@ -316,7 +316,7 @@ func (r *CanvasMapRepo) AddDeviceMembership(
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 
@@ -420,7 +420,7 @@ func (r *CanvasMapRepo) UpdateDeviceAreaMemberships(
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 	for _, deviceID := range canonicalDeviceIDs {
@@ -513,7 +513,7 @@ func (r *CanvasMapRepo) UpdateDeviceVisualColor(
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 
@@ -562,7 +562,7 @@ func (r *CanvasMapRepo) RemoveDevice(id uuid.UUID, deviceID uuid.UUID) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(
@@ -624,7 +624,7 @@ func (r *CanvasMapRepo) RemoveLink(id uuid.UUID, linkID uuid.UUID) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(

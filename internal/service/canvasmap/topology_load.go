@@ -62,21 +62,13 @@ type TopologyLoadResult struct {
 }
 
 // LoadTopology performs saved-map structural loading before the HTTP layer
-// formats JSON: virtual-device isolation, fresh map reload, member projection,
+// formats JSON: map loading, member projection,
 // link filtering, position pruning, counts, and visual metadata.
 func LoadTopology(
 	ctx context.Context,
 	mapID uuid.UUID,
 	deps TopologyLoadDeps,
 ) (TopologyLoadResult, error) {
-	if err := IsolateVirtualDevices(ctx, mapID, VirtualIsolationDeps{
-		Maps:      deps.Maps,
-		Positions: deps.Positions,
-		Devices:   deps.Devices,
-		Links:     deps.Links,
-	}); err != nil {
-		return TopologyLoadResult{}, wrapTopologyLoadError(TopologyLoadStageIsolate, err)
-	}
 
 	canvasMap, err := deps.Maps.GetByID(mapID)
 	if err != nil {

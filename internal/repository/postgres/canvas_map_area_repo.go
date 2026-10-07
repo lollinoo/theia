@@ -67,7 +67,7 @@ func (r *CanvasMapRepo) CreateArea(id uuid.UUID, area domain.CanvasMapAreaMember
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return domain.AreaWithCount{}, err
 	}
 	if err := ensureCanvasMapAreaNameAvailable(tx, id, area.AreaID, area.Name); err != nil {
@@ -124,7 +124,7 @@ func (r *CanvasMapRepo) UpdateArea(
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return domain.AreaWithCount{}, err
 	}
 	if err := ensureCanvasMapAreaNameAvailable(tx, id, areaID, area.Name); err != nil {
@@ -182,7 +182,7 @@ func (r *CanvasMapRepo) DeleteArea(id uuid.UUID, areaID uuid.UUID) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 	result, err := tx.Exec(
