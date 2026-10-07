@@ -299,9 +299,7 @@ func (c *DeviceLinkCache) applyPendingIncrementalChangesLocked() error {
 
 	finish := c.beginRefreshLocked()
 	defer finish()
-	c.mu.Unlock()
 	loadedDevices, loadedLinks, err := c.loadChanges(devices, links)
-	c.mu.Lock()
 	if err != nil {
 		return err
 	}
@@ -323,6 +321,8 @@ func (c *DeviceLinkCache) applyPendingIncrementalChangesLocked() error {
 }
 
 func (c *DeviceLinkCache) loadChanges(devices map[uuid.UUID]domain.DeviceChangeEvent, links map[uuid.UUID]domain.LinkChangeEvent) (map[uuid.UUID]domain.Device, map[uuid.UUID]domain.Link, error) {
+	c.mu.Unlock()
+	defer c.relockAfterRead()
 	loadedDevices := make(map[uuid.UUID]domain.Device, len(devices))
 	loadedLinks := make(map[uuid.UUID]domain.Link, len(links))
 	for id, event := range devices {
@@ -357,9 +357,7 @@ func (c *DeviceLinkCache) loadChanges(devices map[uuid.UUID]domain.DeviceChangeE
 func (c *DeviceLinkCache) reloadLocked() error {
 	finish := c.beginRefreshLocked()
 	defer finish()
-	c.mu.Unlock()
 	devices, links, err := c.loadSnapshot()
-	c.mu.Lock()
 	if err != nil {
 		return err
 	}
@@ -397,7 +395,19 @@ func (c *DeviceLinkCache) beginRefreshLocked() func() {
 	return func() { c.refreshing = false; close(c.refreshDone) }
 }
 
+// relockAfterRead restores getter lock ownership even when repository code
+// panics. Repair is required because drained events may not have been applied.
+func (c *DeviceLinkCache) relockAfterRead() {
+	c.mu.Lock()
+	if value := recover(); value != nil {
+		c.needsFullReload = true
+		panic(value)
+	}
+}
+
 func (c *DeviceLinkCache) loadSnapshot() ([]domain.Device, []domain.Link, error) {
+	c.mu.Unlock()
+	defer c.relockAfterRead()
 	devices, err := c.deviceRepo.GetAll()
 	if err != nil {
 		return nil, nil, err

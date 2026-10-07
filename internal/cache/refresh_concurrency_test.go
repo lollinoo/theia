@@ -136,3 +136,60 @@ func TestCacheRefreshFailureKeepsSnapshotAndRetriesRepair(t *testing.T) {
 		t.Fatalf("repair=%#v %v", device, err)
 	}
 }
+
+type panicRefreshRepo struct {
+	*refreshDeviceRepo
+	panicAll, panicRow bool
+}
+
+func (r *panicRefreshRepo) GetAll() ([]domain.Device, error) {
+	if r.panicAll {
+		panic("repository panic")
+	}
+	return r.refreshDeviceRepo.GetAll()
+}
+
+func (r *panicRefreshRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
+	if r.panicRow {
+		panic("repository panic")
+	}
+	return r.refreshDeviceRepo.GetByID(id)
+}
+
+func TestCacheRefreshPanicPreservesMutexLifecycle(t *testing.T) {
+	for _, stage := range []string{"cold load", "incremental update"} {
+		t.Run(stage, func(t *testing.T) {
+			id := uuid.New()
+			repo := &panicRefreshRepo{refreshDeviceRepo: &refreshDeviceRepo{device: domain.Device{ID: id}, changes: make(chan domain.DeviceChangeEvent, 1)}}
+			cache := NewDeviceLinkCache(repo, &refreshLinkRepo{}, nil)
+			if stage == "cold load" {
+				repo.panicAll = true
+			} else {
+				if _, err := cache.GetDevices(); err != nil {
+					t.Fatal(err)
+				}
+				repo.panicRow = true
+				repo.changes <- domain.DeviceChangeEvent{Kind: domain.ChangeKindUpdated, DeviceID: id}
+			}
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != "repository panic" {
+						t.Fatalf("panic=%v", recovered)
+					}
+				}()
+				cache.GetDevices()
+			}()
+			if !cache.mu.TryLock() {
+				t.Fatal("cache mutex left locked after panic")
+			}
+			cache.mu.Unlock()
+			if cache.refreshing {
+				t.Fatal("refresh marker left active after panic")
+			}
+			repo.panicAll, repo.panicRow = false, false
+			if _, err := cache.GetDevices(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
