@@ -161,7 +161,8 @@ func (s *BackupService) GetLatestBackupJob(ctx context.Context, deviceID uuid.UU
 	return job, nil
 }
 
-// DeleteBackupJob removes a backup job, its files from disk and DB.
+// DeleteBackupJob atomically removes job and file metadata. Durable repositories
+// queue physical file removal for the cleanup worker after the deletion commits.
 func (s *BackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error {
 	if err := contextError(ctx); err != nil {
 		return err
@@ -211,7 +212,7 @@ func (s *BackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error
 	if err != nil && len(files) > 0 {
 		return err
 	}
-	var fileWarnings []string
+	paths := make([]string, 0, len(files))
 	for _, f := range files {
 		if err := contextError(ctx); err != nil {
 			return err
@@ -221,25 +222,11 @@ func (s *BackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error
 			if err != nil {
 				return err
 			}
-			if err := os.Remove(removePath); err != nil && !os.IsNotExist(err) {
-				fileWarnings = append(fileWarnings, fmt.Sprintf("removing %s: %v", f.FilePath, err))
-			}
+			paths = append(paths, removePath)
 		}
 	}
-	// Delete file records
-	if err := contextError(ctx); err != nil {
-		return err
-	}
-	deleteFiles := s.fileRepo.DeleteByJobID
-	if repo, ok := s.fileRepo.(interface {
-		DeleteByJobIDContext(context.Context, uuid.UUID) error
-	}); ok {
-		deleteFiles = func(id uuid.UUID) error { return repo.DeleteByJobIDContext(ctx, id) }
-	}
-	if err := deleteFiles(id); err != nil {
-		return fmt.Errorf("deleting file records: %w", err)
-	}
-	// Delete job
+	// The job deletion cascades to file metadata and its durable cleanup entries
+	// in one database statement. Never remove disk files before this succeeds.
 	if err := contextError(ctx); err != nil {
 		return err
 	}
@@ -251,6 +238,17 @@ func (s *BackupService) DeleteBackupJob(ctx context.Context, id uuid.UUID) error
 	}
 	if err := deleteJob(id); err != nil {
 		return fmt.Errorf("deleting job: %w", err)
+	}
+	if _, ok := s.fileRepo.(domain.BackupFileDeletionRepository); ok {
+		return nil
+	}
+
+	// Repositories without a durable queue clean up only after metadata deletion.
+	var fileWarnings []string
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			fileWarnings = append(fileWarnings, fmt.Sprintf("removing %s: %v", path, err))
+		}
 	}
 	if len(fileWarnings) > 0 {
 		log.Printf("Warning: some backup files could not be removed for job %s: %s", id, strings.Join(fileWarnings, "; "))

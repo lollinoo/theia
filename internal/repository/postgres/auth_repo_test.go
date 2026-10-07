@@ -280,6 +280,10 @@ func TestAuthSeedPreservesManualEditableRolePermissionRemoval(t *testing.T) {
 
 func TestAuthSeedRollsBackRoleExistenceSignalOnPermissionFailure(t *testing.T) {
 	db := setupTestDB(t)
+	// This test exercises first-time seeding, so remove setup's runtime defaults.
+	if _, err := db.Exec(`TRUNCATE TABLE roles, permissions CASCADE`); err != nil {
+		t.Fatalf("clearing RBAC seed fixture: %v", err)
+	}
 	if _, err := db.Exec(`
 		CREATE OR REPLACE FUNCTION fail_auth_seed_permission_insert()
 		RETURNS trigger
@@ -318,6 +322,9 @@ func TestAuthSeedRollsBackRoleExistenceSignalOnPermissionFailure(t *testing.T) {
 	}
 	if roleCount != 0 {
 		t.Fatalf("roles after failed seed = %d, want 0", roleCount)
+	}
+	if count := importTestCount(t, db, `SELECT COUNT(*) FROM permissions`); count != 0 {
+		t.Fatalf("permissions after failed seed = %d, want 0", count)
 	}
 
 	if _, err := db.Exec(`
@@ -853,9 +860,10 @@ func TestAuthRepoCompletePasswordResetRejectsUsedAndExpiredTokens(t *testing.T) 
 
 func TestAuthRepoAuditAppendListOrderingAndDashboardStats(t *testing.T) {
 	repo, ctx := newAuthRepoForTest(t)
+	now := time.Now().UTC()
 
 	active := testAuthUser("active-user", "active-user@example.test")
-	active.LastLoginAt = ptrTime(time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC))
+	active.LastLoginAt = ptrTime(now.Add(-3 * time.Minute))
 	if err := repo.CreateUser(ctx, &active); err != nil {
 		t.Fatalf("CreateUser active: %v", err)
 	}
@@ -877,7 +885,7 @@ func TestAuthRepoAuditAppendListOrderingAndDashboardStats(t *testing.T) {
 		Action:       "auth.login_failed",
 		Resource:     "auth",
 		MetadataJSON: `{"reason":"bad_password"}`,
-		CreatedAt:    time.Date(2026, 5, 21, 12, 1, 0, 0, time.UTC),
+		CreatedAt:    now.Add(-2 * time.Minute),
 	}
 	second := first
 	second.ID = uuid.New()

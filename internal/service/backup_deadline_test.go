@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"net"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +31,7 @@ func TestFullBackupPreservesCallerDeadlineAndCancellation(t *testing.T) {
 			svc := NewBackupService(jobs, newMockBackupFileRepo(), nil, nil, nil, nil, &internalssh.DefaultDialer{}, nil, t.TempDir(), ssh.InsecureIgnoreHostKey())
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
+			deadline, _ := ctx.Deadline()
 			release, err := svc.lockBackupDevice(context.Background(), device.ID)
 			if err != nil {
 				t.Fatal(err)
@@ -59,7 +59,7 @@ func TestFullBackupPreservesCallerDeadlineAndCancellation(t *testing.T) {
 				}
 				time.Sleep(time.Millisecond)
 			}
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(400 * time.Millisecond)
 			unlock()
 			if err := listener.SetDeadline(time.Now().Add(time.Second)); err != nil {
 				t.Fatal(err)
@@ -81,13 +81,22 @@ func TestFullBackupPreservesCallerDeadlineAndCancellation(t *testing.T) {
 			if scenario == "cancellation during SSH handshake" {
 				cancel()
 			}
+			waitBudget := time.Until(deadline) + 250*time.Millisecond
+			if scenario == "cancellation during SSH handshake" {
+				waitBudget = 500 * time.Millisecond
+			}
 			select {
 			case <-done:
-			case <-time.After(2 * time.Second):
+			case <-time.After(waitBudget):
 				t.Fatal("SSH negotiation ignored the caller's total deadline or cancellation")
 			}
+			if scenario == "deadline after device-lock waiting" && time.Now().Before(deadline) {
+				t.Fatal("silent SSH peer failed before the caller deadline")
+			}
 			stored, err := jobs.GetByID(job.ID)
-			if err != nil || stored.Status != domain.BackupStatusFailed || ctx.Err() == nil || !strings.Contains(stored.ErrorMessage, ctx.Err().Error()) {
+			// The socket deadline and context timer may finish in either order;
+			// transport error wording is not part of the executor's deadline contract.
+			if err != nil || stored.Status != domain.BackupStatusFailed || stored.ErrorMessage == "" {
 				t.Fatalf("job=%+v caller error=%v repository error=%v", stored, ctx.Err(), err)
 			}
 		})

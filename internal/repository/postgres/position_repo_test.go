@@ -145,7 +145,7 @@ func createTestDevices(t *testing.T, db *sql.DB, count int) []uuid.UUID {
 				id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, managed,
 				tags_json, created_at, updated_at
-			) VALUES (?, ?, ?, '{}', 'unknown', 'unknown', '', '', '', '', 1, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+			) VALUES ($1, $2, $3, '{}', 'unknown', 'unknown', '', '', '', '', 1, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 			id.String(),
 			"device-"+id.String()[:8],
 			fmt.Sprintf("10.0.0.%d", i+1),

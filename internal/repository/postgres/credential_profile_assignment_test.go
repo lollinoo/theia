@@ -28,7 +28,7 @@ func insertTestDevice(t *testing.T, db *sql.DB) uuid.UUID {
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		deviceID.String(), "test-device", "10.0.0.1",
 		`{"version":"2c","v2c":{"community":"public"}}`,
-		"router", "up", true, "{}", "prometheus", "instance", "10.0.0.1", "default",
+		"router", "up", 1, "{}", "prometheus", "instance", "10.0.0.1", "default",
 	)
 	if err != nil {
 		t.Fatalf("inserting test device: %v", err)

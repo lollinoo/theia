@@ -55,7 +55,7 @@ func TestSNMPProfileRepoEncryptionRoundTrip(t *testing.T) {
 
 	// Verify raw DB value does NOT contain plaintext
 	var rawJSON string
-	err = db.QueryRow("SELECT credentials_json FROM snmp_profiles WHERE id = ?", profile.ID.String()).Scan(&rawJSON)
+	err = db.QueryRow("SELECT credentials_json FROM snmp_profiles WHERE id = $1", profile.ID.String()).Scan(&rawJSON)
 	if err != nil {
 		t.Fatalf("querying raw JSON: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestSNMPProfileRepoV2cEncryptionRoundTrip(t *testing.T) {
 
 	// Verify raw DB value does NOT contain plaintext
 	var rawJSON string
-	err = db.QueryRow("SELECT credentials_json FROM snmp_profiles WHERE id = ?", profile.ID.String()).Scan(&rawJSON)
+	err = db.QueryRow("SELECT credentials_json FROM snmp_profiles WHERE id = $1", profile.ID.String()).Scan(&rawJSON)
 	if err != nil {
 		t.Fatalf("querying raw JSON: %v", err)
 	}

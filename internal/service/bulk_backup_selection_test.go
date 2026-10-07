@@ -3,11 +3,42 @@ package service
 // This file exercises bulk backup selection behavior so refactors preserve the documented contract.
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
 )
+
+func TestBulkBackupRunSelectionStopsOnLookupFailure(t *testing.T) {
+	first, failing := uuid.New(), uuid.New()
+	want := errors.New("database unavailable")
+	runs := newMockBulkBackupRunRepo()
+	svc := &BackupService{
+		deviceRepo:  &backupReadDeviceRepo{failDevice: failing, err: want},
+		bulkRunRepo: runs,
+	}
+	run, err := svc.StartBulkBackupRun(context.Background(), []uuid.UUID{first, failing}, "test")
+	if run != nil || !errors.Is(err, want) {
+		t.Fatalf("run=%v error=%v; want no run and lookup failure", run, err)
+	}
+	if len(runs.runs) != 0 {
+		t.Fatal("lookup failure created a partial backup run")
+	}
+}
+
+func TestBulkBackupRunSelectionSkipsOnlyMissingDevices(t *testing.T) {
+	first, missing, last := uuid.New(), uuid.New(), uuid.New()
+	for _, lookupError := range []error{nil, fmt.Errorf("lookup: %w", domain.ErrDeviceNotFound)} {
+		svc := &BackupService{deviceRepo: &backupReadDeviceRepo{failDevice: missing, missing: true, err: lookupError}}
+		devices, err := svc.bulkBackupRunDevices(context.Background(), []uuid.UUID{first, missing, first, last})
+		if err != nil || len(devices) != 2 || devices[0].ID != first || devices[1].ID != last {
+			t.Fatalf("devices=%v error=%v; want ordered, deduplicated existing devices", devices, err)
+		}
+	}
+}
 
 func TestBulkBackupDeviceNameUsesConfiguredFallbackOrder(t *testing.T) {
 	tests := []struct {

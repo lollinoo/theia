@@ -126,6 +126,7 @@ type BackupJobRepository interface {
 	GetByDeviceID(deviceID uuid.UUID) ([]BackupJob, error)
 	GetLatestByDeviceID(deviceID uuid.UUID) (*BackupJob, error)
 	Update(job *BackupJob) error
+	// Delete atomically removes the job and its associated file metadata.
 	Delete(id uuid.UUID) error
 	DeleteByDeviceID(deviceID uuid.UUID) error
 
