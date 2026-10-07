@@ -853,9 +853,10 @@ func TestAuthRepoCompletePasswordResetRejectsUsedAndExpiredTokens(t *testing.T) 
 
 func TestAuthRepoAuditAppendListOrderingAndDashboardStats(t *testing.T) {
 	repo, ctx := newAuthRepoForTest(t)
+	now := time.Now().UTC()
 
 	active := testAuthUser("active-user", "active-user@example.test")
-	active.LastLoginAt = ptrTime(time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC))
+	active.LastLoginAt = ptrTime(now.Add(-3 * time.Minute))
 	if err := repo.CreateUser(ctx, &active); err != nil {
 		t.Fatalf("CreateUser active: %v", err)
 	}
@@ -877,7 +878,7 @@ func TestAuthRepoAuditAppendListOrderingAndDashboardStats(t *testing.T) {
 		Action:       "auth.login_failed",
 		Resource:     "auth",
 		MetadataJSON: `{"reason":"bad_password"}`,
-		CreatedAt:    time.Date(2026, 5, 21, 12, 1, 0, 0, time.UTC),
+		CreatedAt:    now.Add(-2 * time.Minute),
 	}
 	second := first
 	second.ID = uuid.New()
