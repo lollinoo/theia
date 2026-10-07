@@ -3,6 +3,7 @@ package postgres
 // This file defines bulk backup run repo persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -348,11 +349,16 @@ func (r *BulkBackupRunRepo) TryAcquireBulkRunProcessor(runID uuid.UUID, owner st
 }
 
 func (r *BulkBackupRunRepo) RefreshBulkRunProcessor(runID uuid.UUID, owner string, leaseUntil time.Time) error {
-	result, err := r.db.Exec(
+	return r.RefreshBulkRunProcessorContext(context.Background(), runID, owner, leaseUntil)
+}
+
+// RefreshBulkRunProcessorContext makes lease renewal obey the batch deadline.
+func (r *BulkBackupRunRepo) RefreshBulkRunProcessorContext(ctx context.Context, runID uuid.UUID, owner string, leaseUntil time.Time) error {
+	result, err := r.db.raw.ExecContext(ctx, rebindQuery(
 		`UPDATE backup_bulk_runs
 		 SET processing_lease_expires_at = ?
 		 WHERE id = ?
-		   AND processing_owner = ? AND processing_lease_expires_at > NOW()`,
+		   AND processing_owner = ? AND processing_lease_expires_at > NOW()`),
 		leaseUntil,
 		runID.String(),
 		owner,

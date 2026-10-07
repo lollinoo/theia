@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -10,15 +11,20 @@ import (
 // ReconcileBulkRunBatch projects job state in one bounded batch. Unchanged jobs
 // cause no item/counter writes; ownership fencing still applies to transitions.
 func (r *BulkBackupRunRepo) ReconcileBulkRunBatch(runID uuid.UUID, ids []uuid.UUID) (bool, error) {
+	return r.ReconcileBulkRunBatchContext(context.Background(), runID, ids)
+}
+
+// ReconcileBulkRunBatchContext bounds pool and ownership-lock waits by the processor deadline.
+func (r *BulkBackupRunRepo) ReconcileBulkRunBatchContext(ctx context.Context, runID uuid.UUID, ids []uuid.UUID) (bool, error) {
 	if len(ids) == 0 {
 		return true, nil
 	}
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
-	if err := r.lockProcessor(tx, runID); err != nil {
+	if err := r.lockProcessorContext(ctx, tx, runID); err != nil {
 		return false, err
 	}
 	args := []interface{}{runID.String()}
@@ -28,7 +34,7 @@ func (r *BulkBackupRunRepo) ReconcileBulkRunBatch(runID uuid.UUID, ids []uuid.UU
 		args = append(args, id.String())
 	}
 	filter := "i.run_id=? AND i.id IN (" + strings.Join(marks, ",") + ")"
-	result, err := tx.Exec(`WITH next AS (
+	result, err := tx.ExecContext(ctx, `WITH next AS (
  SELECT i.id,
  CASE WHEN j.id IS NULL THEN 'failed' ELSE j.status END AS status,
  CASE WHEN j.id IS NULL THEN 'backup job disappeared' ELSE j.error_message END AS reason
@@ -47,12 +53,12 @@ FROM next n WHERE i.id=n.id AND i.status IS DISTINCT FROM n.status`, args...)
 		return false, err
 	}
 	if n > 0 {
-		if _, err := tx.Exec(bulkCountersSQL, runID.String(), runID.String()); err != nil {
+		if _, err := tx.ExecContext(ctx, bulkCountersSQL, runID.String(), runID.String()); err != nil {
 			return false, err
 		}
 	}
 	var total, remaining int
-	if err := tx.QueryRow(`SELECT COUNT(*),COUNT(*) FILTER(WHERE i.status NOT IN ('success','failed','skipped','cancelled'))
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COUNT(*) FILTER(WHERE i.status NOT IN ('success','failed','skipped','cancelled'))
  FROM backup_bulk_run_items i WHERE `+filter, args...).Scan(&total, &remaining); err != nil {
 		return false, err
 	}

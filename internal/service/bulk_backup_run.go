@@ -433,7 +433,13 @@ func (s *bulkRunProcessor) processAcquiredBulkRun(runID uuid.UUID, processorOwne
 	}
 }
 
-func (s *bulkRunProcessor) refreshBulkRunProcessor(runID uuid.UUID, owner string) error {
+func (s *bulkRunProcessor) refreshBulkRunProcessor(runID uuid.UUID, owner string, contexts ...context.Context) error {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	if owner == "" {
 		return nil
 	}
@@ -441,7 +447,15 @@ func (s *bulkRunProcessor) refreshBulkRunProcessor(runID uuid.UUID, owner string
 	if !ok {
 		return nil
 	}
-	if err := processors.RefreshBulkRunProcessor(runID, owner, time.Now().UTC().Add(bulkBackupRunProcessorLeaseTTL)); err != nil {
+	refresh := processors.RefreshBulkRunProcessor
+	if contextual, ok := s.bulkRunRepo.(interface {
+		RefreshBulkRunProcessorContext(context.Context, uuid.UUID, string, time.Time) error
+	}); ok {
+		refresh = func(id uuid.UUID, owner string, until time.Time) error {
+			return contextual.RefreshBulkRunProcessorContext(ctx, id, owner, until)
+		}
+	}
+	if err := refresh(runID, owner, time.Now().UTC().Add(bulkBackupRunProcessorLeaseTTL)); err != nil {
 		return err
 	}
 	return nil
@@ -580,15 +594,15 @@ func (s *bulkRunProcessor) waitForBulkRunBatchContext(ctx context.Context, runID
 		case <-ticker.C:
 		}
 		if !time.Now().Before(nextRefresh) {
-			if err := s.refreshBulkRunProcessor(runID, owner); err != nil {
+			if err := s.refreshBulkRunProcessor(runID, owner, ctx); err != nil {
 				return err
 			}
 			nextRefresh = time.Now().Add(bulkBackupRunProcessorLeaseTTL / 3)
 		}
 		if reconciler, ok := s.bulkRunRepo.(interface {
-			ReconcileBulkRunBatch(uuid.UUID, []uuid.UUID) (bool, error)
+			ReconcileBulkRunBatchContext(context.Context, uuid.UUID, []uuid.UUID) (bool, error)
 		}); ok {
-			complete, err := reconciler.ReconcileBulkRunBatch(runID, ids)
+			complete, err := reconciler.ReconcileBulkRunBatchContext(ctx, runID, ids)
 			if err != nil {
 				return err
 			}
