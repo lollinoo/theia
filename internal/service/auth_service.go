@@ -310,11 +310,10 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*LoginResult
 	}
 
 	now := s.now()
-	user.FailedLoginAttempts = 0
-	user.LockedUntil = nil
-	user.LastLoginAt = &now
-	user.UpdatedAt = now
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	if err := s.users.RecordSuccessfulLogin(ctx, user.ID, user.PasswordHash, now); err != nil {
+		if errors.Is(err, domain.ErrAuthUserNotFound) {
+			return nil, ErrInvalidCredentials
+		}
 		return nil, fmt.Errorf("updating successful auth login: %w", err)
 	}
 
@@ -610,20 +609,14 @@ func (s *AuthService) resetExpiredLockState(user *domain.User) {
 
 func (s *AuthService) recordFailedLogin(ctx context.Context, user *domain.User, ipAddress, userAgent string) error {
 	now := s.now()
-	if user.LockedUntil != nil && !user.LockedUntil.After(now) {
-		user.LockedUntil = nil
-		user.FailedLoginAttempts = 0
-	}
-	user.FailedLoginAttempts++
-	user.UpdatedAt = now
-	if user.FailedLoginAttempts >= s.failedThreshold {
-		lockedUntil := now.Add(s.failedLockDuration)
-		user.LockedUntil = &lockedUntil
-	}
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	attempts, err := s.users.RecordFailedLogin(ctx, user.ID, user.PasswordHash, now, s.failedThreshold, now.Add(s.failedLockDuration))
+	if err != nil {
+		if errors.Is(err, domain.ErrAuthUserNotFound) {
+			return ErrInvalidCredentials
+		}
 		return fmt.Errorf("updating failed auth login: %w", err)
 	}
-	if user.FailedLoginAttempts >= s.failedDelayAfter && s.failedDelay > 0 {
+	if attempts >= s.failedDelayAfter && s.failedDelay > 0 {
 		s.failedSleeper(s.failedDelay)
 	}
 	if err := s.appendAuditLog(ctx, nil, &user.ID, "auth.login_failed", "auth", user.ID.String(), `{"reason":"invalid_credentials"}`); err != nil {
