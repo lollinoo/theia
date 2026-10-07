@@ -12,6 +12,9 @@ import (
 // ErrDeviceAddressConflict reports an address already owned by another physical device.
 var ErrDeviceAddressConflict = errors.New("device address conflict")
 
+// ErrDeviceNotFound distinguishes an absent device from a failed repository read.
+var ErrDeviceNotFound = errors.New("device not found")
+
 // DeviceType represents the type of network device.
 type DeviceType string
 

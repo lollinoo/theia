@@ -371,8 +371,9 @@ func (r *backupJobRepoForHandler) DeleteFailedOlderThan(cutoff time.Time) (int, 
 }
 
 type backupFileRepoForHandler struct {
-	mu    sync.Mutex
-	files map[uuid.UUID]*domain.BackupFile
+	mu          sync.Mutex
+	files       map[uuid.UUID]*domain.BackupFile
+	getByJobErr error
 }
 
 func newBackupFileRepoForHandler() *backupFileRepoForHandler {
@@ -389,6 +390,9 @@ func (r *backupFileRepoForHandler) Create(f *domain.BackupFile) error {
 func (r *backupFileRepoForHandler) GetByJobID(jobID uuid.UUID) ([]domain.BackupFile, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.getByJobErr != nil {
+		return nil, r.getByJobErr
+	}
 	var result []domain.BackupFile
 	for _, f := range r.files {
 		if f.JobID == jobID {

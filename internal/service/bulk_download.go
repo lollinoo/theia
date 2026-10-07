@@ -47,16 +47,25 @@ func (s *BackupService) GetBulkDownloadFiles(ctx context.Context, deviceIDs []uu
 			return nil, err
 		}
 		device, err := s.deviceRepo.GetByID(did)
-		if err != nil || device == nil {
+		if errors.Is(err, domain.ErrDeviceNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("loading device %s for bulk download: %w", did, err)
+		}
+		if device == nil {
 			continue
 		}
 		job, err := s.jobRepo.GetLatestByDeviceID(did)
-		if err != nil || job == nil {
+		if err != nil {
+			return nil, fmt.Errorf("loading latest backup for device %s: %w", did, err)
+		}
+		if job == nil {
 			continue
 		}
 		files, err := s.fileRepo.GetByJobID(job.ID)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("loading files for backup job %s: %w", job.ID, err)
 		}
 		dirName := device.Tags["display_name"]
 		if dirName == "" {
