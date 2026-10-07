@@ -609,7 +609,7 @@ func TestDeviceRepoCreateHydratesLegacyPrimaryAddress(t *testing.T) {
 		t.Fatalf("IP = %q, want trimmed legacy primary", got.IP)
 	}
 	assertDeviceAddresses(t, got.Addresses, []addressExpectation{
-		{address: "10.90.0.1", role: domain.DeviceAddressRolePrimary, isPrimary: true, priority: 0},
+		{address: "10.90.0.1", label: "Primary", role: domain.DeviceAddressRolePrimary, isPrimary: true, priority: 0},
 	})
 }
 
