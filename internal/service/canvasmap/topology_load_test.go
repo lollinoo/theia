@@ -87,8 +87,8 @@ func TestLoadTopologyBuildsMaterializedResponsePlan(t *testing.T) {
 	}
 }
 
-// TestLoadTopologyReturnsEmptyPlanForUnmaterializedMapAfterLoadingPositions preserves the existing load order for legacy maps.
-func TestLoadTopologyReturnsEmptyPlanForUnmaterializedMapAfterLoadingPositions(t *testing.T) {
+// TestLoadTopologySkipsIOForUnmaterializedMap avoids unused reads for legacy maps.
+func TestLoadTopologySkipsIOForUnmaterializedMap(t *testing.T) {
 	mapID := uuid.New()
 	maps := &fakeTopologyMapRepo{
 		byID: map[uuid.UUID]domain.CanvasMap{
@@ -112,8 +112,8 @@ func TestLoadTopologyReturnsEmptyPlanForUnmaterializedMapAfterLoadingPositions(t
 	if err != nil {
 		t.Fatalf("LoadTopology() error = %v", err)
 	}
-	if positions.getAllCalls != 1 {
-		t.Fatalf("position loads = %d, want 1 to preserve existing load order", positions.getAllCalls)
+	if positions.getAllCalls != 0 {
+		t.Fatalf("position loads = %d, want zero", positions.getAllCalls)
 	}
 	if loaded.Plan.DeviceCount != 0 || loaded.Plan.LinkCount != 0 || loaded.Plan.PositionCount != 0 {
 		t.Fatalf("empty counts = devices %d links %d positions %d, want zero", loaded.Plan.DeviceCount, loaded.Plan.LinkCount, loaded.Plan.PositionCount)
@@ -130,7 +130,7 @@ func TestLoadTopologyWrapsPositionErrorsWithStage(t *testing.T) {
 
 	_, err := LoadTopology(context.Background(), mapID, TopologyLoadDeps{
 		Maps: &fakeTopologyMapRepo{
-			byID:        map[uuid.UUID]domain.CanvasMap{mapID: {ID: mapID}},
+			byID:        map[uuid.UUID]domain.CanvasMap{mapID: {ID: mapID, MembershipMaterialized: true}},
 			memberships: map[uuid.UUID]domain.CanvasMapMembership{mapID: {}},
 		},
 		Positions: &fakeTopologyPositionRepo{err: wantErr},

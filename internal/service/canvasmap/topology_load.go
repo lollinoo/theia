@@ -43,16 +43,20 @@ func (e TopologyLoadError) Unwrap() error {
 
 // TopologyMapRepository is the narrow map persistence surface needed for topology loading.
 type TopologyMapRepository interface {
-	VirtualIsolationMapRepository
+	GetMembership(uuid.UUID) (domain.CanvasMapMembership, error)
 	GetByID(uuid.UUID) (domain.CanvasMap, error)
 }
 
 // TopologyLoadDeps groups the persistence and device/link operations needed to load saved-map topology.
 type TopologyLoadDeps struct {
 	Maps      TopologyMapRepository
-	Positions VirtualIsolationPositionRepository
-	Devices   VirtualIsolationDeviceService
-	Links     VirtualIsolationLinkRepository
+	Positions interface {
+		GetAllForMap(uuid.UUID) ([]domain.DevicePosition, error)
+	}
+	Devices interface {
+		GetDevicesByIDs(context.Context, []uuid.UUID) ([]domain.Device, error)
+	}
+	Links TopologyLinkRepository
 }
 
 // TopologyLoadResult returns the fresh map row and the domain-level response plan for the API adapter.
@@ -75,17 +79,28 @@ func LoadTopology(
 		return TopologyLoadResult{}, wrapTopologyLoadError(TopologyLoadStageMap, err)
 	}
 
-	// Preserve the historical load order: positions are fetched even for
-	// unmaterialized maps, though only materialized maps project them.
+	return LoadTopologyForMap(ctx, canvasMap, deps)
+}
+
+// LoadTopologyForMap reuses the map already validated by the HTTP adapter.
+// Unmaterialized maps have no projected positions, membership or links to load.
+func LoadTopologyForMap(ctx context.Context, canvasMap domain.CanvasMap, deps TopologyLoadDeps) (TopologyLoadResult, error) {
+	mapID := canvasMap.ID
+	if !canvasMap.MembershipMaterialized {
+		return TopologyLoadResult{Map: canvasMap, Plan: EmptyTopologyResponsePlan()}, nil
+	}
 	positions, err := deps.Positions.GetAllForMap(mapID)
 	if err != nil {
 		return TopologyLoadResult{}, wrapTopologyLoadError(TopologyLoadStagePositions, err)
 	}
-	if !canvasMap.MembershipMaterialized {
-		return TopologyLoadResult{Map: canvasMap, Plan: EmptyTopologyResponsePlan()}, nil
-	}
 
-	membership, err := deps.Maps.GetMembership(mapID)
+	loadMembership := deps.Maps.GetMembership
+	if existing, ok := deps.Maps.(interface {
+		GetMembershipForExistingMap(uuid.UUID) (domain.CanvasMapMembership, error)
+	}); ok {
+		loadMembership = existing.GetMembershipForExistingMap
+	}
+	membership, err := loadMembership(mapID)
 	if err != nil {
 		return TopologyLoadResult{}, wrapTopologyLoadError(TopologyLoadStageMembership, err)
 	}
