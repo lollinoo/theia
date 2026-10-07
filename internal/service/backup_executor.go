@@ -64,9 +64,6 @@ func (s *BackupService) runFullBackupContext(ctx context.Context, device *domain
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
-	defer cancel()
-
 	// Connect via SSH
 	var client *ssh.Client
 	timeout := 30 * time.Second
