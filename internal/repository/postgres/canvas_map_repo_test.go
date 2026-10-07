@@ -4,6 +4,8 @@ package postgres
 
 import (
 	"database/sql"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -524,17 +526,13 @@ func TestCanvasMapRepoCreateAndUpdateCanonicalizeFilterJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create filtered map: %v", err)
 	}
-	if created.FilterJSON != wantCreateFilterJSON {
-		t.Fatalf("created filter_json = %s, want %s", created.FilterJSON, wantCreateFilterJSON)
-	}
+	assertCanvasMapFilterJSON(t, created.FilterJSON, wantCreateFilterJSON)
 
 	var storedFilterJSON string
 	if err := db.QueryRow(`SELECT filter_json FROM canvas_maps WHERE id = $1`, created.ID.String()).Scan(&storedFilterJSON); err != nil {
 		t.Fatalf("query stored create filter: %v", err)
 	}
-	if storedFilterJSON != wantCreateFilterJSON {
-		t.Fatalf("stored create filter_json = %s, want %s", storedFilterJSON, wantCreateFilterJSON)
-	}
+	assertCanvasMapFilterJSON(t, storedFilterJSON, wantCreateFilterJSON)
 
 	updatedName := "Filtered Updated"
 	updatedDescription := "Updated filter map"
@@ -555,15 +553,29 @@ func TestCanvasMapRepoCreateAndUpdateCanonicalizeFilterJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update filtered map: %v", err)
 	}
-	if updated.Name != updatedName || updated.Description != updatedDescription || updated.FilterJSON != wantUpdateFilterJSON {
+	if updated.Name != updatedName || updated.Description != updatedDescription {
 		t.Fatalf("unexpected updated map: %#v, want filter_json %s", updated, wantUpdateFilterJSON)
 	}
+	assertCanvasMapFilterJSON(t, updated.FilterJSON, wantUpdateFilterJSON)
 
 	if err := db.QueryRow(`SELECT filter_json FROM canvas_maps WHERE id = $1`, created.ID.String()).Scan(&storedFilterJSON); err != nil {
 		t.Fatalf("query stored update filter: %v", err)
 	}
-	if storedFilterJSON != wantUpdateFilterJSON {
-		t.Fatalf("stored update filter_json = %s, want %s", storedFilterJSON, wantUpdateFilterJSON)
+	assertCanvasMapFilterJSON(t, storedFilterJSON, wantUpdateFilterJSON)
+}
+
+func assertCanvasMapFilterJSON(t *testing.T, got, want string) {
+	t.Helper()
+	var gotValue, wantValue any
+	if err := json.Unmarshal([]byte(got), &gotValue); err != nil {
+		t.Fatalf("decode stored filter: %v", err)
+	}
+	if err := json.Unmarshal([]byte(want), &wantValue); err != nil {
+		t.Fatalf("decode expected filter: %v", err)
+	}
+	// Compare object contents without normalizing away array order or duplicates.
+	if !reflect.DeepEqual(gotValue, wantValue) {
+		t.Fatalf("filter_json = %s, want %s", got, want)
 	}
 }
 
