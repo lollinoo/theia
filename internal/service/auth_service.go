@@ -450,20 +450,16 @@ func (s *AuthService) ChangePassword(ctx context.Context, input PasswordChangeIn
 	if err != nil {
 		return fmt.Errorf("hashing changed password: %w", err)
 	}
-	user.PasswordHash = passwordHash
-	user.MustChangePassword = false
-	user.PasswordChangedAt = &now
-	user.UpdatedAt = now
-	user.FailedLoginAttempts = 0
-	user.LockedUntil = nil
-	if err := s.users.UpdateUser(ctx, user); err != nil {
-		return fmt.Errorf("updating changed password: %w", err)
+	audit := &domain.AuditLog{
+		ID: uuid.New(), ActorUserID: &user.ID, TargetUserID: &user.ID,
+		Action: "auth.password_changed", Resource: "auth", ResourceID: user.ID.String(),
+		MetadataJSON: `{}`, CreatedAt: now,
 	}
-	if err := s.sessions.RevokeUserSessions(ctx, user.ID, input.CurrentSessionID, now); err != nil {
-		return fmt.Errorf("revoking auth sessions after password change: %w", err)
-	}
-	if err := s.appendAuditLog(ctx, &user.ID, &user.ID, "auth.password_changed", "auth", user.ID.String(), `{}`); err != nil {
-		return err
+	if err := s.users.ChangeUserPassword(ctx, user.ID, user.PasswordHash, passwordHash, input.CurrentSessionID, now, audit); err != nil {
+		if errors.Is(err, domain.ErrAuthUserNotFound) {
+			return ErrInvalidCredentials
+		}
+		return fmt.Errorf("changing password: %w", err)
 	}
 	return nil
 }
