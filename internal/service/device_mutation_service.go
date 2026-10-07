@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/observability"
 )
 
 type deviceMutationService struct {
@@ -359,6 +360,7 @@ func (m *deviceMutationService) DeleteDevice(ctx context.Context, id uuid.UUID) 
 	if err := m.deviceRepo.Delete(id); err != nil {
 		return err
 	}
+	observability.Default().ForgetDevice(id)
 	if resetter := *m.runtimeResetter; resetter != nil {
 		resetter.ResetDeviceRuntime(id)
 	}

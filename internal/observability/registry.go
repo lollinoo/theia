@@ -184,7 +184,9 @@ type histogramSnapshot struct {
 
 // Registry represents registry data used by the package.
 type Registry struct {
-	mu sync.RWMutex
+	mu                   sync.RWMutex
+	deviceMetricLabels   map[string]deviceMetricLabels
+	schedulerDeviceNames map[string]string
 
 	schedulerReadyDepth               map[domain.VolatilityClass]float64
 	schedulerQueueLagSeconds          map[domain.VolatilityClass]float64
@@ -399,8 +401,7 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (r *Registry) MarshalPrometheus() []byte {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r = r.snapshotForScrape()
 
 	var b strings.Builder
 
@@ -744,6 +745,19 @@ func (r *Registry) IncSchedulerScopedBackpressure(taskKind string, volatility do
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if scope == "device" {
+		if previous, ok := r.schedulerDeviceNames[scopeID]; ok && previous != scopeName {
+			for key := range r.schedulerScopedBackpressureTotal {
+				if key.Scope == "device" && key.ScopeID == scopeID {
+					delete(r.schedulerScopedBackpressureTotal, key)
+				}
+			}
+		}
+		if r.schedulerDeviceNames == nil {
+			r.schedulerDeviceNames = make(map[string]string)
+		}
+		r.schedulerDeviceNames[scopeID] = scopeName
+	}
 	r.schedulerScopedBackpressureTotal[schedulerScopedBackpressureKey{
 		TaskKind:        taskKind,
 		VolatilityClass: string(volatility),
@@ -1136,6 +1150,24 @@ func (r *Registry) ObserveSNMPCollectorDeviceOperation(deviceID, device, target,
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	labels := deviceMetricLabels{device: device, target: target}
+	if previous, ok := r.deviceMetricLabels[deviceID]; ok && previous != labels {
+		for key := range r.snmpCollectorDeviceLast {
+			if key.DeviceID == deviceID {
+				delete(r.snmpCollectorDeviceLast, key)
+			}
+		}
+		for key := range r.snmpCollectorDeviceSlow {
+			if key.DeviceID == deviceID {
+				delete(r.snmpCollectorDeviceSlow, key)
+			}
+		}
+	}
+	if r.deviceMetricLabels == nil {
+		r.deviceMetricLabels = make(map[string]deviceMetricLabels)
+	}
+	r.deviceMetricLabels[deviceID] = labels
 
 	key := snmpCollectorDeviceOperationKey{
 		DeviceID:  deviceID,

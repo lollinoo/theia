@@ -414,6 +414,7 @@ func (s *Scheduler) refreshDevices(now time.Time) error {
 		return err
 	}
 
+	observability.Default().RetainDeviceMetrics(devices)
 	seen := make(map[TaskKey]struct{}, len(devices)*5)
 
 	for _, device := range devices {
