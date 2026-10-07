@@ -114,14 +114,9 @@ func (s *DeviceImportStore) CreateDeviceInMap(
 		}
 
 		return s.devices.createOnceWithAppend(
+			ctx,
 			persistenceDevice,
-			func(tx *Tx, _ time.Time) error {
-				return lockAndCheckDeviceImportAddresses(
-					ctx,
-					tx,
-					domain.DeviceAddressValues(*persistenceDevice),
-				)
-			},
+			true, // Imports require exclusivity even for virtual addresses.
 			func(tx *Tx, now time.Time) error {
 				return appendImportedDevicePlacement(ctx, tx, persistenceDevice.ID, placement, now)
 			},
@@ -129,56 +124,6 @@ func (s *DeviceImportStore) CreateDeviceInMap(
 		)
 	})
 	return classifyDeviceImportStoreError(err)
-}
-
-func lockAndCheckDeviceImportAddresses(ctx context.Context, tx *Tx, addresses []string) error {
-	canonical := canonicalDeviceImportAddresses(addresses)
-	lockKeys := make([]int64, 0, len(canonical))
-	seenLockKeys := make(map[int64]struct{}, len(canonical))
-	for _, address := range canonical {
-		key := deviceImportAddressLockKey(address)
-		if _, exists := seenLockKeys[key]; exists {
-			continue
-		}
-		seenLockKeys[key] = struct{}{}
-		lockKeys = append(lockKeys, key)
-	}
-	// A global numeric order prevents overlapping multi-address imports from deadlocking.
-	sort.Slice(lockKeys, func(i, j int) bool { return lockKeys[i] < lockKeys[j] })
-	for _, lockKey := range lockKeys {
-		if _, err := tx.ExecContext(
-			ctx,
-			`SELECT pg_advisory_xact_lock(?)`,
-			lockKey,
-		); err != nil {
-			return err
-		}
-	}
-	if len(canonical) == 0 {
-		return nil
-	}
-
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(canonical)), ",")
-	args := make([]any, len(canonical))
-	for i := range canonical {
-		args[i] = canonical[i]
-	}
-	var exists bool
-	if err := tx.QueryRowContext(
-		ctx,
-		`SELECT EXISTS (
-			SELECT 1
-			FROM device_addresses
-			WHERE normalized_address IN (`+placeholders+`)
-		)`,
-		args...,
-	).Scan(&exists); err != nil {
-		return err
-	}
-	if exists {
-		return domain.ErrDeviceImportAddressConflict
-	}
-	return nil
 }
 
 func deviceImportAddressLockKey(address string) int64 {
@@ -361,7 +306,7 @@ func classifyDeviceImportStoreError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, domain.ErrDeviceImportAddressConflict) {
+	if errors.Is(err, domain.ErrDeviceImportAddressConflict) || errors.Is(err, domain.ErrDeviceAddressConflict) {
 		return domain.ErrDeviceImportAddressConflict
 	}
 	if errors.Is(err, domain.ErrDeviceImportDestinationChanged) || isDeviceImportDestinationConstraint(err) {

@@ -95,13 +95,14 @@ func (r *DeviceRepo) publishChange(kind domain.ChangeKind, deviceID uuid.UUID) {
 // Create inserts a new device and its interfaces into the database.
 func (r *DeviceRepo) Create(device *domain.Device) error {
 	return withWriteRetry(func() error {
-		return r.createOnceWithAppend(device, nil, nil, true)
+		return r.createOnceWithAppend(context.Background(), device, false, nil, true)
 	})
 }
 
 func (r *DeviceRepo) createOnceWithAppend(
+	ctx context.Context,
 	device *domain.Device,
-	beforeInsert deviceCreateTransactionHook,
+	exclusiveAddresses bool,
 	appendToTransaction deviceCreateTransactionHook,
 	publish bool,
 ) error {
@@ -147,15 +148,16 @@ func (r *DeviceRepo) createOnceWithAppend(
 		bootstrapState = domain.TopologyBootstrapStateIdle
 	}
 
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
-	if beforeInsert != nil {
-		if err := beforeInsert(tx, now); err != nil {
-			return err
-		}
+	if err := lockDeviceAddressOwnerTx(ctx, tx, device.ID); err != nil {
+		return err
+	}
+	if err := checkDeviceAddressWriteTx(ctx, tx, device.ID, device.DeviceType, domain.DeviceAddressValues(*device), exclusiveAddresses); err != nil {
+		return err
 	}
 
 	_, err = tx.Exec(
@@ -785,6 +787,36 @@ func (r *DeviceRepo) updateStaticDiscoveryOnce(device *domain.Device) error {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if err := lockDeviceAddressOwnerTx(context.Background(), tx, device.ID); err != nil {
+		return err
+	}
+	var previousType string
+	if err := tx.QueryRow("SELECT device_type FROM devices WHERE id=?", device.ID.String()).Scan(&previousType); err != nil {
+		return err
+	}
+	if previousType == string(domain.DeviceTypeVirtual) && device.DeviceType != domain.DeviceTypeVirtual {
+		rows, err := tx.Query("SELECT address FROM device_addresses WHERE device_id=?", device.ID.String())
+		if err != nil {
+			return err
+		}
+		var addresses []string
+		for rows.Next() {
+			var address string
+			if err := rows.Scan(&address); err != nil {
+				rows.Close()
+				return err
+			}
+			addresses = append(addresses, address)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if err := checkDeviceAddressWriteTx(context.Background(), tx, device.ID, device.DeviceType, addresses, false); err != nil {
+			return err
+		}
+	}
 
 	result, err := tx.Exec(
 		`UPDATE devices SET hostname=?, sys_name=?, sys_name_lookup=?, sys_descr=?, sys_object_id=?,
@@ -864,6 +896,12 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if err := lockDeviceAddressOwnerTx(context.Background(), tx, device.ID); err != nil {
+		return err
+	}
+	if err := checkDeviceAddressWriteTx(context.Background(), tx, device.ID, device.DeviceType, domain.DeviceAddressValues(*device), false); err != nil {
+		return err
+	}
 
 	result, err := tx.Exec(
 		`UPDATE devices SET hostname=?, ip=?, snmp_credentials_json=?, device_type=?,
@@ -1180,6 +1218,20 @@ func (r *DeviceRepo) ReplaceDeviceAddresses(deviceID uuid.UUID, addresses []doma
 			return fmt.Errorf("beginning transaction: %w", err)
 		}
 		defer tx.Rollback()
+		if err := lockDeviceAddressOwnerTx(context.Background(), tx, deviceID); err != nil {
+			return err
+		}
+		var deviceType string
+		if err := tx.QueryRow("SELECT device_type FROM devices WHERE id=?", deviceID.String()).Scan(&deviceType); err != nil {
+			return err
+		}
+		values := make([]string, 0, len(addresses))
+		for _, address := range addresses {
+			values = append(values, address.Address)
+		}
+		if err := checkDeviceAddressWriteTx(context.Background(), tx, deviceID, domain.DeviceType(deviceType), values, false); err != nil {
+			return err
+		}
 
 		if err := replaceDeviceAddressesTx(tx, deviceID, addresses, time.Now().UTC()); err != nil {
 			return err

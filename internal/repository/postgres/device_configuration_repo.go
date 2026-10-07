@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
@@ -90,13 +91,25 @@ func (r *DeviceRepo) UpdateConfiguration(device *domain.Device, fields domain.De
 	args = append(args, device.ID.String())
 	exec := r.db.Exec
 	var tx *Tx
-	if fields.Addresses || fields.AreaIDs {
+	if fields.IP || fields.Addresses || fields.AreaIDs {
 		var err error
 		tx, err = r.db.Begin()
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback()
+		if fields.IP || fields.Addresses {
+			if err := lockDeviceAddressOwnerTx(context.Background(), tx, device.ID); err != nil {
+				return err
+			}
+			var deviceType string
+			if err := tx.QueryRow("SELECT device_type FROM devices WHERE id=?", device.ID.String()).Scan(&deviceType); err != nil {
+				return err
+			}
+			if err := checkDeviceAddressWriteTx(context.Background(), tx, device.ID, domain.DeviceType(deviceType), domain.DeviceAddressValues(*device), false); err != nil {
+				return err
+			}
+		}
 		exec = tx.Exec
 	}
 	result, err := exec("UPDATE devices SET "+strings.Join(columns, ",")+" WHERE id=?", args...)

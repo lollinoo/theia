@@ -3,10 +3,14 @@ package domain
 // This file defines device domain contracts and lifecycle invariants.
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrDeviceAddressConflict reports an address already owned by another physical device.
+var ErrDeviceAddressConflict = errors.New("device address conflict")
 
 // DeviceType represents the type of network device.
 type DeviceType string
