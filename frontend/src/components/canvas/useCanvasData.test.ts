@@ -412,6 +412,31 @@ describe('useCanvasData', () => {
     expect(fetchCanvasMapBootstrap).not.toHaveBeenCalled();
   });
 
+  it('clears initial loading when a silent refresh supersedes the bootstrap request', async () => {
+    const initialBootstrap = deferred<ReturnType<typeof canvasBootstrapResponse>>();
+    vi.mocked(fetchCanvasBootstrap).mockReturnValueOnce(initialBootstrap.promise);
+    vi.mocked(fetchCanvasTopology).mockResolvedValueOnce(canvasTopologyOkResponse());
+    const { result } = renderUseCanvasData(null);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => {
+      expect(await result.current.loadTopology(true)).toBe('applied');
+    });
+    expect(result.current.loading).toBe(false);
+    const refreshedNodeIds = result.current.nodes.map((node) => node.id);
+
+    await act(async () => {
+      initialBootstrap.resolve(canvasBootstrapResponse({ devices: [] }));
+      await initialBootstrap.promise;
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.nodes.map((node) => node.id)).toEqual(refreshedNodeIds);
+  });
+
   it('uses saved map bootstrap on initial load when mapId is set', async () => {
     vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(canvasBootstrapResponse());
 

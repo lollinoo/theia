@@ -713,6 +713,24 @@ for (const importCase of linkedLayoutImportCases) {
         .toBe(true);
       await expect(page.getByTestId('topology-bootstrap-overlay')).toBeHidden({ timeout: 120_000 });
 
+      // Existing positions and an absent overlay can precede discovery startup.
+      // Wait for the backend's durable completion state before reading the final snapshot.
+      await expect
+        .poll(
+          async () => {
+            const response = await page.request.get(
+              `/api/v1/admin/device-imports/topology-runs/${encodeURIComponent(topologyRunId)}`,
+            );
+            expect(response.ok(), `topology run verification returned ${response.status()}`).toBe(
+              true,
+            );
+            const snapshot = (await response.json()) as { run?: { state?: unknown } };
+            return snapshot.run?.state;
+          },
+          { timeout: 120_000 },
+        )
+        .toBe('completed');
+
       const runResponse = await page.request.get(
         `/api/v1/admin/device-imports/topology-runs/${encodeURIComponent(topologyRunId)}`,
       );
