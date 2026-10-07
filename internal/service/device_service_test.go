@@ -247,6 +247,33 @@ func (r *mockDeviceRepo) Update(device *domain.Device) error {
 	return nil
 }
 
+func (r *mockDeviceRepo) UpdateStatus(id uuid.UUID, status domain.DeviceStatus) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	existing, ok := r.devices[id]
+	if !ok {
+		return fmt.Errorf("device not found: %s", id)
+	}
+	cp := *existing
+	cp.Status = status
+	if cp.MetricsSource == domain.MetricsSourcePrometheus && status == domain.DeviceStatusUp && cp.PollIntervalOverride == nil {
+		cp.PollClass = domain.ClassifyPollClass(cp.DeviceType)
+	}
+	if r.updateHook != nil {
+		if err := r.updateHook(&cp); err != nil {
+			return err
+		}
+	}
+	r.updateCalls++
+	if r.updateCallsByDevice == nil {
+		r.updateCallsByDevice = make(map[uuid.UUID]int)
+	}
+	r.updateCallsByDevice[id]++
+	cp.UpdatedAt = time.Now().UTC()
+	r.devices[id] = &cp
+	return nil
+}
+
 func (r *mockDeviceRepo) UpdateStaticDiscovery(device *domain.Device) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

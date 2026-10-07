@@ -168,16 +168,7 @@ func (d *deviceDiscoveryCoordinator) probeDevice(device *domain.Device) {
 	}
 
 	if device.MetricsSource == domain.MetricsSourcePrometheus {
-		fresh, err := s.deviceRepo.GetByID(deviceID)
-		if err != nil {
-			log.Printf("Failed to re-fetch device %s for prometheus probe: %v", deviceIP, err)
-			return
-		}
-		fresh.Status = domain.DeviceStatusUp
-		if fresh.PollIntervalOverride == nil {
-			fresh.PollClass = domain.ClassifyPollClass(fresh.DeviceType)
-		}
-		if err := s.deviceRepo.Update(fresh); err != nil {
+		if err := s.updateDeviceStatus(deviceID, domain.DeviceStatusUp); err != nil {
 			log.Printf("Failed to update device %s status to up: %v", deviceIP, err)
 			return
 		}
@@ -245,7 +236,7 @@ func (d *deviceDiscoveryCoordinator) ProbeDevice(ctx context.Context, id uuid.UU
 	}
 
 	device.Status = domain.DeviceStatusProbing
-	if err := d.parent.deviceRepo.Update(device); err != nil {
+	if err := d.parent.updateDeviceStatus(id, domain.DeviceStatusProbing); err != nil {
 		return fmt.Errorf("updating device status: %w", err)
 	}
 

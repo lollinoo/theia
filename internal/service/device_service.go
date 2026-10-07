@@ -398,16 +398,9 @@ func (s *DeviceService) AddDeviceWithAddresses(
 	return s.mutation.AddDevice(ctx, ip, hostname, deviceType, creds, tags, vendor, metricsSource, prometheusLabelName, prometheusLabelValue, topologyDiscoveryMode, areaIDs, probePorts, addresses, notes...)
 }
 
-// probeDevice performs SNMP discovery and updates the device in the repository.
-// It re-fetches the device from the repo to avoid racing on the pointer
-// that was returned to the caller of AddDevice.
+// updateDeviceStatus persists runtime state without saving a stale device aggregate.
 func (s *DeviceService) updateDeviceStatus(deviceID uuid.UUID, status domain.DeviceStatus) error {
-	fresh, err := s.deviceRepo.GetByID(deviceID)
-	if err != nil {
-		return err
-	}
-	fresh.Status = status
-	return s.deviceRepo.Update(fresh)
+	return s.deviceRepo.UpdateStatus(deviceID, status)
 }
 
 func (s *DeviceService) markDeviceStatus(deviceID uuid.UUID, deviceIP string, status domain.DeviceStatus) {
