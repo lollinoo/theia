@@ -54,7 +54,9 @@ func (s *BackupService) runFullBackupContext(ctx context.Context, device *domain
 	defer release()
 
 	// Set job to running
-	s.updateJobStatus(jobID, domain.BackupStatusRunning, "")
+	if err := s.updateJobStatus(jobID, domain.BackupStatusRunning, ""); err != nil {
+		return
+	}
 
 	secret, err := s.decryptSecret(profile.EncryptedSecret)
 	if err != nil {
