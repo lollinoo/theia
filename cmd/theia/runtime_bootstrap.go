@@ -456,7 +456,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	deviceChangeNotify := deviceRepo.SubscribeDeviceChanges(256)
 	linkChangeNotify := linkRepo.SubscribeLinkChanges(256)
 	positionRepo := postgres.NewPositionRepo(db)
-	canvasMapRepo := postgres.NewCanvasMapRepo(db)
+	canvasMapRepo := postgres.NewCanvasMapRepo(db, cacheInvalidate)
 	canvasMapPositionRepo := postgres.NewCanvasMapPositionRepo(db)
 	settingsRepo := settingscache.New(postgres.NewSettingsRepo(db), 5*time.Second)
 	logging.Debugf("runtime effective config %s", runtimeDebugSettingsSummary(cfg, settingsRepo))

@@ -317,6 +317,11 @@ func (h *CanvasMapHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if err := h.isolateCanvasMapVirtualDevices(r.Context(), updated.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to isolate canvas map virtual devices", err)
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
 }
 
@@ -581,6 +586,10 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if err := h.isolateCanvasMapVirtualDevices(r.Context(), canvasMap.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to isolate canvas map virtual devices", err)
+		return
+	}
 	updated, err := h.mapRepo.GetByID(canvasMap.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load updated canvas map", err)

@@ -71,6 +71,11 @@ func IsolateVirtualDevices(
 	mapID uuid.UUID,
 	deps VirtualIsolationDeps,
 ) error {
+	if atomic, ok := deps.Maps.(interface {
+		IsolateVirtualDevices(context.Context, uuid.UUID) error
+	}); ok {
+		return atomic.IsolateVirtualDevices(ctx, mapID)
+	}
 	membership, err := deps.Maps.GetMembership(mapID)
 	if err != nil {
 		return fmt.Errorf("loading canvas map membership: %w", err)
