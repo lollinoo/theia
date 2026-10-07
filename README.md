@@ -1,5 +1,7 @@
 # Theia
 
+![Theia monitoring app — topology, health, infrastructure, analytics, and operations](frontend/public/branding/theia-presentation.png)
+
 Theia is a network topology and operations platform for MikroTik and ISP-style environments. It combines a live topology canvas, SNMP-based discovery, runtime health, device and instance backups, role-based administration, and a local WinBox Bridge Connector into one workflow.
 
 The project is currently built as a Docker-first Go and React application. For complete setup, production, staging, keyring, and API details, see [SETUP.md](SETUP.md).
