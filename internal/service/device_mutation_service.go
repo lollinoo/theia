@@ -115,12 +115,23 @@ func (m *deviceMutationService) AddDevice(
 }
 
 // UpdateDevice updates device data through the service orchestration.
+type configurationDeviceRepository interface {
+	GetDeviceForUpdate(uuid.UUID) (*domain.Device, error)
+	UpdateConfiguration(*domain.Device, domain.DeviceConfigurationFields) error
+}
+
 func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, update DeviceUpdate) error {
-	device, err := m.deviceRepo.GetByID(id)
+	load := m.deviceRepo.GetByID
+	configuration, targeted := m.deviceRepo.(configurationDeviceRepository)
+	if targeted {
+		load = configuration.GetDeviceForUpdate
+	}
+	device, err := load(id)
 	if err != nil {
 		return fmt.Errorf("getting device: %w", err)
 	}
 	previousIP := device.IP
+	previousStatus, previousMetricsSource := device.Status, device.MetricsSource
 	previousAddresses := append([]domain.DeviceAddress(nil), device.Addresses...)
 	previousProbePorts := append([]int(nil), device.ProbePorts...)
 	previousOverride := clonePollIntervalOverride(device.PollIntervalOverride)
@@ -208,11 +219,28 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	domain.NormalizeDevicePollingEnabled(device)
 	domain.NormalizeVirtualDevice(device)
 	domain.NormalizeDeviceAddresses(device)
-	if err := m.ensureNoDeviceAddressConflicts(*device, device.ID); err != nil {
-		return err
+	if !targeted || update.IP != nil || update.Addresses != nil {
+		if err := m.ensureNoDeviceAddressConflicts(*device, device.ID); err != nil {
+			return err
+		}
 	}
 
-	if err := m.deviceRepo.Update(device); err != nil {
+	persist := m.deviceRepo.Update
+	if targeted {
+		fields := domain.DeviceConfigurationFields{
+			Hostname: update.Hostname != nil, IP: update.IP != nil || update.Addresses != nil,
+			Addresses: update.IP != nil || update.Addresses != nil, ProbePorts: update.ProbePorts != nil,
+			Notes: update.Notes != nil, Tags: update.Tags != nil, SNMPCredentials: update.SNMPCredentials != nil,
+			Vendor: update.Vendor != nil, MetricsSource: update.MetricsSource != nil || device.MetricsSource != previousMetricsSource,
+			PrometheusLabelName: update.PrometheusLabelName != nil, PrometheusLabelValue: update.PrometheusLabelValue != nil,
+			TopologyDiscoveryMode:  update.TopologyDiscoveryMode != nil,
+			TopologyBootstrapState: update.TopologyDiscoveryMode != nil || device.TopologyBootstrapState != previousBootstrapState,
+			PollingEnabled:         update.PollingEnabled != nil, PollIntervalOverride: update.PollIntervalOverride != nil,
+			AreaIDs: update.AreaIDs != nil, Status: device.Status != previousStatus,
+		}
+		persist = func(device *domain.Device) error { return configuration.UpdateConfiguration(device, fields) }
+	}
+	if err := persist(device); err != nil {
 		return err
 	}
 
