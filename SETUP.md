@@ -92,6 +92,8 @@ make wisp-lab
 make wisp-seed-all
 ```
 
+Before seeding, supply your current Theia login password as described in [WISP seed authentication](#wisp-seed-authentication).
+
 After seeding reachable devices, the backend probes them immediately via SNMP and the canvas will populate within ~10 seconds.
 
 Open http://localhost:3000 to see the topology.
@@ -299,7 +301,56 @@ make wisp-seed
 ```
 
 The seed script defaults to `WISP_SEED_TARGET_MODE=auto`. With the Docker backend container running, it registers the routers at `172.31.250.21` through `172.31.250.30` and connects the backend to the lab network if needed. If no backend container is running, it falls back to host loopback targets `127.0.10.21` through `127.0.10.30`.
-Seed scripts prompt for Theia credentials and authenticate with the same cookie session flow as the browser. When run interactively against a fresh dev database, they can complete the first-login password change before seeding.
+Seed scripts authenticate with the same cookie session flow as the browser. Supply credentials as described below before running any seed target.
+
+### WISP seed authentication
+
+`make wisp-seed-all` calls the local API at `http://localhost:8080` to seed the routers and then the radio devices. Both scripts need a Theia user account with permission to create/update devices, add them to the map, and run topology discovery; the development `administrator` account has these permissions.
+
+| Variable | Meaning |
+| --- | --- |
+| `THEIA_API_USERNAME` | Theia login username. Defaults to `administrator` in non-interactive runs; interactive runs can prompt for it. Set it explicitly to use the same account in both scripts. |
+| `THEIA_API_PASSWORD` | That user's **current Theia login password**, also used in the web UI. Required for unattended runs; set it explicitly for Bash seed scripts as well. |
+| `THEIA_API_NEW_PASSWORD` | Only used when the account must change its password. This changes the account password through the API; it is not a second authentication credential. |
+
+For a fresh development database, open `http://localhost:3000`, sign in with `administrator` / `theia`, and complete the mandatory password change first. Then use the **new password** for seeding. The initial `theia` password no longer works after the change.
+
+These variables are read by the seed scripts on your host. Export them in the shell running `make`; the WISP seed targets do not load `.env`, `.env.prod`, or `.env.staging` automatically. They do not configure or reset the server's login password.
+
+**Bash (Linux/macOS):** enter your current password without echoing it or putting its literal value in shell history:
+
+```bash
+export THEIA_API_USERNAME=administrator
+read -r -s -p 'Current Theia password: ' THEIA_API_PASSWORD
+printf '\n'
+export THEIA_API_PASSWORD
+make wisp-seed-all
+unset THEIA_API_PASSWORD THEIA_API_USERNAME
+```
+
+The current Bash helper captures the password reader's stdout and checks whether that output is a terminal. As a result, its password prompt is unavailable even when launched from an interactive terminal; use the exported variable above.
+
+**PowerShell (Windows):** read the password securely and expose it to the child scripts only for this run:
+
+```powershell
+$env:THEIA_API_USERNAME = 'administrator'
+$credential = Get-Credential -UserName $env:THEIA_API_USERNAME -Message 'Enter your current Theia login password'
+try {
+    $env:THEIA_API_PASSWORD = $credential.GetNetworkCredential().Password
+    make wisp-seed-all
+}
+finally {
+    Remove-Item Env:\THEIA_API_PASSWORD -ErrorAction SilentlyContinue
+    Remove-Item Env:\THEIA_API_USERNAME -ErrorAction SilentlyContinue
+    Remove-Variable credential
+}
+```
+
+PowerShell seed scripts can also prompt when no password variable is set and input/output are not redirected. `wisp-seed-all` runs two scripts, each with its own login, so you can be prompted twice. The examples above provide the same credentials to both. They also apply to `make wisp-seed` and `make wisp-radio-seed`.
+
+For CI or other unattended local automation, inject `THEIA_API_USERNAME` and `THEIA_API_PASSWORD` into the process environment from your secret store. Without a password and an available prompt, the scripts stop before creating devices with `Theia seed scripts need a password-session login. Set THEIA_API_PASSWORD for local automation or run interactively.` Avoid committing credentials or logging their values.
+
+If you use `THEIA_API_NEW_PASSWORD` to complete the first-login change through a seed script, the new password must differ from the current one and contain 10–24 characters including uppercase, lowercase, a number, and a special character. Run `make wisp-seed` first with the current and new password variables, then replace `THEIA_API_PASSWORD` with the new password, unset `THEIA_API_NEW_PASSWORD`, and run `make wisp-radio-seed`. Do not use `wisp-seed-all` for this transition: its second script would still receive the old password. Completing the change in the web UI first avoids this extra sequence.
 
 ### Seed the radio access layer
 
