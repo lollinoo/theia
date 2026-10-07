@@ -19,12 +19,39 @@ import (
 
 // TriggerBackup creates a pending backup job and runs all backup types asynchronously.
 func (s *BackupService) TriggerBackup(ctx context.Context, deviceID uuid.UUID) (*domain.BackupJob, error) {
-	device, err := s.deviceRepo.GetByID(deviceID)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	release, err := s.admitManualBackup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			release()
+		}
+	}()
+
+	getDevice := s.deviceRepo.GetByID
+	if repo, ok := s.deviceRepo.(interface {
+		GetByIDContext(context.Context, uuid.UUID) (*domain.Device, error)
+	}); ok {
+		getDevice = func(id uuid.UUID) (*domain.Device, error) { return repo.GetByIDContext(ctx, id) }
+	}
+	device, err := getDevice(deviceID)
 	if err != nil {
 		return nil, fmt.Errorf("getting device: %w", err)
 	}
 
-	profile, err := s.credentialProfileRepo.GetBackupProfileForDevice(device.ID)
+	getProfile := s.credentialProfileRepo.GetBackupProfileForDevice
+	if repo, ok := s.credentialProfileRepo.(interface {
+		GetBackupProfileForDeviceContext(context.Context, uuid.UUID) (*domain.CredentialProfile, error)
+	}); ok {
+		getProfile = func(id uuid.UUID) (*domain.CredentialProfile, error) {
+			return repo.GetBackupProfileForDeviceContext(ctx, id)
+		}
+	}
+	profile, err := getProfile(device.ID)
 	if err != nil {
 		return nil, fmt.Errorf("no credential profile assigned to device %s", deviceID)
 	}
@@ -35,7 +62,7 @@ func (s *BackupService) TriggerBackup(ctx context.Context, deviceID uuid.UUID) (
 	}
 
 	// Fast reachability check before creating the job
-	if err := ssh.CheckReachable(device.IP, profile.Port, 5*time.Second); err != nil {
+	if err := ssh.CheckReachableContext(ctx, domain.BackupAddress(*device), profile.Port, 5*time.Second); err != nil {
 		return nil, fmt.Errorf("device unreachable: %w", err)
 	}
 
@@ -44,11 +71,18 @@ func (s *BackupService) TriggerBackup(ctx context.Context, deviceID uuid.UUID) (
 		DeviceID: deviceID,
 		Status:   domain.BackupStatusPending,
 	}
-	if err := s.jobRepo.Create(job); err != nil {
+	createJob := s.jobRepo.Create
+	if repo, ok := s.jobRepo.(interface {
+		CreateContext(context.Context, *domain.BackupJob) error
+	}); ok {
+		createJob = func(job *domain.BackupJob) error { return repo.CreateContext(ctx, job) }
+	}
+	if err := createJob(job); err != nil {
 		return nil, fmt.Errorf("creating backup job: %w", err)
 	}
 
-	go s.runFullBackup(device, profile, backupCfg, job.ID)
+	transferred = true
+	go func() { defer release(); s.runFullBackupReserved(device, profile, backupCfg, job.ID) }()
 
 	return job, nil
 }

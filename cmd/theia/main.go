@@ -215,7 +215,14 @@ func newSNMPLinkPollFunc(settingsRepo domain.SettingsRepository) worker.SNMPLink
 // newSNMPDiscoverFunc creates a DiscoverFunc that uses real gosnmp clients.
 // It reads SNMP timeout and retries from the settings repository.
 func newSNMPDiscoverFunc(settingsRepo domain.SettingsRepository, vendorRegistry *vendor.Registry) service.DiscoverFunc {
-	return func(target string, creds domain.SNMPCredentials, topologyMode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+	return func(target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+		return newSNMPContextDiscoverFunc(settingsRepo, vendorRegistry)(context.Background(), target, creds, mode)
+	}
+}
+
+// newSNMPContextDiscoverFunc carries caller deadlines across all discovery walks.
+func newSNMPContextDiscoverFunc(settingsRepo domain.SettingsRepository, vendorRegistry *vendor.Registry) func(context.Context, string, domain.SNMPCredentials, domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+	return func(ctx context.Context, target string, creds domain.SNMPCredentials, topologyMode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
 		// Read timeout and retries from settings
 		timeout := 5 * time.Second
 		retries := 2
@@ -231,7 +238,7 @@ func newSNMPDiscoverFunc(settingsRepo domain.SettingsRepository, vendorRegistry 
 			}
 		}
 
-		client, err := snmp.NewClient(target, creds, timeout, retries)
+		client, err := snmp.NewClientContext(ctx, target, creds, timeout, retries)
 		if err != nil {
 			return nil, err
 		}

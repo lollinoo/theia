@@ -178,7 +178,7 @@ func (d *deviceDiscoveryCoordinator) probeDevice(device *domain.Device) {
 
 	topologyMode := domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode())
 
-	result, err := s.discoverFunc(target, device.SNMPCredentials, topologyMode)
+	result, err := s.discoverDevice(s.lifecycleCtx, target, device.SNMPCredentials, topologyMode)
 	if err != nil {
 		log.Printf("SNMP discovery failed for %s: %v", target, err)
 		s.markDeviceStatus(deviceID, deviceIP, domain.DeviceStatusDown)
@@ -318,7 +318,13 @@ func (d *deviceDiscoveryCoordinator) WaitForProbes() {
 }
 
 func (d *deviceDiscoveryCoordinator) TestSNMP(ctx context.Context, id uuid.UUID) (*SNMPTestResult, error) {
-	device, err := d.parent.deviceRepo.GetByID(id)
+	getDevice := d.parent.deviceRepo.GetByID
+	if repo, ok := d.parent.deviceRepo.(interface {
+		GetByIDContext(context.Context, uuid.UUID) (*domain.Device, error)
+	}); ok {
+		getDevice = func(id uuid.UUID) (*domain.Device, error) { return repo.GetByIDContext(ctx, id) }
+	}
+	device, err := getDevice(id)
 	if err != nil {
 		return nil, fmt.Errorf("getting device: %w", err)
 	}
@@ -328,7 +334,7 @@ func (d *deviceDiscoveryCoordinator) TestSNMP(ctx context.Context, id uuid.UUID)
 		SNMPVersion: string(device.SNMPCredentials.Version),
 	}
 
-	discoveryResult, err := d.parent.discoverFunc(result.TargetIP, device.SNMPCredentials, domain.TopologyDiscoveryModeOff)
+	discoveryResult, err := d.parent.discoverDevice(ctx, result.TargetIP, device.SNMPCredentials, domain.TopologyDiscoveryModeOff)
 	if err != nil {
 		result.Error = err.Error()
 		return result, nil

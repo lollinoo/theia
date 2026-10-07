@@ -489,6 +489,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		discoverFunc,
 		topologyNotify,
 		service.WithLifecycleContext(ctx),
+		service.WithContextDiscovery(newSNMPContextDiscoverFunc(settingsRepo, vendorRegistry)),
 		service.WithTopologyObservationStore(topologyObservationRepo),
 	)
 	deviceImportStore := postgres.NewDeviceImportStore(deviceRepo)
@@ -703,8 +704,10 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	metricsHandler := observability.Handler()
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{
-		Addr:    cfg.ListenAddr,
-		Handler: runtimeHTTPHandler(router, metricsHandler, metricsToken),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		Addr:              cfg.ListenAddr,
+		Handler:           runtimeHTTPHandler(router, metricsHandler, metricsToken),
 	}
 
 	b.handleShutdown(cancel, server, children)
