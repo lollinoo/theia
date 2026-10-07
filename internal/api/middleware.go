@@ -96,7 +96,7 @@ func UserAuth(auth authProvider) func(http.Handler) http.Handler {
 				writeAuthCodeError(w, http.StatusForbidden, "password_change_required", "password change required")
 				return
 			}
-			if requiresCSRF(r) && !validateRequestCSRF(w, r, auth, rawSessionToken) {
+			if requiresCSRF(r) && !validateRequestCSRF(w, nextRequest, auth, rawSessionToken) {
 				return
 			}
 			permissions, known := requiredPermissionsForRoute(r.Method, r.URL.Path)
@@ -251,7 +251,19 @@ func validateRequestCSRF(w http.ResponseWriter, r *http.Request, auth authProvid
 		writeAuthCodeError(w, http.StatusForbidden, "csrf_required", "csrf token required")
 		return false
 	}
-	if err := auth.ValidateCSRF(r.Context(), rawSessionToken, csrfToken); err != nil {
+	var err error
+	if validator, ok := auth.(interface {
+		ValidateAuthenticatedCSRF(context.Context, *service.AuthenticatedUser, string, string) error
+	}); ok {
+		if user, authenticated := AuthenticatedUserFromRequest(r); authenticated {
+			err = validator.ValidateAuthenticatedCSRF(r.Context(), user, rawSessionToken, csrfToken)
+		} else {
+			err = auth.ValidateCSRF(r.Context(), rawSessionToken, csrfToken)
+		}
+	} else {
+		err = auth.ValidateCSRF(r.Context(), rawSessionToken, csrfToken)
+	}
+	if err != nil {
 		if errors.Is(err, service.ErrInvalidSession) {
 			writeAuthCodeError(w, http.StatusForbidden, "csrf_invalid", "csrf token invalid")
 			return false

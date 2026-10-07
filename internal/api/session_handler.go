@@ -153,6 +153,7 @@ func (h *AuthHandler) handlePasswordChange(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	r = r.WithContext(withAuthenticatedUser(r.Context(), user))
 	if !validateRequestCSRF(w, r, h.auth, rawSessionToken) {
 		return
 	}
