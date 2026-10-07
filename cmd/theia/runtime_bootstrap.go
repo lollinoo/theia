@@ -383,6 +383,17 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 	defer db.Close()
 
+	// Streaming leases hold connections until the client finishes. Isolate them
+	// from application queries and reserve one slot for unsuccessful lock probes.
+	leaseDB, err := postgres.OpenPrimaryDB(cfg.DBDSN)
+	if err != nil {
+		return fmt.Errorf("opening bulk download lease database: %w", err)
+	}
+	defer leaseDB.Close()
+	leaseDB.SetMaxOpenConns(service.DefaultBulkOperationLimits.BulkDownloadMaxConcurrentGlobal + 1)
+	leaseDB.SetMaxIdleConns(1)
+	leaseDB.SetConnMaxIdleTime(5 * time.Minute)
+
 	postgres.ConfigureDB(db)
 	log.Printf("Database dialect: %s", postgres.DialectPostgres)
 
@@ -688,7 +699,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		})
 	}
 
-	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewState, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService), api.WithDeviceImportService(deviceImportService), api.WithDeviceImportTopologyCoordinator(deviceImportTopologyCoordinator), api.WithAuditLogRepository(authRepo), api.WithRuntimeEnvironment(cfg.DeploymentEnv))
+	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewState, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService), api.WithDeviceImportService(deviceImportService), api.WithDeviceImportTopologyCoordinator(deviceImportTopologyCoordinator), api.WithAuditLogRepository(authRepo), api.WithBulkDownloadLeases(postgres.NewBulkOperationLeaseRepo(leaseDB)), api.WithRuntimeEnvironment(cfg.DeploymentEnv))
 	metricsHandler := observability.Handler()
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{

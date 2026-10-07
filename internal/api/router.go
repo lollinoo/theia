@@ -23,6 +23,7 @@ type routerOptions struct {
 	deviceImport         deviceImportProvider
 	deviceImportTopology deviceImportTopologyProvider
 	auditLogs            domain.AuditLogRepository
+	bulkDownloadLeases   domain.BulkOperationLeaseRepository
 	runtimeEnvironment   string
 }
 
@@ -35,6 +36,11 @@ func WithDeviceImportTopologyCoordinator(coordinator *service.DeviceImportTopolo
 
 // RouterOption customizes router middleware behavior.
 type RouterOption func(*routerOptions)
+
+// WithBulkDownloadLeases supplies a lease repository backed by an isolated pool.
+func WithBulkDownloadLeases(repo domain.BulkOperationLeaseRepository) RouterOption {
+	return func(options *routerOptions) { options.bulkDownloadLeases = repo }
+}
 
 // WithSecurity configures operator authentication and browser origin policy.
 func WithSecurity(config SecurityConfig) RouterOption {
