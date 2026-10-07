@@ -3,9 +3,11 @@ package worker
 // This file defines device backup scheduler worker behavior, background lifecycle, and runtime state updates.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -29,9 +31,10 @@ type DeviceBackupScheduler struct {
 	jobRepo       domain.BackupJobRepository
 	settingsRepo  domain.SettingsRepository
 
-	running atomic.Bool
-	cancel  context.CancelFunc
-	done    chan struct{}
+	running         atomic.Bool
+	cancel          context.CancelFunc
+	done            chan struct{}
+	retentionCursor uuid.UUID
 }
 
 // NewDeviceBackupScheduler creates a new DeviceBackupScheduler.
@@ -209,72 +212,99 @@ func (s *DeviceBackupScheduler) runScheduledBulkBackup(ctx context.Context) {
 	log.Printf("Scheduled device backup run started: %s (%d devices)", run.ID, run.TotalCount)
 }
 
-// runRetention performs per-device retention (delete oldest successful beyond count)
-// and cleans up failed records older than 7 days.
-// Uses a 60s context timeout and processes devices in batches of 100 to bound
-// resource consumption even at scale (T-19-02 remediation).
+// runRetention bounds database retention and disk cleanup to one 60s budget.
+// The cursor survives sweeps in this scheduler instance and advances even when
+// a device fails, so one slow device cannot starve all later devices.
 func (s *DeviceBackupScheduler) runRetention(ctx context.Context) {
-	defer s.cleanupDeletedFiles(ctx)
 	retCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	defer s.cleanupDeletedFiles(retCtx)
+	s.runRetentionSweep(retCtx)
+}
 
-	retentionCount := GetDeviceBackupRetentionCount(s.settingsRepo)
+func (s *DeviceBackupScheduler) runRetentionSweep(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	retentionCount := getDeviceBackupRetentionCountContext(ctx, s.settingsRepo)
+	if ctx.Err() != nil {
+		return
+	}
 
-	deviceIDs, err := s.jobRepo.ListAllDeviceIDs()
+	// Attempt failed-record cleanup before the device sweep so it is not
+	// indefinitely deferred when successful-job retention consumes the budget.
+	deleteFailed := s.jobRepo.DeleteFailedOlderThan
+	if repo, ok := s.jobRepo.(interface {
+		DeleteFailedOlderThanContext(context.Context, time.Time) (int, error)
+	}); ok {
+		deleteFailed = func(cutoff time.Time) (int, error) { return repo.DeleteFailedOlderThanContext(ctx, cutoff) }
+	}
+	failedCount, err := deleteFailed(time.Now().Add(-7 * 24 * time.Hour))
+	if err != nil {
+		log.Printf("DeviceBackupScheduler: retention: failed to clean failed records: %v", err)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+
+	listDevices := s.jobRepo.ListAllDeviceIDs
+	if repo, ok := s.jobRepo.(interface {
+		ListAllDeviceIDsContext(context.Context) ([]uuid.UUID, error)
+	}); ok {
+		listDevices = func() ([]uuid.UUID, error) { return repo.ListAllDeviceIDsContext(ctx) }
+	}
+	deviceIDs, err := listDevices()
 	if err != nil {
 		log.Printf("DeviceBackupScheduler: retention: failed to list device IDs: %v", err)
 		return
 	}
+	if ctx.Err() != nil {
+		return
+	}
+	sort.Slice(deviceIDs, func(i, j int) bool { return bytes.Compare(deviceIDs[i][:], deviceIDs[j][:]) < 0 })
+	start := sort.Search(len(deviceIDs), func(i int) bool { return bytes.Compare(deviceIDs[i][:], s.retentionCursor[:]) > 0 })
 
-	const batchSize = 100
+	listJobs := s.jobRepo.ListSuccessfulByDeviceOldest
+	if repo, ok := s.jobRepo.(interface {
+		ListSuccessfulByDeviceOldestContext(context.Context, uuid.UUID) ([]domain.BackupJob, error)
+	}); ok {
+		listJobs = func(id uuid.UUID) ([]domain.BackupJob, error) {
+			return repo.ListSuccessfulByDeviceOldestContext(ctx, id)
+		}
+	}
 	totalDeleted := 0
-	timedOut := false
-
-	for i := 0; i < len(deviceIDs); i += batchSize {
-		select {
-		case <-retCtx.Done():
-			log.Printf("DeviceBackupScheduler: retention sweep timed out after processing %d/%d devices, will resume next cycle", i, len(deviceIDs))
-			timedOut = true
-		default:
+	defer func() {
+		if totalDeleted > 0 || failedCount > 0 {
+			log.Printf("Device backup retention: deleted %d old jobs, cleaned %d failed records", totalDeleted, failedCount)
 		}
-		if timedOut {
-			break
+	}()
+	for i := 0; i < len(deviceIDs); i++ {
+		if ctx.Err() != nil {
+			return
 		}
-
-		end := i + batchSize
-		if end > len(deviceIDs) {
-			end = len(deviceIDs)
+		did := deviceIDs[(start+i)%len(deviceIDs)]
+		s.retentionCursor = did
+		successful, err := listJobs(did)
+		if err != nil {
+			log.Printf("DeviceBackupScheduler: retention: failed to list jobs for device %s: %v", did, err)
+			continue
 		}
-
-		for _, did := range deviceIDs[i:end] {
-			successful, err := s.jobRepo.ListSuccessfulByDeviceOldest(did)
-			if err != nil {
-				log.Printf("DeviceBackupScheduler: retention: failed to list jobs for device %s: %v", did, err)
+		if len(successful) <= retentionCount {
+			continue
+		}
+		for _, job := range successful[:len(successful)-retentionCount] {
+			if ctx.Err() != nil {
+				return
+			}
+			if err := s.backupService.DeleteBackupJob(ctx, job.ID); err != nil {
+				log.Printf("DeviceBackupScheduler: retention: failed to delete job %s: %v", job.ID, err)
 				continue
 			}
-
-			if len(successful) > retentionCount {
-				toDelete := successful[:len(successful)-retentionCount]
-				for _, job := range toDelete {
-					if err := s.backupService.DeleteBackupJob(ctx, job.ID); err != nil {
-						log.Printf("DeviceBackupScheduler: retention: failed to delete job %s: %v", job.ID, err)
-						continue
-					}
-					totalDeleted++
-				}
-			}
+			totalDeleted++
 		}
 	}
-
-	// Always clean up failed backup records regardless of timeout
-	cutoff := time.Now().Add(-7 * 24 * time.Hour)
-	failedCount, err := s.jobRepo.DeleteFailedOlderThan(cutoff)
-	if err != nil {
-		log.Printf("DeviceBackupScheduler: retention: failed to clean failed records: %v", err)
-	}
-
-	if totalDeleted > 0 || failedCount > 0 {
-		log.Printf("Device backup retention: deleted %d old jobs, cleaned %d failed records", totalDeleted, failedCount)
+	if ctx.Err() == nil {
+		s.retentionCursor = uuid.Nil
 	}
 }
 
@@ -313,7 +343,17 @@ func GetDeviceBackupInterval(settingsRepo domain.SettingsRepository) time.Durati
 // GetDeviceBackupRetentionCount reads the device backup retention count from settings.
 // Returns the configured count with a minimum of 1. Defaults to 5 if missing or invalid.
 func GetDeviceBackupRetentionCount(settingsRepo domain.SettingsRepository) int {
-	val, err := settingsRepo.Get(domain.SettingDeviceBackupRetentionCount)
+	return getDeviceBackupRetentionCountContext(context.Background(), settingsRepo)
+}
+
+func getDeviceBackupRetentionCountContext(ctx context.Context, settingsRepo domain.SettingsRepository) int {
+	get := settingsRepo.Get
+	if repo, ok := settingsRepo.(interface {
+		GetContext(context.Context, string) (string, error)
+	}); ok {
+		get = func(key string) (string, error) { return repo.GetContext(ctx, key) }
+	}
+	val, err := get(domain.SettingDeviceBackupRetentionCount)
 	if err != nil {
 		return 5
 	}

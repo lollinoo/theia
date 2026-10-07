@@ -3,6 +3,7 @@ package postgres
 // This file defines backup file repo persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -40,7 +41,12 @@ func (r *BackupFileRepo) Create(file *domain.BackupFile) error {
 
 // GetByJobID returns all files for a backup job.
 func (r *BackupFileRepo) GetByJobID(jobID uuid.UUID) ([]domain.BackupFile, error) {
-	rows, err := r.db.Query(
+	return r.GetByJobIDContext(context.Background(), jobID)
+}
+
+// GetByJobIDContext carries caller cancellation across this repository operation.
+func (r *BackupFileRepo) GetByJobIDContext(ctx context.Context, jobID uuid.UUID) ([]domain.BackupFile, error) {
+	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, job_id, file_type, file_name, file_path, file_hash, size_bytes, created_at
 		 FROM backup_files WHERE job_id = ? ORDER BY file_type`,
 		jobID.String(),
@@ -102,6 +108,11 @@ func (r *BackupFileRepo) GetByID(id uuid.UUID) (*domain.BackupFile, error) {
 
 // DeleteByJobID removes all files for a backup job.
 func (r *BackupFileRepo) DeleteByJobID(jobID uuid.UUID) error {
-	_, err := r.db.Exec(`DELETE FROM backup_files WHERE job_id = ?`, jobID.String())
+	return r.DeleteByJobIDContext(context.Background(), jobID)
+}
+
+// DeleteByJobIDContext carries caller cancellation across this repository operation.
+func (r *BackupFileRepo) DeleteByJobIDContext(ctx context.Context, jobID uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM backup_files WHERE job_id = ?`, jobID.String())
 	return err
 }

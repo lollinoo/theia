@@ -221,7 +221,7 @@ func TestRunRetention_TimeoutStopsProcessing(t *testing.T) {
 	}
 }
 
-func TestRunRetention_FailedCleanupRunsAfterTimeout(t *testing.T) {
+func TestRunRetention_CancelledSweepDoesNotStartFailedCleanup(t *testing.T) {
 	// Create 500 device IDs
 	deviceIDs := make([]uuid.UUID, 500)
 	for i := range deviceIDs {
@@ -246,9 +246,10 @@ func TestRunRetention_FailedCleanupRunsAfterTimeout(t *testing.T) {
 
 	scheduler.runRetention(ctx)
 
-	// Failed cleanup MUST run even when timeout fires
-	if !jobRepo.deleteFailedCalled.Load() {
-		t.Error("DeleteFailedOlderThan was not called — failed cleanup must run even after timeout")
+	// No database work should start after cancellation. Failed cleanup is
+	// attempted first during each non-cancelled sweep.
+	if jobRepo.deleteFailedCalled.Load() {
+		t.Error("DeleteFailedOlderThan ran after the sweep was cancelled")
 	}
 }
 
