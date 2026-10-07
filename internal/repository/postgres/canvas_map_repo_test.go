@@ -354,7 +354,7 @@ func TestCanvasMapRepoUpdateDeviceAreaMembershipsIsMapLocal(t *testing.T) {
 	}
 
 	var globalAreaID string
-	if err := db.QueryRow(`SELECT area_id FROM device_areas WHERE device_id = ?`, deviceID.String()).Scan(&globalAreaID); err != nil {
+	if err := db.QueryRow(`SELECT area_id FROM device_areas WHERE device_id = $1`, deviceID.String()).Scan(&globalAreaID); err != nil {
 		t.Fatalf("query global device area: %v", err)
 	}
 	if globalAreaID != areaA.String() {
@@ -413,7 +413,7 @@ func TestCanvasMapRepoUpdateDeviceVisualColorPersistsAndClearsMapLocalOverride(t
 	}
 
 	var tagsJSON string
-	if err := db.QueryRow(`SELECT tags_json FROM devices WHERE id = ?`, deviceID.String()).Scan(&tagsJSON); err != nil {
+	if err := db.QueryRow(`SELECT tags_json FROM devices WHERE id = $1`, deviceID.String()).Scan(&tagsJSON); err != nil {
 		t.Fatalf("query global device tags: %v", err)
 	}
 	if tagsJSON != "{}" {
@@ -529,7 +529,7 @@ func TestCanvasMapRepoCreateAndUpdateCanonicalizeFilterJSON(t *testing.T) {
 	}
 
 	var storedFilterJSON string
-	if err := db.QueryRow(`SELECT filter_json FROM canvas_maps WHERE id = ?`, created.ID.String()).Scan(&storedFilterJSON); err != nil {
+	if err := db.QueryRow(`SELECT filter_json FROM canvas_maps WHERE id = $1`, created.ID.String()).Scan(&storedFilterJSON); err != nil {
 		t.Fatalf("query stored create filter: %v", err)
 	}
 	if storedFilterJSON != wantCreateFilterJSON {
@@ -559,7 +559,7 @@ func TestCanvasMapRepoCreateAndUpdateCanonicalizeFilterJSON(t *testing.T) {
 		t.Fatalf("unexpected updated map: %#v, want filter_json %s", updated, wantUpdateFilterJSON)
 	}
 
-	if err := db.QueryRow(`SELECT filter_json FROM canvas_maps WHERE id = ?`, created.ID.String()).Scan(&storedFilterJSON); err != nil {
+	if err := db.QueryRow(`SELECT filter_json FROM canvas_maps WHERE id = $1`, created.ID.String()).Scan(&storedFilterJSON); err != nil {
 		t.Fatalf("query stored update filter: %v", err)
 	}
 	if storedFilterJSON != wantUpdateFilterJSON {
@@ -574,7 +574,7 @@ func TestCanvasMapRepoUpdatePersistsSourceAreaID(t *testing.T) {
 	areaID := uuid.New()
 	if _, err := db.Exec(
 		`INSERT INTO areas (id, name, description, color, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+		 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		areaID.String(),
 		"Source Area",
 		"source area",
@@ -862,7 +862,7 @@ func insertCanvasMapRepoTestDevice(t *testing.T, db *sql.DB, id uuid.UUID) {
 	suffix := id.String()[len(id.String())-3:]
 	if _, err := db.Exec(
 		`INSERT INTO devices (id, hostname, ip, device_type, status, sys_name, sys_descr, sys_object_id, hardware_model, vendor, managed, tags_json, metrics_source, prometheus_label_name, prometheus_label_value, created_at, updated_at)
-		 VALUES (?, ?, ?, 'router', 'up', ?, '', '', '', 'default', 1, '{}', 'none', '', '', datetime('now'), datetime('now'))`,
+		 VALUES ($1, $2, $3, 'router', 'up', $4, '', '', '', 'default', 1, '{}', 'none', '', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		id.String(),
 		"router-"+suffix,
 		"10.0.9."+suffix[1:],
@@ -877,7 +877,7 @@ func insertCanvasMapRepoTestArea(t *testing.T, db *sql.DB, id uuid.UUID, name st
 
 	if _, err := db.Exec(
 		`INSERT INTO areas (id, name, description, color, created_at, updated_at)
-		 VALUES (?, ?, '', ?, datetime('now'), datetime('now'))`,
+		 VALUES ($1, $2, '', $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		id.String(),
 		name,
 		color,
@@ -890,7 +890,7 @@ func insertCanvasMapRepoTestDeviceArea(t *testing.T, db *sql.DB, deviceID uuid.U
 	t.Helper()
 
 	if _, err := db.Exec(
-		`INSERT INTO device_areas (device_id, area_id) VALUES (?, ?)`,
+		`INSERT INTO device_areas (device_id, area_id) VALUES ($1, $2)`,
 		deviceID.String(),
 		areaID.String(),
 	); err != nil {
@@ -903,7 +903,7 @@ func insertCanvasMapRepoTestLink(t *testing.T, db *sql.DB, id, sourceDeviceID, t
 
 	if _, err := db.Exec(
 		`INSERT INTO links (id, source_device_id, source_if_name, target_device_id, target_if_name, discovery_protocol, created_at, updated_at)
-		 VALUES (?, ?, 'ether1', ?, 'ether2', 'manual', datetime('now'), datetime('now'))`,
+		 VALUES ($1, $2, 'ether1', $3, 'ether2', 'manual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		id.String(),
 		sourceDeviceID.String(),
 		targetDeviceID.String(),
