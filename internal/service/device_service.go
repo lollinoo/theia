@@ -261,12 +261,23 @@ func (s *DeviceService) startLifecycleProbe(device *domain.Device) bool {
 	if !ok {
 		return false
 	}
+	// Snapshot discovery inputs before async work; the caller owns the device.
+	probeDevice := *device
+	probeDevice.Addresses = append([]domain.DeviceAddress(nil), device.Addresses...)
+	if device.SNMPCredentials.V2c != nil {
+		credentials := *device.SNMPCredentials.V2c
+		probeDevice.SNMPCredentials.V2c = &credentials
+	}
+	if device.SNMPCredentials.V3 != nil {
+		credentials := *device.SNMPCredentials.V3
+		probeDevice.SNMPCredentials.V3 = &credentials
+	}
 	go func() {
 		defer done()
 		if workCtx.Err() != nil {
 			return
 		}
-		s.probeDevice(device)
+		s.probeDevice(&probeDevice)
 	}()
 	return true
 }

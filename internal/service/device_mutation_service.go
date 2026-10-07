@@ -91,12 +91,12 @@ func (m *deviceMutationService) AddDevice(
 		return nil, err
 	}
 
+	m.parent.populateEffectiveTopologyDiscoveryMode(device)
 	if err := m.deviceRepo.Create(device); err != nil {
 		return nil, fmt.Errorf("creating device: %w", err)
 	}
 
 	if device.DeviceType == domain.DeviceTypeVirtual {
-		m.parent.populateEffectiveTopologyDiscoveryMode(device)
 		return device, nil
 	}
 
@@ -106,13 +106,11 @@ func (m *deviceMutationService) AddDevice(
 		device.MetricsSource != domain.MetricsSourcePrometheus &&
 		device.MetricsSource != domain.MetricsSourceNone &&
 		m.parent.bootstrapScheduler.ScheduleBootstrap(*device, m.now().UTC()) {
-		m.parent.populateEffectiveTopologyDiscoveryMode(device)
 		return device, nil
 	}
 
 	m.parent.startLifecycleProbe(device)
 
-	m.parent.populateEffectiveTopologyDiscoveryMode(device)
 	return device, nil
 }
 
