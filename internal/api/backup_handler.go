@@ -175,6 +175,11 @@ func (h *BackupHandler) HandleTriggerBackup(w http.ResponseWriter, r *http.Reque
 
 	job, err := h.svc.TriggerBackup(r.Context(), deviceID)
 	if err != nil {
+		if errors.Is(err, service.ErrRuntimeBusy) {
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, "retry later")
+			return
+		}
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no SSH credentials") || strings.Contains(err.Error(), "not configured") || strings.Contains(err.Error(), "require MikroTik") || strings.Contains(err.Error(), "unreachable") {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

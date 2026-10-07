@@ -63,7 +63,10 @@ type BackupService struct {
 	backupDir             string
 	hostKeyCallback       gossh.HostKeyCallback
 	hostKeyStore          SSHHostKeyStore
-	deviceLocks           sync.Map // per-device mutex: map[uuid.UUID]*sync.Mutex
+	deviceLocksMu         sync.Mutex
+	deviceLocks           map[uuid.UUID]*backupDeviceLock
+	backupAdmissionOnce   sync.Once
+	backupAdmission       chan struct{}
 	bulkLimits            BulkOperationLimits
 	bulkRunRepo           domain.BulkBackupRunRepository
 }
@@ -156,12 +159,6 @@ func (s *BackupService) BulkBackupRunRepositoryConfigured() bool {
 // BulkBackupRunBatchSize returns the fixed device batch size used by durable bulk backup runs.
 func (s *BackupService) BulkBackupRunBatchSize() int {
 	return defaultBulkBackupRunBatchSize
-}
-
-// getDeviceLock returns or creates a per-device mutex.
-func (s *BackupService) getDeviceLock(deviceID uuid.UUID) *sync.Mutex {
-	val, _ := s.deviceLocks.LoadOrStore(deviceID, &sync.Mutex{})
-	return val.(*sync.Mutex)
 }
 
 // nowInConfiguredTZ returns the current time in the timezone configured in settings.

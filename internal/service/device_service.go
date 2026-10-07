@@ -80,26 +80,27 @@ type DeviceDraftInput struct {
 // DeviceService orchestrates device management, combining SNMP discovery
 // with persistence through repositories.
 type DeviceService struct {
-	deviceRepo         domain.DeviceRepository
-	linkRepo           domain.LinkRepository
-	topologyStore      topology.ObservationStore
-	settingsRepo       domain.SettingsRepository
-	networkProbe       func(context.Context, string, time.Duration, []int) error
-	mutation           *deviceMutationService
-	discovery          *deviceDiscoveryCoordinator
-	discoverFunc       DiscoverFunc
-	pollRescheduler    pollRescheduler
-	bootstrapScheduler bootstrapScheduler
-	runtimeResetter    runtimeResetter
-	now                func() time.Time
-	scheduleFunc       func(time.Duration, func())
-	delayedReprobe     func(context.Context, uuid.UUID) error
-	reprobeDelay       time.Duration
-	reprobeCooldown    time.Duration
-	reprobeWindow      time.Duration
-	reprobeMu          sync.Mutex
-	reprobeBooked      map[uuid.UUID]time.Time
-	reprobeInFlight    atomic.Int32
+	deviceRepo          domain.DeviceRepository
+	linkRepo            domain.LinkRepository
+	topologyStore       topology.ObservationStore
+	settingsRepo        domain.SettingsRepository
+	networkProbe        func(context.Context, string, time.Duration, []int) error
+	mutation            *deviceMutationService
+	discovery           *deviceDiscoveryCoordinator
+	discoverFunc        DiscoverFunc
+	contextDiscoverFunc func(context.Context, string, domain.SNMPCredentials, domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error)
+	pollRescheduler     pollRescheduler
+	bootstrapScheduler  bootstrapScheduler
+	runtimeResetter     runtimeResetter
+	now                 func() time.Time
+	scheduleFunc        func(time.Duration, func())
+	delayedReprobe      func(context.Context, uuid.UUID) error
+	reprobeDelay        time.Duration
+	reprobeCooldown     time.Duration
+	reprobeWindow       time.Duration
+	reprobeMu           sync.Mutex
+	reprobeBooked       map[uuid.UUID]time.Time
+	reprobeInFlight     atomic.Int32
 
 	lifecycleParent context.Context
 	lifecycleCtx    context.Context
@@ -843,4 +844,21 @@ func pollIntervalOverridesEqual(left, right *int) bool {
 
 func (s *DeviceService) scheduleIncompleteLinkReprobe(deviceID uuid.UUID, deviceIP string) bool {
 	return s.discovery.scheduleIncompleteLinkReprobe(deviceID, deviceIP)
+}
+
+// WithContextDiscovery uses cancellable network I/O for production SNMP discovery.
+func WithContextDiscovery(discover func(context.Context, string, domain.SNMPCredentials, domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error)) DeviceServiceOption {
+	return func(s *DeviceService) { s.contextDiscoverFunc = discover }
+}
+
+func (s *DeviceService) discoverDevice(ctx context.Context, target string, creds domain.SNMPCredentials, mode domain.TopologyDiscoveryMode) (*snmp.DiscoveryResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.contextDiscoverFunc != nil {
+		return s.contextDiscoverFunc(ctx, target, creds, mode)
+	}
+	return s.discoverFunc(target, creds, mode)
 }

@@ -26,9 +26,32 @@ import (
 // The per-device lock serializes access to remote backup filenames and the job row transitions
 // from running to success or failed before the background worker releases its bulk lease.
 func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.CredentialProfile, backupCfg vendor.BackupConfig, jobID uuid.UUID) {
-	lock := s.getDeviceLock(device.ID)
-	lock.Lock()
-	defer lock.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+	select {
+	case s.backupSlots() <- struct{}{}:
+		defer func() { <-s.backupSlots() }()
+	case <-ctx.Done():
+		s.failJob(jobID, ctx.Err().Error())
+		return
+	}
+	s.runFullBackupContext(ctx, device, profile, backupCfg, jobID)
+}
+
+// runFullBackupReserved uses the slot reserved before manual job creation.
+func (s *BackupService) runFullBackupReserved(device *domain.Device, profile *domain.CredentialProfile, backupCfg vendor.BackupConfig, jobID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+	s.runFullBackupContext(ctx, device, profile, backupCfg, jobID)
+}
+
+func (s *BackupService) runFullBackupContext(ctx context.Context, device *domain.Device, profile *domain.CredentialProfile, backupCfg vendor.BackupConfig, jobID uuid.UUID) {
+	release, err := s.lockBackupDevice(ctx, device.ID)
+	if err != nil {
+		s.failJob(jobID, err.Error())
+		return
+	}
+	defer release()
 
 	// Set job to running
 	s.updateJobStatus(jobID, domain.BackupStatusRunning, "")
@@ -38,9 +61,6 @@ func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.Cre
 		s.failJob(jobID, fmt.Sprintf("decrypting credentials: %v", err))
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
-	defer cancel()
 
 	// Connect via SSH
 	var client *ssh.Client

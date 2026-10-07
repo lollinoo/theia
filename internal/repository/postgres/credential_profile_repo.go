@@ -3,6 +3,7 @@ package postgres
 // This file defines credential profile repo persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -289,9 +290,14 @@ func (r *CredentialProfileRepo) GetWinboxAssignment(deviceID uuid.UUID) (*Winbox
 // assigned to the given device. If no non-WinBox profile exists, it falls back
 // to any assigned profile. Returns an error if no profile is assigned at all.
 func (r *CredentialProfileRepo) GetBackupProfileForDevice(deviceID uuid.UUID) (*domain.CredentialProfile, error) {
+	return r.GetBackupProfileForDeviceContext(context.Background(), deviceID)
+}
+
+// GetBackupProfileForDeviceContext carries caller cancellation across this repository operation.
+func (r *CredentialProfileRepo) GetBackupProfileForDeviceContext(ctx context.Context, deviceID uuid.UUID) (*domain.CredentialProfile, error) {
 	var p domain.CredentialProfile
 	var idStr, encSecret string
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(ctx,
 		`SELECT cp.id, cp.name, cp.description, cp.username, cp.port,
 		        cp.auth_method, cp.role, cp.encrypted_secret, cp.created_at, cp.updated_at
 		 FROM device_credential_profiles dcp

@@ -27,6 +27,11 @@ func (db *DB) Exec(query string, args ...interface{}) (sql.Result, error) {
 	return db.raw.Exec(rebindQuery(query), args...)
 }
 
+// ExecContext preserves caller cancellation while rebinding SQL placeholders.
+func (db *DB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return db.raw.ExecContext(ctx, rebindQuery(query), args...)
+}
+
 func (db *DB) Query(query string, args ...interface{}) (*sql.Rows, error) {
 	return db.raw.Query(rebindQuery(query), args...)
 }
@@ -37,6 +42,11 @@ func (db *DB) QueryContext(ctx context.Context, query string, args ...interface{
 
 func (db *DB) QueryRow(query string, args ...interface{}) *sql.Row {
 	return db.raw.QueryRow(rebindQuery(query), args...)
+}
+
+// QueryRowContext preserves caller cancellation while rebinding SQL placeholders.
+func (db *DB) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	return db.raw.QueryRowContext(ctx, rebindQuery(query), args...)
 }
 
 func (db *DB) Begin() (*Tx, error) {
