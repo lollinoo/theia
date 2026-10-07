@@ -20,6 +20,13 @@ func (r *CanvasMapRepo) GetMembership(id uuid.UUID) (domain.CanvasMapMembership,
 		return domain.CanvasMapMembership{}, err
 	}
 
+	return r.GetMembershipForExistingMap(id)
+}
+
+// GetMembershipForExistingMap skips a duplicate existence query after the caller
+// has loaded the map. It returns the same membership projection as GetMembership.
+func (r *CanvasMapRepo) GetMembershipForExistingMap(id uuid.UUID) (domain.CanvasMapMembership, error) {
+
 	membership := domain.CanvasMapMembership{
 		Devices: []domain.CanvasMapDeviceMembership{},
 		LinkIDs: []uuid.UUID{},
@@ -202,7 +209,7 @@ func (r *CanvasMapRepo) ReplaceMembership(id uuid.UUID, membership domain.Canvas
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 
@@ -316,7 +323,7 @@ func (r *CanvasMapRepo) AddDeviceMembership(
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 
@@ -420,7 +427,7 @@ func (r *CanvasMapRepo) UpdateDeviceAreaMemberships(
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 	for _, deviceID := range canonicalDeviceIDs {
@@ -513,7 +520,7 @@ func (r *CanvasMapRepo) UpdateDeviceVisualColor(
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 
@@ -562,7 +569,7 @@ func (r *CanvasMapRepo) RemoveDevice(id uuid.UUID, deviceID uuid.UUID) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(
@@ -624,7 +631,7 @@ func (r *CanvasMapRepo) RemoveLink(id uuid.UUID, linkID uuid.UUID) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := ensureCanvasMapExists(tx, id); err != nil {
+	if err := lockCanvasMap(tx, id); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(

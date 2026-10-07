@@ -71,6 +71,11 @@ func IsolateVirtualDevices(
 	mapID uuid.UUID,
 	deps VirtualIsolationDeps,
 ) error {
+	if atomic, ok := deps.Maps.(interface {
+		IsolateVirtualDevices(context.Context, uuid.UUID) error
+	}); ok {
+		return atomic.IsolateVirtualDevices(ctx, mapID)
+	}
 	membership, err := deps.Maps.GetMembership(mapID)
 	if err != nil {
 		return fmt.Errorf("loading canvas map membership: %w", err)
@@ -157,7 +162,9 @@ func IsolateVirtualDevices(
 }
 
 // LoadLinksByIDs loads requested links using a batch repository when present, with GetAll fallback for compatibility.
-func LoadLinksByIDs(repo VirtualIsolationLinkRepository, ids []uuid.UUID) ([]domain.Link, error) {
+type TopologyLinkRepository interface{ GetAll() ([]domain.Link, error) }
+
+func LoadLinksByIDs(repo TopologyLinkRepository, ids []uuid.UUID) ([]domain.Link, error) {
 	if len(ids) == 0 {
 		return []domain.Link{}, nil
 	}

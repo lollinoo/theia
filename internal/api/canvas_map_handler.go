@@ -317,6 +317,11 @@ func (h *CanvasMapHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if err := h.isolateCanvasMapVirtualDevices(r.Context(), updated.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to isolate canvas map virtual devices", err)
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": mapToResponse(updated)})
 }
 
@@ -581,6 +586,10 @@ func (h *CanvasMapHandler) HandleAddDevice(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if err := h.isolateCanvasMapVirtualDevices(r.Context(), canvasMap.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to isolate canvas map virtual devices", err)
+		return
+	}
 	updated, err := h.mapRepo.GetByID(canvasMap.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load updated canvas map", err)
@@ -960,7 +969,7 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 	if !ok {
 		return canvasTopologyResponse{}, false
 	}
-	loaded, err := canvasmap.LoadTopology(r.Context(), canvasMap.ID, canvasmap.TopologyLoadDeps{
+	loaded, err := canvasmap.LoadTopologyForMap(r.Context(), canvasMap, canvasmap.TopologyLoadDeps{
 		Maps:      h.mapRepo,
 		Positions: h.mapPositionRepo,
 		Devices:   canvasMapVirtualIsolationDeviceService{service: h.deviceService},
@@ -973,7 +982,7 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 
 	responsePlan := loaded.Plan
 	var linkRoutes map[string]canvasLinkRouteResponse
-	if h.linkRouteRepo != nil {
+	if h.linkRouteRepo != nil && len(responsePlan.Links) > 0 {
 		routes, err := h.linkRouteRepo.GetAllForMap(r.Context(), canvasMap.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list canvas map link routes", err)

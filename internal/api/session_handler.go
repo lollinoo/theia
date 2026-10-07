@@ -354,6 +354,9 @@ func safeUserFromAggregate(aggregate domain.UserWithRolesAndPermissions) *safeUs
 
 func writeAuthServiceError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, service.ErrRuntimeBusy):
+		w.Header().Set("Retry-After", "1")
+		writeAuthCodeError(w, http.StatusServiceUnavailable, "server_busy", "retry later")
 	case errors.Is(err, service.ErrInvalidCredentials):
 		writeAuthCodeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid username or password")
 	case errors.Is(err, service.ErrUserDisabled), errors.Is(err, service.ErrUserLocked):
@@ -365,6 +368,9 @@ func writeAuthServiceError(w http.ResponseWriter, err error) {
 
 func writePasswordChangeError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, service.ErrRuntimeBusy):
+		w.Header().Set("Retry-After", "1")
+		writeAuthCodeError(w, http.StatusServiceUnavailable, "server_busy", "retry later")
 	case errors.Is(err, service.ErrInvalidCredentials):
 		writeAuthCodeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid current password")
 	case errors.Is(err, service.ErrPasswordReuse):
@@ -378,6 +384,9 @@ func writePasswordChangeError(w http.ResponseWriter, err error) {
 
 func writePasswordResetError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, service.ErrRuntimeBusy):
+		w.Header().Set("Retry-After", "1")
+		writeAuthCodeError(w, http.StatusServiceUnavailable, "server_busy", "retry later")
 	case errors.Is(err, service.ErrInvalidCredentials):
 		writeAuthCodeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid reset token")
 	case errors.Is(err, service.ErrPasswordResetExpired):

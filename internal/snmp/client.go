@@ -15,22 +15,30 @@ import (
 
 // Client wraps gosnmp.GoSNMP to provide a simplified interface for the application.
 type Client struct {
-	target  string
-	creds   domain.SNMPCredentials
-	timeout time.Duration
-	retries int
-	snmp    *gosnmp.GoSNMP
+	target           string
+	creds            domain.SNMPCredentials
+	timeout          time.Duration
+	retries          int
+	snmp             *gosnmp.GoSNMP
+	stopCancellation func() bool
 }
 
 const defaultMaxRepetitions uint32 = 25
 
 // NewClient creates a new SNMP client configured with the given credentials.
 func NewClient(target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (*Client, error) {
+	return NewClientContext(context.Background(), target, creds, timeout, retries)
+}
+
+// NewClientContext propagates operation deadlines and cancellation to SNMP I/O.
+func NewClientContext(ctx context.Context, target string, creds domain.SNMPCredentials, timeout time.Duration, retries int) (*Client, error) {
+
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
 
 	gs := &gosnmp.GoSNMP{
+		Context: ctx,
 		Target:  target,
 		Port:    161,
 		Timeout: timeout,
@@ -122,11 +130,22 @@ func NewClient(target string, creds domain.SNMPCredentials, timeout time.Duratio
 
 // Connect opens the connection to the SNMP agent.
 func (c *Client) Connect() error {
-	return c.snmp.Connect()
+	if err := c.snmp.Connect(); err != nil {
+		return err
+	}
+	conn := c.snmp.Conn
+	c.stopCancellation = context.AfterFunc(c.snmp.Context, func() { conn.Close() })
+	return nil
 }
 
 // Close closes the connection to the SNMP agent.
 func (c *Client) Close() error {
+	if c.stopCancellation != nil {
+		c.stopCancellation()
+	}
+	if c.snmp.Conn == nil {
+		return nil
+	}
 	return c.snmp.Conn.Close()
 }
 
