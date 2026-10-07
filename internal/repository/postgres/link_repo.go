@@ -3,7 +3,9 @@ package postgres
 // This file defines link repo persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"sync"
@@ -374,6 +376,19 @@ func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error
 		return domain.LinkUpsertResult{}, fmt.Errorf("beginning upsert transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
+
+	// Serialize discoveries for the unordered endpoint pair. Row locks cannot
+	// protect a link that does not exist yet, and directional uniqueness permits
+	// concurrent A→B and B→A inserts. Include partial-port observations in the lock.
+	first, second := link.SourceDeviceID.String(), link.TargetDeviceID.String()
+	if first > second {
+		first, second = second, first
+	}
+
+	key := sha256.Sum256([]byte("theia.link.upsert:" + first + ":" + second))
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(?)`, int64(binary.BigEndian.Uint64(key[:8]))); err != nil {
+		return domain.LinkUpsertResult{}, fmt.Errorf("locking link endpoints: %w", err)
+	}
 
 	// Check for an existing link in the same direction (A→B) for the same physical
 	// interface pair. Empty interface names are treated as incomplete data that can
