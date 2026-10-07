@@ -238,6 +238,10 @@ type UserRepository interface {
 	GetUserByLoginIdentifier(ctx context.Context, normalized string) (*User, error)
 	ListUsers(ctx context.Context, filter UserListFilter) ([]UserWithRolesAndPermissions, error)
 	UpdateUser(ctx context.Context, user *User) error
+	// RecordSuccessfulLogin updates login fields only if the verified account state is still valid.
+	RecordSuccessfulLogin(ctx context.Context, id uuid.UUID, passwordHash string, when time.Time) error
+	// RecordFailedLogin increments the persisted counter atomically without rewriting account fields.
+	RecordFailedLogin(ctx context.Context, id uuid.UUID, passwordHash string, when time.Time, threshold int, lockedUntil time.Time) (int, error)
 	UpdateUserPreservingLastActiveSuperAdmin(ctx context.Context, user *User) error
 	CountUsers(ctx context.Context) (int, error)
 	CountActiveSuperAdmins(ctx context.Context) (int, error)
