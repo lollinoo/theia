@@ -486,7 +486,7 @@ func (s *bulkRunProcessor) prepareBulkRunBatch(items []domain.BulkBackupRunItem)
 			s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusSkipped, "backup not supported for vendor", nil)
 			continue
 		}
-		if err := ssh.CheckReachable(device.IP, profile.Port, 5*time.Second); err != nil {
+		if err := ssh.CheckReachable(domain.BackupAddress(*device), profile.Port, 5*time.Second); err != nil {
 			s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusSkipped, "device unreachable", nil)
 			continue
 		}
