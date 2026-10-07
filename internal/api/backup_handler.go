@@ -1063,6 +1063,30 @@ func bulkDownloadLeaseKey(actorKey string) string {
 }
 
 func (h *BackupHandler) acquireBulkDownloadDistributedLeases(ctx context.Context, actorKey string) (domain.BulkOperationLease, string, error) {
+	if combined, ok := h.bulkDownloadLeaseRepo.(interface {
+		TryAcquireBulkOperationLeases(context.Context, []string) (domain.BulkOperationLease, int, error)
+	}); ok {
+		limit := service.DefaultBulkOperationLimits.BulkDownloadMaxConcurrentGlobal
+		if h.svc != nil {
+			limit = h.svc.BulkOperationLimits().BulkDownloadMaxConcurrentGlobal
+		}
+		if limit < 1 {
+			limit = 1
+		}
+		for slot := 0; slot < limit; slot++ {
+			lease, blocked, err := combined.TryAcquireBulkOperationLeases(ctx, []string{bulkDownloadGlobalLeaseKey(slot), bulkDownloadLeaseKey(actorKey)})
+			if err != nil {
+				return nil, "", err
+			}
+			if blocked == -1 {
+				return lease, "", nil
+			}
+			if blocked == 1 {
+				return nil, "distributed_actor_concurrency_limit", nil
+			}
+		}
+		return nil, "distributed_global_concurrency_limit", nil
+	}
 	globalLease, acquired, err := h.acquireBulkDownloadGlobalSlotLease(ctx)
 	if err != nil {
 		return nil, "", err
