@@ -737,7 +737,8 @@ export function useCanvasData({
           }
           return 'failed';
         } finally {
-          if (isCurrentTopologyLoad() && !isSilentRefresh) {
+          // A silent request may supersede a blocking load and inherit its spinner.
+          if (isCurrentTopologyLoad()) {
             setLoading(false);
           }
         }
