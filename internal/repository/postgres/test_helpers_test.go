@@ -11,6 +11,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lollinoo/theia/internal/crypto"
+	"github.com/lollinoo/theia/internal/domain"
 )
 
 var testKey = []byte("test-encryption-key-32-bytes!!!!")
@@ -40,12 +41,38 @@ func setupTestDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { db.Close() })
 	ConfigureDB(db)
 
+	// Clear application data before migrations restore required runtime defaults.
+	resetTestDB(t, db)
 	if err := RunMigrations(db); err != nil {
 		t.Fatalf("running migrations: %v", err)
 	}
-	resetTestDB(t, db)
 
 	return db
+}
+
+func TestSetupTestDBResetsDataAndRestoresDefaults(t *testing.T) {
+	db := setupTestDB(t)
+	if _, err := NewCanvasMapRepo(db).GetDefault(); err != nil {
+		t.Fatalf("default map missing after setup: %v", err)
+	}
+	settings := NewSettingsRepo(db)
+	if err := settings.Set("test.fixture.custom", "dirty"); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Set(domain.SettingPollingInterval, "999"); err != nil {
+		t.Fatal(err)
+	}
+
+	reset := setupTestDB(t)
+	if count := importTestCount(t, reset, "SELECT COUNT(*) FROM settings WHERE key=$1", "test.fixture.custom"); count != 0 {
+		t.Fatal("previous fixture data survived setup")
+	}
+	if _, err := NewCanvasMapRepo(reset).GetDefault(); err != nil {
+		t.Fatalf("default map missing after reset: %v", err)
+	}
+	if value, err := NewSettingsRepo(reset).Get(domain.SettingPollingInterval); err != nil || value != domain.DefaultSettings()[domain.SettingPollingInterval] {
+		t.Fatalf("default setting not restored: value=%q error=%v", value, err)
+	}
 }
 
 func newTestDB(t *testing.T) *sql.DB {
