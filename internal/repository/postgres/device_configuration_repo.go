@@ -56,7 +56,15 @@ func (r *DeviceRepo) UpdateConfiguration(device *domain.Device, fields domain.De
 	add(fields.TopologyBootstrapState, "topology_bootstrap_state", string(device.TopologyBootstrapState))
 	add(fields.PollingEnabled, "polling_enabled", boolToDBInt(domain.DevicePollingEnabled(*device)))
 	add(fields.PollIntervalOverride, "poll_interval_override", device.PollIntervalOverride)
-	add(fields.Status, "status", string(device.Status))
+	if fields.Status {
+		if fields.IP || fields.Addresses {
+			add(true, "status", string(device.Status))
+		} else {
+			// Normalization from a stale PATCH view must not reset a virtual
+			// device that acquired an IP and a live status in another request.
+			columns = append(columns, "status=CASE WHEN device_type='virtual' AND btrim(ip)='' THEN 'unknown' ELSE status END")
+		}
+	}
 	if fields.Tags {
 		tags := device.Tags
 		if tags == nil {

@@ -221,8 +221,10 @@ func (m *deviceMutationService) UpdateDevice(ctx context.Context, id uuid.UUID, 
 	domain.NormalizeDevicePollingEnabled(device)
 	domain.NormalizeVirtualDevice(device)
 	domain.NormalizeDeviceAddresses(device)
-	if err := m.ensureNoDeviceAddressConflicts(*device, device.ID); err != nil {
-		return err
+	if !targeted || update.IP != nil || update.Addresses != nil {
+		if err := m.ensureNoDeviceAddressConflicts(*device, device.ID); err != nil {
+			return err
+		}
 	}
 
 	persist := m.deviceRepo.Update

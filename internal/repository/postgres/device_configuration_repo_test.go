@@ -64,3 +64,33 @@ func TestDeviceConfigurationPreservesConcurrentFieldsAndRelations(t *testing.T) 
 		t.Fatal("missing device update succeeded")
 	}
 }
+
+func TestDeviceConfigurationNormalizationUsesCurrentVirtualAddress(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewDeviceRepo(db, testKeyring, nil)
+	device := &domain.Device{ID: uuid.New(), DeviceType: domain.DeviceTypeVirtual}
+	if err := repo.Create(device); err != nil {
+		t.Fatal(err)
+	}
+	// The PATCH started against a legacy placeholder while another request
+	// assigned an IP and the probe recorded a live status.
+	patch, err := repo.GetDeviceForUpdate(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE devices SET ip='192.0.2.4',status='up' WHERE id=$1", device.ID); err != nil {
+		t.Fatal(err)
+	}
+	patch.Status = domain.DeviceStatusUnknown
+	patch.Hostname = "renamed"
+	if err := repo.UpdateConfiguration(patch, domain.DeviceConfigurationFields{Hostname: true, Status: true}); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := db.QueryRow("SELECT status FROM devices WHERE id=$1", device.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "up" {
+		t.Fatalf("stale normalization overwrote live status: %s", status)
+	}
+}
