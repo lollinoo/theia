@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -85,7 +86,13 @@ func (s *BackupService) bulkBackupRunDevices(ctx context.Context, requestedDevic
 			return nil, err
 		}
 		device, err := s.deviceRepo.GetByID(id)
-		if err != nil || device == nil {
+		if errors.Is(err, domain.ErrDeviceNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("fetching bulk backup device %s: %w", id, err)
+		}
+		if device == nil {
 			continue
 		}
 		devices = append(devices, *device)
