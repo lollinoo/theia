@@ -280,6 +280,10 @@ func TestAuthSeedPreservesManualEditableRolePermissionRemoval(t *testing.T) {
 
 func TestAuthSeedRollsBackRoleExistenceSignalOnPermissionFailure(t *testing.T) {
 	db := setupTestDB(t)
+	// This test exercises first-time seeding, so remove setup's runtime defaults.
+	if _, err := db.Exec(`TRUNCATE TABLE roles, permissions CASCADE`); err != nil {
+		t.Fatalf("clearing RBAC seed fixture: %v", err)
+	}
 	if _, err := db.Exec(`
 		CREATE OR REPLACE FUNCTION fail_auth_seed_permission_insert()
 		RETURNS trigger
@@ -318,6 +322,9 @@ func TestAuthSeedRollsBackRoleExistenceSignalOnPermissionFailure(t *testing.T) {
 	}
 	if roleCount != 0 {
 		t.Fatalf("roles after failed seed = %d, want 0", roleCount)
+	}
+	if count := importTestCount(t, db, `SELECT COUNT(*) FROM permissions`); count != 0 {
+		t.Fatalf("permissions after failed seed = %d, want 0", count)
 	}
 
 	if _, err := db.Exec(`
