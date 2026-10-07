@@ -58,14 +58,21 @@ func (s *DeviceBackupScheduler) Start(ctx context.Context) {
 	go func() {
 		defer close(s.done)
 		defer s.running.Store(false)
+		backupTicker := time.NewTicker(time.Hour)
+		cleanupTicker := time.NewTicker(time.Minute)
+		defer backupTicker.Stop()
+		defer cleanupTicker.Stop()
+		s.cleanupDeletedFiles(schedCtx)
 
 		for {
 			select {
 			case <-schedCtx.Done():
 				log.Println("DeviceBackupScheduler shutting down")
 				return
-			case <-time.After(1 * time.Hour):
+			case <-backupTicker.C:
 				s.tick(schedCtx)
+			case <-cleanupTicker.C:
+				s.cleanupDeletedFiles(schedCtx)
 			}
 		}
 	}()
@@ -207,6 +214,7 @@ func (s *DeviceBackupScheduler) runScheduledBulkBackup(ctx context.Context) {
 // Uses a 60s context timeout and processes devices in batches of 100 to bound
 // resource consumption even at scale (T-19-02 remediation).
 func (s *DeviceBackupScheduler) runRetention(ctx context.Context) {
+	defer s.cleanupDeletedFiles(ctx)
 	retCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
@@ -267,6 +275,24 @@ func (s *DeviceBackupScheduler) runRetention(ctx context.Context) {
 
 	if totalDeleted > 0 || failedCount > 0 {
 		log.Printf("Device backup retention: deleted %d old jobs, cleaned %d failed records", totalDeleted, failedCount)
+	}
+}
+
+func (s *DeviceBackupScheduler) cleanupDeletedFiles(ctx context.Context) {
+	cleaner, ok := s.backupService.(interface {
+		CleanupDeletedBackupFiles(context.Context) (int, error)
+	})
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	count, err := cleaner.CleanupDeletedBackupFiles(ctx)
+	if err != nil {
+		log.Printf("DeviceBackupScheduler: backup file cleanup: %v", err)
+	}
+	if count > 0 {
+		log.Printf("DeviceBackupScheduler: cleaned %d deleted backup files", count)
 	}
 }
 

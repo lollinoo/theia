@@ -3,6 +3,7 @@ package domain
 // This file defines backup domain contracts and lifecycle invariants.
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -164,4 +165,13 @@ type BackupFileRepository interface {
 	GetByJobID(jobID uuid.UUID) ([]BackupFile, error)
 	GetByID(id uuid.UUID) (*BackupFile, error)
 	DeleteByJobID(jobID uuid.UUID) error
+}
+
+// BackupFileDeletionRepository retains disk cleanup paths after metadata deletes,
+// including device/job cascades, until removal succeeds or the file is already absent.
+type BackupFileDeletionRepository interface {
+	ListPendingFileDeletions(ctx context.Context, limit int) ([]BackupFile, error)
+	BackupFilePathsReferenced(ctx context.Context, paths []string) (bool, error)
+	CompleteFileDeletion(ctx context.Context, id uuid.UUID) error
+	DeferFileDeletion(ctx context.Context, id uuid.UUID) error
 }
