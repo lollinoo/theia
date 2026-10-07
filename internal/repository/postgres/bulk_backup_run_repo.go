@@ -13,7 +13,9 @@ import (
 
 // BulkBackupRunRepo implements domain.BulkBackupRunRepository using PostgreSQL.
 type BulkBackupRunRepo struct {
-	db *DB
+	db             *DB
+	processorRunID uuid.UUID
+	processorOwner string
 }
 
 // NewBulkBackupRunRepo creates a repository for durable bulk backup run orchestration state.
@@ -212,7 +214,7 @@ func (r *BulkBackupRunRepo) ListResumableRuns() ([]domain.BulkBackupRun, error) 
 
 // UpdateRun persists aggregate counters and lifecycle fields for an existing run.
 func (r *BulkBackupRunRepo) UpdateRun(run *domain.BulkBackupRun) error {
-	res, err := r.db.Exec(
+	res, err := r.execProcessorMutation(run.ID,
 		`UPDATE backup_bulk_runs
 		 SET status = ?, batch_size = ?, total_count = ?, queued_count = ?, success_count = ?,
 			failed_count = ?, skipped_count = ?, cancelled_count = ?, error_message = ?,
@@ -346,16 +348,26 @@ func (r *BulkBackupRunRepo) TryAcquireBulkRunProcessor(runID uuid.UUID, owner st
 }
 
 func (r *BulkBackupRunRepo) RefreshBulkRunProcessor(runID uuid.UUID, owner string, leaseUntil time.Time) error {
-	_, err := r.db.Exec(
+	result, err := r.db.Exec(
 		`UPDATE backup_bulk_runs
 		 SET processing_lease_expires_at = ?
 		 WHERE id = ?
-		   AND processing_owner = ?`,
+		   AND processing_owner = ? AND processing_lease_expires_at > NOW()`,
 		leaseUntil,
 		runID.String(),
 		owner,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrBulkBackupProcessorLeaseLost
+	}
+	return nil
 }
 
 func (r *BulkBackupRunRepo) ReleaseBulkRunProcessor(runID uuid.UUID, owner string) error {
@@ -372,7 +384,7 @@ func (r *BulkBackupRunRepo) ReleaseBulkRunProcessor(runID uuid.UUID, owner strin
 
 func (r *BulkBackupRunRepo) ClaimBulkRunItem(runID uuid.UUID, itemID uuid.UUID) (*domain.BulkBackupRunItem, bool, error) {
 	now := time.Now().UTC()
-	res, err := r.db.Exec(
+	res, err := r.execProcessorMutation(runID,
 		`UPDATE backup_bulk_run_items
 		 SET status = 'active', reason = '', backup_job_id = NULL, updated_at = ?, completed_at = NULL
 		 WHERE id = ?
@@ -430,7 +442,7 @@ func (r *BulkBackupRunRepo) UpdateRunItem(item *domain.BulkBackupRunItem) error 
 	if item.UpdatedAt.IsZero() {
 		item.UpdatedAt = time.Now().UTC()
 	}
-	res, err := r.db.Exec(
+	res, err := r.execProcessorMutation(item.RunID,
 		`UPDATE backup_bulk_run_items
 		 SET device_name = ?, status = ?, reason = ?, backup_job_id = ?, updated_at = ?, completed_at = ?
 		 WHERE id = ?`,
@@ -491,7 +503,7 @@ func (r *BulkBackupRunRepo) RecalculateRunCounters(runID uuid.UUID) (*domain.Bul
 }
 
 func (r *BulkBackupRunRepo) updateRunCounters(run *domain.BulkBackupRun) error {
-	res, err := r.db.Exec(
+	res, err := r.execProcessorMutation(run.ID,
 		`UPDATE backup_bulk_runs
 		 SET batch_size = ?, total_count = ?, queued_count = ?, success_count = ?,
 			failed_count = ?, skipped_count = ?, cancelled_count = ?, error_message = ?
@@ -517,7 +529,7 @@ func (r *BulkBackupRunRepo) updateRunCounters(run *domain.BulkBackupRun) error {
 }
 
 func (r *BulkBackupRunRepo) FinishBulkRun(runID uuid.UUID, status domain.BulkBackupRunStatus, completedAt time.Time) (bool, error) {
-	res, err := r.db.Exec(
+	res, err := r.execProcessorMutation(runID,
 		`UPDATE backup_bulk_runs
 		 SET status = ?, completed_at = ?
 		 WHERE id = ?
