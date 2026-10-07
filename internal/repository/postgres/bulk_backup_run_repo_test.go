@@ -64,8 +64,20 @@ func TestBulkBackupRunRepoCreatesAndReadsRunWithItems(t *testing.T) {
 	if len(got.Items) != 2 {
 		t.Fatalf("items len = %d, want 2", len(got.Items))
 	}
-	if got.Items[0].DeviceName != "router-01" || got.Items[1].Reason != "device offline" {
-		t.Fatalf("items = %+v, want persisted names and reasons", got.Items)
+	expected := make(map[uuid.UUID]domain.BulkBackupRunItem, len(items))
+	for _, item := range items {
+		expected[item.ID] = item
+	}
+	// Equal creation times are ordered by UUID, not by the input slice.
+	for _, item := range got.Items {
+		want, ok := expected[item.ID]
+		if !ok || item.DeviceID != want.DeviceID || item.DeviceName != want.DeviceName || item.Status != want.Status || item.Reason != want.Reason {
+			t.Fatalf("item = %+v, want persisted item %+v", item, want)
+		}
+		delete(expected, item.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("missing persisted items: %+v", expected)
 	}
 }
 
