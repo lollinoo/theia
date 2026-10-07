@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"github.com/google/uuid"
@@ -14,6 +15,10 @@ func (r *BulkBackupRunRepo) ForProcessor(runID uuid.UUID, owner string) domain.B
 }
 
 func (r *BulkBackupRunRepo) lockProcessor(tx *Tx, runID uuid.UUID) error {
+	return r.lockProcessorContext(context.Background(), tx, runID)
+}
+
+func (r *BulkBackupRunRepo) lockProcessorContext(ctx context.Context, tx *Tx, runID uuid.UUID) error {
 	if r.processorOwner == "" {
 		return nil
 	}
@@ -21,7 +26,7 @@ func (r *BulkBackupRunRepo) lockProcessor(tx *Tx, runID uuid.UUID) error {
 		return domain.ErrBulkBackupProcessorLeaseLost
 	}
 	var id string
-	err := tx.QueryRow(`SELECT id FROM backup_bulk_runs WHERE id=? AND processing_owner=?
+	err := tx.QueryRowContext(ctx, `SELECT id FROM backup_bulk_runs WHERE id=? AND processing_owner=?
   AND processing_lease_expires_at>NOW() FOR UPDATE`, runID.String(), r.processorOwner).Scan(&id)
 	if err == sql.ErrNoRows {
 		return domain.ErrBulkBackupProcessorLeaseLost
