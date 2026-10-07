@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -59,15 +60,30 @@ func writeInstanceBackupArchive(ctx context.Context, req instanceBackupArchiveWr
 	if err != nil {
 		return 0, fmt.Errorf("creating archive file: %w", err)
 	}
-	defer f.Close()
+	return writeInstanceBackupArchiveTo(ctx, req, f)
+}
 
-	gw := gzip.NewWriter(f)
-	defer gw.Close()
+// writeInstanceBackupArchiveTo owns the destination and finishes each archive layer
+// before returning success. Closing an outer layer can still write to the next one.
+func writeInstanceBackupArchiveTo(ctx context.Context, req instanceBackupArchiveWriteRequest, dst io.WriteCloser) (totalSize int64, err error) {
+	gw := gzip.NewWriter(dst)
 
 	tw := tar.NewWriter(gw)
-	defer tw.Close()
-
-	var totalSize int64
+	defer func() {
+		for _, layer := range []struct {
+			name  string
+			close func() error
+		}{
+			{"tar", tw.Close},
+			{"gzip", gw.Close},
+			{"file", dst.Close},
+		} {
+			if closeErr := layer.close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("closing archive %s: %w", layer.name, closeErr))
+				totalSize = 0
+			}
+		}
+	}()
 
 	// Add manifest.json
 	if err := addBytesToTar(tw, "manifest.json", req.manifestJSON, time.Now().UTC()); err != nil {

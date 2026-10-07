@@ -3,6 +3,7 @@ package postgres
 // This file defines backup job repo persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -23,6 +24,11 @@ func NewBackupJobRepo(db *sql.DB) *BackupJobRepo {
 
 // Create inserts a new backup job.
 func (r *BackupJobRepo) Create(job *domain.BackupJob) error {
+	return r.CreateContext(context.Background(), job)
+}
+
+// CreateContext carries caller cancellation across this repository operation.
+func (r *BackupJobRepo) CreateContext(ctx context.Context, job *domain.BackupJob) error {
 	if job.ID == uuid.Nil {
 		job.ID = uuid.New()
 	}
@@ -30,7 +36,7 @@ func (r *BackupJobRepo) Create(job *domain.BackupJob) error {
 		job.CreatedAt = time.Now().UTC()
 	}
 
-	_, err := r.db.Exec(
+	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO backup_jobs (id, device_id, status, error_message, created_at)
 		 VALUES (?, ?, ?, ?, ?)`,
 		job.ID.String(), job.DeviceID.String(), string(job.Status), job.ErrorMessage, job.CreatedAt,

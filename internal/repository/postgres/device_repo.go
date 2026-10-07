@@ -3,6 +3,7 @@ package postgres
 // This file defines device repo persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -237,8 +238,13 @@ func (r *DeviceRepo) createOnceWithAppend(
 
 // GetByID retrieves a device by UUID, including its interfaces.
 func (r *DeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
+	return r.GetByIDContext(context.Background(), id)
+}
+
+// GetByIDContext carries caller cancellation across this repository operation.
+func (r *DeviceRepo) GetByIDContext(ctx context.Context, id uuid.UUID) (*domain.Device, error) {
 	device, err := r.scanDevice(
-		r.db.QueryRow(
+		r.db.QueryRowContext(ctx,
 			`SELECT id, hostname, ip, snmp_credentials_json, device_type, status,
 				sys_name, sys_descr, sys_object_id, hardware_model, os_version, vendor, managed, tags_json,
 				created_at, updated_at, metrics_source, prometheus_label_name, prometheus_label_value,
@@ -254,18 +260,18 @@ func (r *DeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 		return nil, err
 	}
 
-	ifaces, err := r.loadInterfaces(device.ID)
+	ifaces, err := r.loadInterfacesContext(ctx, device.ID)
 	if err != nil {
 		return nil, err
 	}
 	device.Interfaces = ifaces
 
-	areaIDs, err := r.loadAreaIDs(device.ID)
+	areaIDs, err := r.loadAreaIDsContext(ctx, device.ID)
 	if err != nil {
 		return nil, err
 	}
 	device.AreaIDs = areaIDs
-	addresses, err := r.loadAddresses(device.ID)
+	addresses, err := r.loadAddressesContext(ctx, device.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -1268,7 +1274,12 @@ func replaceInterfacesTx(tx *Tx, deviceID uuid.UUID, interfaces []domain.Interfa
 }
 
 func (r *DeviceRepo) loadAddresses(deviceID uuid.UUID) ([]domain.DeviceAddress, error) {
-	rows, err := r.db.Query(
+	return r.loadAddressesContext(context.Background(), deviceID)
+}
+
+// loadAddressesContext carries caller cancellation across this repository operation.
+func (r *DeviceRepo) loadAddressesContext(ctx context.Context, deviceID uuid.UUID) ([]domain.DeviceAddress, error) {
+	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, device_id, address, label, role, is_primary, priority, probe_ports, created_at, updated_at
 		FROM device_addresses
 		WHERE device_id = ?
@@ -1366,7 +1377,12 @@ func scanDeviceAddressRow(rows *sql.Rows) (domain.DeviceAddress, error) {
 
 // loadAreaIDs retrieves area IDs for a single device.
 func (r *DeviceRepo) loadAreaIDs(deviceID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := r.db.Query(
+	return r.loadAreaIDsContext(context.Background(), deviceID)
+}
+
+// loadAreaIDsContext carries caller cancellation across this repository operation.
+func (r *DeviceRepo) loadAreaIDsContext(ctx context.Context, deviceID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.db.QueryContext(ctx,
 		`SELECT area_id FROM device_areas WHERE device_id = ? ORDER BY area_id`,
 		deviceID.String(),
 	)
@@ -1527,7 +1543,12 @@ func (r *DeviceRepo) loadInterfacesForDeviceIDs(deviceIDs []uuid.UUID) (map[uuid
 
 // loadInterfaces retrieves all interfaces for a given device ID.
 func (r *DeviceRepo) loadInterfaces(deviceID uuid.UUID) ([]domain.Interface, error) {
-	rows, err := r.db.Query(
+	return r.loadInterfacesContext(context.Background(), deviceID)
+}
+
+// loadInterfacesContext carries caller cancellation across this repository operation.
+func (r *DeviceRepo) loadInterfacesContext(ctx context.Context, deviceID uuid.UUID) ([]domain.Interface, error) {
+	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, device_id, if_index, if_name, if_descr, speed,
 			admin_status, oper_status, created_at, updated_at
 		FROM interfaces WHERE device_id = ? ORDER BY if_index`,

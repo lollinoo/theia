@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,36 +45,41 @@ var (
 
 // AuthServiceConfig contains dependencies and security settings for AuthService.
 type AuthServiceConfig struct {
-	Users              domain.UserRepository
-	Roles              domain.RoleRepository
-	Sessions           domain.SessionRepository
-	PasswordResets     domain.PasswordResetRepository
-	AuditLogs          domain.AuditLogRepository
-	SessionSecret      []byte
-	Now                func() time.Time
-	SessionTTL         time.Duration
-	PasswordResetTTL   time.Duration
-	FailedLoginSleeper func(time.Duration)
+	// MaxConcurrentPasswordOperations bounds expensive password work; defaults to four.
+	MaxConcurrentPasswordOperations int
+	Users                           domain.UserRepository
+	Roles                           domain.RoleRepository
+	Sessions                        domain.SessionRepository
+	PasswordResets                  domain.PasswordResetRepository
+	AuditLogs                       domain.AuditLogRepository
+	SessionSecret                   []byte
+	Now                             func() time.Time
+	SessionTTL                      time.Duration
+	PasswordResetTTL                time.Duration
+	FailedLoginSleeper              func(time.Duration)
 }
 
 // AuthService coordinates first-party authentication and RBAC workflows.
 type AuthService struct {
-	users              domain.UserRepository
-	roles              domain.RoleRepository
-	sessions           domain.SessionRepository
-	passwordResets     domain.PasswordResetRepository
-	auditLogs          domain.AuditLogRepository
-	sessionSecret      []byte
-	dummyPasswordHash  string
-	verifyPassword     func(password, hash string) (bool, error)
-	now                func() time.Time
-	sessionTTL         time.Duration
-	passwordResetTTL   time.Duration
-	failedThreshold    int
-	failedDelayAfter   int
-	failedDelay        time.Duration
-	failedLockDuration time.Duration
-	failedSleeper      func(time.Duration)
+	passwordConcurrency   int
+	passwordAdmissionOnce sync.Once
+	passwordAdmission     chan struct{}
+	users                 domain.UserRepository
+	roles                 domain.RoleRepository
+	sessions              domain.SessionRepository
+	passwordResets        domain.PasswordResetRepository
+	auditLogs             domain.AuditLogRepository
+	sessionSecret         []byte
+	dummyPasswordHash     string
+	verifyPassword        func(password, hash string) (bool, error)
+	now                   func() time.Time
+	sessionTTL            time.Duration
+	passwordResetTTL      time.Duration
+	failedThreshold       int
+	failedDelayAfter      int
+	failedDelay           time.Duration
+	failedLockDuration    time.Duration
+	failedSleeper         func(time.Duration)
 }
 
 // LoginInput contains credentials and request metadata for a login attempt.
@@ -177,22 +183,23 @@ func NewAuthService(config AuthServiceConfig) (*AuthService, error) {
 		sleeper = time.Sleep
 	}
 	return &AuthService{
-		users:              config.Users,
-		roles:              config.Roles,
-		sessions:           config.Sessions,
-		passwordResets:     config.PasswordResets,
-		auditLogs:          config.AuditLogs,
-		sessionSecret:      append([]byte(nil), config.SessionSecret...),
-		dummyPasswordHash:  dummyPasswordHash,
-		verifyPassword:     security.VerifyPassword,
-		now:                func() time.Time { return now().UTC() },
-		sessionTTL:         sessionTTL,
-		passwordResetTTL:   passwordResetTTL,
-		failedThreshold:    defaultFailedLoginThreshold,
-		failedDelayAfter:   defaultFailedLoginDelayAfter,
-		failedDelay:        defaultFailedLoginDelay,
-		failedLockDuration: defaultFailedLoginLock,
-		failedSleeper:      sleeper,
+		passwordConcurrency: config.MaxConcurrentPasswordOperations,
+		users:               config.Users,
+		roles:               config.Roles,
+		sessions:            config.Sessions,
+		passwordResets:      config.PasswordResets,
+		auditLogs:           config.AuditLogs,
+		sessionSecret:       append([]byte(nil), config.SessionSecret...),
+		dummyPasswordHash:   dummyPasswordHash,
+		verifyPassword:      security.VerifyPassword,
+		now:                 func() time.Time { return now().UTC() },
+		sessionTTL:          sessionTTL,
+		passwordResetTTL:    passwordResetTTL,
+		failedThreshold:     defaultFailedLoginThreshold,
+		failedDelayAfter:    defaultFailedLoginDelayAfter,
+		failedDelay:         defaultFailedLoginDelay,
+		failedLockDuration:  defaultFailedLoginLock,
+		failedSleeper:       sleeper,
 	}, nil
 }
 
@@ -279,6 +286,11 @@ func (s *AuthService) ensureBootstrapUser(ctx context.Context, now time.Time) (*
 
 // Login authenticates a username or email and creates a server-side session.
 func (s *AuthService) Login(ctx context.Context, input LoginInput) (*LoginResult, error) {
+	release, err := s.admitPasswordWork(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	normalized := normalizeLoginIdentifier(input.Identifier)
 	if normalized == "" {
 		s.runDummyPasswordVerification(input.Password)
@@ -310,11 +322,10 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*LoginResult
 	}
 
 	now := s.now()
-	user.FailedLoginAttempts = 0
-	user.LockedUntil = nil
-	user.LastLoginAt = &now
-	user.UpdatedAt = now
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	if err := s.users.RecordSuccessfulLogin(ctx, user.ID, user.PasswordHash, now); err != nil {
+		if errors.Is(err, domain.ErrAuthUserNotFound) {
+			return nil, ErrInvalidCredentials
+		}
 		return nil, fmt.Errorf("updating successful auth login: %w", err)
 	}
 
@@ -428,6 +439,11 @@ func (s *AuthService) Logout(ctx context.Context, rawSessionToken string) error 
 
 // ChangePassword changes a user's password and revokes other sessions.
 func (s *AuthService) ChangePassword(ctx context.Context, input PasswordChangeInput) error {
+	release, err := s.admitPasswordWork(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	user, err := s.users.GetUserByID(ctx, input.UserID)
 	if err != nil {
 		return fmt.Errorf("getting password change user: %w", err)
@@ -451,20 +467,16 @@ func (s *AuthService) ChangePassword(ctx context.Context, input PasswordChangeIn
 	if err != nil {
 		return fmt.Errorf("hashing changed password: %w", err)
 	}
-	user.PasswordHash = passwordHash
-	user.MustChangePassword = false
-	user.PasswordChangedAt = &now
-	user.UpdatedAt = now
-	user.FailedLoginAttempts = 0
-	user.LockedUntil = nil
-	if err := s.users.UpdateUser(ctx, user); err != nil {
-		return fmt.Errorf("updating changed password: %w", err)
+	audit := &domain.AuditLog{
+		ID: uuid.New(), ActorUserID: &user.ID, TargetUserID: &user.ID,
+		Action: "auth.password_changed", Resource: "auth", ResourceID: user.ID.String(),
+		MetadataJSON: `{}`, CreatedAt: now,
 	}
-	if err := s.sessions.RevokeUserSessions(ctx, user.ID, input.CurrentSessionID, now); err != nil {
-		return fmt.Errorf("revoking auth sessions after password change: %w", err)
-	}
-	if err := s.appendAuditLog(ctx, &user.ID, &user.ID, "auth.password_changed", "auth", user.ID.String(), `{}`); err != nil {
-		return err
+	if err := s.users.ChangeUserPassword(ctx, user.ID, user.PasswordHash, passwordHash, input.CurrentSessionID, now, audit); err != nil {
+		if errors.Is(err, domain.ErrAuthUserNotFound) {
+			return ErrInvalidCredentials
+		}
+		return fmt.Errorf("changing password: %w", err)
 	}
 	return nil
 }
@@ -502,6 +514,11 @@ func (s *AuthService) CreatePasswordResetToken(ctx context.Context, input Passwo
 
 // CompletePasswordReset consumes a valid reset token and changes the user's password.
 func (s *AuthService) CompletePasswordReset(ctx context.Context, input PasswordResetCompleteInput) error {
+	release, err := s.admitPasswordWork(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := security.ValidatePasswordPolicy(input.NewPassword); err != nil {
 		return fmt.Errorf("%w: %v", ErrPasswordPolicyViolation, err)
 	}
@@ -610,20 +627,14 @@ func (s *AuthService) resetExpiredLockState(user *domain.User) {
 
 func (s *AuthService) recordFailedLogin(ctx context.Context, user *domain.User, ipAddress, userAgent string) error {
 	now := s.now()
-	if user.LockedUntil != nil && !user.LockedUntil.After(now) {
-		user.LockedUntil = nil
-		user.FailedLoginAttempts = 0
-	}
-	user.FailedLoginAttempts++
-	user.UpdatedAt = now
-	if user.FailedLoginAttempts >= s.failedThreshold {
-		lockedUntil := now.Add(s.failedLockDuration)
-		user.LockedUntil = &lockedUntil
-	}
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	attempts, err := s.users.RecordFailedLogin(ctx, user.ID, user.PasswordHash, now, s.failedThreshold, now.Add(s.failedLockDuration))
+	if err != nil {
+		if errors.Is(err, domain.ErrAuthUserNotFound) {
+			return ErrInvalidCredentials
+		}
 		return fmt.Errorf("updating failed auth login: %w", err)
 	}
-	if user.FailedLoginAttempts >= s.failedDelayAfter && s.failedDelay > 0 {
+	if attempts >= s.failedDelayAfter && s.failedDelay > 0 {
 		s.failedSleeper(s.failedDelay)
 	}
 	if err := s.appendAuditLog(ctx, nil, &user.ID, "auth.login_failed", "auth", user.ID.String(), `{"reason":"invalid_credentials"}`); err != nil {

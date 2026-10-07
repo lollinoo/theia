@@ -26,12 +26,37 @@ import (
 // The per-device lock serializes access to remote backup filenames and the job row transitions
 // from running to success or failed before the background worker releases its bulk lease.
 func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.CredentialProfile, backupCfg vendor.BackupConfig, jobID uuid.UUID) {
-	lock := s.getDeviceLock(device.ID)
-	lock.Lock()
-	defer lock.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+	select {
+	case s.backupSlots() <- struct{}{}:
+		defer func() { <-s.backupSlots() }()
+	case <-ctx.Done():
+		s.failJob(jobID, ctx.Err().Error())
+		return
+	}
+	s.runFullBackupContext(ctx, device, profile, backupCfg, jobID)
+}
+
+// runFullBackupReserved uses the slot reserved before manual job creation.
+func (s *BackupService) runFullBackupReserved(device *domain.Device, profile *domain.CredentialProfile, backupCfg vendor.BackupConfig, jobID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+	s.runFullBackupContext(ctx, device, profile, backupCfg, jobID)
+}
+
+func (s *BackupService) runFullBackupContext(ctx context.Context, device *domain.Device, profile *domain.CredentialProfile, backupCfg vendor.BackupConfig, jobID uuid.UUID) {
+	release, err := s.lockBackupDevice(ctx, device.ID)
+	if err != nil {
+		s.failJob(jobID, err.Error())
+		return
+	}
+	defer release()
 
 	// Set job to running
-	s.updateJobStatus(jobID, domain.BackupStatusRunning, "")
+	if err := s.updateJobStatus(jobID, domain.BackupStatusRunning, ""); err != nil {
+		return
+	}
 
 	secret, err := s.decryptSecret(profile.EncryptedSecret)
 	if err != nil {
@@ -39,24 +64,24 @@ func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.Cre
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
 	// Connect via SSH
 	var client *ssh.Client
 	timeout := 30 * time.Second
 	target := domain.BackupAddress(*device)
 
 	if profile.AuthMethod == domain.SSHAuthPassword {
-		client, err = ssh.NewClient(s.sshDialer, target, profile.Port, profile.Username, secret, timeout, s.hostKeyCallback)
+		client, err = ssh.NewClientContext(ctx, s.sshDialer, target, profile.Port, profile.Username, secret, timeout, s.hostKeyCallback)
 	} else {
-		client, err = ssh.NewClientWithKey(s.sshDialer, target, profile.Port, profile.Username, []byte(secret), timeout, s.hostKeyCallback)
+		client, err = ssh.NewClientWithKeyContext(ctx, s.sshDialer, target, profile.Port, profile.Username, []byte(secret), timeout, s.hostKeyCallback)
 	}
 	if err != nil {
 		s.failJob(jobID, fmt.Sprintf("SSH connection to %s failed: %v", target, err))
 		return
 	}
 	defer client.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
-	defer cancel()
 
 	// Determine file prefix — try device fields first, then SSH identity
 	hostname := sanitizeHostname(device.Tags["display_name"])
@@ -124,6 +149,11 @@ func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.Cre
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		s.failJob(jobID, fmt.Sprintf("backup deadline: %v", err))
+		return
+	}
+
 	// Check results
 	files, _ := s.fileRepo.GetByJobID(jobID)
 	if len(files) == 0 {
@@ -140,105 +170,98 @@ func (s *BackupService) runFullBackup(device *domain.Device, profile *domain.Cre
 
 // waitForRemoteFile polls for a remote file's existence using SFTP Stat.
 func (s *BackupService) waitForRemoteFile(sshClient *gossh.Client, remotePath string, timeout time.Duration) error {
+	return s.waitForRemoteFileContext(context.Background(), sshClient, remotePath, timeout)
+}
+
+func (s *BackupService) waitForRemoteFileContext(ctx context.Context, sshClient *gossh.Client, remotePath string, timeout time.Duration) (err error) {
 	if sshClient == nil {
 		return fmt.Errorf("creating SFTP client for stat: nil SSH client")
 	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = sshClient.Close() })
+	defer stop()
+	defer func() {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+	}()
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
 		return fmt.Errorf("creating SFTP client for stat: %w", err)
 	}
 	defer sftpClient.Close()
-
-	deadline := time.Now().Add(timeout)
-	pollInterval := 500 * time.Millisecond
-
-	for time.Now().Before(deadline) {
-		_, err := sftpClient.Stat(remotePath)
-		if err == nil {
-			return nil // File exists
-		}
-		if !os.IsNotExist(err) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := sftpClient.Stat(remotePath); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("SFTP stat %q: %w", remotePath, err)
 		}
-		time.Sleep(pollInterval)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
-
-	return fmt.Errorf("timed out waiting for remote file %q after %v", remotePath, timeout)
 }
 
-// downloadSFTPFileToDiskAndHash streams a remote SFTP file into a temp file, hashes it, then renames atomically.
-// Cancellation stops waiting for the transfer result; the worker goroutine still cleans up partial temp files.
-func downloadSFTPFileToDiskAndHash(ctx context.Context, sshClient *gossh.Client, remotePath, localPath string) (string, int, error) {
+// downloadSFTPFileToDiskAndHash cancels the transport before returning so no
+// transfer goroutine can outlive cleanup or publish a file after cancellation.
+func downloadSFTPFileToDiskAndHash(ctx context.Context, sshClient *gossh.Client, remotePath, localPath string) (hash string, size int, err error) {
 	if sshClient == nil {
 		return "", 0, fmt.Errorf("creating SFTP client: nil SSH client")
 	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = sshClient.Close() })
+	defer stop()
+	defer func() {
+		if ctx.Err() != nil {
+			hash = ""
+			size = 0
+			err = ctx.Err()
+		}
+	}()
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
 		return "", 0, fmt.Errorf("creating SFTP client: %w", err)
 	}
 	defer sftpClient.Close()
-
-	type result struct {
-		hash string
-		size int
-		err  error
+	remoteFile, err := sftpClient.Open(remotePath)
+	if err != nil {
+		return "", 0, fmt.Errorf("opening remote file %q: %w", remotePath, err)
 	}
-
-	done := make(chan result, 1)
-	go func() {
-		remoteFile, err := sftpClient.Open(remotePath)
-		if err != nil {
-			done <- result{err: fmt.Errorf("opening remote file %q: %w", remotePath, err)}
-			return
-		}
-		defer remoteFile.Close()
-
-		dir := filepath.Dir(localPath)
-		tmpFile, err := os.CreateTemp(dir, ".theia-download-*")
-		if err != nil {
-			done <- result{err: fmt.Errorf("creating temp file: %w", err)}
-			return
-		}
-		tmpPath := tmpFile.Name()
-
-		hasher := sha256.New()
-		written, err := io.Copy(io.MultiWriter(tmpFile, hasher), remoteFile)
-		if err != nil {
-			tmpFile.Close()
-			os.Remove(tmpPath)
-			done <- result{err: fmt.Errorf("downloading file: %w", err)}
-			return
-		}
-		maxInt := int64(int(^uint(0) >> 1))
-		if written > maxInt {
-			tmpFile.Close()
-			os.Remove(tmpPath)
-			done <- result{err: fmt.Errorf("downloaded file too large: %d bytes", written)}
-			return
-		}
-		if err := tmpFile.Close(); err != nil {
-			os.Remove(tmpPath)
-			done <- result{err: fmt.Errorf("closing temp file: %w", err)}
-			return
-		}
-
-		if err := os.Rename(tmpPath, localPath); err != nil {
-			os.Remove(tmpPath)
-			done <- result{err: fmt.Errorf("renaming temp file: %w", err)}
-			return
-		}
-		done <- result{
-			hash: hex.EncodeToString(hasher.Sum(nil)),
-			size: int(written),
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return "", 0, ctx.Err()
-	case r := <-done:
-		return r.hash, r.size, r.err
+	defer remoteFile.Close()
+	tmpFile, err := os.CreateTemp(filepath.Dir(localPath), ".theia-download-*")
+	if err != nil {
+		return "", 0, fmt.Errorf("creating temp file: %w", err)
 	}
+	defer tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+	hasher := sha256.New()
+	written, err := io.Copy(io.MultiWriter(tmpFile, hasher), remoteFile)
+	if err != nil {
+		return "", 0, fmt.Errorf("downloading file: %w", err)
+	}
+	if written > int64(int(^uint(0)>>1)) {
+		return "", 0, fmt.Errorf("downloaded file too large: %d bytes", written)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", 0, fmt.Errorf("closing temp file: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, err
+	}
+	if err := os.Rename(tmpFile.Name(), localPath); err != nil {
+		return "", 0, fmt.Errorf("renaming temp file: %w", err)
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), int(written), nil
 }
 
 // runTextExport captures a command response as a local backup file and records its SHA-256 metadata.
@@ -311,7 +334,7 @@ func (s *BackupService) runBinaryExport(ctx context.Context, client *ssh.Client,
 	}
 
 	// Step 2: Wait for file to appear on remote filesystem via SFTP stat polling
-	if err := s.waitForRemoteFile(client.SSHClient(), bcfg.RemoteFilePath, 30*time.Second); err != nil {
+	if err := s.waitForRemoteFileContext(ctx, client.SSHClient(), bcfg.RemoteFilePath, 30*time.Second); err != nil {
 		return fmt.Errorf("waiting for remote backup file: %w", err)
 	}
 

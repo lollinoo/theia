@@ -50,7 +50,9 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 	snmpProfileHandler := NewSNMPProfileHandler(deps.snmpProfileRepo)
 	areaHandler := NewAreaHandler(deps.areaRepo)
 	backupHandlerOptions := []BackupHandlerOption{WithBackupAuditLogs(routerOpts.auditLogs)}
-	if deps.db != nil {
+	if routerOpts.bulkDownloadLeases != nil {
+		backupHandlerOptions = append(backupHandlerOptions, WithBulkDownloadLeaseRepository(routerOpts.bulkDownloadLeases))
+	} else if deps.db != nil {
 		bulkOperationLeaseRepo := postgres.NewBulkOperationLeaseRepo(deps.db)
 		backupHandlerOptions = append(backupHandlerOptions, WithBulkDownloadLeaseRepository(bulkOperationLeaseRepo))
 	}
