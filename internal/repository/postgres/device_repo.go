@@ -257,7 +257,7 @@ func (r *DeviceRepo) GetByIDContext(ctx context.Context, id uuid.UUID) (*domain.
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("device not found: %s", id)
+			return nil, fmt.Errorf("%w: %s", domain.ErrDeviceNotFound, id)
 		}
 		return nil, err
 	}

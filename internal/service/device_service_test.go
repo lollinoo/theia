@@ -67,7 +67,7 @@ func (r *mockDeviceRepo) GetByID(id uuid.UUID) (*domain.Device, error) {
 	}
 	d, ok := r.devices[id]
 	if !ok {
-		return nil, fmt.Errorf("device not found: %s", id)
+		return nil, fmt.Errorf("%w: %s", domain.ErrDeviceNotFound, id)
 	}
 	cp := *d
 	return &cp, nil

@@ -118,7 +118,10 @@ func (s *BackupService) GetBackupJobs(ctx context.Context, deviceID uuid.UUID) (
 	}
 	// Attach file counts
 	for i := range jobs {
-		files, _ := s.fileRepo.GetByJobID(jobs[i].ID)
+		files, err := s.fileRepo.GetByJobID(jobs[i].ID)
+		if err != nil {
+			return nil, fmt.Errorf("loading files for backup job %s: %w", jobs[i].ID, err)
+		}
 		jobs[i].Files = files
 	}
 	return jobs, nil
@@ -133,7 +136,10 @@ func (s *BackupService) GetBackupJob(ctx context.Context, id uuid.UUID) (*domain
 	if job == nil {
 		return nil, nil
 	}
-	files, _ := s.fileRepo.GetByJobID(job.ID)
+	files, err := s.fileRepo.GetByJobID(job.ID)
+	if err != nil {
+		return nil, fmt.Errorf("loading files for backup job %s: %w", job.ID, err)
+	}
 	job.Files = files
 	return job, nil
 }
@@ -147,7 +153,10 @@ func (s *BackupService) GetLatestBackupJob(ctx context.Context, deviceID uuid.UU
 	if job == nil {
 		return nil, nil
 	}
-	files, _ := s.fileRepo.GetByJobID(job.ID)
+	files, err := s.fileRepo.GetByJobID(job.ID)
+	if err != nil {
+		return nil, fmt.Errorf("loading files for backup job %s: %w", job.ID, err)
+	}
 	job.Files = files
 	return job, nil
 }
