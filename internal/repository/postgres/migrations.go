@@ -3,10 +3,12 @@ package postgres
 // This file defines migrations persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -66,13 +68,29 @@ func RunMigrations(db *sql.DB, encryptionKey ...any) error {
 	return nil
 }
 
-func runPostgresMigrations(db *sql.DB) error {
+func runPostgresMigrations(db *sql.DB) (retErr error) {
 	sourceDriver, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
 		return fmt.Errorf("creating postgres migration source: %w", err)
 	}
+	defer func() {
+		if err := sourceDriver.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("closing postgres migration source: %w", err))
+		}
+	}()
 
-	dbDriver, err := pgdriver.WithInstance(db, &pgdriver.Config{
+	// Own only the reserved connection. WithInstance also gives the migration
+	// driver ownership of the application pool, so closing it closes that pool.
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		return fmt.Errorf("acquiring postgres migration connection: %w", err)
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("closing postgres migration connection: %w", err))
+		}
+	}()
+	dbDriver, err := pgdriver.WithConnection(context.Background(), conn, &pgdriver.Config{
 		MigrationsTable: "schema_migrations",
 	})
 	if err != nil {
