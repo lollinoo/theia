@@ -19,21 +19,26 @@ const ConfigVersion = 1
 
 // Config contains deployment coordinates, never passwords or private keys.
 type Config struct {
-	Version         int      `json:"version"`
-	Project         string   `json:"project"`
-	Release         string   `json:"release"`
-	BackendImage    string   `json:"backend_image"`
-	FrontendImage   string   `json:"frontend_image"`
-	Hostname        string   `json:"hostname"`
-	TLSMode         string   `json:"tls_mode"`
-	HTTPPort        int      `json:"http_port"`
-	HTTPSPort       int      `json:"https_port"`
-	BindAddress     string   `json:"bind_address"`
-	TrustedProxies  []string `json:"trusted_proxies,omitempty"`
-	BundledPostgres bool     `json:"bundled_postgres"`
-	PostgresMajor   int      `json:"postgres_major"`
-	DataVolume      string   `json:"data_volume,omitempty"`
-	PostgresVolume  string   `json:"postgres_volume,omitempty"`
+	Version          int      `json:"version"`
+	Project          string   `json:"project"`
+	Release          string   `json:"release"`
+	BackendImage     string   `json:"backend_image"`
+	FrontendImage    string   `json:"frontend_image"`
+	Hostname         string   `json:"hostname"`
+	TLSMode          string   `json:"tls_mode"`
+	HTTPPort         int      `json:"http_port"`
+	HTTPSPort        int      `json:"https_port"`
+	BindAddress      string   `json:"bind_address"`
+	TrustedProxies   []string `json:"trusted_proxies,omitempty"`
+	BundledPostgres  bool     `json:"bundled_postgres"`
+	PostgresMajor    int      `json:"postgres_major"`
+	DataVolume       string   `json:"data_volume,omitempty"`
+	PostgresVolume   string   `json:"postgres_volume,omitempty"`
+	PostgresBind     string   `json:"postgres_bind,omitempty"`
+	DataBind         string   `json:"data_bind,omitempty"`
+	PostgresUser     string   `json:"postgres_user,omitempty"`
+	PostgresDatabase string   `json:"postgres_database,omitempty"`
+	ExistingNetworks []string `json:"existing_networks,omitempty"`
 }
 
 var releasePattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
@@ -79,6 +84,24 @@ func (c Config) Validate() error {
 	for _, volume := range []string{c.DataVolume, c.PostgresVolume} {
 		if volume != "" && !projectPattern.MatchString(volume) {
 			return fmt.Errorf("invalid existing volume name")
+		}
+	}
+	for _, network := range c.ExistingNetworks {
+		if !projectPattern.MatchString(network) {
+			return fmt.Errorf("invalid original network name")
+		}
+	}
+	for _, source := range []string{c.PostgresBind, c.DataBind} {
+		if source != "" && (!filepath.IsAbs(source) || strings.ContainsAny(source, "\r\n:$")) {
+			return fmt.Errorf("existing bind sources must be absolute, mountable paths")
+		}
+	}
+	if c.PostgresVolume != "" && c.PostgresBind != "" || c.DataVolume != "" && c.DataBind != "" {
+		return fmt.Errorf("specify either a volume or bind source")
+	}
+	for _, name := range []string{c.PostgresUser, c.PostgresDatabase} {
+		if len(name) > 63 || strings.ContainsAny(name, "\r\n\x00") {
+			return fmt.Errorf("invalid PostgreSQL user or database name")
 		}
 	}
 	return nil

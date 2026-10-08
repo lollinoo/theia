@@ -10,6 +10,9 @@
 	encode zstd gzip
 	header X-Content-Type-Options nosniff
 	route {
+		handle /frontend-readyz {
+			respond 200
+		}
 		handle /maintenance/status {
 			root * /status
 			rewrite * /status.json

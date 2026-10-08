@@ -5,7 +5,7 @@
 	       scale-lab-evidence scale-lab-validate \
        development prod production prod-metrics prod-down prod-build prod-logs prod-clean \
        staging staging-down staging-logs \
-       backend-fast frontend-fast govulncheck maintenance-test deployment-test \
+       backend-fast frontend-fast govulncheck maintenance-test deployment-test postgres-upgrade-test kubernetes-test \
        realtime-stress collector-contract browser-e2e \
        bridge-build-all
 
@@ -174,6 +174,12 @@ maintenance-test: ## Verify encrypted recovery using isolated PostgreSQL cluster
 
 deployment-test: ## Verify guided HTTPS deployment, activation, upgrade and replacement restore
 	bash scripts/test-deployment.sh
+
+postgres-upgrade-test: ## Verify PostgreSQL 17 to 18 cutover and return to the retained original volume
+	bash scripts/test-postgres-upgrade.sh
+
+kubernetes-test: ## Verify Helm deployment and shared maintenance Jobs in an isolated kind cluster
+	bash scripts/test-kubernetes.sh
 
 realtime-stress: ## Run focused realtime stress tests locally
 	go test ./internal/ws ./internal/worker ./internal/service ./internal/scalelab -count=1 -run 'Test(HubBroadcastMarksLegacyClientForResyncWhenMailboxIsFull|HubBroadcastAvoidsSnapshotForHTTPBootstrapClientWhenMailboxIsFull|HubRepeatedDetailSubscriptionsConvergeToSingleTarget|PipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay|BurstReplayFixtureKeepsDeterministicLinkCountsAcrossPasses)'

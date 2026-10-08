@@ -328,9 +328,30 @@ func (a *Admin) offline(ctx context.Context, action string, args ...string) erro
 		return err
 	}
 	jobErr := a.job(ctx, append([]string{"maintenance", action}, args...)...)
+	if jobErr != nil && (action == "migrate" || action == "rotate-operational") {
+		op, statusErr := (&service.Maintenance{StatePath: StatePath(a.Dir)}).Status()
+		if statusErr == nil && op != nil && op.Phase == "completed" && !op.WritesReopened && op.Action == strings.ReplaceAll(action, "-", "_") {
+			if err := a.compose(ctx, "stop", "frontend"); err != nil {
+				return errors.Join(jobErr, err)
+			}
+			if err := a.job(ctx, "maintenance", "rollback"); err != nil {
+				return errors.Join(jobErr, err)
+			}
+		}
+	}
+	if state, err := (instance.Store{Path: StatePath(a.Dir)}).Load(); err == nil {
+		if err := a.prepare(*c, state); err != nil {
+			return errors.Join(jobErr, err)
+		}
+	}
 	if jobErr != nil {
 		op, statusErr := (&service.Maintenance{StatePath: StatePath(a.Dir)}).Status()
 		if statusErr == nil && op != nil && (op.Phase == "completed" || op.Phase == "rolled_back") && op.VerifiedReleaseTag == c.Release {
+			if op.Phase == "rolled_back" {
+				if err := a.compose(ctx, "stop", "frontend"); err != nil {
+					return errors.Join(jobErr, err)
+				}
+			}
 			return errors.Join(jobErr, a.startHTTP(ctx, *c))
 		}
 		return jobErr

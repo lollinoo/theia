@@ -25,6 +25,9 @@ func RenderCompose(dir string, c Config) ([]byte, error) {
 	}
 	control := filepath.Join(dir, "control")
 	dataSource := filepath.Join(dir, "data")
+	if c.DataBind != "" {
+		dataSource = c.DataBind
+	}
 	if c.DataVolume != "" {
 		dataSource = c.DataVolume
 	}
@@ -43,7 +46,7 @@ func RenderCompose(dir string, c Config) ([]byte, error) {
 	}
 	// Existing data volumes can carry certificates too. A subpath mount avoids
 	// giving the frontend access to database artifacts or encrypted credentials.
-	certificateMount := map[string]any{"type": "bind", "source": filepath.Join(dir, "data", "certificates"), "target": "/data"}
+	certificateMount := map[string]any{"type": "bind", "source": filepath.Join(dataSource, "certificates"), "target": "/data"}
 	if c.DataVolume != "" {
 		certificateMount = map[string]any{"type": "volume", "source": c.DataVolume, "target": "/data", "volume": map[string]any{"subpath": "certificates"}}
 	}
@@ -73,6 +76,9 @@ func RenderCompose(dir string, c Config) ([]byte, error) {
 	services := map[string]any{"backend": backend, "frontend": frontend}
 	if c.BundledPostgres {
 		pgSource := filepath.Join(dir, fmt.Sprintf("postgres-%d", c.PostgresMajor))
+		if c.PostgresBind != "" {
+			pgSource = c.PostgresBind
+		}
 		if c.PostgresVolume != "" {
 			pgSource = c.PostgresVolume
 		}
@@ -80,10 +86,26 @@ func RenderCompose(dir string, c Config) ([]byte, error) {
 		if c.PostgresMajor == 17 {
 			pgTarget += "/data"
 		}
-		services["postgres"] = map[string]any{"image": fmt.Sprintf("postgres:%d-bookworm", c.PostgresMajor), "restart": "unless-stopped", "environment": map[string]string{"POSTGRES_USER": "theia", "POSTGRES_DB": "theia", "POSTGRES_PASSWORD_FILE": "/run/secrets/postgres_password"}, "secrets": []string{"postgres_password"}, "volumes": []string{pgSource + ":" + pgTarget}, "healthcheck": map[string]any{"test": []string{"CMD", "pg_isready", "-U", "theia", "-d", "theia"}, "interval": "3s", "timeout": "3s", "retries": 30}}
+		user, database := c.PostgresUser, c.PostgresDatabase
+		if user == "" {
+			user = "theia"
+		}
+		if database == "" {
+			database = "theia"
+		}
+		services["postgres"] = map[string]any{"image": fmt.Sprintf("postgres:%d-bookworm", c.PostgresMajor), "restart": "unless-stopped", "environment": map[string]string{"POSTGRES_USER": user, "POSTGRES_DB": database, "POSTGRES_PASSWORD_FILE": "/run/secrets/postgres_password"}, "secrets": []string{"postgres_password"}, "volumes": []string{pgSource + ":" + pgTarget}, "healthcheck": map[string]any{"test": []string{"CMD", "pg_isready", "-U", user, "-d", database}, "interval": "3s", "timeout": "3s", "retries": 30}}
 		backend["depends_on"] = map[string]any{"postgres": map[string]string{"condition": "service_healthy"}}
 	}
 	compose := map[string]any{"name": c.Project, "services": services}
+	if len(c.ExistingNetworks) > 0 {
+		networks := map[string]any{"default": map[string]any{}}
+		attached := append([]string{"default"}, c.ExistingNetworks...)
+		backend["networks"], frontend["networks"] = attached, attached
+		for _, network := range c.ExistingNetworks {
+			networks[network] = map[string]any{"external": true, "name": network}
+		}
+		compose["networks"] = networks
+	}
 	if c.BundledPostgres {
 		compose["secrets"] = map[string]any{"postgres_password": map[string]string{"file": filepath.Join(control, "postgres-password.txt")}}
 	}

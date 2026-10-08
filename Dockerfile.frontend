@@ -26,7 +26,7 @@ CMD ["npm", "run", "dev"]
 # ---------------------------------------------------------------------------
 # Stage: builder — Compile static assets
 # ---------------------------------------------------------------------------
-FROM node:26-alpine AS builder
+FROM --platform=$BUILDPLATFORM node:26-alpine AS builder
 
 WORKDIR /app
 
@@ -41,6 +41,10 @@ RUN npm run build
 # Stage: production — Caddy serving built files with API proxy and HTTPS
 # ---------------------------------------------------------------------------
 FROM caddy:2.11.7-alpine AS production
+
+# Kubernetes serves an unprivileged HTTP port behind Ingress and drops all
+# capabilities. Remove the upstream file capability that blocks that execution.
+RUN setcap -r /usr/bin/caddy
 
 COPY --from=builder /app/dist /srv
 COPY Caddyfile /etc/caddy/Caddyfile

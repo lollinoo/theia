@@ -14,6 +14,7 @@ import (
 )
 
 type upgradeJournal struct {
+	Kind      string    `json:"kind,omitempty"`
 	Original  Config    `json:"original"`
 	Target    Config    `json:"target"`
 	Phase     string    `json:"phase"`
@@ -115,7 +116,7 @@ func (a *Admin) Upgrade(ctx context.Context, release, backendImage, frontendImag
 }
 
 func (a *Admin) recoverUpgrade(ctx context.Context, j *upgradeJournal) error {
-	if err := a.pause(ctx, false); err != nil {
+	if err := a.pause(ctx, true); err != nil {
 		return err
 	}
 	m := &service.Maintenance{StatePath: StatePath(a.Dir)}
@@ -168,6 +169,9 @@ func (a *Admin) Resume(ctx context.Context) error {
 		return err
 	}
 	if j != nil && j.Phase != "completed" && j.Phase != "rolled_back" {
+		if j.Kind == "postgres_major" {
+			return a.recoverPostgresUpgrade(ctx, j)
+		}
 		op, err := (&service.Maintenance{StatePath: StatePath(a.Dir)}).Status()
 		if err != nil {
 			return err

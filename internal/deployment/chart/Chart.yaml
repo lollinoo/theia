@@ -1,0 +1,6 @@
+apiVersion: v2
+name: theia
+description: Managed Theia instance with offline maintenance and persistent secrets
+type: application
+version: 0.1.0
+appVersion: "1.8.0"
