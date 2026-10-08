@@ -1718,10 +1718,6 @@ func (s *Scheduler) recordEffectiveRuntimeWorkerSettingsLocked() {
 			Value:   float64(policy.WebSocketCoalesce / time.Millisecond),
 		},
 		{
-			Setting: domain.SettingPollingPersistenceBatchMS,
-			Value:   float64(policy.PersistenceBatch / time.Millisecond),
-		},
-		{
 			Setting: domain.SettingPollingEssentialTimeoutMillis,
 			Value:   float64(essentialTimeout.Timeout / time.Millisecond),
 		},

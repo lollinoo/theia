@@ -228,9 +228,6 @@ func TestPolicyFromSettingsClampsUnsafePersistedOperationalLimits(t *testing.T) 
 	if policy.WebSocketCoalesce != 50*time.Millisecond {
 		t.Fatalf("WebSocketCoalesce = %v, want 50ms", policy.WebSocketCoalesce)
 	}
-	if policy.PersistenceBatch != 10000*time.Millisecond {
-		t.Fatalf("PersistenceBatch = %v, want 10000ms", policy.PersistenceBatch)
-	}
 	if policy.SafetyMargin != 5.0 {
 		t.Fatalf("SafetyMargin = %v, want 5.0", policy.SafetyMargin)
 	}

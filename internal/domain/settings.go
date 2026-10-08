@@ -30,7 +30,6 @@ const (
 	SettingPollingEssentialTimeoutMillis       = "polling_essential_timeout_ms"
 	SettingPollingEssentialRetries             = "polling_essential_retries"
 	SettingPollingWebSocketCoalesceMS          = "polling_websocket_coalesce_ms"
-	SettingPollingPersistenceBatchMS           = "polling_persistence_batch_ms"
 	SettingPollingCapacitySafetyMargin         = "polling_capacity_safety_margin"
 	SettingPollingForceOverCapacity            = "polling_force_over_capacity"
 	SettingTimezone                            = "timezone"
@@ -47,6 +46,10 @@ const (
 	SettingBridgePort        = "bridge_port"
 	SettingNetworkProbePorts = "network_probe_ports"
 )
+
+// SettingPollingPersistenceBatchMS identifies the obsolete stored persistence batching key.
+// Deprecated: persistence batching is not implemented.
+const SettingPollingPersistenceBatchMS = "polling_persistence_batch_ms"
 
 // DefaultSettings returns the default runtime settings.
 func DefaultSettings() map[string]string {
@@ -69,7 +72,6 @@ func DefaultSettings() map[string]string {
 		SettingPollingEssentialTimeoutMillis: "1200",
 		SettingPollingEssentialRetries:       "1",
 		SettingPollingWebSocketCoalesceMS:    "500",
-		SettingPollingPersistenceBatchMS:     "1000",
 		SettingPollingCapacitySafetyMargin:   "1.5",
 		SettingPollingForceOverCapacity:      "false",
 		SettingTimezone:                      "UTC",

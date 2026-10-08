@@ -1426,7 +1426,6 @@ var runtimeWorkerSettingOrder = []string{
 	domain.SettingPollingMaxWorkersPerSubnet,
 	domain.SettingPollingMaxInflightPerProfile,
 	domain.SettingPollingWebSocketCoalesceMS,
-	domain.SettingPollingPersistenceBatchMS,
 	domain.SettingPollingEssentialTimeoutMillis,
 	domain.SettingPollingEssentialRetries,
 }

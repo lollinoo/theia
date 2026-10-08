@@ -1333,6 +1333,9 @@ func TestSchedulerRecordMetricsLocked_ExportsEffectiveWorkerSettings(t *testing.
 	scheduler.recordMetricsLocked(time.Date(2026, 4, 24, 10, 5, 0, 0, time.UTC))
 
 	metrics := string(registry.MarshalPrometheus())
+	if strings.Contains(metrics, `setting="polling_persistence_batch_ms"`) {
+		t.Fatalf("unused persistence batch reported as effective: %s", metrics)
+	}
 	for _, want := range []string{
 		`theia_runtime_worker_setting_effective{setting="polling_essential_workers"} 42`,
 		`theia_runtime_worker_setting_effective{setting="snmp_worker_pool_performance_size"} 11`,
@@ -1343,7 +1346,6 @@ func TestSchedulerRecordMetricsLocked_ExportsEffectiveWorkerSettings(t *testing.
 		`theia_runtime_worker_setting_effective{setting="polling_max_workers_per_subnet"} 13`,
 		`theia_runtime_worker_setting_effective{setting="polling_max_inflight_per_snmp_profile"} 17`,
 		`theia_runtime_worker_setting_effective{setting="polling_websocket_coalesce_ms"} 750`,
-		`theia_runtime_worker_setting_effective{setting="polling_persistence_batch_ms"} 1500`,
 		`theia_runtime_worker_setting_effective{setting="polling_essential_timeout_ms"} 900`,
 		`theia_runtime_worker_setting_effective{setting="polling_essential_retries"} 2`,
 	} {

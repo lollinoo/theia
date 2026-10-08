@@ -348,7 +348,6 @@ func TestSettingsHandler_BoundedIntegerSettings_ValidBoundariesAccepted(t *testi
 		{name: "essential timeout", key: domain.SettingPollingEssentialTimeoutMillis, min: "100", max: "30000"},
 		{name: "essential retries", key: domain.SettingPollingEssentialRetries, min: "0", max: "10"},
 		{name: "websocket coalesce", key: domain.SettingPollingWebSocketCoalesceMS, min: "50", max: "5000"},
-		{name: "persistence batch", key: domain.SettingPollingPersistenceBatchMS, min: "100", max: "10000"},
 		{name: "instance retention", key: domain.SettingInstanceBackupRetentionCount, min: "1", max: "365"},
 		{name: "device retention", key: domain.SettingDeviceBackupRetentionCount, min: "1", max: "365"},
 		{name: "bridge port", key: domain.SettingBridgePort, min: "1", max: "65535"},
