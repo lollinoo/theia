@@ -355,7 +355,7 @@ async function selectLinkAtPathRatio(page: Page, path: Locator, ratio = 0.5) {
 }
 
 async function waitForPathToSettle(path: Locator): Promise<string> {
-  let previousPath: string | null = null;
+  let previousPath = '';
   let stableReads = 0;
   await expect
     .poll(
@@ -364,7 +364,7 @@ async function waitForPathToSettle(path: Locator): Promise<string> {
         if (currentPath !== null && currentPath === previousPath) {
           stableReads += 1;
         } else {
-          previousPath = currentPath;
+          previousPath = currentPath ?? '';
           stableReads = 0;
         }
         return stableReads;
@@ -374,7 +374,7 @@ async function waitForPathToSettle(path: Locator): Promise<string> {
     .toBeGreaterThanOrEqual(2);
 
   expect(previousPath).toBeTruthy();
-  return previousPath as string;
+  return previousPath;
 }
 
 async function waitForPersistedPositions(
