@@ -47,6 +47,16 @@ func TestManagedActivationIntegration(t *testing.T) {
 			return err
 		}
 		other, _ := age.GenerateX25519Identity()
+		if err := store.Update(func(s *instance.State) error { s.RecoveryRecipient = r.Recipient; return nil }); err != nil {
+			return err
+		}
+		preserved, err := a.Recovery(ctx, token)
+		if err != nil {
+			return err
+		}
+		if preserved.RecoveryFile != "" || preserved.Recipient != r.Recipient || preserved.Proof != r.Proof {
+			return fmt.Errorf("imported recovery recipient was replaced during activation")
+		}
 		input := ActivateInstanceInput{Username: "FirstAdmin", Email: "admin@example.test", Password: "StrongPassword42!", RecoveryFile: other.String(), Proof: r.Proof}
 		if err := a.Complete(ctx, token, input); err == nil {
 			return fmt.Errorf("unrelated saved recovery file accepted")

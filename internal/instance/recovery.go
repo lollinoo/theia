@@ -71,6 +71,46 @@ type protectedWriter struct {
 	destination io.WriteCloser
 }
 
+// ExportRecoveryHistory writes a new active identity together with every identity
+// supplied by the operator. Old archives remain recoverable after replacement.
+func ExportRecoveryHistory(original, output, previousRecipient string) (string, error) {
+	identities, err := ReadRecoveryFile(original)
+	if err != nil {
+		return "", err
+	}
+	if err := VerifyRecoveryFile(original, previousRecipient); err != nil {
+		return "", err
+	}
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		return "", err
+	}
+	f, err := os.OpenFile(output, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return "", err
+	}
+	_, writeErr := fmt.Fprintf(f, "# Theia recovery history. Keep outside the instance host.\n# active recipient: %s\n%s\n", identity.Recipient(), identity)
+	for _, old := range identities {
+		previous, ok := old.(*age.X25519Identity)
+		if !ok {
+			writeErr = errors.Join(writeErr, fmt.Errorf("unsupported recovery identity"))
+			break
+		}
+		_, err := fmt.Fprintln(f, previous.String())
+		writeErr = errors.Join(writeErr, err)
+	}
+	if err := errors.Join(writeErr, f.Sync(), f.Close()); err != nil {
+		return "", err
+	}
+	if err := VerifyRecoveryFile(output, identity.Recipient().String()); err != nil {
+		return "", err
+	}
+	if err := VerifyRecoveryFile(output, previousRecipient); err != nil {
+		return "", err
+	}
+	return identity.Recipient().String(), nil
+}
+
 func (w *protectedWriter) Close() error {
 	closeEncryptionErr := w.WriteCloser.Close()
 	var syncErr error

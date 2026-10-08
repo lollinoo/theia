@@ -41,6 +41,7 @@ type State struct {
 	BackupDestination  *S3Config                `json:"backup_destination,omitempty"`
 	Activation         *Activation              `json:"activation,omitempty"`
 	DeploymentMetadata json.RawMessage          `json:"deployment_metadata,omitempty"`
+	ApplicationConfig  json.RawMessage          `json:"application_config,omitempty"`
 }
 
 // Generate creates fresh secrets in memory without writing them or replacing state.
@@ -74,7 +75,13 @@ func Import(keyring *crypto.Keyring, session, metrics, dsn, databasePassword str
 	for id, secret := range keyring.Secrets() {
 		s.CredentialKeys[id] = CredentialKey{Secret: secret, CreatedAt: now.UTC()}
 	}
-	s.SessionSecret, s.MetricsToken, s.DBDSN, s.DatabasePassword = session, metrics, dsn, databasePassword
+	if session != "" {
+		s.SessionSecret = session
+	}
+	if metrics != "" {
+		s.MetricsToken = metrics
+	}
+	s.DBDSN, s.DatabasePassword = dsn, databasePassword
 	return s, s.Validate()
 }
 
@@ -124,6 +131,9 @@ func (s *State) Validate() error {
 	}
 	if len(s.DeploymentMetadata) > 0 && (len(s.DeploymentMetadata) > 64<<10 || !json.Valid(s.DeploymentMetadata)) {
 		return fmt.Errorf("invalid deployment metadata")
+	}
+	if len(s.ApplicationConfig) > 64<<10 || len(s.ApplicationConfig) > 0 && !json.Valid(s.ApplicationConfig) {
+		return fmt.Errorf("invalid imported application configuration")
 	}
 	return nil
 }

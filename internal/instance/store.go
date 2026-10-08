@@ -173,6 +173,10 @@ func (s Store) locked(work func() error) error {
 	if err := lockFile(f); err != nil {
 		return fmt.Errorf("instance state is busy: %w", err)
 	}
+	if err := preservePrivateFileOwner(f, filepath.Dir(lockPath)); err != nil {
+		unlockFile(f)
+		return err
+	}
 	defer unlockFile(f)
 	return work()
 }

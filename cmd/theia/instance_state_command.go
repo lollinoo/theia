@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"filippo.io/age"
 	"flag"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/lollinoo/theia/internal/config"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/instance"
@@ -31,6 +33,9 @@ func runInstanceStateCommand(args []string, output io.Writer) error {
 	path := flags.String("state", os.Getenv("THEIA_INSTANCE_STATE"), "Persistent private instance state")
 	configPath := flags.String("config", "config.yaml", "Original configuration file")
 	recoveryFile := flags.String("recovery-file", "", "New operator-held recovery file outside instance storage")
+	originalRecovery := flags.String("original-recovery-file", "", "Existing recovery history, read transiently")
+	exportFile := flags.String("output", "", "Private transient export destination")
+	metadataFile := flags.String("metadata-file", "", "Public deployment coordinates")
 	s3Endpoint := flags.String("endpoint", "", "S3 HTTP(S) endpoint")
 	s3Bucket := flags.String("bucket", "", "Existing S3 bucket")
 	s3Region := flags.String("region", "", "S3 region")
@@ -44,6 +49,74 @@ func runInstanceStateCommand(args []string, output io.Writer) error {
 	}
 	store := instance.Store{Path: *path}
 	switch command {
+	case "deployment":
+		file, err := os.Open(*metadataFile)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		data, err := io.ReadAll(io.LimitReader(file, (64<<10)+1))
+		if err != nil {
+			return err
+		}
+		if len(data) > 64<<10 || !json.Valid(data) {
+			return fmt.Errorf("invalid deployment coordinates")
+		}
+		return store.Update(func(s *instance.State) error { s.DeploymentMetadata = data; return nil })
+	case "database-password-file":
+		state, err := store.Load()
+		if err != nil {
+			return err
+		}
+		if *exportFile == "" {
+			return fmt.Errorf("-output is required")
+		}
+		return instance.WritePrivateFile(*exportFile, []byte(state.DatabasePassword))
+	case "recovery-history":
+		state, err := store.Load()
+		if err != nil {
+			return err
+		}
+		if state.Activation != nil {
+			return fmt.Errorf("complete activation before replacing recovery identities")
+		}
+		if *exportFile == "" || *originalRecovery == "" {
+			return fmt.Errorf("-output and -original-recovery-file are required")
+		}
+		recipient, err := instance.ExportRecoveryHistory(*originalRecovery, *exportFile, state.RecoveryRecipient)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(struct{ Previous, Recipient string }{state.RecoveryRecipient, recipient})
+	case "recovery-replace":
+		state, err := store.Load()
+		if err != nil {
+			return err
+		}
+		if state.Activation != nil {
+			return fmt.Errorf("complete activation before replacing recovery identities")
+		}
+		identities, err := instance.ReadRecoveryFile(*recoveryFile)
+		if err != nil {
+			return err
+		}
+		identity, ok := identities[0].(*age.X25519Identity)
+		if !ok {
+			return fmt.Errorf("invalid new recovery identity")
+		}
+		if err := instance.VerifyRecoveryFile(*recoveryFile, state.RecoveryRecipient); err != nil {
+			return err
+		}
+		if identity.Recipient().String() == state.RecoveryRecipient {
+			return fmt.Errorf("recovery identity was not replaced")
+		}
+		return store.Update(func(s *instance.State) error {
+			if s.RecoveryRecipient != state.RecoveryRecipient {
+				return fmt.Errorf("recovery identity changed concurrently")
+			}
+			s.RecoveryRecipient = identity.Recipient().String()
+			return nil
+		})
 	case "init", "activation":
 		origin, err := url.Parse(*site)
 		if err != nil || (origin.Scheme != "https" && origin.Scheme != "http") || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || (origin.Path != "" && origin.Path != "/") {
@@ -85,8 +158,8 @@ func runInstanceStateCommand(args []string, output io.Writer) error {
 			if err := db.QueryRowContext(ctx, "SELECT count(*) FROM users").Scan(&count); err != nil {
 				return fmt.Errorf("activation user check failed")
 			}
-			if count != 0 || state.RecoveryRecipient != "" {
-				return fmt.Errorf("existing users or recovery configuration prohibit first-administrator activation")
+			if count != 0 {
+				return fmt.Errorf("existing users prohibit first-administrator activation")
 			}
 			if err := store.Update(func(s *instance.State) error {
 				var err error
@@ -170,7 +243,19 @@ func runInstanceStateCommand(args []string, output io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if password == "" {
+			connection, err := pgx.ParseConfig(cfg.DBDSN)
+			if err != nil {
+				return fmt.Errorf("invalid original database connection")
+			}
+			password = connection.Password
+		}
 		state, err := instance.Import(keys, cfg.SessionSecret, cfg.MetricsToken, cfg.DBDSN, password, time.Now())
+		if err != nil {
+			return err
+		}
+		cfg.SessionSecret, cfg.MetricsToken, cfg.DBDSN = "", "", ""
+		state.ApplicationConfig, err = json.Marshal(cfg)
 		if err != nil {
 			return err
 		}

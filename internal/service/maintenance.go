@@ -34,21 +34,24 @@ type Maintenance struct {
 // MaintenanceOperation is safe to display. It contains no keys, passwords, DSNs,
 // or operator recovery identities.
 type MaintenanceOperation struct {
-	ID                  string    `json:"id"`
-	Action              string    `json:"action"`
-	Phase               string    `json:"phase"`
-	Attempt             int       `json:"attempt"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
-	SnapshotSHA256      string    `json:"snapshot_sha256,omitempty"`
-	PreventiveBackupID  string    `json:"preventive_backup_id,omitempty"`
-	SourceWasEmpty      bool      `json:"source_was_empty"`
-	VerifiedInstanceID  string    `json:"verified_instance_id,omitempty"`
-	VerifiedActiveKeyID string    `json:"verified_active_key_id,omitempty"`
-	VerifiedReleaseTag  string    `json:"verified_release_tag,omitempty"`
-	OriginalReleaseTag  string    `json:"original_release_tag,omitempty"`
-	WritesReopened      bool      `json:"writes_reopened"`
-	Error               string    `json:"error,omitempty"`
+	LegacyPreventiveFileName string    `json:"legacy_preventive_file_name,omitempty"`
+	SourcePostgresMajor      int       `json:"source_postgres_major,omitempty"`
+	TargetPostgresMajor      int       `json:"target_postgres_major,omitempty"`
+	ID                       string    `json:"id"`
+	Action                   string    `json:"action"`
+	Phase                    string    `json:"phase"`
+	Attempt                  int       `json:"attempt"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
+	SnapshotSHA256           string    `json:"snapshot_sha256,omitempty"`
+	PreventiveBackupID       string    `json:"preventive_backup_id,omitempty"`
+	SourceWasEmpty           bool      `json:"source_was_empty"`
+	VerifiedInstanceID       string    `json:"verified_instance_id,omitempty"`
+	VerifiedActiveKeyID      string    `json:"verified_active_key_id,omitempty"`
+	VerifiedReleaseTag       string    `json:"verified_release_tag,omitempty"`
+	OriginalReleaseTag       string    `json:"original_release_tag,omitempty"`
+	WritesReopened           bool      `json:"writes_reopened"`
+	Error                    string    `json:"error,omitempty"`
 }
 
 func (m *Maintenance) operationsDir() string { return m.StatePath + ".operations" }
@@ -330,6 +333,9 @@ func (m *Maintenance) mutate(ctx context.Context, action string, apply func(cont
 				}
 				if err == nil {
 					err = postgres.NewSettingsRepo(verificationDB).Set(managedInstanceIdentitySetting, current.InstanceID)
+				}
+				if err == nil && op.LegacyPreventiveFileName != "" {
+					err = m.registerLegacyPreventiveBackup(verificationDB, op)
 				}
 				applyErr = err
 				if err == nil {

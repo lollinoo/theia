@@ -3,6 +3,7 @@ package config
 // This file defines config configuration loading, defaults, and validation behavior.
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -149,6 +150,22 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
+	managedPath := cfg.InstanceStatePath
+	if value := os.Getenv("THEIA_INSTANCE_STATE"); value != "" {
+		managedPath = value
+	}
+	if managedPath != "" {
+		state, err := (instance.Store{Path: managedPath}).Load()
+		if err != nil {
+			return nil, fmt.Errorf("load managed instance: %w", err)
+		}
+		if len(state.ApplicationConfig) > 0 {
+			if err := json.Unmarshal(state.ApplicationConfig, cfg); err != nil {
+				return nil, fmt.Errorf("invalid imported application configuration")
+			}
+			cfg.InstanceStatePath = managedPath
+		}
+	}
 	// Environment variable overrides
 	if v := os.Getenv("THEIA_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v

@@ -29,5 +29,10 @@ func AcquireLease(statePath string) (func(), error) {
 		f.Close()
 		return nil, fmt.Errorf("instance is busy; stop the application or finish the active maintenance operation")
 	}
+	if err := preservePrivateFileOwner(f, filepath.Dir(path)); err != nil {
+		unlockFile(f)
+		f.Close()
+		return nil, err
+	}
 	return func() { unlockFile(f); _ = f.Close() }, nil
 }

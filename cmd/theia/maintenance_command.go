@@ -26,8 +26,10 @@ func runMaintenanceCommand(args []string, output io.Writer) error {
 	configPath := flags.String("config", "config.yaml", "Configuration file")
 	statePath := flags.String("state", os.Getenv("THEIA_INSTANCE_STATE"), "Persistent instance state for status")
 	archive := flags.String("archive", "", "Encrypted instance backup archive")
+	destination := flags.String("output", "", "New converted archive destination")
 	recovery := flags.String("recovery-file", "", "Operator recovery file, read transiently")
 	forceRotation := flags.Bool("rotate-credentials", false, "Rotate the active credential key during migration even when not due")
+	postgresTarget := flags.Int("postgres-target", 18, "Supported target PostgreSQL major version")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -82,6 +84,23 @@ func runMaintenanceCommand(args []string, output io.Writer) error {
 	paths := resolveRuntimePaths(cfg)
 	m := &service.Maintenance{StatePath: cfg.InstanceStatePath, DataDir: paths.appDataDir, BackupDir: paths.instanceBackupDir, DeviceBackupDir: paths.backupDir, KnownHostsPath: paths.knownHostsPath, DBDSN: cfg.DBDSN, ReleaseTag: os.Getenv("THEIA_RELEASE_TAG")}
 	switch args[0] {
+	case "convert-legacy":
+		if *archive == "" || *destination == "" {
+			return fmt.Errorf("-archive and -output are required")
+		}
+		backup, err := m.ConvertLegacyArchive(ctx, *archive, *destination)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(backup)
+	case "rotate-operational":
+		return m.RotateOperationalSecrets(ctx)
+	case "postgres-prepare":
+		return m.PreparePostgresUpgrade(ctx, *postgresTarget)
+	case "postgres-finish":
+		return m.FinishPostgresUpgrade(ctx)
+	case "postgres-abort":
+		return m.AbortPostgresUpgrade(ctx)
 	case "migrate":
 		return m.Migrate(ctx, *forceRotation)
 	case "resume":

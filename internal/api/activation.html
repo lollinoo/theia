@@ -26,9 +26,11 @@ download.addEventListener('click', async () => {
   try {
     const recovery = await request('/api/v1/setup/recovery', {});
     proof = recovery.proof;
-    const url = URL.createObjectURL(new Blob([recovery.recovery_file], {type: 'text/plain'}));
-    const link = document.createElement('a'); link.href = url; link.download = 'theia-recovery.txt'; link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (recovery.recovery_file) {
+      const url = URL.createObjectURL(new Blob([recovery.recovery_file], {type: 'text/plain'}));
+      const link = document.createElement('a'); link.href = url; link.download = 'theia-recovery.txt'; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } else { message.textContent = 'Select the recovery file saved when this installation was imported.'; }
     document.getElementById('activation').hidden = false;
     download.hidden = true;
   } catch (error) { message.textContent = error.message; download.disabled = false; }

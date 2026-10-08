@@ -11,6 +11,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/instance"
 	"github.com/lollinoo/theia/internal/repository/postgres"
 )
@@ -33,16 +34,34 @@ func (m *Maintenance) prepareSafetySnapshot(ctx context.Context, db *sql.DB, sta
 		}
 		op.SourceWasEmpty = true
 	} else {
-		s, err := m.backupService(db, state)
-		if err != nil {
+		var sourceVersion int
+		var dirty bool
+		if err := db.QueryRowContext(ctx, "SELECT version,dirty FROM schema_migrations").Scan(&sourceVersion, &dirty); err != nil {
 			return err
 		}
-		s.FailStaleRunning()
-		backup, err := s.Create(ctx)
-		if err != nil {
-			return fmt.Errorf("preventive backup is incomplete; maintenance was not started: %w", err)
+		if dirty || sourceVersion > postgres.SupportedSchemaVersion() {
+			return fmt.Errorf("source migration metadata is dirty or newer than this release")
 		}
-		op.PreventiveBackupID = backup.ID.String()
+		if sourceVersion < postgres.SupportedSchemaVersion() {
+			backup, err := m.createLegacyPreventiveBackup(ctx, state, func(path string, id uuid.UUID) (*domain.InstanceBackup, error) {
+				return m.writeDatabaseArchive(ctx, db, state, id, path, state.RecoveryRecipient)
+			})
+			if err != nil {
+				return err
+			}
+			op.PreventiveBackupID, op.LegacyPreventiveFileName = backup.ID.String(), backup.FileName
+		} else {
+			s, err := m.backupService(db, state)
+			if err != nil {
+				return err
+			}
+			s.FailStaleRunning()
+			backup, err := s.Create(ctx)
+			if err != nil {
+				return fmt.Errorf("preventive backup is incomplete; maintenance was not started: %w", err)
+			}
+			op.PreventiveBackupID = backup.ID.String()
+		}
 	}
 	if err := m.persist(op, "snapshot_preparing"); err != nil {
 		return err
@@ -152,6 +171,34 @@ func (m *Maintenance) rollback(ctx context.Context, op *MaintenanceOperation) (r
 	if err != nil {
 		return err
 	}
+	if op.Action == "rotate_operational" {
+		var connected *sql.DB
+		for _, dsn := range []string{m.DBDSN, state.DBDSN} {
+			candidate := *m
+			candidate.DBDSN = dsn
+			db, openErr := candidate.openDB()
+			if openErr != nil {
+				continue
+			}
+			probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+			pingErr := db.PingContext(probe)
+			cancel()
+			if pingErr == nil {
+				connected = db
+				break
+			}
+			db.Close()
+		}
+		if connected == nil {
+			return fmt.Errorf("neither protected database password can resume this operation")
+		}
+		err := setDatabaseRolePassword(ctx, connected, state.DatabasePassword)
+		connected.Close()
+		if err != nil {
+			return err
+		}
+		m.DBDSN = state.DBDSN
+	}
 	if err := runPostgresRestore(ctx, m.DBDSN, filepath.Join(staging, postgresArchiveDBEntry)); err != nil {
 		return err
 	}
@@ -172,7 +219,23 @@ func (m *Maintenance) rollback(ctx context.Context, op *MaintenanceOperation) (r
 			return err
 		}
 		// Verify decryption without upgrading the schema again during rollback.
-		if err := VerifyStoredCredentials(ctx, db, keys, false); err != nil {
+		manifest, err := readRestoreManifest(staging)
+		if err != nil {
+			return err
+		}
+		if manifest.MigrationVersion < postgres.SupportedSchemaVersion() {
+			var version int
+			var dirty bool
+			if err := db.QueryRowContext(ctx, "SELECT version,dirty FROM schema_migrations").Scan(&version, &dirty); err != nil {
+				return err
+			}
+			if dirty || version != manifest.MigrationVersion {
+				return fmt.Errorf("original schema was not restored")
+			}
+			if err := VerifyIsolatedPostgresDump(ctx, filepath.Join(staging, postgresArchiveDBEntry), keys); err != nil {
+				return err
+			}
+		} else if err := VerifyStoredCredentials(ctx, db, keys, false); err != nil {
 			return err
 		}
 	}
@@ -228,6 +291,9 @@ func (m *Maintenance) Resume(ctx context.Context) error {
 	}
 	if op == nil || terminalMaintenancePhase(op.Phase) {
 		return nil
+	}
+	if op.Action == "postgres_major" {
+		return fmt.Errorf("restart the original PostgreSQL 17 volume and use postgres-abort for this cutover")
 	}
 	if op.Phase == "preparing" || op.Phase == "snapshot_preparing" {
 		op.Error = "operation interrupted before live changes; start a new operation"

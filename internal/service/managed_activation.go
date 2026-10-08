@@ -118,8 +118,11 @@ func (a *ManagedActivation) Recovery(ctx context.Context, token string) (*Activa
 	if err := a.DB.QueryRowContext(ctx, "SELECT count(*) FROM users").Scan(&count); err != nil {
 		return nil, err
 	}
-	if count != 0 || s.RecoveryRecipient != "" {
+	if count != 0 {
 		return nil, ErrActivationDenied
+	}
+	if s.RecoveryRecipient != "" {
+		return &ActivationRecovery{Recipient: s.RecoveryRecipient, Proof: recoveryProof(s, s.RecoveryRecipient)}, nil
 	}
 	identity, err := age.GenerateX25519Identity()
 	if err != nil {
@@ -138,14 +141,22 @@ func (a *ManagedActivation) Complete(ctx context.Context, token string, input Ac
 		return err
 	}
 	identities, err := age.ParseIdentities(strings.NewReader(input.RecoveryFile))
-	if err != nil || len(identities) != 1 {
+	if err != nil || len(identities) == 0 {
 		return fmt.Errorf("saved recovery file is invalid")
 	}
-	identity, ok := identities[0].(*age.X25519Identity)
-	if !ok {
-		return fmt.Errorf("saved recovery file is invalid")
+	var recipient string
+	for _, candidate := range identities {
+		if identity, ok := candidate.(*age.X25519Identity); ok {
+			value := identity.Recipient().String()
+			if (s.RecoveryRecipient == "" || s.RecoveryRecipient == value) && hmac.Equal([]byte(input.Proof), []byte(recoveryProof(s, value))) {
+				recipient = value
+				break
+			}
+		}
 	}
-	recipient := identity.Recipient().String()
+	if recipient == "" {
+		return fmt.Errorf("saved recovery file does not match this activation")
+	}
 	if !hmac.Equal([]byte(input.Proof), []byte(recoveryProof(s, recipient))) {
 		return fmt.Errorf("saved recovery file does not match this activation")
 	}

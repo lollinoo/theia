@@ -42,6 +42,9 @@ func (m *Maintenance) RollbackBeforeReopen(ctx context.Context) error {
 	if op == nil || op.Phase != "completed" || op.WritesReopened || op.SnapshotSHA256 == "" {
 		return fmt.Errorf("rollback requires a verified operation whose application writes have not reopened")
 	}
+	if op.Action == "postgres_major" {
+		return fmt.Errorf("PostgreSQL major rollback requires restarting its original volume and using postgres-abort")
+	}
 	op.Attempt++
 	return m.rollback(ctx, op)
 }
