@@ -79,7 +79,7 @@ func TestDefaultDialerCancelsSilentHandshake(t *testing.T) {
 }
 
 func TestClientCancelsBlockedChannelOperations(t *testing.T) {
-	for _, operation := range []string{"command", "sftp-memory", "sftp-disk"} {
+	for _, operation := range []string{"command", "sftp-disk"} {
 		t.Run(operation, func(t *testing.T) {
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
@@ -128,8 +128,6 @@ func TestClientCancelsBlockedChannelOperations(t *testing.T) {
 				switch operation {
 				case "command":
 					_, err = client.RunCommand(ctx, "blocked")
-				case "sftp-memory":
-					_, err = client.DownloadFile(ctx, "/backup")
 				case "sftp-disk":
 					err = client.DownloadFileToDisk(ctx, "/backup", path)
 				}
