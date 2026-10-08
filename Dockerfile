@@ -51,7 +51,10 @@ CMD ["air", "-c", ".air.toml"]
 # ---------------------------------------------------------------------------
 # Stage: builder — Compile production binary
 # ---------------------------------------------------------------------------
-FROM golang:1.27.1-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
@@ -66,7 +69,7 @@ RUN go mod download 2>/dev/null || true
 
 COPY . .
 
-RUN go build -o /app/theia ./cmd/theia/
+RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -o /app/theia ./cmd/theia/
 
 # ---------------------------------------------------------------------------
 # Stage: production — Minimal runtime image

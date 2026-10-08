@@ -44,6 +44,9 @@ jobs:
             browser_e2e=true
             bridge=true
           elif [[ "${{ github.event_name }}" == "release" ]]; then
+            backend=true
+            frontend=true
+            browser_e2e=true
             bridge=true
           elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base="${{ github.event.pull_request.base.sha }}"
@@ -302,7 +305,7 @@ jobs:
   master-images:
     name: Master Images
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/master' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-    needs: [changes, backend-fast, frontend-fast, browser-e2e, build-bridge]
+    needs: [changes, backend-fast, frontend-fast, browser-e2e, build-bridge, deployment-integration]
     runs-on: ubuntu-latest
     concurrency:
       group: master-images
@@ -368,7 +371,7 @@ jobs:
   branch-images:
     name: Branch Images
     if: ${{ always() && github.event_name == 'push' && github.ref != 'refs/heads/master' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-    needs: [changes, backend-fast, frontend-fast, browser-e2e]
+    needs: [changes, backend-fast, frontend-fast, browser-e2e, deployment-integration]
     runs-on: ubuntu-latest
     concurrency:
       group: branch-images-${{ github.ref }}
@@ -435,6 +438,7 @@ jobs:
 
   release-images:
     name: Release Images
+    needs: [backend-fast, frontend-fast, browser-e2e, deployment-integration]
     if: ${{ github.event_name == 'release' && !github.event.release.prerelease && !github.event.release.draft }}
     runs-on: ubuntu-latest
     permissions:
@@ -465,6 +469,8 @@ jobs:
             echo "release_tag=$release_tag"
           } >> "$GITHUB_OUTPUT"
 
+      - uses: docker/setup-qemu-action@v3
+
       - uses: docker/setup-buildx-action@v4
 
       - uses: docker/login-action@v4
@@ -488,6 +494,7 @@ jobs:
           context: .
           file: ./Dockerfile
           target: production
+          platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
           sbom: false
@@ -511,6 +518,7 @@ jobs:
           context: ./frontend
           file: ./Dockerfile.frontend
           target: production
+          platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
           sbom: false
@@ -518,3 +526,55 @@ jobs:
           labels: ${{ steps.meta-frontend-release.outputs.labels }}
           cache-from: type=gha,scope=frontend-release
           cache-to: type=gha,mode=max,scope=frontend-release
+
+  deployment-bundles:
+    name: Deployment bundles
+    if: ${{ github.event_name == 'release' && !github.event.release.prerelease && !github.event.release.draft }}
+    needs: release-images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build administration bundles for AMD64 and ARM64
+        env:
+          THEIA_BUNDLE_RELEASE: ${{ github.event.release.tag_name }}
+        run: bash scripts/build-deployment-bundles.sh "$THEIA_BUNDLE_RELEASE"
+      - name: Upload verified deployment bundles
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          THEIA_BUNDLE_RELEASE: ${{ github.event.release.tag_name }}
+        run: |
+          cd dist/deployment
+          sha256sum --check SHA256SUMS
+          gh release upload "$THEIA_BUNDLE_RELEASE" ./*.tar.gz SHA256SUMS --clobber --repo "${{ github.repository }}"
+
+  deployment-integration:
+    name: Managed deployment integration
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install browser and Kubernetes test tools
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run e2e:install
+          bash scripts/install-kubernetes-test-tools.sh "$RUNNER_TEMP/theia-kube-tools"
+          echo "$RUNNER_TEMP/theia-kube-tools" >> "$GITHUB_PATH"
+      - name: Verify managed Docker deployment and encrypted recovery
+        run: make deployment-test maintenance-test postgres-upgrade-test
+      - name: Verify Kubernetes lifecycle on isolated persistent volumes
+        run: make kubernetes-test
