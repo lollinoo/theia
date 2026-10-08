@@ -773,11 +773,19 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		observability.DatabasePool{Name: "bulk_download", DB: leaseDB},
 	)
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
+	var activation *service.ManagedActivation
+	if cfg.InstanceStatePath != "" {
+		activation = &service.ManagedActivation{Store: instance.Store{Path: cfg.InstanceStatePath}, DB: db}
+		if err := activation.Reconcile(context.Background()); err != nil {
+			return fmt.Errorf("reconcile managed activation: %w", err)
+		}
+	}
+	httpHandler := api.WithManagedActivation(router, activation, db)
 	server = &http.Server{
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		Addr:              cfg.ListenAddr,
-		Handler:           runtimeHTTPHandler(router, metricsHandler, metricsToken),
+		Handler:           runtimeHTTPHandler(httpHandler, metricsHandler, metricsToken),
 	}
 
 	b.handleShutdown(cancel, server, children)

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"filippo.io/age"
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/crypto"
 )
@@ -37,6 +38,7 @@ type State struct {
 	SnapshotSecret    string                   `json:"snapshot_secret"`
 	RecoveryRecipient string                   `json:"recovery_recipient,omitempty"`
 	BackupDestination *S3Config                `json:"backup_destination,omitempty"`
+	Activation        *Activation              `json:"activation,omitempty"`
 }
 
 // Generate creates fresh secrets in memory without writing them or replacing state.
@@ -107,6 +109,16 @@ func (s *State) Validate() error {
 	}
 	if strings.TrimSpace(s.SessionSecret) == "" || strings.TrimSpace(s.MetricsToken) == "" || len(s.SnapshotSecret) < 32 {
 		return fmt.Errorf("instance operational secrets are missing")
+	}
+	if s.RecoveryRecipient != "" {
+		if _, err := age.ParseX25519Recipient(s.RecoveryRecipient); err != nil {
+			return fmt.Errorf("invalid instance recovery recipient")
+		}
+	}
+	if s.Activation != nil {
+		if err := s.Activation.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

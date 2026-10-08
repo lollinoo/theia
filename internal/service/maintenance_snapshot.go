@@ -180,6 +180,17 @@ func (m *Maintenance) rollback(ctx context.Context, op *MaintenanceOperation) (r
 }
 
 func (m *Maintenance) activateArtifacts(staging string) error {
+	certificates := filepath.Join(staging, "certificates")
+	if _, err := os.Stat(certificates); os.IsNotExist(err) {
+		if err := os.Mkdir(certificates, 0700); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if err := replaceDirForRestore(certificates, filepath.Join(m.DataDir, "certificates")); err != nil {
+		return err
+	}
 	backups := filepath.Join(staging, "backups")
 	if _, err := os.Stat(backups); os.IsNotExist(err) {
 		if err := os.Mkdir(backups, 0700); err != nil {

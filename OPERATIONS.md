@@ -6,6 +6,17 @@ deployment work are recorded in [the ADRs](docs/adr/0001-guided-portable-instanc
 
 ## Persistent secrets and existing installations
 
+A new managed instance uses `theia instance init -state /persistent/secrets.json
+-site https://theia.example.org` with its destination connection supplied through
+`THEIA_DB_DSN_FILE`. This explicitly creates secrets once and prints an activation
+link that expires after one hour. Run `maintenance migrate` before starting HTTP.
+The activation page downloads a recovery file to the administrator's computer,
+requires selecting that saved file again, and creates the chosen administrator
+account only after proving it matches the configured public recipient. No fixed
+administrator password or private recovery key is saved by the server. If the link
+expires before creating any users, `instance activation` issues a replacement.
+Existing users, including disabled users, prevent first-administrator activation.
+
 `THEIA_INSTANCE_STATE=/persistent/secrets.json` selects managed instance secrets.
 The file and its directory must be private (0600 and 0700 respectively) and
 persistent across container replacement. Missing or corrupt state stops startup;
@@ -58,7 +69,9 @@ independent storage outside the instance host. Protect it like a password.
 
 Managed backups created by the existing UI and scheduler use `.tar.gz.age` and
 contain protected instance secrets, the PostgreSQL dump, retained device backups,
-and SSH known hosts. Each archive is encrypted directly while writing. Before
+SSH known hosts, and the persistent HTTPS certificate/CA files under
+`THEIA_DATA_DIR/certificates`. Stop the frontend during restore so its certificate
+cache cannot retain replaced state. Each archive is encrypted directly while writing. Before
 success, the backend decrypts the entire archive with a temporary in-memory
 identity, checks its contents, actually restores an isolated PostgreSQL 18 cluster,
 runs migrations, and verifies every stored sensitive credential. The temporary
