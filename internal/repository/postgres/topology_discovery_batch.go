@@ -32,7 +32,7 @@ func (r *TopologyObservationRepo) UpsertDiscoveryObservations(observations []top
 	if len(observations) == 0 {
 		return nil
 	}
-	return withWriteRetry(func() error { return r.upsertDiscoveryObservationsOnce(observations) })
+	return r.upsertDiscoveryObservationsOnce(observations)
 }
 
 func (r *TopologyObservationRepo) upsertDiscoveryObservationsOnce(observations []topology.Observation) error {

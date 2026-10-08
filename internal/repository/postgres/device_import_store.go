@@ -101,28 +101,26 @@ func (s *DeviceImportStore) CreateDeviceInMap(
 	}
 	persistenceDevice := cloneDeviceForImportPersistence(device)
 
-	err := withWriteRetry(func() error {
-		if ctx.Err() != nil {
-			return domain.ErrDeviceImportStoreUnavailable
-		}
-		existing, err := s.existingCanonicalAddresses(ctx, domain.DeviceAddressValues(*persistenceDevice))
-		if err != nil {
-			return err
-		}
-		if len(existing) > 0 {
-			return domain.ErrDeviceImportAddressConflict
-		}
+	if ctx.Err() != nil {
+		return domain.ErrDeviceImportStoreUnavailable
+	}
+	existing, err := s.existingCanonicalAddresses(ctx, domain.DeviceAddressValues(*persistenceDevice))
+	if err != nil {
+		return classifyDeviceImportStoreError(err)
+	}
+	if len(existing) > 0 {
+		return domain.ErrDeviceImportAddressConflict
+	}
 
-		return s.devices.createOnceWithAppend(
-			ctx,
-			persistenceDevice,
-			true, // Imports require exclusivity even for virtual addresses.
-			func(tx *Tx, now time.Time) error {
-				return appendImportedDevicePlacement(ctx, tx, persistenceDevice.ID, placement, now)
-			},
-			false,
-		)
-	})
+	err = s.devices.createOnceWithAppend(
+		ctx,
+		persistenceDevice,
+		true, // Imports require exclusivity even for virtual addresses.
+		func(tx *Tx, now time.Time) error {
+			return appendImportedDevicePlacement(ctx, tx, persistenceDevice.ID, placement, now)
+		},
+		false,
+	)
 	return classifyDeviceImportStoreError(err)
 }
 

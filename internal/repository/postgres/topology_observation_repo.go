@@ -26,9 +26,7 @@ func NewTopologyObservationRepo(db *sql.DB) *TopologyObservationRepo {
 }
 
 func (r *TopologyObservationRepo) UpsertObservation(observation *topology.Observation) error {
-	return withWriteRetry(func() error {
-		return r.upsertObservationOnce(observation)
-	})
+	return r.upsertObservationOnce(observation)
 }
 
 func (r *TopologyObservationRepo) upsertObservationOnce(observation *topology.Observation) error {
@@ -117,13 +115,7 @@ func (r *TopologyObservationRepo) upsertObservationOnce(observation *topology.Ob
 // PruneLocalObservations deletes local observations for the selected protocols
 // that are absent from the supplied current observation keys.
 func (r *TopologyObservationRepo) PruneLocalObservations(localDeviceID uuid.UUID, protocols []domain.DiscoveryProtocol, keep []topology.Observation) (int, error) {
-	deleted := 0
-	err := withWriteRetry(func() error {
-		var pruneErr error
-		deleted, pruneErr = r.pruneLocalObservationsOnce(localDeviceID, protocols, keep)
-		return pruneErr
-	})
-	return deleted, err
+	return r.pruneLocalObservationsOnce(localDeviceID, protocols, keep)
 }
 
 func (r *TopologyObservationRepo) pruneLocalObservationsOnce(localDeviceID uuid.UUID, protocols []domain.DiscoveryProtocol, keep []topology.Observation) (int, error) {
@@ -246,9 +238,7 @@ func normalizeObservationProtocols(protocols []domain.DiscoveryProtocol) []domai
 }
 
 func (r *TopologyObservationRepo) UpsertUnresolvedNeighbor(neighbor *topology.UnresolvedNeighbor) error {
-	return withWriteRetry(func() error {
-		return r.upsertUnresolvedNeighborOnce(neighbor)
-	})
+	return r.upsertUnresolvedNeighborOnce(neighbor)
 }
 
 func (r *TopologyObservationRepo) upsertUnresolvedNeighborOnce(neighbor *topology.UnresolvedNeighbor) error {

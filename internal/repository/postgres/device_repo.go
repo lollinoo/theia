@@ -94,9 +94,7 @@ func (r *DeviceRepo) publishChange(kind domain.ChangeKind, deviceID uuid.UUID) {
 
 // Create inserts a new device and its interfaces into the database.
 func (r *DeviceRepo) Create(device *domain.Device) error {
-	return withWriteRetry(func() error {
-		return r.createOnceWithAppend(context.Background(), device, false, nil, true)
-	})
+	return r.createOnceWithAppend(context.Background(), device, false, nil, true)
 }
 
 func (r *DeviceRepo) createOnceWithAppend(
@@ -769,9 +767,7 @@ func (r *DeviceRepo) GetByIDsForTopology(ids []uuid.UUID) ([]domain.Device, erro
 
 // UpdateStaticDiscovery persists static discovery fields and replaces interfaces without touching credentials.
 func (r *DeviceRepo) UpdateStaticDiscovery(device *domain.Device) error {
-	return withWriteRetry(func() error {
-		return r.updateStaticDiscoveryOnce(device)
-	})
+	return r.updateStaticDiscoveryOnce(device)
 }
 
 func (r *DeviceRepo) updateStaticDiscoveryOnce(device *domain.Device) error {
@@ -849,9 +845,7 @@ func (r *DeviceRepo) updateStaticDiscoveryOnce(device *domain.Device) error {
 
 // Update modifies an existing device and replaces its interfaces.
 func (r *DeviceRepo) Update(device *domain.Device) error {
-	return withWriteRetry(func() error {
-		return r.updateOnce(device)
-	})
+	return r.updateOnce(device)
 }
 
 func (r *DeviceRepo) updateOnce(device *domain.Device) error {
@@ -966,9 +960,7 @@ func (r *DeviceRepo) updateOnce(device *domain.Device) error {
 
 // Delete removes a device and its interfaces (via CASCADE) by UUID.
 func (r *DeviceRepo) Delete(id uuid.UUID) error {
-	return withWriteRetry(func() error {
-		return r.deleteOnce(id)
-	})
+	return r.deleteOnce(id)
 }
 
 func (r *DeviceRepo) deleteOnce(id uuid.UUID) error {
@@ -1212,37 +1204,35 @@ func (r *DeviceRepo) GetDeviceAddresses(deviceID uuid.UUID) ([]domain.DeviceAddr
 
 // ReplaceDeviceAddresses replaces all address rows for one device.
 func (r *DeviceRepo) ReplaceDeviceAddresses(deviceID uuid.UUID, addresses []domain.DeviceAddress) error {
-	return withWriteRetry(func() error {
-		tx, err := r.db.Begin()
-		if err != nil {
-			return fmt.Errorf("beginning transaction: %w", err)
-		}
-		defer tx.Rollback()
-		if err := lockDeviceAddressOwnerTx(context.Background(), tx, deviceID); err != nil {
-			return err
-		}
-		var deviceType string
-		if err := tx.QueryRow("SELECT device_type FROM devices WHERE id=?", deviceID.String()).Scan(&deviceType); err != nil {
-			return err
-		}
-		values := make([]string, 0, len(addresses))
-		for _, address := range addresses {
-			values = append(values, address.Address)
-		}
-		if err := checkDeviceAddressWriteTx(context.Background(), tx, deviceID, domain.DeviceType(deviceType), values, false); err != nil {
-			return err
-		}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := lockDeviceAddressOwnerTx(context.Background(), tx, deviceID); err != nil {
+		return err
+	}
+	var deviceType string
+	if err := tx.QueryRow("SELECT device_type FROM devices WHERE id=?", deviceID.String()).Scan(&deviceType); err != nil {
+		return err
+	}
+	values := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		values = append(values, address.Address)
+	}
+	if err := checkDeviceAddressWriteTx(context.Background(), tx, deviceID, domain.DeviceType(deviceType), values, false); err != nil {
+		return err
+	}
 
-		if err := replaceDeviceAddressesTx(tx, deviceID, addresses, time.Now().UTC()); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-		r.notify()
-		r.publishChange(domain.ChangeKindUpdated, deviceID)
-		return nil
-	})
+	if err := replaceDeviceAddressesTx(tx, deviceID, addresses, time.Now().UTC()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	r.notify()
+	r.publishChange(domain.ChangeKindUpdated, deviceID)
+	return nil
 }
 
 func replaceDeviceAddressesTx(tx *Tx, deviceID uuid.UUID, addresses []domain.DeviceAddress, now time.Time) error {
