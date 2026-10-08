@@ -13,4 +13,4 @@ docker run --rm \
   -e THEIA_MAINTENANCE_INTEGRATION=1 \
   -v "$test_dir/service.test:/service.test:ro" \
   theia-maintenance-test:local \
-  /service.test -test.run '^Test(ManagedBackup|ManagedActivation|Maintenance)Integration$' -test.v -test.timeout 240s
+  /service.test -test.run '^Test(ManagedBackup|ManagedActivation|Maintenance|MaintenanceEmptyDatabase)Integration$' -test.v -test.timeout 240s

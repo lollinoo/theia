@@ -43,6 +43,12 @@ func TestMaintenanceIntegration(t *testing.T) {
 		if err := m.RequireVerifiedState(state.InstanceID, state.ActiveKeyID); err != nil {
 			return err
 		}
+		if err := m.MarkWritesReopened(state.InstanceID, state.ActiveKeyID); err != nil {
+			return err
+		}
+		if err := m.RollbackBeforeReopen(ctx); err == nil {
+			return fmt.Errorf("rollback was allowed after application writes reopened")
+		}
 		if err := m.Migrate(ctx, false); err != nil {
 			return err
 		}
@@ -131,7 +137,7 @@ func TestMaintenanceIntegration(t *testing.T) {
 		if err := m.persist(second, "preparing"); err != nil {
 			return err
 		}
-		if err := m.prepareSafetySnapshot(ctx, db, state, second); err != nil {
+		if err := m.prepareSafetySnapshot(ctx, db, state, second, nil); err != nil {
 			return err
 		}
 		if err := m.persist(second, "applying"); err != nil {

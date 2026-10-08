@@ -86,6 +86,8 @@ func runMaintenanceCommand(args []string, output io.Writer) error {
 		return m.Migrate(ctx, *forceRotation)
 	case "resume":
 		return m.Resume(ctx)
+	case "rollback":
+		return m.RollbackBeforeReopen(ctx)
 	case "backup":
 		backup, err := m.Backup(ctx)
 		if err != nil {

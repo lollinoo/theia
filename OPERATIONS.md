@@ -1,8 +1,83 @@
 # Instance administration
 
-The managed deployment is being introduced incrementally. The existing Compose
-deployment remains usable during the transition. Architecture and remaining
-deployment work are recorded in [the ADRs](docs/adr/0001-guided-portable-instance-maintenance.md).
+The standalone `theia-admin` binary manages Docker deployment without Git, Make,
+Go or Node on the server. Docker Engine and Compose are the host prerequisites.
+Architecture is recorded in [the ADRs](docs/adr/0001-guided-portable-instance-maintenance.md).
+
+## Guided Docker deployment
+
+Use the administration binary from a versioned release. Its release build pins
+the matching image version; development builds require `-release` explicitly.
+
+```sh
+theia-admin install -dir /opt/theia -hostname theia.example.org
+```
+
+This creates private persistent secrets once, starts bundled PostgreSQL 18,
+runs verified offline migrations, starts the backend and HTTPS frontend, and
+checks the actual HTTPS endpoint before printing the temporary activation link.
+Choose your administrator credentials and save the recovery file on your
+computer through that link. Do not store its private identity on the instance host.
+
+LAN IP addresses and local hostnames use an internal CA automatically. Export its
+public certificate and trust it once on each client:
+
+```sh
+theia-admin ca -dir /opt/theia -output theia-ca.crt
+```
+
+The CA persists across restarts and belongs to the encrypted instance backup.
+Public DNS names use automatic certificate issuance and renewal. DNS must reach
+the host and ports 80/443 must be available for certificate challenges. Override
+the TLS choice with `-tls internal` or `-tls auto`. Use `-tls external` with
+`-tls-cert-file` and `-tls-key-file` for existing PEM certificates; their owner
+handles renewal. `-tls proxy` exposes HTTP behind an existing HTTPS proxy; specify
+that proxy's source CIDRs with `-trusted-proxies` so forwarded HTTPS is preserved.
+`-http-port`, `-https-port` and `-bind-address` customize published frontend ports.
+The generated deployment publishes neither PostgreSQL nor the backend API.
+
+For external PostgreSQL, pass `-database-dsn-file /private/postgres-connection.txt`
+during installation. The connection is saved privately; it does not appear in
+Compose or command arguments. The database owner manages server upgrades.
+
+```sh
+theia-admin status -dir /opt/theia
+theia-admin up -dir /opt/theia
+theia-admin activation -dir /opt/theia
+theia-admin backup -dir /opt/theia -output /independent-storage/instance.age
+theia-admin upgrade -dir /opt/theia -release v1.8.1
+theia-admin resume -dir /opt/theia
+```
+
+Up and upgrade reuse persistent secrets. Upgrade downloads pinned images before
+stopping writes, makes a verified preventive backup and a separate Safety Snapshot,
+then runs migrations before starting HTTP. An interrupted operation resumes from
+its original snapshot. Automatic rollback closes permanently when HTTP writes
+reopen. The frontend serves maintenance status while the backend is stopped.
+`-offline` uses images already loaded on the host, including air-gapped installs.
+
+A replacement host needs the encrypted archive and the administrator-held recovery
+file. One restore command provisions its destination database, verifies the archive
+with a real isolated restore, recovers users, keys, device backups and CA files,
+and checks HTTPS. Existing instances use the same command inside a maintenance window:
+
+```sh
+theia-admin restore -dir /opt/theia -hostname theia.example.org \
+  -archive /operator/instance.age -recovery-file /operator/theia-recovery.txt
+```
+
+The destination's database connection/password remain its own. Original credential
+keys travel inside the encrypted archive. The supplied recovery file is mounted
+from private temporary storage and removed after the command; it is never copied
+into persistent instance state. Exported backups are verified against the original
+digest and never overwrite an existing output file.
+
+`make deployment-test` builds local images and exercises first activation in Chromium,
+restart, upgrade, credential rotation, replacement restore, CA continuity and
+rejection of a damaged archive in two isolated temporary Compose projects.
+`make maintenance-test` verifies database rollback and interrupted-operation
+resumption with isolated PostgreSQL clusters. These are development checks, not
+installation prerequisites.
 
 ## Persistent secrets and existing installations
 

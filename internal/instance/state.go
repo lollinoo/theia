@@ -5,6 +5,7 @@ package instance
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -26,19 +27,20 @@ type CredentialKey struct {
 // State is private instance material. Only its public recovery recipient may be
 // stored here; recovery identities belong exclusively to the operator.
 type State struct {
-	Version           int                      `json:"version"`
-	InstanceID        string                   `json:"instance_id"`
-	CreatedAt         time.Time                `json:"created_at"`
-	ActiveKeyID       string                   `json:"active_key_id"`
-	CredentialKeys    map[string]CredentialKey `json:"credential_keys"`
-	SessionSecret     string                   `json:"session_secret"`
-	MetricsToken      string                   `json:"metrics_token"`
-	DBDSN             string                   `json:"db_dsn,omitempty"`
-	DatabasePassword  string                   `json:"database_password,omitempty"`
-	SnapshotSecret    string                   `json:"snapshot_secret"`
-	RecoveryRecipient string                   `json:"recovery_recipient,omitempty"`
-	BackupDestination *S3Config                `json:"backup_destination,omitempty"`
-	Activation        *Activation              `json:"activation,omitempty"`
+	Version            int                      `json:"version"`
+	InstanceID         string                   `json:"instance_id"`
+	CreatedAt          time.Time                `json:"created_at"`
+	ActiveKeyID        string                   `json:"active_key_id"`
+	CredentialKeys     map[string]CredentialKey `json:"credential_keys"`
+	SessionSecret      string                   `json:"session_secret"`
+	MetricsToken       string                   `json:"metrics_token"`
+	DBDSN              string                   `json:"db_dsn,omitempty"`
+	DatabasePassword   string                   `json:"database_password,omitempty"`
+	SnapshotSecret     string                   `json:"snapshot_secret"`
+	RecoveryRecipient  string                   `json:"recovery_recipient,omitempty"`
+	BackupDestination  *S3Config                `json:"backup_destination,omitempty"`
+	Activation         *Activation              `json:"activation,omitempty"`
+	DeploymentMetadata json.RawMessage          `json:"deployment_metadata,omitempty"`
 }
 
 // Generate creates fresh secrets in memory without writing them or replacing state.
@@ -119,6 +121,9 @@ func (s *State) Validate() error {
 		if err := s.Activation.Validate(); err != nil {
 			return err
 		}
+	}
+	if len(s.DeploymentMetadata) > 0 && (len(s.DeploymentMetadata) > 64<<10 || !json.Valid(s.DeploymentMetadata)) {
+		return fmt.Errorf("invalid deployment metadata")
 	}
 	return nil
 }

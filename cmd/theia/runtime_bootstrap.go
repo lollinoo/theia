@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -389,6 +390,11 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		}
 		if err := (&service.Maintenance{StatePath: cfg.InstanceStatePath, ReleaseTag: os.Getenv("THEIA_RELEASE_TAG")}).RequireVerifiedState(cfg.InstanceID(), keys.ActiveKeyID()); err != nil {
 			return err
+		}
+		for _, dir := range []string{paths.appDataDir, paths.backupDir, paths.instanceBackupDir, filepath.Join(paths.appDataDir, "certificates")} {
+			if err := instance.PrivateDirectory(dir); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -791,6 +797,11 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	b.handleShutdown(cancel, server, children)
 
 	log.Printf("Theia starting on %s (environment=%s)", cfg.ListenAddr, cfg.DeploymentEnv)
+	if cfg.InstanceStatePath != "" {
+		if err := (&service.Maintenance{StatePath: cfg.InstanceStatePath, ReleaseTag: os.Getenv("THEIA_RELEASE_TAG")}).MarkWritesReopened(cfg.InstanceID(), encryptionKeyring.ActiveKeyID()); err != nil {
+			return err
+		}
+	}
 	if err := b.serve(server); err != nil {
 		return fmt.Errorf("server error: %w", err)
 	}

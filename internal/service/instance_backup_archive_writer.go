@@ -70,7 +70,7 @@ func (s *InstanceBackupService) createArchiveWithProtection(ctx context.Context,
 	if err := json.Unmarshal(privateState, &state); err != nil {
 		return 0, nil, fmt.Errorf("invalid private archive state")
 	}
-	f, err := os.OpenFile(archivePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	f, err := instance.CreatePrivateFile(archivePath)
 	if err != nil {
 		return 0, nil, err
 	}

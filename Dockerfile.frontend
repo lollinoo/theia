@@ -4,7 +4,7 @@
 # Stages:
 #   dev        - Vite dev server with HMR (used by docker-compose.yml)
 #   builder    - Compiles static assets
-#   production - nginx serving built files + API proxy (docker-compose.prod.yml)
+#   production - Caddy serving built files, API proxy and managed HTTPS
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -38,15 +38,16 @@ COPY . .
 RUN npm run build
 
 # ---------------------------------------------------------------------------
-# Stage: production — nginx serving built files with API proxy
+# Stage: production — Caddy serving built files with API proxy and HTTPS
 # ---------------------------------------------------------------------------
-FROM nginx:1.31-alpine AS production
+FROM caddy:2.11.7-alpine AS production
 
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=builder /app/dist /srv
+COPY Caddyfile /etc/caddy/Caddyfile
 
 ENV BACKEND_PORT=8080
+ENV THEIA_SITE_ADDRESS=:80
 
-EXPOSE 80
+EXPOSE 80 443
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

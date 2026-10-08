@@ -47,6 +47,7 @@ type MaintenanceOperation struct {
 	VerifiedActiveKeyID string    `json:"verified_active_key_id,omitempty"`
 	VerifiedReleaseTag  string    `json:"verified_release_tag,omitempty"`
 	OriginalReleaseTag  string    `json:"original_release_tag,omitempty"`
+	WritesReopened      bool      `json:"writes_reopened"`
 	Error               string    `json:"error,omitempty"`
 }
 
@@ -136,7 +137,18 @@ func (m *Maintenance) persist(op *MaintenanceOperation, phase string) error {
 	}
 	// Deployments may serve this folder while the backend is stopped. It contains
 	// no recovery keys, snapshot hashes, connection strings, or operation paths.
-	return instance.WritePrivateFile(filepath.Join(filepath.Dir(m.StatePath), "public", "status.json"), public)
+	publicDir := filepath.Join(filepath.Dir(m.StatePath), "public")
+	if err := instance.WritePrivateFile(filepath.Join(publicDir, "status.json"), public); err != nil {
+		return err
+	}
+	marker := filepath.Join(publicDir, "maintenance")
+	if !terminalMaintenancePhase(phase) {
+		return instance.WritePrivateFile(marker, []byte("maintenance\n"))
+	}
+	if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (m *Maintenance) openDB() (*sql.DB, error) {
@@ -222,8 +234,12 @@ func (m *Maintenance) Migrate(ctx context.Context, forceRotation bool) error {
 			}
 			db.Close()
 			if err == nil {
+				op, statusErr := m.Status()
+				if statusErr == nil {
+					statusErr = m.persist(op, op.Phase)
+				}
 				release()
-				return nil
+				return statusErr
 			}
 		}
 	}
@@ -276,9 +292,12 @@ func (m *Maintenance) mutate(ctx context.Context, action string, apply func(cont
 	if err := m.persist(op, "preparing"); err != nil {
 		return err
 	}
-	if err := m.prepareSafetySnapshot(ctx, db, state, op); err != nil {
+	if err := m.prepareSafetySnapshot(ctx, db, state, op, previous); err != nil {
 		// Preparation has not changed live data. No rollback is needed.
 		op.Error = "maintenance preparation failed; live data was not changed"
+		if previous != nil {
+			op.VerifiedInstanceID, op.VerifiedActiveKeyID, op.VerifiedReleaseTag = previous.VerifiedInstanceID, previous.VerifiedActiveKeyID, previous.VerifiedReleaseTag
+		}
 		_ = m.persist(op, "rolled_back")
 		return err
 	}

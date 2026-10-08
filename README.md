@@ -87,6 +87,17 @@ The top-level app keeps the topology canvas mounted while switching between canv
 
 ## Installation
 
+For server deployments, the standalone administration command automates secrets,
+PostgreSQL initialization, migrations, HTTPS and first-administrator activation:
+
+```sh
+theia-admin install -dir /opt/theia -hostname theia.example.org
+```
+
+Use the administration binary from a versioned release. See
+[instance administration](OPERATIONS.md) for LAN certificates, external PostgreSQL,
+upgrade, backup and replacement-host restore. The server needs Docker and Compose.
+
 The fastest way to run Theia locally is the Docker Compose development stack. No local Go or Node.js install is required for the standard dev path.
 
 Prerequisites:

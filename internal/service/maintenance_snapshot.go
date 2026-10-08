@@ -15,7 +15,7 @@ import (
 	"github.com/lollinoo/theia/internal/repository/postgres"
 )
 
-func (m *Maintenance) prepareSafetySnapshot(ctx context.Context, db *sql.DB, state *instance.State, op *MaintenanceOperation) error {
+func (m *Maintenance) prepareSafetySnapshot(ctx context.Context, db *sql.DB, state *instance.State, op *MaintenanceOperation, previous *MaintenanceOperation) error {
 	var schemaExists bool
 	if err := db.QueryRowContext(ctx, "SELECT to_regclass('public.schema_migrations') IS NOT NULL").Scan(&schemaExists); err != nil {
 		return fmt.Errorf("preflight database connection failed")
@@ -27,6 +27,9 @@ func (m *Maintenance) prepareSafetySnapshot(ctx context.Context, db *sql.DB, sta
 		}
 		if tables != 0 {
 			return fmt.Errorf("database has existing tables without Theia migration metadata; import its compatible original deployment first")
+		}
+		if op.Action == "migrate" && previous != nil && previous.VerifiedInstanceID != "" && !(previous.Phase == "rolled_back" && previous.SourceWasEmpty) {
+			return fmt.Errorf("a previously verified instance database is unexpectedly empty; restore a verified instance backup instead of initializing a replacement schema")
 		}
 		op.SourceWasEmpty = true
 	} else {

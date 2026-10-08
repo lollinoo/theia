@@ -30,8 +30,14 @@ func PrivateDirectory(path string) error {
 			if err := check(parent); err != nil {
 				return err
 			}
-			if err := os.Mkdir(p, 0700); err != nil && !os.IsExist(err) {
-				return err
+			if mkdirErr := os.Mkdir(p, 0700); mkdirErr != nil {
+				if !os.IsExist(mkdirErr) {
+					return mkdirErr
+				}
+			} else {
+				if err := preservePrivateDirectoryOwner(p, parent); err != nil {
+					return err
+				}
 			}
 			info, err = os.Lstat(p)
 		} else if err == nil && filepath.Dir(p) != p {
@@ -58,6 +64,23 @@ func PrivateDirectory(path string) error {
 		return fmt.Errorf("instance storage cannot be a shared temporary directory")
 	}
 	return os.Chmod(abs, 0700)
+}
+
+// CreatePrivateFile creates new streaming storage with the persistent parent's
+// ownership, so a root container does not lock out the host administrator.
+func CreatePrivateFile(path string) (*os.File, error) {
+	if err := PrivateDirectory(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := preservePrivateFileOwner(f, filepath.Dir(path)); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 func privateRegularFile(path string) error {

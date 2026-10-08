@@ -82,7 +82,11 @@ func (s *InstanceBackupService) prepareInstanceBackup(trigger domain.InstanceBac
 
 	// Create backup subdirectory: {backupDir}/{backupID}/
 	backupSubDir := filepath.Join(s.backupDir, backupID.String())
-	if err := os.MkdirAll(backupSubDir, 0700); err != nil {
+	prepareDir := func() error { return os.MkdirAll(backupSubDir, 0700) }
+	if s.managedStatePath != "" {
+		prepareDir = func() error { return instance.PrivateDirectory(backupSubDir) }
+	}
+	if err := prepareDir(); err != nil {
 		return nil, "", fmt.Errorf("creating backup directory: %w", err)
 	}
 

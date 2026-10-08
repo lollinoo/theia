@@ -54,6 +54,13 @@ func TestManagedBackupIntegration(t *testing.T) {
 			return err
 		}
 		root := t.TempDir()
+		caDir := filepath.Join(root, "certificates", "caddy", "pki", "authorities", "local")
+		if err := os.MkdirAll(caDir, 0700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(caDir, "root.key"), []byte("original-private-ca-key"), 0600); err != nil {
+			return err
+		}
 		deviceDir := filepath.Join(root, "devices")
 		if err := os.Mkdir(deviceDir, 0700); err != nil {
 			return err
@@ -140,6 +147,10 @@ func TestManagedBackupIntegration(t *testing.T) {
 			got, err := os.ReadFile(filepath.Join(maintenance.DeviceBackupDir, "device.cfg"))
 			if err != nil || string(got) != "device-configuration" {
 				return fmt.Errorf("replacement-host restore lost device files")
+			}
+			ca, err := os.ReadFile(filepath.Join(maintenance.DataDir, "certificates", "caddy", "pki", "authorities", "local", "root.key"))
+			if err != nil || string(ca) != "original-private-ca-key" {
+				return fmt.Errorf("replacement-host restore lost the original CA")
 			}
 			return nil
 		})

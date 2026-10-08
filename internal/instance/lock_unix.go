@@ -20,6 +20,20 @@ func syncDirectory(path string) error {
 	return f.Sync()
 }
 
+func preservePrivateDirectoryOwner(path, parent string) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	info, err := os.Stat(parent)
+	if err != nil {
+		return err
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return os.Chown(path, int(stat.Uid), int(stat.Gid))
+	}
+	return nil
+}
+
 // Root containers preserve bind-mounted state ownership for the host administrator.
 func preservePrivateFileOwner(f *os.File, target string) error {
 	if os.Geteuid() != 0 {
