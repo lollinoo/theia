@@ -2,6 +2,9 @@
 
 The standalone `theia-admin` binary manages Docker deployment without Git, Make,
 Go or Node on the server. Docker Engine and Compose are the host prerequisites.
+Kubernetes installations use the same binary with an existing cluster, Helm and
+kubectl. Release bundles include Linux AMD64/ARM64 binaries, the embedded chart,
+this guide and SHA256SUMS; both container images are published for those platforms.
 Architecture is recorded in [the ADRs](docs/adr/0001-guided-portable-instance-maintenance.md).
 
 ## Guided Docker deployment
@@ -46,6 +49,7 @@ theia-admin up -dir /opt/theia
 theia-admin activation -dir /opt/theia
 theia-admin backup -dir /opt/theia -output /independent-storage/instance.age
 theia-admin upgrade -dir /opt/theia -release v1.8.1
+theia-admin postgres-upgrade -dir /opt/theia -postgres-target 18
 theia-admin resume -dir /opt/theia
 ```
 
@@ -55,6 +59,16 @@ then runs migrations before starting HTTP. An interrupted operation resumes from
 its original snapshot. Automatic rollback closes permanently when HTTP writes
 reopen. The frontend serves maintenance status while the backend is stopped.
 `-offline` uses images already loaded on the host, including air-gapped installs.
+
+The supported bundled PostgreSQL major transition is 17→18. The administration
+command verifies an encrypted source snapshot before stopping the version 17
+container, initializes a separate version 18 directory, restores and verifies it,
+then reopens HTTP. The original volume is retained. Failed or interrupted cutovers
+return to that original volume before writes reopen; `resume` uses the recorded
+source and target coordinates. Each attempt gets a distinct replacement directory.
+After version 18 accepts application writes, automatic return to version 17 closes.
+`make postgres-upgrade-test` exercises a real successful cutover and an interruption
+after verified import, checking original encrypted credentials in both outcomes.
 
 A replacement host needs the encrypted archive and the administrator-held recovery
 file. One restore command provisions its destination database, verifies the archive
@@ -80,6 +94,50 @@ resumption with isolated PostgreSQL clusters. These are development checks, not
 installation prerequisites.
 
 ## Persistent secrets and existing installations
+
+The guided transition reads the original container's resolved environment and
+configuration, preserves its storage and external networks, and stops its writers
+only after verifying a new recovery file. Provide the original Compose/environment
+files and a new recovery-file destination outside every instance data directory:
+
+```sh
+theia-admin import -dir /opt/theia-managed -hostname theia.example.org \
+  -compose-file /original/docker-compose.prod.yml -env-file /original/.env.prod \
+  -output /operator/theia-recovery.txt
+```
+
+For a non-default configuration location inside the original backend, add
+`-config /original/container/config.yaml`. Import retains existing users and exact
+credential passphrases, including literal dollar characters. It preserves known
+operational secrets and generates only missing ones. Original Compose files and
+volumes remain available; verified SQL rollback can reopen the original deployment.
+An existing-schema transition requires a verified preventive archive before migration,
+including when the original schema predates the current backup tables.
+
+Convert an accessible version 1 PostgreSQL archive without changing the original:
+
+```sh
+theia-admin convert-legacy -dir /opt/theia-managed \
+  -archive /operator/previous.tar.gz -output /operator/previous.age
+```
+
+Conversion checks the original keys, database hash, file set and a real isolated
+database restore before publishing encrypted bytes. SQLite archives first require
+the compatible 1.7.x PostgreSQL migration path. Keep original configuration and
+archives until their converted recovery points have been verified.
+
+```sh
+theia-admin rotate-operational -dir /opt/theia-managed
+theia-admin rotate-recovery -dir /opt/theia-managed \
+  -recovery-file /operator/theia-recovery.txt -output /operator/new-recovery.txt
+```
+
+Operational rotation replaces the bundled database password, session secret and
+metrics token under a verified snapshot, revokes sessions, updates the deployment's
+password file/Secret, and restarts HTTP. External database passwords remain with
+their infrastructure owner. Recovery replacement verifies the actual new exported
+file and retains every supplied historical identity in it, so retained archives
+remain recoverable. Private recovery history stays with the operator.
 
 A new managed instance uses `theia instance init -state /persistent/secrets.json
 -site https://theia.example.org` with its destination connection supplied through
@@ -165,6 +223,14 @@ credentials through `THEIA_S3_ACCESS_KEY_FILE` and `THEIA_S3_SECRET_KEY_FILE`, t
 theia instance s3 -state /persistent/secrets.json -endpoint https://s3.example.org -bucket theia-backups -region us-east-1
 ```
 
+The administration adapter handles persistence and restart for both platforms:
+
+```sh
+theia-admin s3 -dir /opt/theia-managed -endpoint https://s3.example.org \
+  -bucket theia-backups -region us-east-1 \
+  -access-key-file /operator/access-key -secret-key-file /operator/secret-key
+```
+
 The command saves credentials in private instance state; remove the input
 environment variables afterwards and restart the application. S3 credentials are
 also protected inside encrypted backups. The bucket must already exist and permit
@@ -184,7 +250,66 @@ unmanaged installation. Managed encrypted restore uses the operator recovery fil
 through the maintenance CLI. Do not upload recovery identities to the legacy
 archive upload form.
 
-## Offline maintenance
+## Kubernetes deployment
+
+Use an explicitly configured cluster context and its existing Ingress/TLS setup:
+
+```sh
+theia-admin install -platform kubernetes -dir ./theia-coordinates \
+  -kube-context production -namespace theia -hostname theia.example.org \
+  -ingress-class traefik -tls-secret theia-tls
+```
+
+The cluster owns the Ingress controller and TLS issuance/renewal. The chart accepts
+Ingress annotations, including an existing cert-manager issuer through direct Helm
+values. `-trusted-proxies` supplies explicit Ingress source CIDRs, and
+`-storage-class`/`-storage-size` select persistent storage. External PostgreSQL uses
+the same `-database-dsn-file` option as Docker.
+
+The binary creates initial secrets outside Helm values/history, provisions PVCs,
+copies state once, removes the bootstrap Secret after validating the persistent
+copy, and runs the shared migration command in a backend init container. Missing
+state after bootstrap removal blocks startup. Backend and maintenance containers
+run as UID 999 with one writer; the chart uses Recreate and exactly one backend
+replica. The frontend serves HTTP behind Ingress and mounts only public status at
+runtime; its initialization briefly waits for the persistent status directory.
+Its readiness stays available during backend maintenance. Persistent-volume group
+handling preserves 0600 secret files across pod replacement.
+Backend, frontend and maintenance Jobs have required affinity to the same Linux
+node so their shared ReadWriteOnce instance volume remains mountable. Self-affinity
+allows the first bootstrap Job to schedule before the application exists.
+
+After installation, `up`, `status`, `activation`, `backup`, `restore`, `upgrade`,
+`migrate`, `resume`, `s3`, `rotate-operational` and `rotate-recovery` automatically
+select Kubernetes from the saved public coordinates. Destructive actions scale
+the backend to zero, wait for its pod to exit, and execute the same native commands
+in exclusive maintenance Jobs. Recovery files use transient Secrets and temporary
+Job storage, which are removed after the operation. Operational rotation also
+updates the PostgreSQL initialization Secret from verified persistent state.
+
+Restore to another namespace with one command:
+
+```sh
+theia-admin restore -platform kubernetes -dir ./replacement-coordinates \
+  -kube-context production -namespace theia-replacement \
+  -hostname theia.example.org -ingress-class traefik -tls-secret theia-tls \
+  -archive /operator/instance.age -recovery-file /operator/theia-recovery.txt
+```
+
+This provisions fresh storage and verifies the archive before applying it. Docker
+and Kubernetes use the same encrypted archive format; destination database
+coordinates remain destination-specific. Legacy Docker installations enter this
+path through `import`, `backup`, then `restore -platform kubernetes`. The bundled
+Kubernetes deployment starts on PostgreSQL 18; the retained-volume 17→18 cutover
+adapter targets Docker. Kubernetes HA is outside this initial single-replica scope.
+
+`make kubernetes-test` creates and deletes its own two-node kind cluster. It verifies browser
+activation, persistent identity after restart, migration/upgrade Jobs, all secret
+rotations, replacement restore, corrupt-archive rejection, writer exclusion and
+missing-state refusal. Cluster Ingress rendering is covered; live Ingress controller
+and external certificate issuance are infrastructure integration checks.
+
+## Native offline maintenance
 
 Stop the application and execute a maintenance container/Job using the same
 persistent instance state, application data, and PostgreSQL connection:
