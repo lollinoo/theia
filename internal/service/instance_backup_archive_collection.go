@@ -60,9 +60,49 @@ func isArchiveQuotaError(err error) bool {
 
 // collectArchiveSourceFiles gathers source files using the service's configured directories.
 func (s *InstanceBackupService) collectArchiveSourceFiles(ctx context.Context, limits BackupArchiveLimits, initialBytes int64) ([]archiveSourceFile, int, *archiveSourceFile, int64, int, error) {
-	sources, err := collectInstanceBackupArchiveSourceFiles(ctx, s.backupDir, s.deviceBackupDir, s.knownHostsPath, limits, initialBytes)
+	sources, err := collectInstanceBackupArchiveSourceFiles(ctx, s.backupDir, s.deviceBackupDir, s.knownHostsPath, limits, initialBytes, s.managedStatePath != "")
 	if err != nil {
 		return nil, 0, nil, 0, 0, err
+	}
+	if s.managedStatePath != "" {
+		root := filepath.Join(s.stateDir, "certificates")
+		if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if os.IsNotExist(err) && path == root {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("managed certificate source must be a regular file")
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			name := "certificates/" + filepath.ToSlash(rel)
+			if err := checkBackupArchiveEntryQuota(name, info.Size(), limits); err != nil {
+				return err
+			}
+			sources.totalBytes, err = checkedArchiveByteTotal(sources.totalBytes, info.Size(), limits.MaxTotalBytes)
+			if err != nil {
+				return err
+			}
+			sources.fileEntries++
+			if err := checkBackupArchiveTotals(sources.totalBytes, sources.fileEntries, limits); err != nil {
+				return err
+			}
+			sources.deviceBackupFiles = append(sources.deviceBackupFiles, archiveSourceFile{archiveName: name, diskPath: path, sizeBytes: info.Size()})
+			return nil
+		}); err != nil {
+			return nil, 0, nil, 0, 0, err
+		}
 	}
 	return sources.deviceBackupFiles, sources.backupFileCount, sources.knownHostsFile, sources.totalBytes, sources.fileEntries, nil
 }
@@ -75,6 +115,7 @@ func collectInstanceBackupArchiveSourceFiles(
 	knownHostsPath string,
 	limits BackupArchiveLimits,
 	initialBytes int64,
+	strict ...bool,
 ) (instanceBackupArchiveSources, error) {
 	var sources instanceBackupArchiveSources
 	if err := checkBackupArchiveTotals(initialBytes, 1, limits); err != nil {
@@ -91,6 +132,9 @@ func collectInstanceBackupArchiveSourceFiles(
 				return ctxErr
 			}
 			if err != nil {
+				if len(strict) > 0 && strict[0] {
+					return err
+				}
 				return nil // skip files we can't read
 			}
 			if info.IsDir() {
@@ -103,6 +147,9 @@ func collectInstanceBackupArchiveSourceFiles(
 				return nil
 			}
 			if !info.Mode().IsRegular() {
+				if len(strict) > 0 && strict[0] {
+					return fmt.Errorf("managed device backup source must be a regular file: %s", path)
+				}
 				return nil
 			}
 
@@ -143,7 +190,7 @@ func collectInstanceBackupArchiveSourceFiles(
 		return sources, fmt.Errorf("statting device backup dir: %w", err)
 	}
 
-	if info, err := os.Stat(knownHostsPath); err == nil && !info.IsDir() && info.Mode().IsRegular() {
+	if info, err := os.Lstat(knownHostsPath); err == nil && !info.IsDir() && info.Mode().IsRegular() {
 		if err := checkBackupArchiveEntryQuota("known_hosts", info.Size(), limits); err != nil {
 			return sources, err
 		}
@@ -163,6 +210,8 @@ func collectInstanceBackupArchiveSourceFiles(
 		}
 	} else if err != nil && !os.IsNotExist(err) {
 		return sources, fmt.Errorf("statting known_hosts: %w", err)
+	} else if err == nil && len(strict) > 0 && strict[0] {
+		return sources, fmt.Errorf("managed known_hosts source must be a regular file")
 	}
 
 	return sources, nil

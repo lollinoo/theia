@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,11 +28,13 @@ import (
 	"github.com/lollinoo/theia/internal/config"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/instance"
 	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/metrics"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/scheduler"
+	"github.com/lollinoo/theia/internal/secretinput"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/settingscache"
 	"github.com/lollinoo/theia/internal/ssh"
@@ -143,7 +146,17 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 		return nil
 	}
 
-	if err := validateEncryptionKeySecretPolicy(deploymentEnv); err != nil {
+	if cfg.InstanceStatePath != "" {
+		keyring, err := cfg.CredentialKeyring()
+		if err != nil {
+			return fmt.Errorf("managed credential keys: %w", err)
+		}
+		for _, secret := range keyring.Secrets() {
+			if isKnownSecretPlaceholder(secret) {
+				return fmt.Errorf("%s deployment rejects example managed credential keys", deploymentEnv)
+			}
+		}
+	} else if err := validateEncryptionKeySecretPolicy(deploymentEnv); err != nil {
 		return err
 	}
 
@@ -172,8 +185,15 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 }
 
 func validateEncryptionKeySecretPolicy(deploymentEnv string) error {
-	activeKeyID := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY_ID"))
-	keyList := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEYS"))
+	activeKeyID, err := secretinput.Read("THEIA_ENCRYPTION_KEY_ID")
+	if err != nil {
+		return err
+	}
+	keyList, err := secretinput.Read("THEIA_ENCRYPTION_KEYS")
+	if err != nil {
+		return err
+	}
+	activeKeyID, keyList = strings.TrimSpace(activeKeyID), strings.TrimSpace(keyList)
 	if activeKeyID != "" || keyList != "" {
 		if activeKeyID == "" {
 			return fmt.Errorf("THEIA_ENCRYPTION_KEY_ID is required for %s deployment when THEIA_ENCRYPTION_KEYS is set", deploymentEnv)
@@ -190,7 +210,11 @@ func validateEncryptionKeySecretPolicy(deploymentEnv string) error {
 		return nil
 	}
 
-	encryptionKey := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
+	encryptionKey, err := secretinput.Read("THEIA_ENCRYPTION_KEY")
+	if err != nil {
+		return err
+	}
+	encryptionKey = strings.TrimSpace(encryptionKey)
 	if encryptionKey == "" {
 		return fmt.Errorf("THEIA_ENCRYPTION_KEY is required for %s deployment", deploymentEnv)
 	}
@@ -354,6 +378,25 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	logging.Infof("Config loaded: listen=%s log_level=%s", cfg.ListenAddr, cfg.LogLevel)
 
 	paths := resolveRuntimePaths(cfg)
+	if cfg.InstanceStatePath != "" {
+		release, err := instance.AcquireLease(cfg.InstanceStatePath)
+		if err != nil {
+			return err
+		}
+		defer release()
+		keys, err := cfg.CredentialKeyring()
+		if err != nil {
+			return err
+		}
+		if err := (&service.Maintenance{StatePath: cfg.InstanceStatePath, ReleaseTag: os.Getenv("THEIA_RELEASE_TAG")}).RequireVerifiedState(cfg.InstanceID(), keys.ActiveKeyID()); err != nil {
+			return err
+		}
+		for _, dir := range []string{paths.appDataDir, paths.backupDir, paths.instanceBackupDir, filepath.Join(paths.appDataDir, "certificates")} {
+			if err := instance.PrivateDirectory(dir); err != nil {
+				return err
+			}
+		}
+	}
 
 	if err := validateDeploymentSecretPolicy(cfg); err != nil {
 		return err
@@ -367,8 +410,10 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	if err := ensurePrivateDir(paths.appDataDir); err != nil {
 		return fmt.Errorf("prepare application data directory %s: %w", paths.appDataDir, err)
 	}
-	if err := applyPendingPostgresRestore(paths.appDataDir, cfg.DBDSN, paths.backupDir, paths.knownHostsPath); err != nil {
-		return fmt.Errorf("apply pending PostgreSQL restore: %w", err)
+	if cfg.InstanceStatePath == "" {
+		if err := applyPendingPostgresRestoreWithConfig(paths.appDataDir, cfg.DBDSN, paths.backupDir, paths.knownHostsPath, cfg); err != nil {
+			return fmt.Errorf("apply pending PostgreSQL restore: %w", err)
+		}
 	}
 	if _, err := os.Stat(paths.knownHostsPath); err == nil {
 		if err := ensureFileMode(paths.knownHostsPath, privateFileMode); err != nil {
@@ -404,15 +449,24 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		return wrapPostgresConnectError(err)
 	}
 
-	encryptionKeyring, err := crypto.LoadKeyringFromEnv()
+	encryptionKeyring, err := cfg.CredentialKeyring()
 	if err != nil {
 		return fmt.Errorf("security configuration error: %w", err)
 	}
 
-	if err := postgres.RunMigrations(db, encryptionKeyring); err != nil {
-		return fmt.Errorf("run database migrations: %w", err)
+	if cfg.InstanceStatePath != "" {
+		if err := postgres.RequireCurrentSchema(context.Background(), db); err != nil {
+			return err
+		}
+		if err := service.VerifyInstanceIdentity(context.Background(), db, cfg.InstanceID()); err != nil {
+			return err
+		}
+	} else {
+		if err := postgres.RunMigrations(db, encryptionKeyring); err != nil {
+			return fmt.Errorf("run database migrations: %w", err)
+		}
+		log.Println("Database migrations completed")
 	}
-	log.Println("Database migrations completed")
 
 	authRepo := postgres.NewAuthRepo(db)
 	authService, err := service.NewAuthService(service.AuthServiceConfig{
@@ -428,10 +482,12 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("initialize auth service: %w", err)
 	}
-	if user, created, err := authService.EnsureBootstrapSuperAdmin(context.Background()); err != nil {
-		return fmt.Errorf("ensure bootstrap super admin: %w", err)
-	} else if created {
-		log.Printf("Bootstrap super admin created username=%q must_change_password=true", user.Username)
+	if cfg.InstanceStatePath == "" {
+		if user, created, err := authService.EnsureBootstrapSuperAdmin(context.Background()); err != nil {
+			return fmt.Errorf("ensure bootstrap super admin: %w", err)
+		} else if created {
+			log.Printf("Bootstrap super admin created username=%q must_change_password=true", user.Username)
+		}
 	}
 
 	yamlRegistry, envVendors, err := loadBootstrapVendorRegistry()
@@ -553,6 +609,20 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		encryptionKeyring,
 	)
 	configureInstanceBackupArchiveLimits(instanceBackupService, cfg)
+	if cfg.InstanceStatePath != "" {
+		instanceBackupService.SetManagedState(cfg.InstanceStatePath)
+		state, err := (instance.Store{Path: cfg.InstanceStatePath}).Load()
+		if err != nil {
+			return err
+		}
+		if state.BackupDestination != nil {
+			destination, err := instance.NewS3Destination(*state.BackupDestination)
+			if err != nil {
+				return err
+			}
+			instanceBackupService.SetBackupDestination(destination)
+		}
+	}
 	log.Printf("Instance backup directory: %s", paths.instanceBackupDir)
 	instanceBackupService.FailStaleRunning()
 	backupScheduler = worker.NewBackupScheduler(instanceBackupService, instanceBackupRepo, settingsRepo)
@@ -709,16 +779,29 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		observability.DatabasePool{Name: "bulk_download", DB: leaseDB},
 	)
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
+	var activation *service.ManagedActivation
+	if cfg.InstanceStatePath != "" {
+		activation = &service.ManagedActivation{Store: instance.Store{Path: cfg.InstanceStatePath}, DB: db}
+		if err := activation.Reconcile(context.Background()); err != nil {
+			return fmt.Errorf("reconcile managed activation: %w", err)
+		}
+	}
+	httpHandler := api.WithManagedActivation(router, activation, db)
 	server = &http.Server{
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		Addr:              cfg.ListenAddr,
-		Handler:           runtimeHTTPHandler(router, metricsHandler, metricsToken),
+		Handler:           runtimeHTTPHandler(httpHandler, metricsHandler, metricsToken),
 	}
 
 	b.handleShutdown(cancel, server, children)
 
 	log.Printf("Theia starting on %s (environment=%s)", cfg.ListenAddr, cfg.DeploymentEnv)
+	if cfg.InstanceStatePath != "" {
+		if err := (&service.Maintenance{StatePath: cfg.InstanceStatePath, ReleaseTag: os.Getenv("THEIA_RELEASE_TAG")}).MarkWritesReopened(cfg.InstanceID(), encryptionKeyring.ActiveKeyID()); err != nil {
+			return err
+		}
+	}
 	if err := b.serve(server); err != nil {
 		return fmt.Errorf("server error: %w", err)
 	}

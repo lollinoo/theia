@@ -40,6 +40,7 @@ const (
 )
 
 type instanceBackupArchiveManifestInput struct {
+	privateStateBytes  int64
 	dbArtifact         databaseBackupArtifact
 	backupCreatedAt    time.Time
 	dbSHA256           string
@@ -69,6 +70,18 @@ func buildInstanceBackupArchiveManifestPlan(input instanceBackupArchiveManifestI
 		DBSHA256:         input.dbSHA256,
 		BackupFileCount:  input.backupFileCount,
 		TotalSizeBytes:   0, // will be updated after archiving
+	}
+	if input.privateStateBytes > 0 {
+		manifest.Version = 2
+		if err := checkBackupArchiveEntryQuota("instance-secrets.json", input.privateStateBytes, input.limits); err != nil {
+			return plan, err
+		}
+		total, err := checkedArchiveByteTotal(input.totalSourceBytes, input.privateStateBytes, input.limits.MaxTotalBytes)
+		if err != nil {
+			return plan, err
+		}
+		input.totalSourceBytes = total
+		input.archiveFileEntries++
 	}
 	if input.encryptionKeyring != nil {
 		manifest.Encryption = &backupManifestEncryption{

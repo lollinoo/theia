@@ -24,6 +24,7 @@ const statusColors: Record<string, string> = {
   failed: 'text-status-down',
   running: 'text-status-probing',
   cancelled: 'text-on-bg-secondary',
+  pending_upload: 'text-status-probing',
 };
 
 const statusIcons: Record<string, string> = {
@@ -31,6 +32,7 @@ const statusIcons: Record<string, string> = {
   failed: '\u2717', // X mark
   running: '\u25CF', // filled circle
   cancelled: '\u25CB', // hollow circle
+  pending_upload: '\u2191',
 };
 
 type InitialLoadSection = 'history' | 'settings' | 'restore';
@@ -807,7 +809,7 @@ export function InstanceBackupManager() {
                 </div>
                 <div className="flex items-center gap-1">
                   {/* Download button -- only for successful backups */}
-                  {backup.status === 'success' && (
+                  {(backup.status === 'success' || backup.status === 'pending_upload') && (
                     <a
                       href={instanceBackupDownloadUrl(backup.id)}
                       download
@@ -844,21 +846,22 @@ export function InstanceBackupManager() {
               </div>
 
               {/* Error message -- expandable on click */}
-              {backup.status === 'failed' && backup.error_message && (
-                <button
-                  type="button"
-                  className="block w-full cursor-pointer text-left"
-                  onClick={() =>
-                    setExpandedErrorId(expandedErrorId === backup.id ? null : backup.id)
-                  }
-                >
-                  <p
-                    className={`text-[10px] text-status-down ${expandedErrorId === backup.id ? '' : 'truncate'}`}
+              {(backup.status === 'failed' || backup.status === 'pending_upload') &&
+                backup.error_message && (
+                  <button
+                    type="button"
+                    className="block w-full cursor-pointer text-left"
+                    onClick={() =>
+                      setExpandedErrorId(expandedErrorId === backup.id ? null : backup.id)
+                    }
                   >
-                    {backup.error_message}
-                  </p>
-                </button>
-              )}
+                    <p
+                      className={`text-[10px] text-status-down ${expandedErrorId === backup.id ? '' : 'truncate'}`}
+                    >
+                      {backup.error_message}
+                    </p>
+                  </button>
+                )}
               {backup.status === 'running' && backup.progress && (
                 <div className="text-[10px] text-on-bg-secondary">{formatProgress(backup)}</div>
               )}

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Activate Theia</title><link rel="icon" href="/branding/theia-icon.png"><style>
+body{font:16px system-ui;background:#10151d;color:#e9edf3;margin:0}main{max-width:520px;margin:5vh auto;padding:32px;background:#1b2330;border-radius:16px}img{width:64px}h1{font-size:26px}label{display:block;margin:16px 0 6px}input{box-sizing:border-box;width:100%;padding:12px;border:1px solid #526078;border-radius:6px;background:#10151d;color:inherit;font:inherit}input[type=checkbox]{width:auto}button,a{font:inherit;color:inherit}button{margin:16px 0;padding:12px 18px;border:0;border-radius:6px;background:#386ed6;cursor:pointer}button:disabled{opacity:.5;cursor:default}small{display:block;color:#b3bed0;margin-top:6px}#message{white-space:pre-wrap;color:#ffb4a2}[hidden]{display:none!important}
+</style></head><body><main><img src="/branding/theia-icon.png" alt="Theia"><h1>Activate your Theia instance</h1><p>Create your administrator account and save the recovery file on your computer. You will need this file to restore a backup on a replacement host.</p>
+<button id="download">Download recovery file</button><form id="activation" hidden>
+<label for="saved">Select the recovery file you saved</label><input id="saved" type="file" accept=".txt" required><small>Keep an additional copy in independent storage.</small>
+<label for="username">Administrator username</label><input id="username" autocomplete="username" maxlength="80" required>
+<label for="email">Email</label><input id="email" type="email" autocomplete="email" maxlength="255" required>
+<label for="password">Password</label><input id="password" type="password" autocomplete="new-password" minlength="10" maxlength="24" required><small>10–24 characters, with uppercase, lowercase, a number and a special character.</small>
+<label><input id="confirmed" type="checkbox" required> I saved the recovery file outside the instance host.</label>
+<button id="complete" type="submit">Activate Theia</button></form><p id="message" role="alert"></p><p id="success" hidden>Your instance is ready. <a href="/">Sign in to Theia</a></p>
+</main><script>
+const token = new URLSearchParams(location.hash.slice(1)).get('token');
+history.replaceState(null, '', location.pathname);
+const message = document.getElementById('message');
+const download = document.getElementById('download');
+let proof = '';
+async function request(path, body) {
+  const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json', Authorization: `Bearer ${token}`}, body: JSON.stringify(body)});
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+if (!token) { download.disabled = true; message.textContent = 'Open the temporary activation link printed by the administration command.'; }
+download.addEventListener('click', async () => {
+  download.disabled = true; message.textContent = '';
+  try {
+    const recovery = await request('/api/v1/setup/recovery', {});
+    proof = recovery.proof;
+    if (recovery.recovery_file) {
+      const url = URL.createObjectURL(new Blob([recovery.recovery_file], {type: 'text/plain'}));
+      const link = document.createElement('a'); link.href = url; link.download = 'theia-recovery.txt'; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } else { message.textContent = 'Select the recovery file saved when this installation was imported.'; }
+    document.getElementById('activation').hidden = false;
+    download.hidden = true;
+  } catch (error) { message.textContent = error.message; download.disabled = false; }
+});
+document.getElementById('activation').addEventListener('submit', async event => {
+  event.preventDefault(); const button = document.getElementById('complete'); button.disabled = true; message.textContent = '';
+  try {
+    const file = document.getElementById('saved').files[0];
+    if (!file || file.size > 65536) throw new Error('Select the saved recovery file.');
+    await request('/api/v1/setup/complete', {username: document.getElementById('username').value, email: document.getElementById('email').value, password: document.getElementById('password').value, recovery_file: await file.text(), proof});
+    document.getElementById('activation').hidden = true; document.getElementById('success').hidden = false;
+  } catch (error) { message.textContent = error.message; button.disabled = false; }
+});
+</script></body></html>

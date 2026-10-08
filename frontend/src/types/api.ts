@@ -1155,7 +1155,12 @@ export interface BulkOperationStatus {
 }
 
 /** InstanceBackupStatus is the lifecycle state for full application backup archives. */
-export type InstanceBackupStatus = 'running' | 'success' | 'failed' | 'cancelled';
+export type InstanceBackupStatus =
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'cancelled'
+  | 'pending_upload';
 
 /** InstanceBackupProgress reports best-effort phase progress for a running archive job. */
 export interface InstanceBackupProgress {

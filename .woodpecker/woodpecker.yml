@@ -4,7 +4,8 @@
 # - GitHub webhook: subscribe to the release event. Woodpecker 3.16.0
 #   repository activation and repair do not add it automatically.
 when:
-  - evaluate: 'CI_PIPELINE_EVENT == "push" || (CI_PIPELINE_EVENT == "pull_request" && CI_COMMIT_BRANCH == "master") || CI_PIPELINE_EVENT == "release" || CI_PIPELINE_EVENT == "manual"'
+  - event: [push, pull_request, release, manual]
+    evaluate: 'CI_PIPELINE_EVENT == "push" || (CI_PIPELINE_EVENT == "pull_request" && CI_COMMIT_BRANCH == "master") || CI_PIPELINE_EVENT == "release" || CI_PIPELINE_EVENT == "manual"'
 
 services:
   - name: postgres
@@ -36,6 +37,9 @@ steps:
             bridge=true
             ;;
           release)
+            backend=true
+            frontend=true
+            browser_e2e=true
             bridge=true
             ;;
           push|pull_request)
@@ -49,7 +53,7 @@ steps:
 
               while IFS= read -r path; do
                 case "$path" in
-                  cmd/*|internal/*|go.mod|go.sum|config.example.yaml|Dockerfile|docker-compose*.yml|Makefile|scripts/*.sh|scripts/*.ps1|.env*.example)
+                  cmd/*|internal/*|go.mod|go.sum|config.example.yaml|Dockerfile|Dockerfile.deployment-test|docker-compose*.yml|Makefile|scripts/*.sh|scripts/*.ps1|.env*.example)
                     backend=true
                     browser_e2e=true
                     ;;
@@ -145,7 +149,24 @@ steps:
         export THEIA_E2E_DB_DSN=postgres://theia:theia@postgres:5432/theia?sslmode=disable
         make browser-e2e
 
-  - name: build-bridge
+  - name: deployment-integration
+    image: docker:29-cli
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/theia-managed-ci:/tmp/theia-managed-ci
+    commands:
+      - |
+        set -eu
+        . .ci/changed-areas.env
+        if [ "$BACKEND_CHANGED" != "true" ] && [ "$FRONTEND_CHANGED" != "true" ]; then
+          echo "No managed deployment changes detected."
+          exit 0
+        fi
+
+        apk add --no-cache bash git tar util-linux
+        bash scripts/test-managed-ci.sh
+
+  - name: build-release-assets
     image: golang:1.27.1-bookworm
     when:
       - event: release
@@ -156,33 +177,13 @@ steps:
       - test -f bridge_binaries/winbox-bridge-windows-arm64.exe
       - test -f bridge_binaries/winbox-bridge-linux-amd64
       - test -f bridge_binaries/winbox-bridge-linux-arm64
-
-  - name: upload-bridge-assets
-    image: golang:1.27.1-bookworm
-    environment:
-      GH_TOKEN:
-        from_secret: GITHUB_TOKEN
-    when:
-      - event: release
-        evaluate: 'CI_COMMIT_PRERELEASE == "false"'
-    commands:
       - |
         set -eu
-        apt-get update
-        apt-get install -y --no-install-recommends ca-certificates curl
-        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-        chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
-        apt-get update
-        apt-get install -y --no-install-recommends gh
-
         release_tag="$CI_COMMIT_TAG"
         if [ -z "$release_tag" ]; then
           release_tag=$(printf '%s' "$CI_COMMIT_REF" | sed 's#^refs/tags/##')
         fi
-        test -n "$release_tag"
-
-        gh release upload "$release_tag" bridge_binaries/winbox-bridge-windows-amd64.exe bridge_binaries/winbox-bridge-windows-arm64.exe bridge_binaries/winbox-bridge-linux-amd64 bridge_binaries/winbox-bridge-linux-arm64 --clobber --repo "$CI_REPO"
+        bash scripts/build-deployment-bundles.sh "$release_tag"
 
   - name: publish-master-images
     image: docker:29-cli
@@ -260,5 +261,37 @@ steps:
         docker buildx inspect theia >/dev/null 2>&1 || docker buildx create --name theia --driver docker-container --use
         docker buildx use theia
 
-        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile --target production --tag "ghcr.io/lollinoo/theia-backend:$release_tag" --tag ghcr.io/lollinoo/theia-backend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
-        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$release_tag" --tag ghcr.io/lollinoo/theia-frontend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
+        docker run --privileged --rm tonistiigi/binfmt --install arm64
+
+        docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --file Dockerfile --target production --tag "ghcr.io/lollinoo/theia-backend:$release_tag" --tag ghcr.io/lollinoo/theia-backend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
+        docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$release_tag" --tag ghcr.io/lollinoo/theia-frontend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
+
+  - name: upload-release-assets
+    image: golang:1.27.1-bookworm
+    environment:
+      GH_TOKEN:
+        from_secret: GITHUB_TOKEN
+    when:
+      - event: release
+        evaluate: 'CI_COMMIT_PRERELEASE == "false"'
+    commands:
+      - |
+        set -eu
+        apt-get update
+        apt-get install -y --no-install-recommends ca-certificates curl
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+        apt-get update
+        apt-get install -y --no-install-recommends gh
+
+        release_tag="$CI_COMMIT_TAG"
+        if [ -z "$release_tag" ]; then
+          release_tag=$(printf '%s' "$CI_COMMIT_REF" | sed 's#^refs/tags/##')
+        fi
+        test -n "$release_tag"
+
+        gh release upload "$release_tag" bridge_binaries/winbox-bridge-windows-amd64.exe bridge_binaries/winbox-bridge-windows-arm64.exe bridge_binaries/winbox-bridge-linux-amd64 bridge_binaries/winbox-bridge-linux-arm64 --clobber --repo "$CI_REPO"
+        cd dist/deployment
+        sha256sum --check SHA256SUMS
+        gh release upload "$release_tag" ./*.tar.gz SHA256SUMS --clobber --repo "$CI_REPO"

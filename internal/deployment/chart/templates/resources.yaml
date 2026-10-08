@@ -1,0 +1,285 @@
+{{- if ne (int .Values.replicas) 1 }}{{ fail "Theia supports exactly one backend replica" }}{{ end -}}
+{{- $name := .Release.Name -}}
+{{- $claim := default (printf "%s-instance" $name) .Values.persistence.claimName -}}
+{{- $pgclaim := default (printf "%s-postgres" $name) .Values.postgres.claimName -}}
+{{- $backend := required "backendImage must be a pinned release image" .Values.backendImage -}}
+{{- $frontend := required "frontendImage must be a pinned release image" .Values.frontendImage -}}
+{{- $release := required "releaseTag is required" .Values.releaseTag -}}
+{{- if not .Values.persistence.claimName }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $claim }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+---
+{{- end }}
+{{- if and .Values.postgres.bundled (not .Values.postgres.claimName) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $pgclaim }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if .Values.postgres.storageClass }}
+  storageClassName: {{ .Values.postgres.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.postgres.size }}
+---
+{{- end }}
+{{- if .Values.postgres.bundled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: {{ $name }}-postgres}
+  template:
+    metadata:
+      labels: {app: {{ $name }}-postgres}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/os: linux}
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - {name: POSTGRES_USER, value: theia}
+            - {name: POSTGRES_DB, value: theia}
+            - {name: POSTGRES_PASSWORD_FILE, value: /run/database/password}
+          ports: [{name: postgres, containerPort: 5432}]
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, theia, -d, theia]
+            periodSeconds: 3
+          volumeMounts:
+            - {name: postgres, mountPath: /var/lib/postgresql}
+            - {name: database, mountPath: /run/database, readOnly: true}
+      volumes:
+        - name: postgres
+          persistentVolumeClaim: {claimName: {{ $pgclaim }}}
+        - name: database
+          secret:
+            secretName: {{ required "databaseSecret must name an existing Secret" .Values.databaseSecret }}
+            defaultMode: 0440
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-postgres
+spec:
+  selector: {app: {{ $name }}-postgres}
+  ports: [{port: 5432, targetPort: postgres}]
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-backend
+spec:
+  replicas: {{ ternary 0 1 .Values.maintenanceMode }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: {{ $name }}-backend}
+  template:
+    metadata:
+      labels: {app: {{ $name }}-backend, theia-instance: {{ $name }}}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/os: linux}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {theia-instance: {{ $name }}}
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: bootstrap
+          image: {{ $backend | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: [sh, -ec]
+          args:
+            - |
+              umask 077
+              mkdir -p /persist/control/public /persist/data
+              if [ ! -e /persist/control/state.json ]; then
+                test -s /bootstrap/state.json || { echo 'Missing persistent state and bootstrap Secret; refusing to generate replacement keys' >&2; exit 1; }
+                cp /bootstrap/state.json /persist/control/.bootstrap-state
+                chmod 600 /persist/control/.bootstrap-state
+                mv /persist/control/.bootstrap-state /persist/control/state.json
+              fi
+          volumeMounts:
+            - {name: instance, mountPath: /persist}
+            - {name: bootstrap, mountPath: /bootstrap, readOnly: true}
+        - name: maintenance
+          image: {{ $backend | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: [theia, maintenance, migrate]
+          env: &backendEnv
+            - {name: THEIA_INSTANCE_STATE, value: /persist/control/state.json}
+            - {name: THEIA_DATA_DIR, value: /persist/data}
+            - {name: THEIA_INSTANCE_BACKUP_DIR, value: /persist/data/instance-backups}
+            - {name: THEIA_LISTEN_ADDR, value: ':8080'}
+            - {name: THEIA_DEPLOYMENT_ENV, value: production}
+            - {name: THEIA_RELEASE_TAG, value: {{ $release | quote }}}
+            - {name: THEIA_ALLOWED_ORIGINS, value: {{ printf "https://%s" .Values.ingress.hostname | quote }}}
+          volumeMounts: &backendMounts
+            - {name: instance, mountPath: /persist}
+      containers:
+        - name: backend
+          image: {{ $backend | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: [theia]
+          env: *backendEnv
+          ports: [{name: http, containerPort: 8080}]
+          startupProbe:
+            httpGet: {path: /readyz, port: http}
+            failureThreshold: 60
+            periodSeconds: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+          livenessProbe:
+            httpGet: {path: /livez, port: http}
+          volumeMounts: *backendMounts
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+      volumes:
+        - name: instance
+          persistentVolumeClaim: {claimName: {{ $claim }}}
+        - name: bootstrap
+          secret:
+            secretName: {{ required "bootstrapSecret must name the one-time bootstrap Secret" .Values.bootstrapSecret }}
+            optional: true
+            defaultMode: 0440
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-backend
+spec:
+  selector: {app: {{ $name }}-backend}
+  ports: [{port: 8080, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-frontend
+spec:
+  replicas: {{ ternary 0 1 .Values.maintenanceMode }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: {{ $name }}-frontend}
+  template:
+    metadata:
+      labels: {app: {{ $name }}-frontend, theia-instance: {{ $name }}}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/os: linux}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app: {{ $name }}-backend}
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: wait-for-instance
+          image: {{ $frontend | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: [sh, -ec]
+          args: ['until test -s /persist/control/public/status.json; do sleep 1; done']
+          volumeMounts:
+            - {name: instance, mountPath: /persist, readOnly: true}
+      containers:
+        - name: frontend
+          image: {{ $frontend | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - {name: THEIA_SITE_ADDRESS, value: ':8080'}
+            - {name: BACKEND_ADDRESS, value: {{ $name }}-backend}
+            - {name: THEIA_TRUSTED_PROXIES, value: {{ .Values.trustedProxies | quote }}}
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /frontend-readyz, port: http}
+          volumeMounts:
+            - {name: instance, mountPath: /status, subPath: control/public, readOnly: true}
+            - {name: caddy-config, mountPath: /config}
+            - {name: caddy-data, mountPath: /data}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+      volumes:
+        - name: instance
+          persistentVolumeClaim: {claimName: {{ $claim }}}
+        - {name: caddy-config, emptyDir: {}}
+        - {name: caddy-data, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-frontend
+spec:
+  selector: {app: {{ $name }}-frontend}
+  ports: [{port: 80, targetPort: http}]
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  tls:
+    - hosts: [{{ required "ingress.hostname is required" .Values.ingress.hostname | quote }}]
+      secretName: {{ required "ingress.tlsSecret is required for cluster-managed HTTPS" .Values.ingress.tlsSecret }}
+  rules:
+    - host: {{ .Values.ingress.hostname | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}-frontend
+                port: {number: 80}
+{{- end }}
