@@ -90,9 +90,7 @@ func (r *LinkRepo) publishChange(kind domain.ChangeKind, linkID uuid.UUID) {
 
 // Create inserts a new link into the database.
 func (r *LinkRepo) Create(link *domain.Link) error {
-	return withWriteRetry(func() error {
-		return r.createOnce(link)
-	})
+	return r.createOnce(link)
 }
 
 func (r *LinkRepo) createOnce(link *domain.Link) error {
@@ -123,17 +121,9 @@ func (r *LinkRepo) createOnce(link *domain.Link) error {
 // CreateManualIdempotent inserts a manual link or returns the stored equivalent
 // link without mutating existing discovery-owned rows.
 func (r *LinkRepo) CreateManualIdempotent(link *domain.Link, browserLocalStorageMigration bool) (*domain.Link, bool, error) {
-	var stored *domain.Link
-	var created bool
-	err := withWriteRetry(func() error {
-		r.manualCreateMu.Lock()
-		defer r.manualCreateMu.Unlock()
-
-		var innerErr error
-		stored, created, innerErr = r.createManualIdempotentOnce(link, browserLocalStorageMigration)
-		return innerErr
-	})
-	return stored, created, err
+	r.manualCreateMu.Lock()
+	defer r.manualCreateMu.Unlock()
+	return r.createManualIdempotentOnce(link, browserLocalStorageMigration)
 }
 
 func (r *LinkRepo) createManualIdempotentOnce(link *domain.Link, browserLocalStorageMigration bool) (*domain.Link, bool, error) {
@@ -227,9 +217,7 @@ func (r *LinkRepo) GetByID(id uuid.UUID) (*domain.Link, error) {
 
 // Update modifies the interface names of an existing link.
 func (r *LinkRepo) Update(link *domain.Link) error {
-	return withWriteRetry(func() error {
-		return r.updateOnce(link)
-	})
+	return r.updateOnce(link)
 }
 
 func (r *LinkRepo) updateOnce(link *domain.Link) error {
@@ -318,9 +306,7 @@ func (r *LinkRepo) GetByIDs(ids []uuid.UUID) ([]domain.Link, error) {
 
 // Delete removes a link by UUID.
 func (r *LinkRepo) Delete(id uuid.UUID) error {
-	return withWriteRetry(func() error {
-		return r.deleteOnce(id)
-	})
+	return r.deleteOnce(id)
 }
 
 func (r *LinkRepo) deleteOnce(id uuid.UUID) error {
@@ -355,13 +341,7 @@ func (r *LinkRepo) Upsert(link *domain.Link) (bool, error) {
 }
 
 func (r *LinkRepo) UpsertDetailed(link *domain.Link) (domain.LinkUpsertResult, error) {
-	var result domain.LinkUpsertResult
-	err := withWriteRetry(func() error {
-		var innerErr error
-		result, innerErr = r.upsertOnce(link)
-		return innerErr
-	})
-	return result, err
+	return r.upsertOnce(link)
 }
 
 func (r *LinkRepo) upsertOnce(link *domain.Link) (domain.LinkUpsertResult, error) {

@@ -36,7 +36,3 @@ func ConfigureDBWithLimits(db *sql.DB, maxOpenConns, maxIdleConns int) error {
 	db.SetConnMaxIdleTime(dbConnMaxIdleTime)
 	return nil
 }
-
-func withWriteRetry(fn func() error) error {
-	return fn()
-}
