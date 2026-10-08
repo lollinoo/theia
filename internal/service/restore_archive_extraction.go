@@ -45,8 +45,14 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 		return fmt.Errorf("opening archive: %w", err)
 	}
 	defer f.Close()
+	return extractArchiveReader(ctx, f, destDir, limits)
+}
 
-	gr, err := gzip.NewReader(f)
+// extractArchiveReader also consumes the gzip footer and underlying reader to EOF.
+// This is required to authenticate the final chunk when the reader decrypts age.
+func extractArchiveReader(ctx context.Context, source io.Reader, destDir string, limits RestoreArchiveLimits) error {
+
+	gr, err := gzip.NewReader(source)
 	if err != nil {
 		return fmt.Errorf("creating gzip reader: %w", err)
 	}
@@ -55,6 +61,7 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 	tr := tar.NewReader(gr)
 	var totalBytes int64
 	var archiveEntries int
+	seen := make(map[string]bool)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -72,6 +79,10 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 			return err
 		}
 		cleanName := validated.cleanName
+		if seen[cleanName] {
+			return fmt.Errorf("duplicate restore archive entry: %s", cleanName)
+		}
+		seen[cleanName] = true
 
 		targetPath := filepath.Join(destDir, filepath.FromSlash(cleanName))
 		archiveEntries++
@@ -113,10 +124,23 @@ func extractArchiveContext(ctx context.Context, archivePath, destDir string, lim
 			outFile.Close()
 			return fmt.Errorf("writing file %s: %w", cleanName, err)
 		}
-		outFile.Close()
+		if err := outFile.Close(); err != nil {
+			return fmt.Errorf("closing extracted archive file: %w", err)
+		}
 		totalBytes += header.Size
 	}
 
+	// Allow normal tar padding but bound extra decompressed data after the archive.
+	n, err := copyWithContext(ctx, io.Discard, io.LimitReader(gr, (1<<20)+1))
+	if err != nil {
+		return fmt.Errorf("reading archive footer: %w", err)
+	}
+	if n > 1<<20 {
+		return fmt.Errorf("excessive trailing archive data")
+	}
+	if _, err := copyWithContext(ctx, io.Discard, source); err != nil {
+		return fmt.Errorf("authenticating archive: %w", err)
+	}
 	return nil
 }
 

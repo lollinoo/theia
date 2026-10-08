@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/lollinoo/theia/internal/config"
@@ -25,6 +27,11 @@ func runInstanceStateCommand(args []string, output io.Writer) error {
 	flags.SetOutput(output)
 	path := flags.String("state", os.Getenv("THEIA_INSTANCE_STATE"), "Persistent private instance state")
 	configPath := flags.String("config", "config.yaml", "Original configuration file")
+	recoveryFile := flags.String("recovery-file", "", "New operator-held recovery file outside instance storage")
+	s3Endpoint := flags.String("endpoint", "", "S3 HTTP(S) endpoint")
+	s3Bucket := flags.String("bucket", "", "Existing S3 bucket")
+	s3Region := flags.String("region", "", "S3 region")
+	s3Prefix := flags.String("prefix", "theia", "S3 object prefix")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -33,6 +40,62 @@ func runInstanceStateCommand(args []string, output io.Writer) error {
 	}
 	store := instance.Store{Path: *path}
 	switch command {
+	case "s3":
+		accessKey, err := secretinput.Read("THEIA_S3_ACCESS_KEY")
+		if err != nil {
+			return err
+		}
+		secretKey, err := secretinput.Read("THEIA_S3_SECRET_KEY")
+		if err != nil {
+			return err
+		}
+		destination := instance.S3Config{Endpoint: *s3Endpoint, Bucket: *s3Bucket, Region: *s3Region, Prefix: *s3Prefix, AccessKey: accessKey, SecretKey: secretKey}
+		if _, err := instance.NewS3Destination(destination); err != nil {
+			return err
+		}
+		if err := store.Update(func(state *instance.State) error { state.BackupDestination = &destination; return nil }); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(output, "S3 destination saved in private state. Restart the application to use this destination.")
+		return err
+	case "recovery":
+		state, err := store.Load()
+		if err != nil {
+			return err
+		}
+		if state.RecoveryRecipient != "" {
+			return fmt.Errorf("a recovery recipient is already configured")
+		}
+		if *recoveryFile == "" {
+			return fmt.Errorf("-recovery-file outside instance storage is required")
+		}
+		dir, err := filepath.Abs(filepath.Dir(*path))
+		if err != nil {
+			return err
+		}
+		file, err := filepath.Abs(*recoveryFile)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, file)
+		if err != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+			return fmt.Errorf("recovery file must be outside instance storage")
+		}
+		recipient, err := instance.ExportRecoveryFile(file)
+		if err != nil {
+			return err
+		}
+		if err := store.Update(func(s *instance.State) error {
+			if s.RecoveryRecipient != "" {
+				return fmt.Errorf("recovery recipient was configured concurrently")
+			}
+			s.RecoveryRecipient = recipient
+			return nil
+		}); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(output, "Recovery file exported and verified. Move it to independent storage outside this host before enabling managed backups.")
+		return err
 	case "import":
 		cfg, err := config.Load(*configPath)
 		if err != nil {

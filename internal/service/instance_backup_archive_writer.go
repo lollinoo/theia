@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,11 +14,14 @@ import (
 	"os"
 	"time"
 
+	"filippo.io/age"
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/instance"
 )
 
 type instanceBackupArchiveWriteRequest struct {
+	privateState      []byte
 	archivePath       string
 	dbArtifact        databaseBackupArtifact
 	deviceBackupFiles []archiveSourceFile
@@ -40,7 +44,13 @@ func (s *InstanceBackupService) createArchive(
 	manifest *backupManifest,
 	backupID uuid.UUID,
 ) (int64, error) {
-	return writeInstanceBackupArchive(ctx, instanceBackupArchiveWriteRequest{
+	size, _, err := s.createArchiveWithProtection(ctx, archivePath, dbArtifact, deviceBackupFiles, knownHostsFile, manifestJSON, manifest, backupID, nil)
+	return size, err
+}
+
+func (s *InstanceBackupService) createArchiveWithProtection(ctx context.Context, archivePath string, dbArtifact databaseBackupArtifact, deviceBackupFiles []archiveSourceFile, knownHostsFile *archiveSourceFile, manifestJSON []byte, manifest *backupManifest, backupID uuid.UUID, privateState []byte) (int64, *age.X25519Identity, error) {
+	req := instanceBackupArchiveWriteRequest{
+		privateState:      privateState,
 		archivePath:       archivePath,
 		dbArtifact:        dbArtifact,
 		deviceBackupFiles: deviceBackupFiles,
@@ -51,7 +61,26 @@ func (s *InstanceBackupService) createArchive(
 		progress: func(update domain.InstanceBackupProgress) {
 			s.updateInstanceBackupProgress(backupID, update)
 		},
-	})
+	}
+	if len(privateState) == 0 {
+		size, err := writeInstanceBackupArchive(ctx, req)
+		return size, nil, err
+	}
+	var state instance.State
+	if err := json.Unmarshal(privateState, &state); err != nil {
+		return 0, nil, fmt.Errorf("invalid private archive state")
+	}
+	f, err := os.OpenFile(archivePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return 0, nil, err
+	}
+	protected, identity, err := instance.ProtectWriter(f, state.RecoveryRecipient)
+	if err != nil {
+		f.Close()
+		return 0, nil, err
+	}
+	size, err := writeInstanceBackupArchiveTo(ctx, req, protected)
+	return size, identity, err
 }
 
 // writeInstanceBackupArchive writes the full tar.gz archive and reports progress after each entry.
@@ -91,6 +120,12 @@ func writeInstanceBackupArchiveTo(ctx context.Context, req instanceBackupArchive
 	}
 	totalSize += int64(len(req.manifestJSON))
 	reportInstanceBackupArchiveProgress(req, "Archived manifest", totalSize)
+	if len(req.privateState) > 0 {
+		if err := addBytesToTar(tw, "instance-secrets.json", req.privateState, time.Now().UTC()); err != nil {
+			return 0, err
+		}
+		totalSize += int64(len(req.privateState))
+	}
 
 	// Add the PostgreSQL dump.
 	dbSize, err := addFileToTarContext(ctx, tw, req.dbArtifact.archiveEntryName, req.dbArtifact.tempPath)
@@ -104,6 +139,9 @@ func writeInstanceBackupArchiveTo(ctx context.Context, req instanceBackupArchive
 	for _, bf := range req.deviceBackupFiles {
 		size, err := addCollectedFileToTarContext(ctx, tw, bf, req.limits)
 		if err != nil {
+			if len(req.privateState) > 0 {
+				return 0, fmt.Errorf("archiving complete instance: %w", err)
+			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isArchiveQuotaError(err) {
 				return 0, err
 			}
@@ -118,6 +156,9 @@ func writeInstanceBackupArchiveTo(ctx context.Context, req instanceBackupArchive
 	if req.knownHostsFile != nil {
 		size, err := addCollectedFileToTarContext(ctx, tw, *req.knownHostsFile, req.limits)
 		if err != nil {
+			if len(req.privateState) > 0 {
+				return 0, fmt.Errorf("archiving complete instance: %w", err)
+			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isArchiveQuotaError(err) {
 				return 0, err
 			}

@@ -74,7 +74,7 @@ func isLegacySQLiteRestoreArchiveFile(name string) bool {
 func isAllowedRestoreArchiveFile(name string) bool {
 	normalized := strings.ReplaceAll(name, "\\", "/")
 	switch normalized {
-	case "manifest.json", postgresArchiveDBEntry, "known_hosts":
+	case "manifest.json", postgresArchiveDBEntry, "known_hosts", "instance-secrets.json":
 		return true
 	default:
 		return strings.HasPrefix(normalized, "backups/")

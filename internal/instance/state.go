@@ -36,6 +36,7 @@ type State struct {
 	DatabasePassword  string                   `json:"database_password,omitempty"`
 	SnapshotSecret    string                   `json:"snapshot_secret"`
 	RecoveryRecipient string                   `json:"recovery_recipient,omitempty"`
+	BackupDestination *S3Config                `json:"backup_destination,omitempty"`
 }
 
 // Generate creates fresh secrets in memory without writing them or replacing state.

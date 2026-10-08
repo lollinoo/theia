@@ -167,7 +167,7 @@ func (h *InstanceBackupHandler) HandleDownload(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusNotFound, "backup not found")
 		return
 	}
-	if backup.Status != domain.InstanceBackupStatusSuccess {
+	if backup.Status != domain.InstanceBackupStatusSuccess && backup.Status != domain.InstanceBackupStatusPendingUpload {
 		writeError(w, http.StatusBadRequest, "backup is not ready for download")
 		return
 	}

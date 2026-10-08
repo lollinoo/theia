@@ -169,6 +169,9 @@ backend-fast: ## Run the backend-fast quality gate locally
 	bash scripts/check-go-cover.sh coverage/backend-fast.out 45
 endif
 
+maintenance-test: ## Verify encrypted recovery using isolated PostgreSQL clusters in Docker
+	bash scripts/test-maintenance.sh
+
 realtime-stress: ## Run focused realtime stress tests locally
 	go test ./internal/ws ./internal/worker ./internal/service ./internal/scalelab -count=1 -run 'Test(HubBroadcastMarksLegacyClientForResyncWhenMailboxIsFull|HubBroadcastAvoidsSnapshotForHTTPBootstrapClientWhenMailboxIsFull|HubRepeatedDetailSubscriptionsConvergeToSingleTarget|PipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay|BurstReplayFixtureKeepsDeterministicLinkCountsAcrossPasses)'
 

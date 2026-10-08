@@ -60,7 +60,7 @@ func isArchiveQuotaError(err error) bool {
 
 // collectArchiveSourceFiles gathers source files using the service's configured directories.
 func (s *InstanceBackupService) collectArchiveSourceFiles(ctx context.Context, limits BackupArchiveLimits, initialBytes int64) ([]archiveSourceFile, int, *archiveSourceFile, int64, int, error) {
-	sources, err := collectInstanceBackupArchiveSourceFiles(ctx, s.backupDir, s.deviceBackupDir, s.knownHostsPath, limits, initialBytes)
+	sources, err := collectInstanceBackupArchiveSourceFiles(ctx, s.backupDir, s.deviceBackupDir, s.knownHostsPath, limits, initialBytes, s.managedStatePath != "")
 	if err != nil {
 		return nil, 0, nil, 0, 0, err
 	}
@@ -75,6 +75,7 @@ func collectInstanceBackupArchiveSourceFiles(
 	knownHostsPath string,
 	limits BackupArchiveLimits,
 	initialBytes int64,
+	strict ...bool,
 ) (instanceBackupArchiveSources, error) {
 	var sources instanceBackupArchiveSources
 	if err := checkBackupArchiveTotals(initialBytes, 1, limits); err != nil {
@@ -91,6 +92,9 @@ func collectInstanceBackupArchiveSourceFiles(
 				return ctxErr
 			}
 			if err != nil {
+				if len(strict) > 0 && strict[0] {
+					return err
+				}
 				return nil // skip files we can't read
 			}
 			if info.IsDir() {
@@ -103,6 +107,9 @@ func collectInstanceBackupArchiveSourceFiles(
 				return nil
 			}
 			if !info.Mode().IsRegular() {
+				if len(strict) > 0 && strict[0] {
+					return fmt.Errorf("managed device backup source must be a regular file: %s", path)
+				}
 				return nil
 			}
 

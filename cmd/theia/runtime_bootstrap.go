@@ -27,6 +27,7 @@ import (
 	"github.com/lollinoo/theia/internal/config"
 	"github.com/lollinoo/theia/internal/crypto"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/instance"
 	"github.com/lollinoo/theia/internal/logging"
 	"github.com/lollinoo/theia/internal/metrics"
 	"github.com/lollinoo/theia/internal/observability"
@@ -575,6 +576,20 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		encryptionKeyring,
 	)
 	configureInstanceBackupArchiveLimits(instanceBackupService, cfg)
+	if cfg.InstanceStatePath != "" {
+		instanceBackupService.SetManagedState(cfg.InstanceStatePath)
+		state, err := (instance.Store{Path: cfg.InstanceStatePath}).Load()
+		if err != nil {
+			return err
+		}
+		if state.BackupDestination != nil {
+			destination, err := instance.NewS3Destination(*state.BackupDestination)
+			if err != nil {
+				return err
+			}
+			instanceBackupService.SetBackupDestination(destination)
+		}
+	}
 	log.Printf("Instance backup directory: %s", paths.instanceBackupDir)
 	instanceBackupService.FailStaleRunning()
 	backupScheduler = worker.NewBackupScheduler(instanceBackupService, instanceBackupRepo, settingsRepo)

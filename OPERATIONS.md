@@ -41,5 +41,57 @@ secret files and Docker Compose secrets can use this interface.
 
 Credential rotation retains original and historical keys. Rewrapping and removal
 of any historical key must remain separate operations: old unconverted archives
-may still require those keys. The automatic maintenance command and encrypted
-recovery workflow are subsequent implementation stages.
+may still require those keys.
+
+## Encrypted backups
+
+For an imported instance, export its recovery file explicitly:
+
+```sh
+theia instance recovery -state /persistent/secrets.json -recovery-file /operator/recovery.txt
+```
+
+The operator directory must already exist. The command refuses an existing
+recovery file, rereads the exported file to verify its public recipient, and saves
+only that recipient in instance state. Move the private recovery file to
+independent storage outside the instance host. Protect it like a password.
+
+Managed backups created by the existing UI and scheduler use `.tar.gz.age` and
+contain protected instance secrets, the PostgreSQL dump, retained device backups,
+and SSH known hosts. Each archive is encrypted directly while writing. Before
+success, the backend decrypts the entire archive with a temporary in-memory
+identity, checks its contents, actually restores an isolated PostgreSQL 18 cluster,
+runs migrations, and verifies every stored sensitive credential. The temporary
+identity is never written to disk. The production image includes the PostgreSQL
+server tools needed for this verification; no external database permissions or
+Docker socket are required. This verification runs on every managed backup.
+
+After interruption, the existence of an encrypted archive is insufficient to
+declare success. A complete durable verification receipt and matching archive
+digest are required. An archive interrupted before verification must be recreated.
+
+Optionally configure an existing S3-compatible bucket once. Supply access
+credentials through `THEIA_S3_ACCESS_KEY_FILE` and `THEIA_S3_SECRET_KEY_FILE`, then:
+
+```sh
+theia instance s3 -state /persistent/secrets.json -endpoint https://s3.example.org -bucket theia-backups -region us-east-1
+```
+
+The command saves credentials in private instance state; remove the input
+environment variables afterwards and restart the application. S3 credentials are
+also protected inside encrypted backups. The bucket must already exist and permit
+upload, download, and deletion within the selected prefix. External verification
+downloads and hashes the complete object; an ETag alone is insufficient.
+
+When S3 is configured, success requires a verified external copy. An unavailable
+destination leaves the archive in `pending_upload`, preserves the verified local
+copy for download, and retries at the scheduler's hourly cycle (up to three pending
+archives per cycle). Pending uploads are excluded from automatic retention and
+cannot displace successful recovery points. An interrupted upload can resume
+using the same verified bytes without retaining the temporary private identity.
+Keep enough disk space for local pending copies during prolonged outages.
+
+Historical unencrypted archives continue using the legacy restore path. Managed
+encrypted restore uses the operator recovery file through the maintenance CLI;
+that CLI is the next implementation stage. Do not upload recovery identities to
+the existing legacy archive upload form.

@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/instance"
 )
 
 // Create produces a full instance backup archive synchronously with trigger set to "manual".
@@ -74,6 +76,9 @@ func (s *InstanceBackupService) prepareInstanceBackup(trigger domain.InstanceBac
 	now := time.Now().UTC()
 
 	fileName := fmt.Sprintf("theia-backup-%s.tar.gz", now.Format("20060102-150405"))
+	if s.managedStatePath != "" {
+		fileName += ".age"
+	}
 
 	// Create backup subdirectory: {backupDir}/{backupID}/
 	backupSubDir := filepath.Join(s.backupDir, backupID.String())
@@ -117,6 +122,23 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 	}
 
 	limits := s.BackupArchiveLimits()
+	var privateState []byte
+	if s.managedStatePath != "" {
+		state, err := (instance.Store{Path: s.managedStatePath}).Load()
+		if err == nil && state.RecoveryRecipient == "" {
+			err = fmt.Errorf("configure and export the instance recovery file before creating managed backups")
+		}
+		if err == nil && (s.keyring == nil || s.keyring.ActiveKeyID() != state.ActiveKeyID) {
+			err = fmt.Errorf("instance keys changed; restart the application before backup")
+		}
+		if err == nil {
+			privateState, err = json.Marshal(state)
+		}
+		if err != nil {
+			s.cleanupFailedInstanceBackup(backup, backupSubDir, err.Error(), err)
+			return nil, err
+		}
+	}
 
 	cleanupOnError := func(errMsg string, err error) {
 		s.cleanupFailedInstanceBackup(backup, backupSubDir, errMsg, err)
@@ -177,6 +199,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 
 	// Step 5: Build manifest
 	manifestPlan, err := buildInstanceBackupArchiveManifestPlan(instanceBackupArchiveManifestInput{
+		privateStateBytes:  int64(len(privateState)),
 		dbArtifact:         dbArtifact,
 		backupCreatedAt:    backup.CreatedAt,
 		dbSHA256:           dbHash,
@@ -210,13 +233,20 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 	finalPath := filepath.Join(backupSubDir, backup.FileName)
 	tempArchivePath := finalPath + ".tmp"
 
-	totalSize, err := s.createArchive(ctx, tempArchivePath, dbArtifact, deviceBackupFiles, knownHostsFile, manifestJSON, &manifest, backup.ID)
+	totalSize, verification, err := s.createArchiveWithProtection(ctx, tempArchivePath, dbArtifact, deviceBackupFiles, knownHostsFile, manifestJSON, &manifest, backup.ID, privateState)
 	if err != nil {
 		cleanupOnError(fmt.Sprintf("creating archive: %v", err), err)
 		os.Remove(tempArchivePath)
 		return nil, fmt.Errorf("creating archive: %w", err)
 	}
 	manifest.TotalSizeBytes = totalSize
+	if verification != nil {
+		s.updateInstanceBackupProgress(backup.ID, domain.InstanceBackupProgress{Phase: "verifying", Message: "Decrypting archive and restoring an isolated database"})
+		if err := s.verifyProtectedBackup(ctx, tempArchivePath, verification); err != nil {
+			cleanupOnError(fmt.Sprintf("verifying encrypted backup: %v", err), err)
+			return nil, fmt.Errorf("verifying encrypted backup: %w", err)
+		}
+	}
 
 	// Step 7: Rename temp archive to final path
 	if err := os.Rename(tempArchivePath, finalPath); err != nil {
@@ -271,6 +301,23 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 	backup.MigrationVersion = dbArtifact.migrationVersion
 	backup.Status = domain.InstanceBackupStatusSuccess
 	backup.ErrorMessage = ""
+	if verification != nil {
+		if err := writeBackupVerificationReceipt(backup); err != nil {
+			return nil, fmt.Errorf("persist backup verification: %w", err)
+		}
+	}
+	if s.externalDestination != nil {
+		backup.Status = domain.InstanceBackupStatusPendingUpload
+		backup.ErrorMessage = "Verified local backup retained; external upload pending"
+		if err := s.repo.Update(backup); err != nil {
+			return nil, err
+		}
+		if err := s.uploadVerifiedBackup(ctx, backup); err != nil {
+			backup.ErrorMessage = err.Error()
+			_ = s.repo.Update(backup)
+			return backup, fmt.Errorf("external backup incomplete; verified local archive retained: %w", err)
+		}
+	}
 
 	if err := s.completeInstanceBackupSuccess(backup, totalSize, ownOperation); err != nil {
 		if errors.Is(err, context.Canceled) {
