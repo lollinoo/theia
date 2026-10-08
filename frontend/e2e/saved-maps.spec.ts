@@ -1,21 +1,45 @@
 /**
  * Exercises saved maps browser workflow behavior so refactors preserve the documented contract.
  */
+import { randomUUID } from 'node:crypto';
 import {
   type APIRequestContext,
+  test as base,
   expect,
   type Locator,
   type Page,
   type Response,
-  test,
 } from '@playwright/test';
 
-const TEST_MAP_NAME = 'Backbone e2e';
-const DUPLICATE_TEST_MAP_NAME = `Copy of ${TEST_MAP_NAME}`;
-const TEST_MAP_NAMES = new Set([TEST_MAP_NAME, DUPLICATE_TEST_MAP_NAME]);
-const ROUTE_TEST_DEVICE_NAME = 'Editable route e2e target';
-const SELF_LINK_TEST_DEVICE_NAME = 'Editable self-link e2e target';
-const ROUTE_TEST_DEVICE_NAMES = new Set([ROUTE_TEST_DEVICE_NAME, SELF_LINK_TEST_DEVICE_NAME]);
+interface SavedMapTestFixtures {
+  mapName: string;
+  duplicateMapName: string;
+  routeDeviceName: string;
+  selfLinkDeviceName: string;
+  deviceIp: string;
+}
+
+const test = base.extend<{ testFixtures: SavedMapTestFixtures }>({
+  testFixtures: async ({ page }, use, testInfo) => {
+    const namespace = `${testInfo.workerIndex}-${randomUUID()}`;
+    const mapName = `Backbone e2e ${namespace}`;
+    const fixtures: SavedMapTestFixtures = {
+      mapName,
+      duplicateMapName: `Copy of ${mapName}`,
+      routeDeviceName: `Editable route e2e target ${namespace}`,
+      selfLinkDeviceName: `Editable self-link e2e target ${namespace}`,
+      // Tests run sequentially within each worker; cleanup releases its address before reuse.
+      deviceIp: `127.20.${Math.floor(testInfo.workerIndex / 256)}.${testInfo.workerIndex % 256}`,
+    };
+
+    try {
+      await use(fixtures);
+    } finally {
+      // Scope teardown to this test, including resources created before a failed assertion.
+      await cleanupTestFixtures(page, fixtures);
+    }
+  },
+});
 
 interface EditableRouteFixture {
   sourceDeviceId: string;
@@ -36,7 +60,7 @@ interface ScreenPoint {
   y: number;
 }
 
-async function getTestMaps(request: APIRequestContext) {
+async function getTestMaps(request: APIRequestContext, fixtures: SavedMapTestFixtures) {
   const response = await request.get('/api/v1/canvas/maps');
   expect(response.ok()).toBeTruthy();
   const payload = (await response.json()) as {
@@ -48,7 +72,7 @@ async function getTestMaps(request: APIRequestContext) {
       typeof map.id === 'string' &&
       typeof map.name === 'string' &&
       map.is_default === false &&
-      TEST_MAP_NAMES.has(map.name),
+      (map.name === fixtures.mapName || map.name === fixtures.duplicateMapName),
   );
 }
 
@@ -59,7 +83,7 @@ async function csrfHeaders(page: Page) {
   return { 'X-CSRF-Token': csrfCookie?.value ?? '' };
 }
 
-async function getRouteTestDevices(request: APIRequestContext) {
+async function getRouteTestDevices(request: APIRequestContext, fixtures: SavedMapTestFixtures) {
   const response = await request.get('/api/v1/devices');
   expect(response.ok()).toBeTruthy();
   const payload = (await response.json()) as {
@@ -73,12 +97,13 @@ async function getRouteTestDevices(request: APIRequestContext) {
     (device): device is { id: string; attributes: { tags: { display_name: string } } } =>
       typeof device.id === 'string' &&
       typeof device.attributes?.tags?.display_name === 'string' &&
-      ROUTE_TEST_DEVICE_NAMES.has(device.attributes.tags.display_name),
+      (device.attributes.tags.display_name === fixtures.routeDeviceName ||
+        device.attributes.tags.display_name === fixtures.selfLinkDeviceName),
   );
 }
 
-async function cleanupTestMaps(page: Page) {
-  const maps = await getTestMaps(page.request);
+async function cleanupTestMaps(page: Page, fixtures: SavedMapTestFixtures) {
+  const maps = await getTestMaps(page.request, fixtures);
   const headers = await csrfHeaders(page);
 
   for (const map of maps) {
@@ -91,11 +116,11 @@ async function cleanupTestMaps(page: Page) {
     expect(response.ok()).toBeTruthy();
   }
 
-  await expect.poll(async () => getTestMaps(page.request)).toEqual([]);
+  await expect.poll(async () => getTestMaps(page.request, fixtures)).toEqual([]);
 }
 
-async function cleanupRouteTestDevices(page: Page) {
-  const devices = await getRouteTestDevices(page.request);
+async function cleanupRouteTestDevices(page: Page, fixtures: SavedMapTestFixtures) {
+  const devices = await getRouteTestDevices(page.request, fixtures);
   const headers = await csrfHeaders(page);
 
   for (const device of devices) {
@@ -105,12 +130,12 @@ async function cleanupRouteTestDevices(page: Page) {
     expect(response.ok()).toBeTruthy();
   }
 
-  await expect.poll(async () => getRouteTestDevices(page.request)).toEqual([]);
+  await expect.poll(async () => getRouteTestDevices(page.request, fixtures)).toEqual([]);
 }
 
-async function cleanupTestFixtures(page: Page) {
-  await cleanupTestMaps(page);
-  await cleanupRouteTestDevices(page);
+async function cleanupTestFixtures(page: Page, fixtures: SavedMapTestFixtures) {
+  await cleanupTestMaps(page, fixtures);
+  await cleanupRouteTestDevices(page, fixtures);
 }
 
 async function seedDeviceId(page: Page): Promise<string> {
@@ -140,16 +165,19 @@ async function createFixtureMap(page: Page, name: string, deviceIds: string[]): 
   return payload.data?.id as string;
 }
 
-async function createEditableRouteFixture(page: Page): Promise<EditableRouteFixture> {
+async function createEditableRouteFixture(
+  page: Page,
+  fixtures: SavedMapTestFixtures,
+): Promise<EditableRouteFixture> {
   const sourceDeviceId = await seedDeviceId(page);
   const headers = await csrfHeaders(page);
   const deviceResponse = await page.request.post('/api/v1/devices', {
     headers,
     data: {
-      hostname: ROUTE_TEST_DEVICE_NAME,
-      ip: '127.0.10.22',
+      hostname: fixtures.routeDeviceName,
+      ip: fixtures.deviceIp,
       snmp: { version: '2c', community: 'public' },
-      tags: { display_name: ROUTE_TEST_DEVICE_NAME },
+      tags: { display_name: fixtures.routeDeviceName },
       skip_primary_map_membership: true,
     },
   });
@@ -173,8 +201,8 @@ async function createEditableRouteFixture(page: Page): Promise<EditableRouteFixt
   const linkId = linkPayload.data?.id as string;
 
   const deviceIds = [sourceDeviceId, targetDeviceId];
-  const routeMapId = await createFixtureMap(page, TEST_MAP_NAME, deviceIds);
-  const isolationMapId = await createFixtureMap(page, DUPLICATE_TEST_MAP_NAME, deviceIds);
+  const routeMapId = await createFixtureMap(page, fixtures.mapName, deviceIds);
+  const isolationMapId = await createFixtureMap(page, fixtures.duplicateMapName, deviceIds);
 
   for (const mapId of [routeMapId, isolationMapId]) {
     const positionsResponse = await page.request.put(
@@ -207,15 +235,18 @@ async function createEditableRouteFixture(page: Page): Promise<EditableRouteFixt
   return { sourceDeviceId, targetDeviceId, linkId, routeMapId, isolationMapId };
 }
 
-async function createEditableSelfLinkFixture(page: Page): Promise<EditableSelfLinkFixture> {
+async function createEditableSelfLinkFixture(
+  page: Page,
+  fixtures: SavedMapTestFixtures,
+): Promise<EditableSelfLinkFixture> {
   const headers = await csrfHeaders(page);
   const deviceResponse = await page.request.post('/api/v1/devices', {
     headers,
     data: {
-      hostname: SELF_LINK_TEST_DEVICE_NAME,
-      ip: '127.0.10.23',
+      hostname: fixtures.selfLinkDeviceName,
+      ip: fixtures.deviceIp,
       snmp: { version: '2c', community: 'public' },
-      tags: { display_name: SELF_LINK_TEST_DEVICE_NAME },
+      tags: { display_name: fixtures.selfLinkDeviceName },
       skip_primary_map_membership: true,
     },
   });
@@ -238,7 +269,7 @@ async function createEditableSelfLinkFixture(page: Page): Promise<EditableSelfLi
   expect(linkPayload.data?.id).toEqual(expect.any(String));
   const linkId = linkPayload.data?.id as string;
 
-  const mapId = await createFixtureMap(page, TEST_MAP_NAME, [deviceId]);
+  const mapId = await createFixtureMap(page, fixtures.mapName, [deviceId]);
   const positionsResponse = await page.request.put(
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/positions`,
     {
@@ -495,45 +526,40 @@ async function expectPathAnchoredToNodeBorders(
   await expect(page.getByTestId('topology-canvas-root')).toBeVisible();
 }
 
-test.beforeEach(async ({ page }) => {
-  await cleanupTestFixtures(page);
-});
-
-test.afterEach(async ({ page }) => {
-  await cleanupTestFixtures(page);
-});
-
-test('creates, opens, duplicates, and deletes a saved map', async ({ page }) => {
+test('creates, opens, duplicates, and deletes a saved map', async ({
+  page,
+  testFixtures: fixtures,
+}) => {
   await page.goto('/');
 
   await page.getByLabel('Topology Hub').click();
   await page.getByRole('button', { name: 'Create map from area Backbone', exact: true }).click();
   const createMapDialog = page.getByRole('dialog', { name: 'Create map' });
-  await createMapDialog.getByLabel('Map name').fill(TEST_MAP_NAME);
+  await createMapDialog.getByLabel('Map name').fill(fixtures.mapName);
   await createMapDialog.getByRole('button', { name: 'Create map', exact: true }).click();
-  await expect(page.getByLabel(/Select topology map/)).toContainText(TEST_MAP_NAME);
+  await expect(page.getByLabel(/Select topology map/)).toContainText(fixtures.mapName);
 
   await page.getByLabel(/Select topology map/).click();
   await page.getByRole('button', { name: 'Manage maps' }).click();
-  await page.getByRole('button', { name: `Duplicate ${TEST_MAP_NAME}`, exact: true }).click();
+  await page.getByRole('button', { name: `Duplicate ${fixtures.mapName}`, exact: true }).click();
   const duplicateMapDialog = page.getByRole('dialog', { name: 'Duplicate map' });
-  await duplicateMapDialog.getByLabel('Map name').fill(DUPLICATE_TEST_MAP_NAME);
+  await duplicateMapDialog.getByLabel('Map name').fill(fixtures.duplicateMapName);
   await duplicateMapDialog.getByRole('button', { name: 'Duplicate map', exact: true }).click();
-  await expect(page.getByLabel(/Select topology map/)).toContainText(DUPLICATE_TEST_MAP_NAME);
+  await expect(page.getByLabel(/Select topology map/)).toContainText(fixtures.duplicateMapName);
 
   await page.getByLabel(/Select topology map/).click();
   await page.getByRole('button', { name: 'Manage maps' }).click();
-  await page.getByRole('button', { name: `Delete ${DUPLICATE_TEST_MAP_NAME}` }).click();
+  await page.getByRole('button', { name: `Delete ${fixtures.duplicateMapName}` }).click();
   const deleteMapDialog = page.getByRole('dialog', { name: 'Delete map' });
-  await expect(deleteMapDialog).toContainText(DUPLICATE_TEST_MAP_NAME);
+  await expect(deleteMapDialog).toContainText(fixtures.duplicateMapName);
   await deleteMapDialog.getByRole('button', { name: 'Delete map', exact: true }).click();
-  await expect(page.getByText(DUPLICATE_TEST_MAP_NAME)).toHaveCount(0);
+  await expect(page.getByText(fixtures.duplicateMapName)).toHaveCount(0);
 });
 
-test('edits and persists a map-local link route', async ({ page }) => {
-  const fixture = await createEditableRouteFixture(page);
+test('edits and persists a map-local link route', async ({ page, testFixtures: fixtures }) => {
+  const fixture = await createEditableRouteFixture(page, fixtures);
   await page.goto('/');
-  await openMap(page, TEST_MAP_NAME);
+  await openMap(page, fixtures.mapName);
   await waitForPersistedPositions(page, fixture.routeMapId, [
     fixture.sourceDeviceId,
     fixture.targetDeviceId,
@@ -686,7 +712,7 @@ test('edits and persists a map-local link route', async ({ page }) => {
   await expectPathAnchoredToNodeBorders(page, hitPath, sourceNode, targetNode);
 
   await page.reload();
-  await openMap(page, TEST_MAP_NAME);
+  await openMap(page, fixtures.mapName);
   hitPath = visibleLinkHitPath(page);
   await expect(hitPath).toBeVisible();
   await page.getByTitle('Edit Mode (E)').click();
@@ -699,7 +725,7 @@ test('edits and persists a map-local link route', async ({ page }) => {
   await waitForPathToSettle(hitPath);
   await expectPathAnchoredToNodeBorders(page, hitPath, sourceNode, targetNode);
 
-  await openMap(page, DUPLICATE_TEST_MAP_NAME);
+  await openMap(page, fixtures.duplicateMapName);
   await waitForPersistedPositions(page, fixture.isolationMapId, [
     fixture.sourceDeviceId,
     fixture.targetDeviceId,
@@ -709,7 +735,7 @@ test('edits and persists a map-local link route', async ({ page }) => {
   await selectLinkAtPathRatio(page, hitPath);
   await expect(page.getByRole('button', { name: /Move waypoint/ })).toHaveCount(0);
 
-  await openMap(page, TEST_MAP_NAME);
+  await openMap(page, fixtures.mapName);
   hitPath = visibleLinkHitPath(page);
   await expect(hitPath).toBeVisible();
   await selectLinkAtPathRatio(page, hitPath);
@@ -730,7 +756,7 @@ test('edits and persists a map-local link route', async ({ page }) => {
   expect((await resetResponse).ok()).toBe(true);
 
   await page.reload();
-  await openMap(page, TEST_MAP_NAME);
+  await openMap(page, fixtures.mapName);
   hitPath = visibleLinkHitPath(page);
   await expect(hitPath).toBeVisible();
   await page.getByTitle('Edit Mode (E)').click();
@@ -739,10 +765,13 @@ test('edits and persists a map-local link route', async ({ page }) => {
   await expect(hitPath).not.toHaveAttribute('d', movedManualPath);
 });
 
-test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
-  const fixture = await createEditableSelfLinkFixture(page);
+test('edits, reloads, and resets a saved self-link route', async ({
+  page,
+  testFixtures: fixtures,
+}) => {
+  const fixture = await createEditableSelfLinkFixture(page, fixtures);
   await page.goto('/');
-  await openMap(page, TEST_MAP_NAME);
+  await openMap(page, fixtures.mapName);
   await waitForPersistedPositions(page, fixture.mapId, [fixture.deviceId]);
 
   // Hold a view-mode refresh until the route is saved in edit mode.
@@ -805,7 +834,7 @@ test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
   expect(manualPath).not.toBe(automaticPath);
 
   await page.reload();
-  await openMap(page, TEST_MAP_NAME);
+  await openMap(page, fixtures.mapName);
   await page.getByTitle('Edit Mode (E)').click();
   hitPath = visibleLinkHitPathById(page, fixture.linkId);
   await expect(hitPath).toBeVisible();
@@ -843,7 +872,7 @@ test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
   await expect(page.getByRole('button', { name: /Move waypoint/ })).toHaveCount(0);
 
   await page.reload();
-  await openMap(page, TEST_MAP_NAME);
+  await openMap(page, fixtures.mapName);
   await page.getByTitle('Edit Mode (E)').click();
   hitPath = visibleLinkHitPathById(page, fixture.linkId);
   await expect(hitPath).toBeVisible();
