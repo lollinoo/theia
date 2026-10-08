@@ -45,7 +45,7 @@ func (s *BackupService) StartBulkBackupRun(ctx context.Context, requestedDeviceI
 	if active, err := s.bulkRunRepo.GetActiveRun(); err != nil {
 		return nil, fmt.Errorf("checking active bulk backup run: %w", err)
 	} else if active != nil {
-		hydrated, hydrateErr := s.hydrateBulkBackupRunFileTotals(active)
+		hydrated, hydrateErr := s.hydrateBulkBackupRunFileTotals(ctx, active)
 		if hydrateErr != nil {
 			return nil, fmt.Errorf("loading active bulk backup run totals: %w", hydrateErr)
 		}
@@ -93,7 +93,7 @@ func (s *BackupService) StartBulkBackupRun(ctx context.Context, requestedDeviceI
 		if errors.Is(err, ErrBulkBackupRunAlreadyActive) || isBulkBackupRunActiveConstraintError(err) {
 			active, activeErr := s.bulkRunRepo.GetActiveRun()
 			if activeErr == nil && active != nil {
-				if hydrated, hydrateErr := s.hydrateBulkBackupRunFileTotals(active); hydrateErr == nil {
+				if hydrated, hydrateErr := s.hydrateBulkBackupRunFileTotals(ctx, active); hydrateErr == nil {
 					return hydrated, ErrBulkBackupRunAlreadyActive
 				}
 			}
@@ -138,7 +138,7 @@ func (s *BackupService) GetLatestBulkBackupRun(ctx context.Context) (*domain.Bul
 	if err != nil {
 		return nil, err
 	}
-	return s.hydrateBulkBackupRunFileTotals(run)
+	return s.hydrateBulkBackupRunFileTotals(context.Background(), run)
 }
 
 func (s *BackupService) CancelBulkBackupRun(ctx context.Context, id uuid.UUID) (*domain.BulkBackupRun, error) {
@@ -241,32 +241,30 @@ func (s *BackupService) getBulkBackupRunWithFileTotals(id uuid.UUID) (*domain.Bu
 	if err != nil {
 		return nil, err
 	}
-	return s.hydrateBulkBackupRunFileTotals(run)
+	return s.hydrateBulkBackupRunFileTotals(context.Background(), run)
 }
 
-func (s *BackupService) hydrateBulkBackupRunFileTotals(run *domain.BulkBackupRun) (*domain.BulkBackupRun, error) {
+func (s *BackupService) hydrateBulkBackupRunFileTotals(ctx context.Context, run *domain.BulkBackupRun) (*domain.BulkBackupRun, error) {
 	if run == nil || s.fileRepo == nil {
 		return run, nil
 	}
-
-	run.FileCount = 0
-	run.ByteCount = 0
+	ids := make([]uuid.UUID, 0, len(run.Items))
+	for _, item := range run.Items {
+		if item.BackupJobID != nil {
+			ids = append(ids, *item.BackupJobID)
+		}
+	}
+	totals, err := s.backupFileTotals(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("loading bulk backup run item files: %w", err)
+	}
+	run.FileCount, run.ByteCount = 0, 0
 	for index := range run.Items {
 		item := &run.Items[index]
-		item.FileCount = 0
-		item.ByteCount = 0
-		if item.BackupJobID == nil {
-			continue
-		}
-		files, err := s.fileRepo.GetByJobID(*item.BackupJobID)
-		if err != nil {
-			return nil, fmt.Errorf("loading bulk backup run item files: %w", err)
-		}
-		item.FileCount = len(files)
-		for _, file := range files {
-			if file.SizeBytes > 0 {
-				item.ByteCount += int64(file.SizeBytes)
-			}
+		item.FileCount, item.ByteCount = 0, 0
+		if item.BackupJobID != nil {
+			total := totals[*item.BackupJobID]
+			item.FileCount, item.ByteCount = total.FileCount, total.ByteCount
 		}
 		run.FileCount += item.FileCount
 		run.ByteCount += item.ByteCount
@@ -752,7 +750,7 @@ func (s *bulkRunProcessor) finishBulkBackupRun(runID uuid.UUID) {
 	if run.CompletedAt != nil && !durationStart.IsZero() {
 		duration = run.CompletedAt.Sub(durationStart)
 	}
-	if hydratedRun, err := s.hydrateBulkBackupRunFileTotals(run); err != nil {
+	if hydratedRun, err := s.hydrateBulkBackupRunFileTotals(context.Background(), run); err != nil {
 		log.Printf("Warning: failed to hydrate bulk backup run %s file totals for metrics: %v", runID, err)
 	} else if hydratedRun != nil {
 		run = hydratedRun

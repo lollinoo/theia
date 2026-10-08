@@ -31,10 +31,11 @@ type DeviceBackupScheduler struct {
 	jobRepo       domain.BackupJobRepository
 	settingsRepo  domain.SettingsRepository
 
-	running         atomic.Bool
-	cancel          context.CancelFunc
-	done            chan struct{}
-	retentionCursor uuid.UUID
+	running            atomic.Bool
+	cancel             context.CancelFunc
+	done               chan struct{}
+	retentionCursor    uuid.UUID
+	retentionJobCursor uuid.UUID
 }
 
 // NewDeviceBackupScheduler creates a new DeviceBackupScheduler.
@@ -244,6 +245,11 @@ func (s *DeviceBackupScheduler) runRetentionSweep(ctx context.Context) {
 		log.Printf("DeviceBackupScheduler: retention: failed to clean failed records: %v", err)
 	}
 	if ctx.Err() != nil {
+		return
+	}
+
+	if repo, ok := s.jobRepo.(backupRetentionBatchRepository); ok {
+		s.runRetentionBatches(ctx, repo, retentionCount)
 		return
 	}
 

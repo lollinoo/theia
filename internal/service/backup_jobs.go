@@ -116,13 +116,16 @@ func (s *BackupService) GetBackupJobs(ctx context.Context, deviceID uuid.UUID) (
 	if err != nil {
 		return nil, err
 	}
-	// Attach file counts
+	ids := make([]uuid.UUID, len(jobs))
 	for i := range jobs {
-		files, err := s.fileRepo.GetByJobID(jobs[i].ID)
-		if err != nil {
-			return nil, fmt.Errorf("loading files for backup job %s: %w", jobs[i].ID, err)
-		}
-		jobs[i].Files = files
+		ids[i] = jobs[i].ID
+	}
+	files, err := s.backupFilesByJobIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range jobs {
+		jobs[i].Files = files[jobs[i].ID]
 	}
 	return jobs, nil
 }
