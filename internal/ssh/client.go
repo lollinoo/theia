@@ -197,36 +197,6 @@ func (c *Client) RunCommandToWriter(ctx context.Context, command string, stdout 
 	return nil
 }
 
-// DownloadFile retrieves a file from the remote host via SFTP.
-func (c *Client) DownloadFile(ctx context.Context, remotePath string) (data []byte, err error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
-	defer stop()
-	defer func() {
-		if ctx.Err() != nil {
-			data = nil
-			err = ctx.Err()
-		}
-	}()
-	sftpClient, err := sftp.NewClient(c.client)
-	if err != nil {
-		return nil, fmt.Errorf("creating SFTP client: %w", err)
-	}
-	defer sftpClient.Close()
-	f, err := sftpClient.Open(remotePath)
-	if err != nil {
-		return nil, fmt.Errorf("opening remote file %q: %w", remotePath, err)
-	}
-	defer f.Close()
-	data, err = io.ReadAll(f)
-	if err != nil {
-		return nil, fmt.Errorf("reading remote file %q: %w", remotePath, err)
-	}
-	return data, nil
-}
-
 // DownloadFileToDisk streams an SFTP file to a temporary file and renames it only
 // after a complete transfer. Cancellation closes the transport and drains I/O.
 func (c *Client) DownloadFileToDisk(ctx context.Context, remotePath, localPath string) (err error) {
