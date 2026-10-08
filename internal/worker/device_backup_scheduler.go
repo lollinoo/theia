@@ -25,7 +25,7 @@ type deviceBackupService interface {
 }
 
 // DeviceBackupScheduler runs scheduled device config backups and per-device retention cleanup.
-// It follows the same Start/Stop lifecycle pattern as BackupScheduler and Poller.
+// It follows the same Start/Stop lifecycle pattern as BackupScheduler and PipelineOrchestrator.
 type DeviceBackupScheduler struct {
 	backupService deviceBackupService
 	jobRepo       domain.BackupJobRepository

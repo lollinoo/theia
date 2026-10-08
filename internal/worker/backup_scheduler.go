@@ -15,7 +15,7 @@ import (
 )
 
 // BackupScheduler runs scheduled instance backups and retention cleanup.
-// It follows the same Start/Stop lifecycle pattern as Poller and MetricsCollector.
+// It follows the same Start/Stop lifecycle pattern as PipelineOrchestrator.
 type BackupScheduler struct {
 	backupService *service.InstanceBackupService
 	backupRepo    domain.InstanceBackupRepository
