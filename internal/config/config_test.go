@@ -67,12 +67,6 @@ func TestLoad_DefaultsArchiveLimitsToConservativeValues(t *testing.T) {
 	if got, want := cfg.InstanceBackupArchiveLimits.MaxDurationSeconds, 1800; got != want {
 		t.Fatalf("InstanceBackupArchiveLimits.MaxDurationSeconds = %d, want %d", got, want)
 	}
-	if got, want := cfg.BulkBackupLimits.MaxDevices, 100; got != want {
-		t.Fatalf("BulkBackupLimits.MaxDevices = %d, want %d", got, want)
-	}
-	if got, want := cfg.BulkBackupLimits.MaxQueuedJobs, 100; got != want {
-		t.Fatalf("BulkBackupLimits.MaxQueuedJobs = %d, want %d", got, want)
-	}
 	if got, want := cfg.BulkDownloadLimits.MaxDevices, 100; got != want {
 		t.Fatalf("BulkDownloadLimits.MaxDevices = %d, want %d", got, want)
 	}
@@ -192,12 +186,6 @@ bulk_download_limits:
 	}
 	if got, want := cfg.InstanceBackupArchiveLimits.MaxDurationSeconds, 88; got != want {
 		t.Fatalf("InstanceBackupArchiveLimits.MaxDurationSeconds = %d, want env override %d", got, want)
-	}
-	if got, want := cfg.BulkBackupLimits.MaxDevices, 12; got != want {
-		t.Fatalf("BulkBackupLimits.MaxDevices = %d, want env override %d", got, want)
-	}
-	if got, want := cfg.BulkBackupLimits.MaxQueuedJobs, 22; got != want {
-		t.Fatalf("BulkBackupLimits.MaxQueuedJobs = %d, want %d", got, want)
 	}
 	if got, want := cfg.BulkDownloadLimits.MaxDevices, 33; got != want {
 		t.Fatalf("BulkDownloadLimits.MaxDevices = %d, want %d", got, want)
@@ -334,8 +322,6 @@ func TestLoad_RejectsInvalidArchiveLimitOverrides(t *testing.T) {
 		{name: "backup entries non integer", key: "THEIA_INSTANCE_BACKUP_MAX_FILE_ENTRIES", value: "not-an-integer"},
 		{name: "backup duration zero", key: "THEIA_INSTANCE_BACKUP_MAX_DURATION_SECONDS", value: "0"},
 		{name: "backup duration overflows time duration", key: "THEIA_INSTANCE_BACKUP_MAX_DURATION_SECONDS", value: "9223372037"},
-		{name: "bulk backup devices zero", key: "THEIA_BULK_BACKUP_MAX_DEVICES", value: "0"},
-		{name: "bulk backup queued negative", key: "THEIA_BULK_BACKUP_MAX_QUEUED_JOBS", value: "-1"},
 		{name: "bulk download devices non integer", key: "THEIA_BULK_DOWNLOAD_MAX_DEVICES", value: "not-an-integer"},
 		{name: "bulk download files zero", key: "THEIA_BULK_DOWNLOAD_MAX_FILES", value: "0"},
 		{name: "bulk download bytes negative", key: "THEIA_BULK_DOWNLOAD_MAX_BYTES", value: "-1"},
@@ -363,11 +349,6 @@ func TestLoad_RejectsInvalidArchiveLimitYAML(t *testing.T) {
 			name:     "restore total",
 			contents: "restore_archive_limits:\n  max_total_bytes: 0\n",
 			want:     "restore_archive_limits.max_total_bytes",
-		},
-		{
-			name:     "bulk backup devices",
-			contents: "bulk_backup_limits:\n  max_devices: 0\n",
-			want:     "bulk_backup_limits.max_devices",
 		},
 		{
 			name:     "bulk download bytes",

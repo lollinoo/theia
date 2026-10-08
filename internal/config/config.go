@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"strconv"
@@ -34,7 +35,6 @@ type Config struct {
 	AllowedOrigins              []string                    `yaml:"allowed_origins"`
 	RestoreArchiveLimits        RestoreArchiveLimits        `yaml:"restore_archive_limits"`
 	InstanceBackupArchiveLimits InstanceBackupArchiveLimits `yaml:"instance_backup_archive_limits"`
-	BulkBackupLimits            BulkBackupLimits            `yaml:"bulk_backup_limits"`
 	BulkDownloadLimits          BulkDownloadLimits          `yaml:"bulk_download_limits"`
 }
 
@@ -52,12 +52,6 @@ type InstanceBackupArchiveLimits struct {
 	MaxEntryBytes      int64 `yaml:"max_entry_bytes"`
 	MaxFileEntries     int   `yaml:"max_file_entries"`
 	MaxDurationSeconds int   `yaml:"max_duration_seconds"`
-}
-
-// BulkBackupLimits holds defensive quotas for one bulk device-backup request.
-type BulkBackupLimits struct {
-	MaxDevices    int `yaml:"max_devices"`
-	MaxQueuedJobs int `yaml:"max_queued_jobs"`
 }
 
 // BulkDownloadLimits holds defensive quotas for one bulk backup download request.
@@ -89,10 +83,6 @@ func defaults() *Config {
 			MaxEntryBytes:      1 << 30,
 			MaxFileEntries:     50000,
 			MaxDurationSeconds: 30 * 60,
-		},
-		BulkBackupLimits: BulkBackupLimits{
-			MaxDevices:    100,
-			MaxQueuedJobs: 100,
 		},
 		BulkDownloadLimits: BulkDownloadLimits{
 			MaxDevices:            100,
@@ -129,8 +119,6 @@ func defaults() *Config {
 //   - THEIA_INSTANCE_BACKUP_MAX_ENTRY_BYTES
 //   - THEIA_INSTANCE_BACKUP_MAX_FILE_ENTRIES
 //   - THEIA_INSTANCE_BACKUP_MAX_DURATION_SECONDS
-//   - THEIA_BULK_BACKUP_MAX_DEVICES
-//   - THEIA_BULK_BACKUP_MAX_QUEUED_JOBS
 //   - THEIA_BULK_DOWNLOAD_MAX_DEVICES
 //   - THEIA_BULK_DOWNLOAD_MAX_FILES
 //   - THEIA_BULK_DOWNLOAD_MAX_BYTES
@@ -138,6 +126,11 @@ func defaults() *Config {
 //   - THEIA_BULK_DOWNLOAD_MAX_CONCURRENT_GLOBAL
 func Load(path string) (*Config, error) {
 	cfg := defaults()
+	// Decode deprecated quotas only to report their presence; persistent runs do not use them.
+	fileConfig := struct {
+		*Config          `yaml:",inline"`
+		BulkBackupLimits any `yaml:"bulk_backup_limits"`
+	}{Config: cfg}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -146,7 +139,7 @@ func Load(path string) (*Config, error) {
 		}
 		// Config file not found — proceed with defaults + env overrides
 	} else {
-		if err := yaml.Unmarshal(data, cfg); err != nil {
+		if err := yaml.Unmarshal(data, &fileConfig); err != nil {
 			return nil, fmt.Errorf("parsing config file: %w", err)
 		}
 	}
@@ -231,6 +224,9 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if fileConfig.BulkBackupLimits != nil || os.Getenv("THEIA_BULK_BACKUP_MAX_DEVICES") != "" || os.Getenv("THEIA_BULK_BACKUP_MAX_QUEUED_JOBS") != "" {
+		log.Print("Warning: bulk_backup_limits and THEIA_BULK_BACKUP_MAX_* are deprecated and ignored; persistent bulk backup runs use bounded batches")
+	}
 	return cfg, nil
 }
 
@@ -320,20 +316,6 @@ func applyArchiveLimitEnv(cfg *Config) error {
 }
 
 func applyBulkLimitEnv(cfg *Config) error {
-	if v := os.Getenv("THEIA_BULK_BACKUP_MAX_DEVICES"); v != "" {
-		parsed, err := parsePositiveEnvInt("THEIA_BULK_BACKUP_MAX_DEVICES", v)
-		if err != nil {
-			return err
-		}
-		cfg.BulkBackupLimits.MaxDevices = parsed
-	}
-	if v := os.Getenv("THEIA_BULK_BACKUP_MAX_QUEUED_JOBS"); v != "" {
-		parsed, err := parsePositiveEnvInt("THEIA_BULK_BACKUP_MAX_QUEUED_JOBS", v)
-		if err != nil {
-			return err
-		}
-		cfg.BulkBackupLimits.MaxQueuedJobs = parsed
-	}
 	if v := os.Getenv("THEIA_BULK_DOWNLOAD_MAX_DEVICES"); v != "" {
 		parsed, err := parsePositiveEnvInt("THEIA_BULK_DOWNLOAD_MAX_DEVICES", v)
 		if err != nil {
@@ -440,12 +422,6 @@ func validateArchiveLimits(cfg *Config) error {
 }
 
 func validateBulkLimits(cfg *Config) error {
-	if err := validatePositiveInt("bulk_backup_limits.max_devices", cfg.BulkBackupLimits.MaxDevices); err != nil {
-		return err
-	}
-	if err := validatePositiveInt("bulk_backup_limits.max_queued_jobs", cfg.BulkBackupLimits.MaxQueuedJobs); err != nil {
-		return err
-	}
 	if err := validatePositiveInt("bulk_download_limits.max_devices", cfg.BulkDownloadLimits.MaxDevices); err != nil {
 		return err
 	}
