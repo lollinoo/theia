@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -390,11 +391,13 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		return fmt.Errorf("opening bulk download lease database: %w", err)
 	}
 	defer leaseDB.Close()
-	leaseDB.SetMaxOpenConns(service.DefaultBulkOperationLimits.BulkDownloadMaxConcurrentGlobal + 1)
+	configureDownloadLeasePool(leaseDB, cfg)
 	leaseDB.SetMaxIdleConns(1)
 	leaseDB.SetConnMaxIdleTime(5 * time.Minute)
 
-	postgres.ConfigureDB(db)
+	if err := postgres.ConfigureDBWithLimits(db, cfg.DBMaxOpenConns, cfg.DBMaxIdleConns); err != nil {
+		return fmt.Errorf("configure database pool: %w", err)
+	}
 	log.Printf("Database dialect: %s", postgres.DialectPostgres)
 
 	if err := db.Ping(); err != nil {
@@ -701,7 +704,10 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	}
 
 	router := api.NewRouter(db, deviceService, linkRepo, positionRepo, canvasMapRepo, canvasMapPositionRepo, settingsRepo, snmpProfileRepo, credentialProfileRepo, areaRepo, backupService, vendorRegistry, vendorConfigRepo, pipeline, instanceBackupService, restoreRestarter, cfg.BridgeBinariesDir, pipeline.GetOrBuildOverviewState, wsHandler, api.WithSecurity(apiSecurity), api.WithAuthService(authService), api.WithBridgeService(bridgeService), api.WithDeviceImportService(deviceImportService), api.WithDeviceImportTopologyCoordinator(deviceImportTopologyCoordinator), api.WithAuditLogRepository(authRepo), api.WithBulkDownloadLeases(postgres.NewBulkOperationLeaseRepo(leaseDB)), api.WithRuntimeEnvironment(cfg.DeploymentEnv))
-	metricsHandler := observability.Handler()
+	metricsHandler := observability.Handler(
+		observability.DatabasePool{Name: "primary", DB: db},
+		observability.DatabasePool{Name: "bulk_download", DB: leaseDB},
+	)
 	metricsToken := strings.TrimSpace(cfg.MetricsToken)
 	server = &http.Server{
 		ReadHeaderTimeout: 5 * time.Second,
@@ -736,6 +742,15 @@ func configureInstanceBackupArchiveLimits(instanceBackupService *service.Instanc
 		MaxFileEntries: cfg.InstanceBackupArchiveLimits.MaxFileEntries,
 		MaxDuration:    time.Duration(cfg.InstanceBackupArchiveLimits.MaxDurationSeconds) * time.Second,
 	})
+}
+
+// configureDownloadLeasePool reserves one connection for rejecting excess downloads.
+func configureDownloadLeasePool(db *sql.DB, cfg *runtimeConfig) {
+	limit := service.DefaultBulkOperationLimits.BulkDownloadMaxConcurrentGlobal
+	if cfg.BulkDownloadLimits.MaxConcurrentGlobal > 0 {
+		limit = cfg.BulkDownloadLimits.MaxConcurrentGlobal
+	}
+	db.SetMaxOpenConns(limit + 1)
 }
 
 func configureBackupServiceBulkOperationLimits(backupService *service.BackupService, cfg *runtimeConfig) {

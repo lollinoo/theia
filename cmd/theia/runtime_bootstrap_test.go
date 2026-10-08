@@ -20,6 +20,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/lollinoo/theia/internal/domain"
+	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/ws"
 	"gopkg.in/yaml.v3"
@@ -1547,10 +1548,12 @@ func TestRuntimeBootstrapRunTightensExistingKnownHostsFile(t *testing.T) {
 	originalLoadRuntimeConfig := loadRuntimeConfig
 	loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
 		return &runtimeConfig{
-			DBDSN:      "postgres://user:pass@127.0.0.1:1/theia?sslmode=disable",
-			DataDir:    runtimeDir,
-			ListenAddr: ":0",
-			LogLevel:   "info",
+			DBDSN:          "postgres://user:pass@127.0.0.1:1/theia?sslmode=disable",
+			DBMaxOpenConns: 16,
+			DBMaxIdleConns: 8,
+			DataDir:        runtimeDir,
+			ListenAddr:     ":0",
+			LogLevel:       "info",
 		}, nil
 	}
 	t.Cleanup(func() { loadRuntimeConfig = originalLoadRuntimeConfig })
@@ -1814,10 +1817,12 @@ func TestRuntimeBootstrapRunWrapsPostgresConnectFailureWithGuidance(t *testing.T
 	originalLoadRuntimeConfig := loadRuntimeConfig
 	loadRuntimeConfig = func(path string) (*runtimeConfig, error) {
 		return &runtimeConfig{
-			DBDSN:      "postgres://user:pass@127.0.0.1:1/theia?sslmode=disable",
-			DataDir:    runtimeDir,
-			ListenAddr: ":0",
-			LogLevel:   "info",
+			DBDSN:          "postgres://user:pass@127.0.0.1:1/theia?sslmode=disable",
+			DBMaxOpenConns: 16,
+			DBMaxIdleConns: 8,
+			DataDir:        runtimeDir,
+			ListenAddr:     ":0",
+			LogLevel:       "info",
 		}, nil
 	}
 	t.Cleanup(func() { loadRuntimeConfig = originalLoadRuntimeConfig })
@@ -1864,5 +1869,56 @@ func TestRuntimeBootstrapRunWrapsPostgresOpenFailureWithGuidance(t *testing.T) {
 	}
 	if got := err.Error(); !strings.Contains(got, "set THEIA_DB_DSN") {
 		t.Fatalf("Run() error = %q, want postgres recovery hint", got)
+	}
+}
+
+func TestDownloadLeasePoolUsesConfiguredConcurrency(t *testing.T) {
+	cfg := &runtimeConfig{}
+	cfg.BulkDownloadLimits.MaxConcurrentGlobal = 17
+	db, err := postgres.OpenPrimaryDB("postgres://unused/unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	configureDownloadLeasePool(db, cfg)
+	if got := db.Stats().MaxOpenConnections; got != 18 {
+		t.Fatalf("max open=%d, want 18 including the rejection probe", got)
+	}
+	cfg.BulkDownloadLimits.MaxConcurrentGlobal = 0
+	configureDownloadLeasePool(db, cfg)
+	if got := db.Stats().MaxOpenConnections; got != service.DefaultBulkOperationLimits.BulkDownloadMaxConcurrentGlobal+1 {
+		t.Fatalf("default max open=%d", got)
+	}
+}
+
+func TestConfiguredDownloadLeasePoolKeepsRejectionProbeAvailable(t *testing.T) {
+	dsn := os.Getenv("THEIA_TEST_DB_DSN")
+	if dsn == "" {
+		t.Skip("THEIA_TEST_DB_DSN is required")
+	}
+	db, err := postgres.OpenPrimaryDB(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cfg := &runtimeConfig{}
+	cfg.BulkDownloadLimits.MaxConcurrentGlobal = 6
+	configureDownloadLeasePool(db, cfg)
+	repo := postgres.NewBulkOperationLeaseRepo(db)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	prefix := t.Name() + time.Now().String()
+	for i := range 6 {
+		lease, acquired, err := repo.TryAcquireBulkOperationLease(ctx, fmt.Sprintf("%s:%d", prefix, i))
+		if err != nil || !acquired {
+			t.Fatalf("lease %d acquired=%v error=%v", i, acquired, err)
+		}
+		defer lease.Release()
+	}
+	if _, acquired, err := repo.TryAcquireBulkOperationLease(ctx, prefix+":0"); err != nil || acquired {
+		t.Fatalf("busy lease probe acquired=%v error=%v", acquired, err)
+	}
+	if stats := db.Stats(); stats.InUse != 6 || stats.WaitCount != 0 {
+		t.Fatalf("lease pool stats=%+v", stats)
 	}
 }

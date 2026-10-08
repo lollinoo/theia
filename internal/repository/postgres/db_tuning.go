@@ -5,7 +5,6 @@ package postgres
 import (
 	"database/sql"
 	"fmt"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -22,23 +21,20 @@ func OpenPrimaryDB(dsn string) (*sql.DB, error) {
 
 // ConfigureDB bounds the PostgreSQL connection pool for mixed API and collector load.
 func ConfigureDB(db *sql.DB) {
-	maxConns := runtime.GOMAXPROCS(0) * 4
-	switch {
-	case maxConns < 8:
-		maxConns = 8
-	case maxConns > 48:
-		maxConns = 48
-	}
+	_ = ConfigureDBWithLimits(db, 16, 8)
+}
 
-	idleConns := maxConns / 2
-	if idleConns < 4 {
-		idleConns = 4
+// ConfigureDBWithLimits applies a validated deployment connection budget.
+// MaxIdleConns may be zero to release every connection when it becomes idle.
+func ConfigureDBWithLimits(db *sql.DB, maxOpenConns, maxIdleConns int) error {
+	if maxOpenConns <= 0 || maxIdleConns < 0 || maxIdleConns > maxOpenConns {
+		return fmt.Errorf("invalid database pool limits: open=%d idle=%d", maxOpenConns, maxIdleConns)
 	}
-
-	db.SetMaxOpenConns(maxConns)
-	db.SetMaxIdleConns(idleConns)
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxIdleConns)
 	db.SetConnMaxLifetime(0)
 	db.SetConnMaxIdleTime(dbConnMaxIdleTime)
+	return nil
 }
 
 func withWriteRetry(fn func() error) error {

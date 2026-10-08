@@ -21,6 +21,8 @@ const maxInstanceBackupDurationSeconds = int64(math.MaxInt64 / int64(time.Second
 type Config struct {
 	ListenAddr                  string                      `yaml:"listen_addr"`
 	DBDSN                       string                      `yaml:"db_dsn"`
+	DBMaxOpenConns              int                         `yaml:"db_max_open_conns"`
+	DBMaxIdleConns              int                         `yaml:"db_max_idle_conns"`
 	DataDir                     string                      `yaml:"data_dir"`
 	LogLevel                    string                      `yaml:"log_level"`
 	BridgeBinariesDir           string                      `yaml:"bridge_binaries_dir"`
@@ -70,10 +72,12 @@ type BulkDownloadLimits struct {
 // defaults returns a Config with sensible default values.
 func defaults() *Config {
 	return &Config{
-		ListenAddr:    ":8080",
-		DataDir:       "./data",
-		LogLevel:      "info",
-		DeploymentEnv: "development",
+		ListenAddr:     ":8080",
+		DBMaxOpenConns: 16,
+		DBMaxIdleConns: 8,
+		DataDir:        "./data",
+		LogLevel:       "info",
+		DeploymentEnv:  "development",
 		RestoreArchiveLimits: RestoreArchiveLimits{
 			MaxCompressedBytes: 256 << 20,
 			MaxTotalBytes:      1 << 30,
@@ -106,6 +110,8 @@ func defaults() *Config {
 // Supported env vars:
 //   - THEIA_LISTEN_ADDR
 //   - THEIA_DB_DSN
+//   - THEIA_DB_MAX_OPEN_CONNS
+//   - THEIA_DB_MAX_IDLE_CONNS
 //   - THEIA_DATA_DIR
 //   - THEIA_LOG_LEVEL
 //   - THEIA_BRIDGE_BINARIES_DIR
@@ -152,6 +158,21 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("THEIA_DB_DSN"); v != "" {
 		cfg.DBDSN = v
 	}
+	if v := os.Getenv("THEIA_DB_MAX_OPEN_CONNS"); v != "" {
+		parsed, err := parsePositiveEnvInt("THEIA_DB_MAX_OPEN_CONNS", v)
+		if err != nil {
+			return nil, err
+		}
+		cfg.DBMaxOpenConns = parsed
+	}
+	if v := os.Getenv("THEIA_DB_MAX_IDLE_CONNS"); v != "" {
+		parsed, err := parseNonNegativeEnvInt("THEIA_DB_MAX_IDLE_CONNS", v)
+		if err != nil {
+			return nil, err
+		}
+		cfg.DBMaxIdleConns = parsed
+	}
+
 	if v := os.Getenv("THEIA_DATA_DIR"); v != "" {
 		cfg.DataDir = v
 	}
@@ -168,14 +189,14 @@ func Load(path string) (*Config, error) {
 		cfg.SessionSecret = v
 	}
 	if v := os.Getenv("THEIA_SESSION_TTL_MINUTES"); v != "" {
-		minutes, err := parseEnvMinutes("THEIA_SESSION_TTL_MINUTES", v)
+		minutes, err := parseNonNegativeEnvInt("THEIA_SESSION_TTL_MINUTES", v)
 		if err != nil {
 			return nil, err
 		}
 		cfg.SessionTTLMinutes = minutes
 	}
 	if v := os.Getenv("THEIA_PASSWORD_RESET_TTL_MINUTES"); v != "" {
-		minutes, err := parseEnvMinutes("THEIA_PASSWORD_RESET_TTL_MINUTES", v)
+		minutes, err := parseNonNegativeEnvInt("THEIA_PASSWORD_RESET_TTL_MINUTES", v)
 		if err != nil {
 			return nil, err
 		}
@@ -187,6 +208,13 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("THEIA_ALLOWED_ORIGINS"); v != "" {
 		cfg.AllowedOrigins = splitAllowedOrigins(v)
 	}
+	if cfg.DBMaxOpenConns <= 0 {
+		return nil, fmt.Errorf("db_max_open_conns must be positive")
+	}
+	if cfg.DBMaxIdleConns < 0 || cfg.DBMaxIdleConns > cfg.DBMaxOpenConns {
+		return nil, fmt.Errorf("db_max_idle_conns must be between zero and db_max_open_conns")
+	}
+
 	if err := applyArchiveLimitEnv(cfg); err != nil {
 		return nil, err
 	}
@@ -220,7 +248,7 @@ func normalizeDeploymentEnv(cfg *Config) error {
 	}
 }
 
-func parseEnvMinutes(key, value string) (int, error) {
+func parseNonNegativeEnvInt(key, value string) (int, error) {
 	minutes, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil {
 		return 0, fmt.Errorf("parsing %s: %w", key, err)
@@ -432,6 +460,9 @@ func validateBulkLimits(cfg *Config) error {
 	}
 	if err := validatePositiveInt("bulk_download_limits.max_concurrent_global", cfg.BulkDownloadLimits.MaxConcurrentGlobal); err != nil {
 		return err
+	}
+	if cfg.BulkDownloadLimits.MaxConcurrentGlobal == math.MaxInt {
+		return fmt.Errorf("bulk_download_limits.max_concurrent_global must leave room for one lease probe connection")
 	}
 	return nil
 }

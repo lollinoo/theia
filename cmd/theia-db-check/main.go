@@ -41,7 +41,9 @@ func main() {
 	}
 	defer db.Close()
 
-	postgres.ConfigureDB(db)
+	if err := postgres.ConfigureDBWithLimits(db, cfg.DBMaxOpenConns, cfg.DBMaxIdleConns); err != nil {
+		log.Fatalf("Failed to configure database pool: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeoutFlag)
 	defer cancel()

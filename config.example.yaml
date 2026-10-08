@@ -7,6 +7,7 @@
 #
 # All values can be overridden with environment variables:
 #   THEIA_LISTEN_ADDR, THEIA_DB_DSN, THEIA_DATA_DIR, THEIA_LOG_LEVEL,
+#   THEIA_DB_MAX_OPEN_CONNS, THEIA_DB_MAX_IDLE_CONNS,
 #   THEIA_BRIDGE_BINARIES_DIR, THEIA_DEPLOYMENT_ENV, THEIA_SESSION_SECRET,
 #   THEIA_SESSION_TTL_MINUTES, THEIA_PASSWORD_RESET_TTL_MINUTES,
 #   THEIA_METRICS_TOKEN, THEIA_ALLOWED_ORIGINS,
@@ -20,6 +21,14 @@ listen_addr: ":8080"
 # PostgreSQL DSN. Required.
 # DSN shape: postgres://<postgres-user>:<postgres-password>@<postgres-host>:5432/<postgres-db>?sslmode=disable
 db_dsn: ""
+
+# Per-process primary database pool budget, independent of CPU count.
+# Reserve max_concurrent_global + 1 additional connections for download leases,
+# and multiply this combined budget by the number of backend instances.
+# Choose limits from PostgreSQL capacity and observed /metrics pool waits.
+# Zero idle connections is allowed; open connections must be positive.
+db_max_open_conns: 16
+db_max_idle_conns: 8
 
 # Local app data directory used for known_hosts and backup files.
 # Default: "./data"
