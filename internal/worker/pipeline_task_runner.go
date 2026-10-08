@@ -181,9 +181,9 @@ func (r *pipelineTaskRunner) runTask(ctx context.Context, task scheduler.PollTas
 		update := result.ToStoreUpdate(task.ExpectedInterval)
 		if result.Err == nil {
 			if p.prometheus != nil && p.GetPrometheusStatus().Enabled {
-				enrichment, err := p.prometheus.CollectDeviceEnrichment(ctx, task.Device)
-				if err == nil && enrichment.Hostname != "" {
-					p.prometheusMonitor.recordHostname(task.Device.ID, enrichment.Hostname)
+				hostname, err := p.prometheus.CollectDeviceHostname(ctx, task.Device)
+				if err == nil && hostname != "" {
+					p.prometheusMonitor.recordHostname(task.Device.ID, hostname)
 				}
 			}
 

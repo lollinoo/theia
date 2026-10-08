@@ -143,6 +143,17 @@ func ResolvePrometheusLabel(device domain.Device) (labelName string, labelValue 
 // CollectDeviceEnrichment fetches hostname and probe reachability for one
 // device without querying Prometheus for core device or link metrics.
 func (c *PrometheusCollector) CollectDeviceEnrichment(ctx context.Context, device domain.Device) (PrometheusEnrichment, error) {
+	return c.collectDeviceEnrichment(ctx, device, true)
+}
+
+// CollectDeviceHostname fetches only the hostname used by physical SNMP polling.
+// Probe reachability remains authoritative only for virtual-device enrichment.
+func (c *PrometheusCollector) CollectDeviceHostname(ctx context.Context, device domain.Device) (string, error) {
+	result, err := c.collectDeviceEnrichment(ctx, device, false)
+	return result.Hostname, err
+}
+
+func (c *PrometheusCollector) collectDeviceEnrichment(ctx context.Context, device domain.Device, includeProbe bool) (PrometheusEnrichment, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -171,7 +182,7 @@ func (c *PrometheusCollector) CollectDeviceEnrichment(ctx context.Context, devic
 		result.Hostname = hostnames[labelValue]
 	}
 
-	if ip := strings.TrimSpace(device.IP); ip != "" {
+	if ip := strings.TrimSpace(device.IP); includeProbe && ip != "" {
 		probeStatuses, err := client.QueryProbeStatus(ctx, []string{ip})
 		if err != nil {
 			return result, fmt.Errorf("query probe status: %w", err)
