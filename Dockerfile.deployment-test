@@ -1,0 +1,12 @@
+# CI toolchain only. The product images and server bundles do not include it.
+FROM docker:29-cli AS docker-tools
+FROM golang:1.27.1-bookworm AS go-tools
+FROM node:26-bookworm
+
+COPY --from=docker-tools /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-tools /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
+COPY --from=go-tools /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:$PATH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl make python3 ripgrep && rm -rf /var/lib/apt/lists/*

@@ -64,7 +64,7 @@ jobs:
 
             while IFS= read -r path; do
               case "$path" in
-                cmd/*|internal/*|go.mod|go.sum|config.example.yaml|Dockerfile|docker-compose*.yml|Makefile|scripts/*.sh|scripts/*.ps1|.env*.example)
+                cmd/*|internal/*|go.mod|go.sum|config.example.yaml|Dockerfile|Dockerfile.deployment-test|docker-compose*.yml|Makefile|scripts/*.sh|scripts/*.ps1|.env*.example)
                   backend=true
                   browser_e2e=true
                   ;;
@@ -570,6 +570,10 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install browser and Kubernetes test tools
         run: |
+          if ! command -v rg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
           npm --prefix frontend ci
           npm --prefix frontend run e2e:install
           bash scripts/install-kubernetes-test-tools.sh "$RUNNER_TEMP/theia-kube-tools"

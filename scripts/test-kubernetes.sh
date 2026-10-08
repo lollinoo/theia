@@ -2,7 +2,7 @@
 set -euo pipefail
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_dir"
-for command in kind kubectl helm docker go python3 curl; do
+for command in kind kubectl helm docker go python3 curl rg; do
   command -v "$command" >/dev/null || { echo "Missing test prerequisite: $command" >&2; exit 1; }
 done
 test_root=$(mktemp -d /tmp/theia-kubernetes-XXXXXX)
