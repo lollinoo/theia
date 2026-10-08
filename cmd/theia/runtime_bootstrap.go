@@ -758,8 +758,6 @@ func configureBackupServiceBulkOperationLimits(backupService *service.BackupServ
 		return
 	}
 	backupService.SetBulkOperationLimits(service.BulkOperationLimits{
-		BulkBackupMaxDevices:              cfg.BulkBackupLimits.MaxDevices,
-		BulkBackupMaxQueuedJobs:           cfg.BulkBackupLimits.MaxQueuedJobs,
 		BulkDownloadMaxDevices:            cfg.BulkDownloadLimits.MaxDevices,
 		BulkDownloadMaxFiles:              cfg.BulkDownloadLimits.MaxFiles,
 		BulkDownloadMaxBytes:              cfg.BulkDownloadLimits.MaxBytes,

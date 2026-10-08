@@ -9,7 +9,9 @@ import (
 
 // BulkOperationLimits holds defensive quotas for bulk backup and download requests.
 type BulkOperationLimits struct {
-	BulkBackupMaxDevices              int
+	// Deprecated: persistent bulk backup runs are bounded by their batch and worker limits.
+	BulkBackupMaxDevices int
+	// Deprecated: persistent bulk backup runs do not use a queued-job quota.
 	BulkBackupMaxQueuedJobs           int
 	BulkDownloadMaxDevices            int
 	BulkDownloadMaxFiles              int

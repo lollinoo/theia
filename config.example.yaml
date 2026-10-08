@@ -77,3 +77,8 @@ allowed_origins: []
 # Log verbosity: debug, info, warn, error
 # Default: "info"
 log_level: "info"
+
+# Deprecated: bulk_backup_limits.max_devices / max_queued_jobs and
+# THEIA_BULK_BACKUP_MAX_DEVICES / THEIA_BULK_BACKUP_MAX_QUEUED_JOBS are ignored.
+# Persistent bulk runs use batches of 10 items and at most 4 backup workers.
+# Bulk download limits still apply to archive size and concurrent downloads.
