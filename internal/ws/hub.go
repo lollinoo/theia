@@ -222,14 +222,25 @@ func (h *Hub) Broadcast(msg Message) {
 
 // SendTo serializes a message and queues it for a single client.
 func (h *Hub) SendTo(client *Client, msg Message) {
+	h.SendToMany([]*Client{client}, msg)
+}
+
+// SendToMany serializes one immutable message for a bounded set of clients.
+// Each client retains its own queue limit, drop behavior, and delivery metrics.
+func (h *Hub) SendToMany(clients []*Client, msg Message) {
+	if len(clients) == 0 {
+		return
+	}
 	payload, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("WebSocket hub: failed to marshal client message: %v", err)
 		return
 	}
-	observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
-	logging.Debugf("websocket message queued scope=unicast type=%s bytes=%d", msg.Type, len(payload))
-	h.enqueue(client, payload)
+	for _, client := range clients {
+		observability.Default().ObserveWSMessage("unicast", msg.Type, len(payload))
+		logging.Debugf("websocket message queued scope=unicast type=%s bytes=%d", msg.Type, len(payload))
+		h.enqueue(client, payload)
+	}
 }
 
 // WriteTo serializes and writes a message directly to a client. It must only be
