@@ -3,6 +3,7 @@ package cache
 // This file defines cache cache behavior and expiry assumptions.
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -47,7 +48,9 @@ type DeviceLinkCache struct {
 	deviceRepo domain.DeviceRepository
 	linkRepo   domain.LinkRepository
 
-	mu sync.Mutex
+	mu          sync.Mutex
+	refreshing  bool
+	refreshDone chan struct{}
 
 	devicesByID      map[uuid.UUID]domain.Device
 	devicesBySysName map[string]uuid.UUID
@@ -208,6 +211,19 @@ func (c *DeviceLinkCache) GetLinkByEndpointPair(sourceDeviceID uuid.UUID, source
 }
 
 func (c *DeviceLinkCache) prepareLocked() error {
+	if c.refreshing {
+		// Existing readers can use the last complete snapshot while one reader
+		// fetches changes. Cold readers wait for publication without holding mu.
+		if c.loaded {
+			return nil
+		}
+		done := c.refreshDone
+		c.mu.Unlock()
+		<-done
+		c.mu.Lock()
+		return c.prepareLocked()
+	}
+
 	if c.useIncremental {
 		if c.deviceRepair != nil && c.deviceRepair() {
 			c.needsFullReload = true
@@ -224,7 +240,10 @@ func (c *DeviceLinkCache) prepareLocked() error {
 			return err
 		}
 		if c.useIncremental {
-			return c.applyPendingIncrementalChangesLocked()
+			if err := c.applyPendingIncrementalChangesLocked(); err != nil {
+				c.needsFullReload = true
+				return err
+			}
 		}
 		return nil
 	}
@@ -253,74 +272,92 @@ func (c *DeviceLinkCache) drainInvalidations() {
 }
 
 func (c *DeviceLinkCache) applyPendingIncrementalChangesLocked() error {
-	for {
-		applied := false
-
+	// Coalesce a bounded batch before fetching: multiple queued updates to the
+	// same row need only its latest committed value. Events arriving during I/O
+	// remain queued for the next refresh.
+	devices := make(map[uuid.UUID]domain.DeviceChangeEvent)
+	links := make(map[uuid.UUID]domain.LinkChangeEvent)
+	for i := 0; i < 512; i++ {
 		select {
 		case event := <-c.deviceChanges:
-			if err := c.applyDeviceChangeLocked(event); err != nil {
-				return err
-			}
-			applied = true
+			devices[event.DeviceID] = event
 		default:
+			i = 512
 		}
-
+	}
+	for i := 0; i < 512; i++ {
 		select {
 		case event := <-c.linkChanges:
-			if err := c.applyLinkChangeLocked(event); err != nil {
-				return err
-			}
-			applied = true
+			links[event.LinkID] = event
 		default:
-		}
-
-		if !applied {
-			return nil
+			i = 512
 		}
 	}
-}
-
-func (c *DeviceLinkCache) applyDeviceChangeLocked(event domain.DeviceChangeEvent) error {
-	switch event.Kind {
-	case domain.ChangeKindDeleted:
-		c.deleteDeviceLocked(event.DeviceID)
-		return nil
-	case domain.ChangeKindCreated, domain.ChangeKindUpdated:
-		device, err := c.deviceRepo.GetByID(event.DeviceID)
-		if err != nil {
-			return err
-		}
-		c.upsertDeviceLocked(*device)
-		return nil
-	default:
+	if len(devices) == 0 && len(links) == 0 {
 		return nil
 	}
-}
 
-func (c *DeviceLinkCache) applyLinkChangeLocked(event domain.LinkChangeEvent) error {
-	switch event.Kind {
-	case domain.ChangeKindDeleted:
-		c.deleteLinkLocked(event.LinkID)
-		return nil
-	case domain.ChangeKindCreated, domain.ChangeKindUpdated:
-		link, err := c.linkRepo.GetByID(event.LinkID)
-		if err != nil {
-			return err
-		}
-		c.upsertLinkLocked(*link)
-		return nil
-	default:
-		return nil
-	}
-}
-
-func (c *DeviceLinkCache) reloadLocked() error {
-	devices, err := c.deviceRepo.GetAll()
+	finish := c.beginRefreshLocked()
+	defer finish()
+	loadedDevices, loadedLinks, err := c.loadChanges(devices, links)
 	if err != nil {
 		return err
 	}
+	for id, event := range devices {
+		if event.Kind == domain.ChangeKindDeleted {
+			c.deleteDeviceLocked(id)
+		} else if device, ok := loadedDevices[id]; ok {
+			c.upsertDeviceLocked(device)
+		}
+	}
+	for id, event := range links {
+		if event.Kind == domain.ChangeKindDeleted {
+			c.deleteLinkLocked(id)
+		} else if link, ok := loadedLinks[id]; ok {
+			c.upsertLinkLocked(link)
+		}
+	}
+	return nil
+}
 
-	links, err := c.linkRepo.GetAll()
+func (c *DeviceLinkCache) loadChanges(devices map[uuid.UUID]domain.DeviceChangeEvent, links map[uuid.UUID]domain.LinkChangeEvent) (map[uuid.UUID]domain.Device, map[uuid.UUID]domain.Link, error) {
+	c.mu.Unlock()
+	defer c.relockAfterRead()
+	loadedDevices := make(map[uuid.UUID]domain.Device, len(devices))
+	loadedLinks := make(map[uuid.UUID]domain.Link, len(links))
+	for id, event := range devices {
+		if event.Kind != domain.ChangeKindCreated && event.Kind != domain.ChangeKindUpdated {
+			continue
+		}
+		device, err := c.deviceRepo.GetByID(id)
+		if err != nil {
+			return nil, nil, err
+		}
+		if device == nil {
+			return nil, nil, fmt.Errorf("changed device %s is missing", id)
+		}
+		loadedDevices[id] = *device
+	}
+	for id, event := range links {
+		if event.Kind != domain.ChangeKindCreated && event.Kind != domain.ChangeKindUpdated {
+			continue
+		}
+		link, err := c.linkRepo.GetByID(id)
+		if err != nil {
+			return nil, nil, err
+		}
+		if link == nil {
+			return nil, nil, fmt.Errorf("changed link %s is missing", id)
+		}
+		loadedLinks[id] = *link
+	}
+	return loadedDevices, loadedLinks, nil
+}
+
+func (c *DeviceLinkCache) reloadLocked() error {
+	finish := c.beginRefreshLocked()
+	defer finish()
+	devices, links, err := c.loadSnapshot()
 	if err != nil {
 		return err
 	}
@@ -350,6 +387,36 @@ func (c *DeviceLinkCache) reloadLocked() error {
 	observability.Default().IncCacheReload()
 
 	return nil
+}
+
+func (c *DeviceLinkCache) beginRefreshLocked() func() {
+	c.refreshing = true
+	c.refreshDone = make(chan struct{})
+	return func() { c.refreshing = false; close(c.refreshDone) }
+}
+
+// relockAfterRead restores getter lock ownership even when repository code
+// panics. Repair is required because drained events may not have been applied.
+func (c *DeviceLinkCache) relockAfterRead() {
+	c.mu.Lock()
+	if value := recover(); value != nil {
+		c.needsFullReload = true
+		panic(value)
+	}
+}
+
+func (c *DeviceLinkCache) loadSnapshot() ([]domain.Device, []domain.Link, error) {
+	c.mu.Unlock()
+	defer c.relockAfterRead()
+	devices, err := c.deviceRepo.GetAll()
+	if err != nil {
+		return nil, nil, err
+	}
+	links, err := c.linkRepo.GetAll()
+	if err != nil {
+		return nil, nil, err
+	}
+	return devices, links, nil
 }
 
 func (c *DeviceLinkCache) upsertDeviceLocked(device domain.Device) {
