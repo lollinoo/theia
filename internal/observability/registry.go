@@ -331,14 +331,16 @@ func ResetDefaultForTest() *Registry {
 	return defaultRegistry
 }
 
-func Handler() http.Handler {
+func Handler(pools ...DatabasePool) http.Handler {
 	return metricsHandler{
 		registry:        Default(),
+		databasePools:   append([]DatabasePool(nil), pools...),
 		runtimeGatherer: runtimeMetricsGatherer,
 	}
 }
 
 type metricsHandler struct {
+	databasePools   []DatabasePool
 	registry        *Registry
 	runtimeGatherer prometheus.Gatherer
 }
@@ -353,6 +355,7 @@ func (h metricsHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = w.Write(runtimeMetrics)
 	_, _ = w.Write(h.registry.MarshalPrometheus())
+	_, _ = w.Write(marshalDatabasePoolMetrics(h.databasePools))
 }
 
 func newRuntimeMetricsGatherer() prometheus.Gatherer {
