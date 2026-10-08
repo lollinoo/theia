@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -461,7 +462,11 @@ func (s *bulkRunProcessor) refreshBulkRunProcessor(runID uuid.UUID, owner string
 
 func (s *bulkRunProcessor) prepareBulkRunBatch(items []domain.BulkBackupRunItem) []queuedDeviceBackup {
 	queued := make([]queuedDeviceBackup, 0, len(items))
-	now := time.Now().UTC()
+	type candidate struct {
+		item   domain.BulkBackupRunItem
+		backup queuedDeviceBackup
+	}
+	candidates := make([]candidate, 0, len(items))
 	activeItems := s.claimBulkRunBatch(items)
 	for _, item := range activeItems {
 		device, err := s.deviceRepo.GetByID(item.DeviceID)
@@ -484,27 +489,60 @@ func (s *bulkRunProcessor) prepareBulkRunBatch(items []domain.BulkBackupRunItem)
 			s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusSkipped, "backup not supported for vendor", nil)
 			continue
 		}
-		if err := ssh.CheckReachable(domain.BackupAddress(*device), profile.Port, 5*time.Second); err != nil {
+		candidates = append(candidates, candidate{item: item, backup: queuedDeviceBackup{
+			device: *device, profile: profile, backupCfg: backupCfg,
+		}})
+	}
+
+	backups := make([]queuedDeviceBackup, len(candidates))
+	for i := range candidates {
+		backups[i] = candidates[i].backup
+	}
+	// Only TCP probes run concurrently; repository reads and job transitions stay ordered.
+	reachability := checkBulkBackupReachability(backups, ssh.CheckReachable)
+	for i, candidate := range candidates {
+		item := candidate.item
+		if reachability[i] != nil {
 			s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusSkipped, "device unreachable", nil)
 			continue
 		}
-		job := &domain.BackupJob{ID: uuid.New(), DeviceID: device.ID, Status: domain.BackupStatusPending}
+		job := &domain.BackupJob{ID: uuid.New(), DeviceID: candidate.backup.device.ID, Status: domain.BackupStatusPending}
 		item.Status = domain.BulkBackupRunItemStatusActive
-		item.UpdatedAt = now
+		item.UpdatedAt = time.Now().UTC()
 		item.CompletedAt = nil
 		if err := s.createBulkRunJob(&item, job); err != nil {
 			s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusFailed, fmt.Sprintf("failed to create or attach job: %v", err), nil)
 			continue
 		}
 		s.recalculateBulkRunCounters(item.RunID)
-		queued = append(queued, queuedDeviceBackup{
-			device:    *device,
-			profile:   profile,
-			backupCfg: backupCfg,
-			jobID:     job.ID,
-		})
+		candidate.backup.jobID = job.ID
+		queued = append(queued, candidate.backup)
 	}
 	return queued
+}
+
+// checkBulkBackupReachability bounds network fan-out independently of the batch size.
+// Each worker owns its result slot, and all probes finish before database mutations resume.
+func checkBulkBackupReachability(backups []queuedDeviceBackup, check func(string, int, time.Duration) error) []error {
+	results := make([]error, len(backups))
+	indices := make(chan int)
+	var workers sync.WaitGroup
+	for range min(defaultBulkBackupWorkerCount, len(backups)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := range indices {
+				backup := backups[i]
+				results[i] = check(domain.BackupAddress(backup.device), backup.profile.Port, 5*time.Second)
+			}
+		}()
+	}
+	for i := range backups {
+		indices <- i
+	}
+	close(indices)
+	workers.Wait()
+	return results
 }
 
 func (s *bulkRunProcessor) claimBulkRunBatch(items []domain.BulkBackupRunItem) []domain.BulkBackupRunItem {
