@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lollinoo/theia/internal/crypto"
+	"github.com/lollinoo/theia/internal/instance"
+	"github.com/lollinoo/theia/internal/secretinput"
 	"gopkg.in/yaml.v3"
 )
 
@@ -20,6 +23,8 @@ const maxInstanceBackupDurationSeconds = int64(math.MaxInt64 / int64(time.Second
 // Runtime settings (Prometheus URL, polling interval, etc.) are stored
 // in the primary database settings table and managed via the API.
 type Config struct {
+	InstanceStatePath           string `yaml:"instance_state"`
+	instanceState               *instance.State
 	ListenAddr                  string                      `yaml:"listen_addr"`
 	DBDSN                       string                      `yaml:"db_dsn"`
 	DBMaxOpenConns              int                         `yaml:"db_max_open_conns"`
@@ -151,6 +156,9 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("THEIA_DB_DSN"); v != "" {
 		cfg.DBDSN = v
 	}
+	if v := os.Getenv("THEIA_INSTANCE_STATE"); v != "" {
+		cfg.InstanceStatePath = v
+	}
 	if v := os.Getenv("THEIA_DB_MAX_OPEN_CONNS"); v != "" {
 		parsed, err := parsePositiveEnvInt("THEIA_DB_MAX_OPEN_CONNS", v)
 		if err != nil {
@@ -201,6 +209,39 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("THEIA_ALLOWED_ORIGINS"); v != "" {
 		cfg.AllowedOrigins = splitAllowedOrigins(v)
 	}
+	for _, field := range []struct {
+		name   string
+		target *string
+	}{
+		{"THEIA_DB_DSN", &cfg.DBDSN}, {"THEIA_SESSION_SECRET", &cfg.SessionSecret}, {"THEIA_METRICS_TOKEN", &cfg.MetricsToken},
+	} {
+		value, err := secretinput.Read(field.name)
+		if err != nil {
+			return nil, err
+		}
+		if value != "" {
+			*field.target = value
+		}
+	}
+	if cfg.InstanceStatePath != "" {
+		state, err := (instance.Store{Path: cfg.InstanceStatePath}).Load()
+		if err != nil {
+			return nil, fmt.Errorf("load managed instance: %w", err)
+		}
+		for _, name := range []string{"THEIA_ENCRYPTION_KEY_ID", "THEIA_ENCRYPTION_KEYS", "THEIA_ENCRYPTION_KEY", "THEIA_SESSION_SECRET", "THEIA_METRICS_TOKEN"} {
+			if os.Getenv(name) != "" || os.Getenv(name+"_FILE") != "" {
+				return nil, fmt.Errorf("%s conflicts with managed instance state", name)
+			}
+		}
+		if cfg.SessionSecret != "" || cfg.MetricsToken != "" {
+			return nil, fmt.Errorf("session and metrics secrets must come from managed instance state")
+		}
+		cfg.instanceState = state
+		cfg.SessionSecret, cfg.MetricsToken = state.SessionSecret, state.MetricsToken
+		if cfg.DBDSN == "" {
+			cfg.DBDSN = state.DBDSN
+		}
+	}
 	if cfg.DBMaxOpenConns <= 0 {
 		return nil, fmt.Errorf("db_max_open_conns must be positive")
 	}
@@ -228,6 +269,14 @@ func Load(path string) (*Config, error) {
 		log.Print("Warning: bulk_backup_limits and THEIA_BULK_BACKUP_MAX_* are deprecated and ignored; persistent bulk backup runs use bounded batches")
 	}
 	return cfg, nil
+}
+
+// CredentialKeyring resolves managed state or the compatible legacy environment.
+func (cfg *Config) CredentialKeyring() (*crypto.Keyring, error) {
+	if cfg.instanceState != nil {
+		return cfg.instanceState.Keyring()
+	}
+	return crypto.LoadKeyringFromEnv()
 }
 
 func normalizeDeploymentEnv(cfg *Config) error {

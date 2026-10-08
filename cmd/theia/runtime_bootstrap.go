@@ -32,6 +32,7 @@ import (
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/scheduler"
+	"github.com/lollinoo/theia/internal/secretinput"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/settingscache"
 	"github.com/lollinoo/theia/internal/ssh"
@@ -143,7 +144,17 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 		return nil
 	}
 
-	if err := validateEncryptionKeySecretPolicy(deploymentEnv); err != nil {
+	if cfg.InstanceStatePath != "" {
+		keyring, err := cfg.CredentialKeyring()
+		if err != nil {
+			return fmt.Errorf("managed credential keys: %w", err)
+		}
+		for _, secret := range keyring.Secrets() {
+			if isKnownSecretPlaceholder(secret) {
+				return fmt.Errorf("%s deployment rejects example managed credential keys", deploymentEnv)
+			}
+		}
+	} else if err := validateEncryptionKeySecretPolicy(deploymentEnv); err != nil {
 		return err
 	}
 
@@ -172,8 +183,15 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 }
 
 func validateEncryptionKeySecretPolicy(deploymentEnv string) error {
-	activeKeyID := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY_ID"))
-	keyList := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEYS"))
+	activeKeyID, err := secretinput.Read("THEIA_ENCRYPTION_KEY_ID")
+	if err != nil {
+		return err
+	}
+	keyList, err := secretinput.Read("THEIA_ENCRYPTION_KEYS")
+	if err != nil {
+		return err
+	}
+	activeKeyID, keyList = strings.TrimSpace(activeKeyID), strings.TrimSpace(keyList)
 	if activeKeyID != "" || keyList != "" {
 		if activeKeyID == "" {
 			return fmt.Errorf("THEIA_ENCRYPTION_KEY_ID is required for %s deployment when THEIA_ENCRYPTION_KEYS is set", deploymentEnv)
@@ -190,7 +208,11 @@ func validateEncryptionKeySecretPolicy(deploymentEnv string) error {
 		return nil
 	}
 
-	encryptionKey := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
+	encryptionKey, err := secretinput.Read("THEIA_ENCRYPTION_KEY")
+	if err != nil {
+		return err
+	}
+	encryptionKey = strings.TrimSpace(encryptionKey)
 	if encryptionKey == "" {
 		return fmt.Errorf("THEIA_ENCRYPTION_KEY is required for %s deployment", deploymentEnv)
 	}
@@ -367,7 +389,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	if err := ensurePrivateDir(paths.appDataDir); err != nil {
 		return fmt.Errorf("prepare application data directory %s: %w", paths.appDataDir, err)
 	}
-	if err := applyPendingPostgresRestore(paths.appDataDir, cfg.DBDSN, paths.backupDir, paths.knownHostsPath); err != nil {
+	if err := applyPendingPostgresRestoreWithConfig(paths.appDataDir, cfg.DBDSN, paths.backupDir, paths.knownHostsPath, cfg); err != nil {
 		return fmt.Errorf("apply pending PostgreSQL restore: %w", err)
 	}
 	if _, err := os.Stat(paths.knownHostsPath); err == nil {
@@ -404,7 +426,7 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		return wrapPostgresConnectError(err)
 	}
 
-	encryptionKeyring, err := crypto.LoadKeyringFromEnv()
+	encryptionKeyring, err := cfg.CredentialKeyring()
 	if err != nil {
 		return fmt.Errorf("security configuration error: %w", err)
 	}
