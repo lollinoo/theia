@@ -3,9 +3,9 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/lollinoo/theia/internal/instance"
@@ -14,9 +14,23 @@ import (
 // RotateOperationalSecrets replaces operational secrets during a protected
 // offline operation. External database owners manage their own password.
 func (m *Maintenance) RotateOperationalSecrets(ctx context.Context) error {
+	state, err := (instance.Store{Path: m.StatePath}).Load()
+	if err != nil {
+		return err
+	}
+	var ownership struct {
+		Bundled  *bool `json:"bundled_postgres"`
+		External *bool `json:"external_postgres"`
+	}
+	if json.Unmarshal(state.DeploymentMetadata, &ownership) != nil || !(ownership.Bundled != nil && *ownership.Bundled || ownership.External != nil && !*ownership.External) {
+		return fmt.Errorf("external database passwords remain with their infrastructure owner")
+	}
+	if m.DBDSN != state.DBDSN {
+		return fmt.Errorf("operational password rotation cannot use an overridden database connection")
+	}
 	return m.mutate(ctx, "rotate_operational", func(ctx context.Context, db *sql.DB, state *instance.State) error {
 		connection, err := url.Parse(state.DBDSN)
-		if err != nil || connection.User == nil || connection.Scheme != "postgres" || (connection.Host != "postgres:5432" && !strings.HasSuffix(connection.Host, "-postgres:5432")) || state.DBDSN != m.DBDSN {
+		if err != nil || connection.User == nil || connection.Scheme != "postgres" || state.DBDSN != m.DBDSN {
 			return fmt.Errorf("operational password rotation requires the bundled managed PostgreSQL connection")
 		}
 		password, err := instance.RandomSecret()
