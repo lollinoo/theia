@@ -21,7 +21,6 @@ import (
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
 	"github.com/lollinoo/theia/internal/vendor"
-	"github.com/lollinoo/theia/internal/worker"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -141,74 +140,6 @@ func newCollectorSNMPClientFunc(settingsRepo domain.SettingsRepository) collecto
 		}
 
 		return newCollectorSNMPClient(target, creds, timeout, retries)
-	}
-}
-
-// newSNMPMetricsPollFunc creates an SNMPPollFunc that polls CPU/MEM/UPTIME/TEMP
-// directly from a device. Used as a fallback when Prometheus has no data.
-func newSNMPMetricsPollFunc(settingsRepo domain.SettingsRepository, vendorRegistry *vendor.Registry) worker.SNMPPollFunc {
-	return func(target string, creds domain.SNMPCredentials, vendorName string) (domain.DeviceMetrics, error) {
-		timeout := 5 * time.Second
-		retries := 1
-
-		if val, err := settingsRepo.Get(domain.SettingSNMPTimeout); err == nil {
-			if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
-				timeout = time.Duration(secs) * time.Second
-			}
-		}
-
-		client, err := snmp.NewClient(target, creds, timeout, retries)
-		if err != nil {
-			return domain.DeviceMetrics{}, err
-		}
-		if err := client.Connect(); err != nil {
-			return domain.DeviceMetrics{}, err
-		}
-		defer client.Close()
-
-		perfOIDs := vendorRegistry.ResolvePerformanceOIDs(vendorName)
-		cpu, mem, uptime, temp := snmp.PollDeviceMetrics(client, perfOIDs)
-		return domain.DeviceMetrics{
-			CPUPercent:  cpu,
-			MemPercent:  mem,
-			UptimeSecs:  uptime,
-			TempCelsius: temp,
-		}, nil
-	}
-}
-
-// newSNMPLinkPollFunc creates an SNMPLinkPollFunc that polls ifHCInOctets and
-// ifHCOutOctets for interface throughput data on SNMP-sourced devices.
-func newSNMPLinkPollFunc(settingsRepo domain.SettingsRepository) worker.SNMPLinkPollFunc {
-	return func(target string, creds domain.SNMPCredentials) ([]worker.SNMPIfCounter, error) {
-		timeout := 5 * time.Second
-		retries := 1
-
-		if val, err := settingsRepo.Get(domain.SettingSNMPTimeout); err == nil {
-			if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
-				timeout = time.Duration(secs) * time.Second
-			}
-		}
-
-		client, err := snmp.NewClient(target, creds, timeout, retries)
-		if err != nil {
-			return nil, err
-		}
-		if err := client.Connect(); err != nil {
-			return nil, err
-		}
-		defer client.Close()
-
-		raw := snmp.PollInterfaceCounters(client)
-		result := make([]worker.SNMPIfCounter, len(raw))
-		for i, c := range raw {
-			result[i] = worker.SNMPIfCounter{
-				IfName:    c.IfName,
-				InOctets:  c.InOctets,
-				OutOctets: c.OutOctets,
-			}
-		}
-		return result, nil
 	}
 }
 
