@@ -59,6 +59,11 @@ type staticDiscoveryDeviceRepository interface {
 	UpdateStaticDiscovery(*domain.Device) error
 }
 
+// topologyDiscoveryBatchStore commits observation and unresolved-neighbor changes together.
+type topologyDiscoveryBatchStore interface {
+	UpsertDiscoveryObservations([]topology.Observation) error
+}
+
 // ReconcileStoredTopology resolves discovery observations against the supplied
 // map-scoped devices and materializes links only when both endpoints belong to
 // that scope. It never creates devices for unknown neighbors.
@@ -166,6 +171,9 @@ func (s *DeviceService) ReconcileStoredTopologyForImport(
 
 	now := time.Now().UTC()
 	materializable := make([]topology.Observation, 0, len(observations))
+	batchStore, batched := s.topologyStore.(topologyDiscoveryBatchStore)
+	resolvedObservations := make([]topology.Observation, 0)
+
 	for index := range observations {
 		observation := &observations[index]
 		if _, ok := imported[observation.LocalDeviceID]; !ok {
@@ -185,16 +193,20 @@ func (s *DeviceService) ReconcileStoredTopologyForImport(
 			observation.RemoteDeviceID = remoteID
 			observation.SelfNeighbor = false
 			observation.LastObservedAt = now
-			if err := s.topologyStore.UpsertObservation(observation); err != nil {
-				return StaticPersistenceResult{}, fmt.Errorf("updating resolved topology observation: %w", err)
-			}
-			if err := s.topologyStore.ResolveUnresolvedNeighbor(
-				observation.LocalDeviceID,
-				observation.RemoteIdentity,
-				observation.Protocol,
-				now,
-			); err != nil {
-				return StaticPersistenceResult{}, fmt.Errorf("resolving stored topology neighbor: %w", err)
+			if batched {
+				resolvedObservations = append(resolvedObservations, *observation)
+			} else {
+				if err := s.topologyStore.UpsertObservation(observation); err != nil {
+					return StaticPersistenceResult{}, fmt.Errorf("updating resolved topology observation: %w", err)
+				}
+				if err := s.topologyStore.ResolveUnresolvedNeighbor(
+					observation.LocalDeviceID,
+					observation.RemoteIdentity,
+					observation.Protocol,
+					now,
+				); err != nil {
+					return StaticPersistenceResult{}, fmt.Errorf("resolving stored topology neighbor: %w", err)
+				}
 			}
 		}
 
@@ -206,6 +218,12 @@ func (s *DeviceService) ReconcileStoredTopologyForImport(
 			continue
 		}
 		materializable = append(materializable, *observation)
+	}
+
+	if batched && len(resolvedObservations) > 0 {
+		if err := batchStore.UpsertDiscoveryObservations(resolvedObservations); err != nil {
+			return StaticPersistenceResult{}, fmt.Errorf("updating resolved topology observations: %w", err)
+		}
 	}
 
 	applied, err := topology.ApplyObservations(
@@ -472,6 +490,40 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 	unknownByProtocol := make(map[domain.DiscoveryProtocol]int)
 	currentObservations := make([]topology.Observation, 0, len(neighbors))
 
+	identities := make(map[string]uuid.UUID)
+	names := make([]string, 0, len(neighbors))
+	seenNames := make(map[string]struct{})
+	for _, neighbor := range neighbors {
+		name := neighbor.RemoteSysName
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		if _, ok := seenNames[name]; !ok {
+			seenNames[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	if lookup, ok := s.deviceRepo.(interface {
+		LookupDeviceIDsBySysNames([]string) (map[string]uuid.UUID, error)
+	}); ok {
+		var err error
+		identities, err = lookup.LookupDeviceIDsBySysNames(names)
+		if err != nil {
+			return StaticPersistenceResult{}, nil, nil, fmt.Errorf("looking up topology identities: %w", err)
+		}
+	} else {
+		for _, name := range names {
+			device, err := s.deviceRepo.GetBySysName(name)
+			if err != nil {
+				return StaticPersistenceResult{}, nil, nil, fmt.Errorf("looking up neighbor %s: %w", name, err)
+			}
+			if device != nil {
+				identities[name] = device.ID
+			}
+		}
+	}
+	batchStore, batched := s.topologyStore.(topologyDiscoveryBatchStore)
+
 	for _, neighbor := range neighbors {
 		normalizedIdentity := discoveredNeighborRemoteIdentity(neighbor)
 		if normalizedIdentity == "" {
@@ -479,12 +531,8 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 		}
 
 		var remoteDevice *domain.Device
-		if strings.TrimSpace(neighbor.RemoteSysName) != "" {
-			var lookupErr error
-			remoteDevice, lookupErr = s.deviceRepo.GetBySysName(neighbor.RemoteSysName)
-			if lookupErr != nil {
-				return StaticPersistenceResult{}, nil, nil, fmt.Errorf("looking up neighbor %s: %w", neighbor.RemoteSysName, lookupErr)
-			}
+		if id, ok := identities[neighbor.RemoteSysName]; ok {
+			remoteDevice = &domain.Device{ID: id}
 		}
 
 		observation := &topology.Observation{
@@ -499,8 +547,10 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 		if remoteDevice != nil {
 			observation.RemoteDeviceID = remoteDevice.ID
 		}
-		if err := s.topologyStore.UpsertObservation(observation); err != nil {
-			return StaticPersistenceResult{}, nil, nil, fmt.Errorf("upserting topology observation: %w", err)
+		if !batched {
+			if err := s.topologyStore.UpsertObservation(observation); err != nil {
+				return StaticPersistenceResult{}, nil, nil, fmt.Errorf("upserting topology observation: %w", err)
+			}
 		}
 		currentObservations = append(currentObservations, *observation)
 
@@ -510,22 +560,32 @@ func (s *DeviceService) applyDiscoveryViaObservationStore(
 				Protocol:       neighbor.Protocol,
 			}]++
 			unknownByProtocol[neighbor.Protocol]++
-			if err := s.topologyStore.UpsertUnresolvedNeighbor(&topology.UnresolvedNeighbor{
-				LocalDeviceID:   fresh.ID,
-				RemoteIdentity:  normalizedIdentity,
-				Protocol:        neighbor.Protocol,
-				Occurrences:     1,
-				LastObservedAt:  now,
-				FirstObservedAt: now,
-			}); err != nil {
-				return StaticPersistenceResult{}, nil, nil, fmt.Errorf("upserting unresolved neighbor: %w", err)
+			if !batched {
+				if err := s.topologyStore.UpsertUnresolvedNeighbor(&topology.UnresolvedNeighbor{
+					LocalDeviceID:   fresh.ID,
+					RemoteIdentity:  normalizedIdentity,
+					Protocol:        neighbor.Protocol,
+					Occurrences:     1,
+					LastObservedAt:  now,
+					FirstObservedAt: now,
+				}); err != nil {
+					return StaticPersistenceResult{}, nil, nil, fmt.Errorf("upserting unresolved neighbor: %w", err)
+				}
 			}
 			continue
 		}
 
 		affectedDeviceIDs[remoteDevice.ID] = struct{}{}
-		if err := s.topologyStore.ResolveUnresolvedNeighbor(fresh.ID, normalizedIdentity, neighbor.Protocol, now); err != nil {
-			return StaticPersistenceResult{}, nil, nil, fmt.Errorf("resolving unresolved neighbor: %w", err)
+		if !batched {
+			if err := s.topologyStore.ResolveUnresolvedNeighbor(fresh.ID, normalizedIdentity, neighbor.Protocol, now); err != nil {
+				return StaticPersistenceResult{}, nil, nil, fmt.Errorf("resolving unresolved neighbor: %w", err)
+			}
+		}
+	}
+
+	if batched {
+		if err := batchStore.UpsertDiscoveryObservations(currentObservations); err != nil {
+			return StaticPersistenceResult{}, nil, nil, fmt.Errorf("upserting discovery observations: %w", err)
 		}
 	}
 
