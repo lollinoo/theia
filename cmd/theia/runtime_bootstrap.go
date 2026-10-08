@@ -377,6 +377,20 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	logging.Infof("Config loaded: listen=%s log_level=%s", cfg.ListenAddr, cfg.LogLevel)
 
 	paths := resolveRuntimePaths(cfg)
+	if cfg.InstanceStatePath != "" {
+		release, err := instance.AcquireLease(cfg.InstanceStatePath)
+		if err != nil {
+			return err
+		}
+		defer release()
+		keys, err := cfg.CredentialKeyring()
+		if err != nil {
+			return err
+		}
+		if err := (&service.Maintenance{StatePath: cfg.InstanceStatePath, ReleaseTag: os.Getenv("THEIA_RELEASE_TAG")}).RequireVerifiedState(cfg.InstanceID(), keys.ActiveKeyID()); err != nil {
+			return err
+		}
+	}
 
 	if err := validateDeploymentSecretPolicy(cfg); err != nil {
 		return err
@@ -390,8 +404,10 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	if err := ensurePrivateDir(paths.appDataDir); err != nil {
 		return fmt.Errorf("prepare application data directory %s: %w", paths.appDataDir, err)
 	}
-	if err := applyPendingPostgresRestoreWithConfig(paths.appDataDir, cfg.DBDSN, paths.backupDir, paths.knownHostsPath, cfg); err != nil {
-		return fmt.Errorf("apply pending PostgreSQL restore: %w", err)
+	if cfg.InstanceStatePath == "" {
+		if err := applyPendingPostgresRestoreWithConfig(paths.appDataDir, cfg.DBDSN, paths.backupDir, paths.knownHostsPath, cfg); err != nil {
+			return fmt.Errorf("apply pending PostgreSQL restore: %w", err)
+		}
 	}
 	if _, err := os.Stat(paths.knownHostsPath); err == nil {
 		if err := ensureFileMode(paths.knownHostsPath, privateFileMode); err != nil {
@@ -432,10 +448,19 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 		return fmt.Errorf("security configuration error: %w", err)
 	}
 
-	if err := postgres.RunMigrations(db, encryptionKeyring); err != nil {
-		return fmt.Errorf("run database migrations: %w", err)
+	if cfg.InstanceStatePath != "" {
+		if err := postgres.RequireCurrentSchema(context.Background(), db); err != nil {
+			return err
+		}
+		if err := service.VerifyInstanceIdentity(context.Background(), db, cfg.InstanceID()); err != nil {
+			return err
+		}
+	} else {
+		if err := postgres.RunMigrations(db, encryptionKeyring); err != nil {
+			return fmt.Errorf("run database migrations: %w", err)
+		}
+		log.Println("Database migrations completed")
 	}
-	log.Println("Database migrations completed")
 
 	authRepo := postgres.NewAuthRepo(db)
 	authService, err := service.NewAuthService(service.AuthServiceConfig{
@@ -451,10 +476,12 @@ func (b *runtimeBootstrap) Run(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("initialize auth service: %w", err)
 	}
-	if user, created, err := authService.EnsureBootstrapSuperAdmin(context.Background()); err != nil {
-		return fmt.Errorf("ensure bootstrap super admin: %w", err)
-	} else if created {
-		log.Printf("Bootstrap super admin created username=%q must_change_password=true", user.Username)
+	if cfg.InstanceStatePath == "" {
+		if user, created, err := authService.EnsureBootstrapSuperAdmin(context.Background()); err != nil {
+			return fmt.Errorf("ensure bootstrap super admin: %w", err)
+		} else if created {
+			log.Printf("Bootstrap super admin created username=%q must_change_password=true", user.Username)
+		}
 	}
 
 	yamlRegistry, envVendors, err := loadBootstrapVendorRegistry()

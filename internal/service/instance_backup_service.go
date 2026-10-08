@@ -148,6 +148,9 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 // ValidateAndStageRestoreContext validates and stages a restore archive while observing caller cancellation.
 // Non-dry-run calls extract into a private staging directory and write a pending marker for restart activation.
 func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Context, archivePath string, dryRun bool) (*RestoreReport, error) {
+	if s.managedStatePath != "" {
+		return nil, fmt.Errorf("managed restore requires the administration command and the operator recovery file")
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

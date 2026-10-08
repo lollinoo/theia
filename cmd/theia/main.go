@@ -96,6 +96,9 @@ var newBootstrapRunner = func() bootstrapRunner {
 }
 
 func runMain(args []string) error {
+	if len(args) > 0 && args[0] == "maintenance" {
+		return runMaintenanceCommand(args[1:], os.Stdout)
+	}
 	if len(args) > 0 && args[0] == "instance" {
 		return runInstanceStateCommand(args[1:], os.Stdout)
 	}

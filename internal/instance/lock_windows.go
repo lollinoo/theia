@@ -12,3 +12,5 @@ func unlockFile(f *os.File) {
 	_ = windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &windows.Overlapped{})
 }
 func syncDirectory(string) error { return nil }
+
+func preservePrivateFileOwner(*os.File, string) error { return nil }

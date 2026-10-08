@@ -5,6 +5,8 @@ package instance
 import (
 	"golang.org/x/sys/unix"
 	"os"
+	"path/filepath"
+	"syscall"
 )
 
 func lockFile(f *os.File) error { return unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB) }
@@ -16,4 +18,23 @@ func syncDirectory(path string) error {
 	}
 	defer f.Close()
 	return f.Sync()
+}
+
+// Root containers preserve bind-mounted state ownership for the host administrator.
+func preservePrivateFileOwner(f *os.File, target string) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	info, err := os.Lstat(target)
+	if os.IsNotExist(err) {
+		info, err = os.Stat(filepath.Dir(target))
+	}
+	if err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	return f.Chown(int(stat.Uid), int(stat.Gid))
 }

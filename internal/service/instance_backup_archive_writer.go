@@ -48,7 +48,7 @@ func (s *InstanceBackupService) createArchive(
 	return size, err
 }
 
-func (s *InstanceBackupService) createArchiveWithProtection(ctx context.Context, archivePath string, dbArtifact databaseBackupArtifact, deviceBackupFiles []archiveSourceFile, knownHostsFile *archiveSourceFile, manifestJSON []byte, manifest *backupManifest, backupID uuid.UUID, privateState []byte) (int64, *age.X25519Identity, error) {
+func (s *InstanceBackupService) createArchiveWithProtection(ctx context.Context, archivePath string, dbArtifact databaseBackupArtifact, deviceBackupFiles []archiveSourceFile, knownHostsFile *archiveSourceFile, manifestJSON []byte, manifest *backupManifest, backupID uuid.UUID, privateState []byte, recipientOverride ...string) (int64, *age.X25519Identity, error) {
 	req := instanceBackupArchiveWriteRequest{
 		privateState:      privateState,
 		archivePath:       archivePath,
@@ -74,7 +74,11 @@ func (s *InstanceBackupService) createArchiveWithProtection(ctx context.Context,
 	if err != nil {
 		return 0, nil, err
 	}
-	protected, identity, err := instance.ProtectWriter(f, state.RecoveryRecipient)
+	recipient := state.RecoveryRecipient
+	if len(recipientOverride) > 0 {
+		recipient = recipientOverride[0]
+	}
+	protected, identity, err := instance.ProtectWriter(f, recipient)
 	if err != nil {
 		f.Close()
 		return 0, nil, err

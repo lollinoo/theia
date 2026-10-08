@@ -19,6 +19,9 @@ func PrivateDirectory(path string) error {
 	if err != nil {
 		return err
 	}
+	if filepath.Dir(abs) == abs {
+		return fmt.Errorf("instance storage cannot be a filesystem root")
+	}
 	var check func(string) error
 	check = func(p string) error {
 		info, err := os.Lstat(p)
@@ -46,6 +49,13 @@ func PrivateDirectory(path string) error {
 	}
 	if err := check(abs); err != nil {
 		return err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSticky != 0 {
+		return fmt.Errorf("instance storage cannot be a shared temporary directory")
 	}
 	return os.Chmod(abs, 0700)
 }
@@ -172,6 +182,10 @@ func WritePrivateFile(path string, data []byte) error {
 		return err
 	}
 	defer os.Remove(f.Name())
+	if err := preservePrivateFileOwner(f, path); err != nil {
+		f.Close()
+		return err
+	}
 	_, writeErr := f.Write(data)
 	syncErr := f.Sync()
 	closeErr := f.Close()

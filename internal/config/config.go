@@ -279,6 +279,14 @@ func (cfg *Config) CredentialKeyring() (*crypto.Keyring, error) {
 	return crypto.LoadKeyringFromEnv()
 }
 
+// InstanceID exposes only the public identifier used by the maintenance receipt.
+func (cfg *Config) InstanceID() string {
+	if cfg.instanceState == nil {
+		return ""
+	}
+	return cfg.instanceState.InstanceID
+}
+
 func normalizeDeploymentEnv(cfg *Config) error {
 	normalized := strings.ToLower(strings.TrimSpace(cfg.DeploymentEnv))
 	if normalized == "" {

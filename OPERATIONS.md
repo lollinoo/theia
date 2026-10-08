@@ -91,7 +91,78 @@ cannot displace successful recovery points. An interrupted upload can resume
 using the same verified bytes without retaining the temporary private identity.
 Keep enough disk space for local pending copies during prolonged outages.
 
-Historical unencrypted archives continue using the legacy restore path. Managed
-encrypted restore uses the operator recovery file through the maintenance CLI;
-that CLI is the next implementation stage. Do not upload recovery identities to
-the existing legacy archive upload form.
+Historical unencrypted archives continue using the legacy restore path in an
+unmanaged installation. Managed encrypted restore uses the operator recovery file
+through the maintenance CLI. Do not upload recovery identities to the legacy
+archive upload form.
+
+## Offline maintenance
+
+Stop the application and execute a maintenance container/Job using the same
+persistent instance state, application data, and PostgreSQL connection:
+
+```sh
+theia maintenance migrate
+theia maintenance backup
+theia maintenance restore -archive /input/instance.tar.gz.age -recovery-file /input/recovery.txt
+theia maintenance status -state /persistent/secrets.json
+theia maintenance resume
+theia maintenance verify -archive /input/instance.tar.gz.age -recovery-file /input/recovery.txt
+```
+
+`THEIA_INSTANCE_STATE` selects the state file; `THEIA_DATA_DIR`,
+`THEIA_BACKUP_DIR`, and `THEIA_INSTANCE_BACKUP_DIR` select the existing data paths.
+`-config` loads a configuration file when necessary. Mount recovery input
+read-only for the duration of the restore/verification command, then remove it.
+`verify` needs PostgreSQL 18 tools, the archive and recovery file; it never opens
+the live database. `status` needs only the state path and remains available when
+the application or database cannot start.
+
+Managed HTTP startup checks the schema, database identity and prior verification
+receipt without migrating data or repeatedly decrypting all credentials. Set
+`THEIA_RELEASE_TAG` identically for maintenance and HTTP containers to bind the
+receipt to a pinned release. The HTTP process does not create a fixed default
+administrator. Only one application or
+maintenance process can acquire the persistent instance lease. The operating
+system releases the lease after a crash. A fresh managed database is migrated
+before HTTP startup and receives backup defaults of every 24 hours and seven
+successful archives; existing settings are preserved.
+
+When release, schema, verified keys and instance identity remain current, a
+repeated `migrate` exits without creating another backup/snapshot or rewriting
+data. Due rotation and explicit `-rotate-credentials` still run full maintenance.
+A public summary containing only maintenance activity, action and phase is
+written to the `public/status.json` directory beside instance state for the
+deployment proxy to serve while the backend is stopped.
+
+For an existing database, destructive maintenance first completes a verified
+Instance Backup (including an external copy if configured), then creates a
+separate encrypted Safety Snapshot. Each operation has a unique directory beside
+the instance state. Its online snapshot key remains outside the snapshot and
+outside replaced application data; the operator's recovery file is unnecessary
+for automatic rollback. Snapshot identifiers and verified bytes are immutable.
+
+Credential keys older than 90 days rotate during `migrate`; use
+`-rotate-credentials` to rotate early. Historical keys remain available. The
+procedure verifies every sensitive credential after SQL/data migrations. A
+failure before writes reopen attempts to restore the original database, device
+files, SSH hosts, and instance secrets. The original deployment release must be
+restarted after a rollback to its earlier schema.
+
+Interrupted changes block managed HTTP startup. `resume` uses the verified
+snapshot belonging to that operation to roll back; it never replaces the snapshot
+with partially changed live data. Recovery is bounded to three attempts. If it
+cannot finish, the instance stays in maintenance and `status` reports the required
+operator action. Completed operations are never automatically rolled back after
+the application is allowed to serve writes again.
+
+Offline restore defaults allow an encrypted archive of up to 2 GiB and reject
+path traversal, duplicate entries, links, incomplete authentication, mismatched
+database hashes, and unsupported newer schemas. Original database connection
+credentials remain destination-specific; archived credential-encryption keys and
+users are restored. Restored login sessions are revoked.
+
+Developer verification: `make maintenance-test` builds the runtime image and tests
+encrypted recovery across credential rotation, rollback after partial mutation,
+and recovery of an interrupted second operation with its own snapshot. Tests use
+isolated PostgreSQL clusters and do not touch the deployed instance.

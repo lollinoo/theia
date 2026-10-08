@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -107,7 +108,41 @@ func TestManagedBackupIntegration(t *testing.T) {
 		if err := VerifyIsolatedPostgresDump(ctx, filepath.Join(staging, "database.dump"), recoveredKeys); err != nil {
 			return err
 		}
-		return nil
+		recoveryFile := filepath.Join(t.TempDir(), "recovery.txt")
+		if err := os.WriteFile(recoveryFile, []byte(identity.String()+"\n"), 0600); err != nil {
+			return err
+		}
+		return withIsolatedPostgres(ctx, func(targetDSN string) error {
+			targetRoot := t.TempDir()
+			targetState, err := instance.Generate(time.Now())
+			if err != nil {
+				return err
+			}
+			targetState.DBDSN = targetDSN
+			targetStore := instance.Store{Path: filepath.Join(targetRoot, "control", "state.json")}
+			if err := targetStore.Create(targetState); err != nil {
+				return err
+			}
+			maintenance := &Maintenance{StatePath: targetStore.Path, DataDir: filepath.Join(targetRoot, "data"), BackupDir: filepath.Join(targetRoot, "data", "archives"), DeviceBackupDir: filepath.Join(targetRoot, "data", "backups"), KnownHostsPath: filepath.Join(targetRoot, "data", "known_hosts"), DBDSN: targetDSN}
+			if err := maintenance.Restore(ctx, first.FilePath, recoveryFile); err != nil {
+				return err
+			}
+			targetKeys, err := targetStore.Load()
+			if err != nil {
+				return err
+			}
+			if targetKeys.ActiveKeyID != state.ActiveKeyID || targetKeys.DBDSN != targetDSN {
+				return fmt.Errorf("restored keys or destination database connection were not preserved")
+			}
+			if err := maintenance.RequireVerifiedState(targetKeys.InstanceID, targetKeys.ActiveKeyID); err != nil {
+				return err
+			}
+			got, err := os.ReadFile(filepath.Join(maintenance.DeviceBackupDir, "device.cfg"))
+			if err != nil || string(got) != "device-configuration" {
+				return fmt.Errorf("replacement-host restore lost device files")
+			}
+			return nil
+		})
 	}); err != nil {
 		t.Fatal(err)
 	}
