@@ -39,7 +39,6 @@ type Policy struct {
 	MaxWorkersPerDevice   int
 	MaxInflightPerProfile int
 	WebSocketCoalesce     time.Duration
-	PersistenceBatch      time.Duration
 	SafetyMargin          float64
 	ForceOverCapacity     bool
 	DegradedRisk          bool
@@ -68,7 +67,6 @@ func PolicyFromSettings(repo SettingsGetter, deviceCount int, observedP95 time.D
 		MaxWorkersPerDevice:   intSetting(repo, domain.SettingPollingMaxWorkersPerDevice, 1),
 		MaxInflightPerProfile: intSetting(repo, domain.SettingPollingMaxInflightPerProfile, 16),
 		WebSocketCoalesce:     durationMSSetting(repo, domain.SettingPollingWebSocketCoalesceMS, 500*time.Millisecond),
-		PersistenceBatch:      durationMSSetting(repo, domain.SettingPollingPersistenceBatchMS, time.Second),
 		SafetyMargin:          floatSetting(repo, domain.SettingPollingCapacitySafetyMargin, 1.5),
 		ForceOverCapacity:     boolSetting(repo, domain.SettingPollingForceOverCapacity, false),
 		Timeouts: map[Lane]TimeoutProfile{

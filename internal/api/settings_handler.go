@@ -62,7 +62,6 @@ var validSettingKeys = map[string]bool{
 	domain.SettingPollingEssentialTimeoutMillis:       true,
 	domain.SettingPollingEssentialRetries:             true,
 	domain.SettingPollingWebSocketCoalesceMS:          true,
-	domain.SettingPollingPersistenceBatchMS:           true,
 	domain.SettingPollingCapacitySafetyMargin:         true,
 	domain.SettingPollingForceOverCapacity:            true,
 	domain.SettingTimezone:                            true,
@@ -346,7 +345,6 @@ func debugSettingAffects(key string) string {
 		domain.SettingPollingEssentialTimeoutMillis,
 		domain.SettingPollingEssentialRetries,
 		domain.SettingPollingWebSocketCoalesceMS,
-		domain.SettingPollingPersistenceBatchMS,
 		domain.SettingPollingCapacitySafetyMargin,
 		domain.SettingPollingForceOverCapacity:
 		return "polling"

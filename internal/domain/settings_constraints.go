@@ -47,7 +47,6 @@ var SettingConstraints = map[string]SettingConstraint{
 	SettingPollingEssentialTimeoutMillis:       intConstraint(100, 30000),
 	SettingPollingEssentialRetries:             intConstraint(0, 10),
 	SettingPollingWebSocketCoalesceMS:          intConstraint(50, 5000),
-	SettingPollingPersistenceBatchMS:           intConstraint(100, 10000),
 	SettingPollingCapacitySafetyMargin:         floatConstraint(1.0, 5.0, "1.0", "5.0"),
 	SettingInstanceBackupRetentionCount:        intConstraint(1, 365),
 	SettingDeviceBackupRetentionCount:          intConstraint(1, 365),
