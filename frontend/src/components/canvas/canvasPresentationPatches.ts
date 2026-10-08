@@ -28,6 +28,22 @@ function runtimeAlertStatusForDevice(
   return snapshot?.devices[deviceId]?.alert_status ?? alertStatusForDevice(deviceId, alerts);
 }
 
+/** Preserves live edge selection while accepting refreshed topology and route data. */
+export function mergeEdgeSelectionState(
+  nextEdges: LinkEdgeType[],
+  currentEdges: LinkEdgeType[],
+): LinkEdgeType[] {
+  const currentById = new Map(currentEdges.map((edge) => [edge.id, edge]));
+  let mergedEdges: LinkEdgeType[] | null = null;
+  nextEdges.forEach((edge, index) => {
+    const current = currentById.get(edge.id);
+    if (!current || edge.selected === current.selected) return;
+    mergedEdges ??= nextEdges.slice();
+    mergedEdges[index] = { ...edge, selected: current.selected };
+  });
+  return mergedEdges ?? nextEdges;
+}
+
 /** Patches edit mode for the topology canvas. */
 export function patchEditMode(nodes: DeviceNode[], editMode: boolean): DeviceNode[] {
   let nextNodes: DeviceNode[] | null = null;

@@ -226,6 +226,7 @@ function renderUseCanvasData(
     currentMapId?: string | null;
     currentMapName?: string;
     currentSnapGrid?: SnapGrid | null;
+    currentEditMode?: boolean;
   }
 
   const rendered = renderHook(
@@ -234,6 +235,7 @@ function renderUseCanvasData(
       currentMapId = null,
       currentMapName = 'Default',
       currentSnapGrid = options.snapGrid ?? null,
+      currentEditMode = options.editMode ?? false,
     }: RenderProps) => {
       const [nodes, setNodes] = useState<DeviceNode[]>([]);
       nodesForGeometry = nodes;
@@ -245,7 +247,7 @@ function renderUseCanvasData(
         snapshot: currentSnapshot,
         reconnecting: false,
         prometheusStatus,
-        editMode: options.editMode ?? false,
+        editMode: currentEditMode,
         openDeviceMenu,
         openEdgeMenu,
         onLinkRouteCommit: options.onLinkRouteCommit,
@@ -265,6 +267,7 @@ function renderUseCanvasData(
         nodes,
         edges,
         setNodesForTest: setNodes,
+        setEdgesForTest: setEdges,
       };
     },
     {
@@ -357,6 +360,7 @@ function deferred<T>() {
 describe('useCanvasData', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(buildTopologyEdges).mockReset().mockReturnValue([]);
     manualEdgeMigrationOrchestratorControl.runOverride = null;
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-13T12:00:00Z'));
@@ -395,6 +399,80 @@ describe('useCanvasData', () => {
     manualEdgeMigrationOrchestratorControl.runOverride = null;
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it.each([false, true])(
+    'keeps current edit mode and edge selection when a refresh started with editMode=%s',
+    async (initialEditMode) => {
+      const route: LinkRoute = { version: 1, waypoints: [{ x: 30, y: 40 }] };
+      const topology = { links: [mockLink()], link_routes: { 'link-1': route } };
+      vi.mocked(buildTopologyEdges).mockImplementation((links, _devices, _nodes, data) =>
+        links.map((link) => ({
+          id: link.id,
+          source: link.source_device_id,
+          target: link.target_device_id,
+          data: data?.get(link.id),
+        })),
+      );
+      vi.mocked(fetchCanvasMapBootstrap).mockResolvedValueOnce(canvasBootstrapResponse(topology));
+      const { result, rerender } = renderUseCanvasData(null, null, {
+        mapId: 'map-a',
+        editMode: initialEditMode,
+        onLinkRouteCommit: vi.fn(),
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const refresh = deferred<CanvasTopologyFetchResult>();
+      vi.mocked(fetchCanvasMapTopology).mockReturnValueOnce(refresh.promise);
+      let refreshComplete!: Promise<unknown>;
+      await act(async () => {
+        refreshComplete = result.current.loadTopology(true);
+        await Promise.resolve();
+      });
+      rerender({ currentSnapshot: null, currentMapId: 'map-a', currentEditMode: !initialEditMode });
+      act(() =>
+        result.current.setEdgesForTest((edges) =>
+          edges.map((edge) => ({ ...edge, selected: true })),
+        ),
+      );
+      await act(async () => {
+        refresh.resolve(canvasTopologyOkResponse(topology));
+        await refreshComplete;
+      });
+      expect(result.current.edges[0]?.selected).toBe(true);
+      expect(result.current.edges[0]?.data?.routeEditable).toBe(!initialEditMode);
+      expect(result.current.edges[0]?.data?.route).toEqual(route);
+    },
+  );
+
+  it('clears previous-map edge selection when the same link appears in another map', async () => {
+    const topology = { links: [mockLink()] };
+    vi.mocked(buildTopologyEdges).mockImplementation((links) =>
+      links.map((link) => ({
+        id: link.id,
+        source: link.source_device_id,
+        target: link.target_device_id,
+      })),
+    );
+    vi.mocked(fetchCanvasMapBootstrap).mockResolvedValue(canvasBootstrapResponse(topology));
+    vi.mocked(fetchCanvasMapTopology).mockResolvedValue(canvasTopologyOkResponse(topology));
+    const { result, rerender } = renderUseCanvasData(null, null, { mapId: 'map-a' });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    act(() =>
+      result.current.setEdgesForTest((edges) => edges.map((edge) => ({ ...edge, selected: true }))),
+    );
+    rerender({ currentSnapshot: null, currentMapId: 'map-b' });
+    await act(async () => {
+      await result.current.loadTopology(true);
+    });
+    expect(result.current.renderedMapKey).toBe('map:map-b');
+    expect(result.current.edges[0]?.id).toBe('link-1');
+    expect(result.current.edges[0]?.selected).not.toBe(true);
   });
 
   it('uses default bootstrap when mapId is null', async () => {

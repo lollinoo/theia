@@ -745,6 +745,30 @@ test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
   await openMap(page, TEST_MAP_NAME);
   await waitForPersistedPositions(page, fixture.mapId, [fixture.deviceId]);
 
+  // Hold a view-mode refresh until the route is saved in edit mode.
+  let releaseRefresh!: () => void;
+  let refreshCaptured!: () => void;
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  const refreshReady = new Promise<void>((resolve) => {
+    refreshCaptured = resolve;
+  });
+  await page.route(
+    `**/api/v1/canvas/maps/${fixture.mapId}/topology`,
+    async (route) => {
+      const headers = { ...route.request().headers() };
+      delete headers['if-none-match'];
+      const response = await route.fetch({ headers });
+      refreshCaptured();
+      await refreshGate;
+      await route.fulfill({ response });
+    },
+    { times: 1 },
+  );
+  await page.evaluate(() => window.__THEIA_CANVAS_FORCE_REFRESH__?.());
+  await refreshReady;
+
   const editMode = page.getByTitle('Edit Mode (E)');
   await editMode.click();
   let hitPath = visibleLinkHitPathById(page, fixture.linkId);
@@ -760,6 +784,13 @@ test('edits, reloads, and resets a saved self-link route', async ({ page }) => {
   const edge = hitPath.locator(
     'xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " react-flow__edge ")][1]',
   );
+  await expect(edge).toHaveClass(/selected/);
+  const refreshedTopology = page.waitForResponse((response) =>
+    response.url().endsWith(`/canvas/maps/${fixture.mapId}/topology`),
+  );
+  releaseRefresh();
+  await refreshedTopology;
+  await waitForPathToSettle(hitPath);
   await expect(edge).toHaveClass(/selected/);
 
   let waypoint = page.getByRole('button', {

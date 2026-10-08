@@ -9,6 +9,7 @@ import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import {
   clearSelectedGraphItems,
+  mergeEdgeSelectionState,
   patchAlertStatuses,
   patchEditMode,
   patchHighlightedNode,
@@ -303,5 +304,30 @@ describe('canvas presentation patches', () => {
     expect(result.nodes[0]).toBe(nodes[0]);
     expect(result.nodes[1]).toBe(nodes[1]);
     expect(result.edges[0]).toBe(edges[0]);
+  });
+});
+
+describe('mergeEdgeSelectionState', () => {
+  it('retains selection without restoring stale routes or deleted edges', () => {
+    const route = { version: 1 as const, waypoints: [{ x: 10, y: 20 }] };
+    const current = [
+      { id: 'selected', source: 'a', target: 'a', selected: true, data: { route } },
+      { id: 'deselected', source: 'a', target: 'b', selected: false },
+      { id: 'deleted', source: 'a', target: 'c', selected: true },
+    ] as LinkEdgeType[];
+    const next = [
+      { id: 'selected', source: 'a', target: 'a', data: { routeEditable: true } },
+      { id: 'deselected', source: 'a', target: 'b', selected: true },
+      { id: 'new', source: 'a', target: 'd' },
+    ] as LinkEdgeType[];
+    const merged = mergeEdgeSelectionState(next, current);
+    expect(merged.map((edge) => edge.id)).toEqual(['selected', 'deselected', 'new']);
+    expect(merged[0]?.selected).toBe(true);
+    expect(merged[0]?.data).toBe(next[0]?.data);
+    expect(merged[0]?.data?.route).toBeUndefined();
+    expect(merged[1]?.selected).toBe(false);
+    expect(merged[2]).toBe(next[2]);
+    expect(next[0]?.selected).toBeUndefined();
+    expect(mergeEdgeSelectionState(next, [])).toBe(next);
   });
 });

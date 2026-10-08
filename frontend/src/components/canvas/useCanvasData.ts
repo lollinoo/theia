@@ -27,6 +27,7 @@ import {
   measureCanvasWork,
 } from './canvasInstrumentation';
 import { recordCanvasLayoutCompleted, recordCanvasLayoutStarted } from './canvasLayoutDiagnostics';
+import { mergeEdgeSelectionState } from './canvasPresentationPatches';
 import { refreshCanvasSettings } from './canvasSettingsRefresh';
 import {
   recordCanvasTopologyLoadFailed,
@@ -205,6 +206,7 @@ export function useCanvasData({
   const topologyLinksRef = useRef<Link[]>([]);
   const nodesRef = useRef<DeviceNode[]>(nodes);
   const snapGridRef = useRef<SnapGrid | null>(snapGrid);
+  const editModeRef = useRef(editMode);
   const activeMapKeyRef = useRef<string>(mapKey);
   const mountedMapKeyRef = useRef<string | null>(null);
   const topologyLoadSequenceRef = useRef(0);
@@ -258,6 +260,7 @@ export function useCanvasData({
   topologyLinksRef.current = topologyLinks;
   nodesRef.current = nodes;
   snapGridRef.current = snapGrid;
+  editModeRef.current = editMode;
   activeMapKeyRef.current = mapKey;
   currentNodePositionsByMapRef.current.set(
     nodesOwnerMapKeyRef.current,
@@ -522,6 +525,8 @@ export function useCanvasData({
             computedPositions: Map<string, { x: number; y: number }>,
             placementDeviceIds: Set<string>,
           ) => {
+            // A refresh can cross an edit-mode toggle while its HTTP request is pending.
+            const currentEditMode = editModeRef.current;
             const compositionInput = {
               devices: fetchedDevices,
               links: fetchedLinks,
@@ -533,7 +538,7 @@ export function useCanvasData({
               computedPositions,
               currentPositions: currentPositionsForComposition,
               explicitPositions: explicitPlacement.positions,
-              editMode,
+              editMode: currentEditMode,
               openDeviceMenu,
               openEdgeMenu,
               openSelfLinkDetails,
@@ -556,7 +561,7 @@ export function useCanvasData({
                 computedPositions,
                 currentPositions: currentPositionsForComposition,
                 explicitPositions: explicitPlacement.positions,
-                editMode,
+                editMode: currentEditMode,
                 snapGrid: snapGridRef.current,
                 placementDeviceIds,
                 runtimeIdentity: topologySource.runtimeIdentity,
@@ -577,6 +582,8 @@ export function useCanvasData({
             return { ...composition, edges: reconciledEdges };
           };
 
+          const preserveEdgeSelection = nodesOwnerMapKeyRef.current === requestMapKey;
+
           if (!structureChanged) {
             setDevices(fetchedDevices);
             setTopologyLinks(fetchedLinks);
@@ -596,7 +603,9 @@ export function useCanvasData({
             setRenderedMapKey(mapKey);
             currentNodePositionsByMapRef.current.set(mapKey, nodePositionsToPositionMap(nextNodes));
             setNodes((currentNodes) => mergeNodePresentationState(nextNodes, currentNodes));
-            setEdges(nextEdges);
+            setEdges((currentEdges) =>
+              preserveEdgeSelection ? mergeEdgeSelectionState(nextEdges, currentEdges) : nextEdges,
+            );
             lastAppliedRuntimeSnapshotRef.current = snapshotRef.current;
             if (!strictImportedPlacement && positionSavePlan.shouldSave) {
               void savePositions(positionSavePlan.payload);
@@ -687,7 +696,11 @@ export function useCanvasData({
           setNodes((currentNodes) => {
             return mergeNodePresentationState(composedNodes, currentNodes);
           });
-          setEdges(composedEdges);
+          setEdges((currentEdges) =>
+            preserveEdgeSelection
+              ? mergeEdgeSelectionState(composedEdges, currentEdges)
+              : composedEdges,
+          );
           lastAppliedRuntimeSnapshotRef.current = runtimeSnapshot;
 
           if (!strictImportedPlacement && positionSavePlan.shouldSave) {
