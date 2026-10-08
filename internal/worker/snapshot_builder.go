@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/lollinoo/theia/internal/collector"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/state"
 	"github.com/lollinoo/theia/internal/ws"
@@ -236,19 +235,6 @@ func interfaceSpeed(device domain.Device, observedIfName string) int64 {
 		}
 	}
 	return 0
-}
-
-func interfaceCounterSnapshots(device domain.Device, counters []SNMPIfCounter) []collector.InterfaceCounterSnapshot {
-	snapshots := make([]collector.InterfaceCounterSnapshot, 0, len(counters))
-	for _, counter := range counters {
-		snapshots = append(snapshots, collector.InterfaceCounterSnapshot{
-			IfName:    counter.IfName,
-			InOctets:  counter.InOctets,
-			OutOctets: counter.OutOctets,
-			SpeedBps:  interfaceSpeed(device, counter.IfName),
-		})
-	}
-	return snapshots
 }
 
 func normalizeInterfaceName(name string) string {
