@@ -19,14 +19,26 @@ shutil.rmtree(root,ignore_errors=True)
 PY
 }
 trap cleanup EXIT
-kind create cluster --name "$cluster_name" --kubeconfig "$KUBECONFIG" --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5 --wait 120s
+cat > "$test_root/kind.yaml" <<'YAML'
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+YAML
+kind create cluster --name "$cluster_name" --kubeconfig "$KUBECONFIG" --config "$test_root/kind.yaml" --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5 --wait 120s
 context="kind-$cluster_name"
+# Let both nodes host the application to exercise affinity rather than a single
+# eligible worker masked by the control-plane taint.
+kubectl --context "$context" taint node "$cluster_name-control-plane" node-role.kubernetes.io/control-plane-
 docker build --target production -t theia-managed-backend:local .
 docker build --target production -f Dockerfile.frontend -t theia-managed-frontend:local frontend
 docker pull postgres:18-bookworm
 docker save theia-managed-backend:local theia-managed-frontend:local postgres:18-bookworm -o "$test_root/images.tar"
 # Explicit platform avoids importing absent ARM manifests from Docker's image store.
-docker exec --privileged -i "$cluster_name-control-plane" ctr -n k8s.io images import --platform linux/amd64 --snapshotter overlayfs - < "$test_root/images.tar"
+while IFS= read -r test_node; do
+  docker exec --privileged -i "$test_node" ctr -n k8s.io images import --platform linux/amd64 --snapshotter overlayfs - < "$test_root/images.tar"
+done < <(kind get nodes --name "$cluster_name")
 python3 - "$test_root/images.tar" <<'PY'
 import pathlib,sys
 pathlib.Path(sys.argv[1]).unlink()
@@ -68,6 +80,12 @@ root=pathlib.Path(sys.argv[1]);expected=json.loads((root/'expected.json').read_t
 assert all(actual[key]==expected[key] for key in ['instance_id','active_key_id','retained_key_ids'])
 PY
 [[ $(kubectl --context "$context" -n theia-source exec deployment/theia-backend -c backend -- stat -c %a /persist/control/state.json) == 600 ]]
+kubectl --context "$context" -n theia-source get pods -l theia-instance=theia -o json > "$test_root/consumers.json"
+python3 - "$test_root/consumers.json" <<'PY'
+import json,pathlib,sys
+pods=json.loads(pathlib.Path(sys.argv[1]).read_text())['items']
+assert len(pods)==2 and len({pod['spec']['nodeName'] for pod in pods})==1
+PY
 # A second writer must fail without changing the persistent identity.
 if kubectl --context "$context" -n theia-source exec deployment/theia-backend -c backend -- theia maintenance migrate > "$test_root/concurrent.log" 2>&1; then echo 'Concurrent maintenance writer accepted' >&2; exit 1; fi
 "$test_root/theia-admin" upgrade -dir "$test_root/source" -release v0.0.1-test "${image_args[@]}" > "$test_root/upgrade.log" 2>&1

@@ -55,6 +55,7 @@ spec:
       labels: {app: {{ $name }}-postgres}
     spec:
       automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/os: linux}
       securityContext:
         runAsUser: 999
         runAsGroup: 999
@@ -104,15 +105,22 @@ spec:
     matchLabels: {app: {{ $name }}-backend}
   template:
     metadata:
-      labels: {app: {{ $name }}-backend}
+      labels: {app: {{ $name }}-backend, theia-instance: {{ $name }}}
     spec:
       automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/os: linux}
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
         runAsGroup: 999
         fsGroup: 999
         fsGroupChangePolicy: OnRootMismatch
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {theia-instance: {{ $name }}}
+              topologyKey: kubernetes.io/hostname
       initContainers:
         - name: bootstrap
           image: {{ $backend | quote }}
@@ -192,9 +200,10 @@ spec:
     matchLabels: {app: {{ $name }}-frontend}
   template:
     metadata:
-      labels: {app: {{ $name }}-frontend}
+      labels: {app: {{ $name }}-frontend, theia-instance: {{ $name }}}
     spec:
       automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/os: linux}
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
