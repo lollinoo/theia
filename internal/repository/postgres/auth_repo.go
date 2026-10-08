@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -600,15 +601,50 @@ func (r *AuthRepo) RemoveRolePreservingLastActiveSuperAdmin(ctx context.Context,
 
 // GetUserRolesAndPermissions returns a user with roles and permissions.
 func (r *AuthRepo) GetUserRolesAndPermissions(ctx context.Context, userID uuid.UUID) (*domain.UserWithRolesAndPermissions, error) {
-	user, err := r.GetUserByID(ctx, userID)
+	// Correlated aggregates keep both grant sets in the same database snapshot
+	// without multiplying rows for users with several roles and permissions.
+	query := strings.Replace(userSelectSQL(), "FROM users", `,
+		(SELECT json_agg(grants ORDER BY grants."Name") FROM (
+			SELECT r.id AS "ID", r.name AS "Name", r.description AS "Description",
+			       r.is_system_role AS "IsSystemRole", r.created_at AS "CreatedAt", r.updated_at AS "UpdatedAt"
+			FROM roles r JOIN user_roles ur ON ur.role_id = r.id WHERE ur.user_id = users.id
+		) grants),
+		(SELECT json_agg(grants ORDER BY grants."Key") FROM (
+			SELECT DISTINCT p.id AS "ID", p.key AS "Key", p.description AS "Description",
+			       p.resource AS "Resource", p.action AS "Action"
+			FROM permissions p JOIN role_permissions rp ON rp.permission_id = p.id
+			JOIN user_roles ur ON ur.role_id = rp.role_id WHERE ur.user_id = users.id
+		) grants)
+		FROM users`, 1) + ` WHERE id = ?`
+	var rolesJSON, permissionsJSON []byte
+	user, err := r.scanUser(authAggregateScanner{
+		row:    r.queryRowContext(ctx, query, userID.String()),
+		grants: []interface{}{&rolesJSON, &permissionsJSON},
+	})
 	if err != nil {
-		return nil, fmt.Errorf("getting auth user aggregate user: %w", err)
+		return nil, fmt.Errorf("getting auth user aggregate: %w", err)
 	}
-	aggregate, err := r.userRolesAndPermissions(ctx, *user)
-	if err != nil {
-		return nil, fmt.Errorf("getting auth user aggregate grants: %w", err)
+	aggregate := &domain.UserWithRolesAndPermissions{User: *user}
+	if len(rolesJSON) > 0 {
+		if err := json.Unmarshal(rolesJSON, &aggregate.Roles); err != nil {
+			return nil, fmt.Errorf("decoding auth roles: %w", err)
+		}
+	}
+	if len(permissionsJSON) > 0 {
+		if err := json.Unmarshal(permissionsJSON, &aggregate.Permissions); err != nil {
+			return nil, fmt.Errorf("decoding auth permissions: %w", err)
+		}
 	}
 	return aggregate, nil
+}
+
+type authAggregateScanner struct {
+	row    authRowScanner
+	grants []interface{}
+}
+
+func (s authAggregateScanner) Scan(dest ...interface{}) error {
+	return s.row.Scan(append(dest, s.grants...)...)
 }
 
 // CreateSession inserts an authentication session.
@@ -710,6 +746,24 @@ func (r *AuthRepo) TouchSession(ctx context.Context, sessionID uuid.UUID, when t
 	}
 	if err := requireRowsAffected(res, domain.ErrAuthSessionNotFound); err != nil {
 		return fmt.Errorf("touching auth session: %w", err)
+	}
+	return nil
+}
+
+// TouchSessionIfStale throttles activity writes atomically across concurrent requests.
+// A filtered update still checks session existence so deleted sessions fail closed.
+func (r *AuthRepo) TouchSessionIfStale(ctx context.Context, sessionID uuid.UUID, when time.Time, interval time.Duration) error {
+	var exists bool
+	err := r.queryRowContext(ctx, `WITH touched AS (
+		UPDATE auth_sessions SET last_seen_at = ? WHERE id = ?
+		AND (last_seen_at IS NULL OR last_seen_at <= ?) RETURNING id
+	) SELECT EXISTS(SELECT 1 FROM auth_sessions WHERE id = ?)`,
+		when, sessionID.String(), when.Add(-interval), sessionID.String()).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("touching recent auth session: %w", err)
+	}
+	if !exists {
+		return domain.ErrAuthSessionNotFound
 	}
 	return nil
 }

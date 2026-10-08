@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 const (
 	defaultAuthSessionTTL        = 12 * time.Hour
+	defaultSessionTouchInterval  = time.Minute
 	defaultPasswordResetTTL      = 30 * time.Minute
 	defaultFailedLoginThreshold  = 5
 	defaultFailedLoginDelayAfter = 3
@@ -112,8 +114,11 @@ type AuthenticatedSession struct {
 
 // AuthenticatedUser contains the current user aggregate and backing session.
 type AuthenticatedUser struct {
-	User    domain.UserWithRolesAndPermissions
-	Session AuthenticatedSession
+	// Token hashes stay private and are reused only within the authenticated request.
+	tokenHash     string
+	csrfTokenHash string
+	User          domain.UserWithRolesAndPermissions
+	Session       AuthenticatedSession
 }
 
 // PasswordChangeInput contains a password change request for an authenticated user.
@@ -391,11 +396,40 @@ func (s *AuthService) CurrentUser(ctx context.Context, rawSessionToken string) (
 	if err := s.ensureAggregateCanAuthenticate(&aggregate.User); err != nil {
 		return nil, err
 	}
-	if err := s.sessions.TouchSession(ctx, session.ID, now); err != nil {
-		return nil, fmt.Errorf("touching auth session: %w", err)
+	if session.LastSeenAt == nil || now.Sub(*session.LastSeenAt) >= defaultSessionTouchInterval {
+		var touchErr error
+		if activity, ok := s.sessions.(interface {
+			TouchSessionIfStale(context.Context, uuid.UUID, time.Time, time.Duration) error
+		}); ok {
+			touchErr = activity.TouchSessionIfStale(ctx, session.ID, now, defaultSessionTouchInterval)
+		} else {
+			touchErr = s.sessions.TouchSession(ctx, session.ID, now)
+		}
+		if touchErr != nil {
+			return nil, fmt.Errorf("touching auth session: %w", touchErr)
+		}
+		session.LastSeenAt = &now
 	}
-	session.LastSeenAt = &now
-	return &AuthenticatedUser{User: *aggregate, Session: authenticatedSessionFromDomain(*session)}, nil
+	return &AuthenticatedUser{User: *aggregate, Session: authenticatedSessionFromDomain(*session),
+		tokenHash: session.TokenHash, csrfTokenHash: session.CSRFTokenHash}, nil
+}
+
+// ValidateAuthenticatedCSRF verifies CSRF using the session already checked for this request.
+// It must receive the CurrentUser result; fabricated or mismatched session views fail closed.
+func (s *AuthService) ValidateAuthenticatedCSRF(ctx context.Context, user *AuthenticatedUser, rawSessionToken, rawCSRFToken string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	rawSessionToken = strings.TrimSpace(rawSessionToken)
+	rawCSRFToken = strings.TrimSpace(rawCSRFToken)
+	if user == nil || user.tokenHash == "" || user.csrfTokenHash == "" || rawSessionToken == "" || rawCSRFToken == "" || !user.Session.ExpiresAt.After(s.now()) {
+		return ErrInvalidSession
+	}
+	if subtle.ConstantTimeCompare([]byte(security.HashToken(rawSessionToken, s.sessionSecret)), []byte(user.tokenHash)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(security.HashToken(rawCSRFToken, s.sessionSecret)), []byte(user.csrfTokenHash)) != 1 {
+		return ErrInvalidSession
+	}
+	return nil
 }
 
 // ValidateCSRF verifies that a raw CSRF token belongs to the current session.
