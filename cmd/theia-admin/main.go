@@ -68,6 +68,12 @@ func run(args []string, out io.Writer) error {
 	if f.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments")
 	}
+	platformSet := false
+	f.Visit(func(fl *flag.Flag) {
+		if fl.Name == "platform" {
+			platformSet = true
+		}
+	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Minute)
@@ -83,7 +89,7 @@ func run(args []string, out io.Writer) error {
 	if kubeErr != nil && !os.IsNotExist(kubeErr) {
 		return kubeErr
 	}
-	if *platform == "kubernetes" || kubeErr == nil {
+	if *platform == "kubernetes" || (!platformSet && kubeErr == nil) {
 		_ = kubeConfig
 		kc := deployment.KubernetesConfig{Name: *name, Namespace: *namespace, Context: *kubeContext, Release: *release, BackendImage: *backend, FrontendImage: *frontend, Hostname: *hostname, IngressClass: *ingressClass, TLSSecret: *tlsSecret, StorageClass: *storageClass, StorageSize: *storageSize, TrustedProxies: strings.Join(strings.Split(*trusted, ","), " ")}
 		switch args[0] {
