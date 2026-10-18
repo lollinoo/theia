@@ -18,7 +18,7 @@ RUN mkdir -p /theia-libs && cp -L "$(pg_config --libdir)/libpq.so.5" /theia-libs
 # ---------------------------------------------------------------------------
 # Stage: dev — Development with Air hot-reload
 # ---------------------------------------------------------------------------
-FROM golang:1.27.1-bookworm AS dev
+FROM golang:1.27.2-bookworm AS dev
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl libpq5 libreadline8 && \
@@ -53,7 +53,7 @@ CMD ["air", "-c", ".air.toml"]
 # ---------------------------------------------------------------------------
 # Stage: builder — Compile production binary
 # ---------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2-bookworm AS builder
 
 ARG TARGETOS
 ARG TARGETARCH

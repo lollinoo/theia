@@ -92,7 +92,7 @@ steps:
         } > .ci/changed-areas.env
 
   - name: backend-fast
-    image: golang:1.27.1-bookworm
+    image: golang:1.27.2-bookworm
     commands:
       - |
         set -eu
@@ -137,7 +137,7 @@ steps:
 
         apt-get update
         apt-get install -y --no-install-recommends ca-certificates curl postgresql-client
-        curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o /tmp/go.tar.gz
+        curl -fsSL https://go.dev/dl/go1.27.2.linux-amd64.tar.gz -o /tmp/go.tar.gz
         rm -rf /usr/local/go
         tar -C /usr/local -xzf /tmp/go.tar.gz
         export PATH="/usr/local/go/bin:$PATH"
@@ -167,7 +167,7 @@ steps:
         bash scripts/test-managed-ci.sh
 
   - name: build-release-assets
-    image: golang:1.27.1-bookworm
+    image: golang:1.27.2-bookworm
     when:
       - event: release
         evaluate: 'CI_COMMIT_PRERELEASE == "false"'
@@ -267,7 +267,7 @@ steps:
         docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$release_tag" --tag ghcr.io/lollinoo/theia-frontend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
 
   - name: upload-release-assets
-    image: golang:1.27.1-bookworm
+    image: golang:1.27.2-bookworm
     environment:
       GH_TOKEN:
         from_secret: GITHUB_TOKEN
