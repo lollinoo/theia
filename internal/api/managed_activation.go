@@ -33,6 +33,10 @@ func WithManagedActivation(next http.Handler, activation *service.ManagedActivat
 				return
 			}
 			if r.URL.Path == "/readyz" {
+				if db == nil {
+					http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+					return
+				}
 				ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 				defer cancel()
 				if err := db.PingContext(ctx); err != nil {

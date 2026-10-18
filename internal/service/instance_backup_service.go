@@ -401,7 +401,7 @@ func (s *InstanceBackupService) Delete(ctx context.Context, id uuid.UUID) error 
 		return ErrInstanceBackupNotFound
 	}
 	if backup.Status == domain.InstanceBackupStatusRunning {
-		return ErrInstanceBackupNotRunning
+		return ErrInstanceBackupAlreadyRunning
 	}
 	if s.externalDestination != nil && (backup.Status == domain.InstanceBackupStatusSuccess || backup.Status == domain.InstanceBackupStatusPendingUpload) {
 		if err := s.externalDestination.Delete(ctx, backup.ID.String()+"/"+backup.FileName); err != nil {

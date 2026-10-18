@@ -307,6 +307,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 	backup.ErrorMessage = ""
 	if verification != nil {
 		if err := writeBackupVerificationReceipt(backup); err != nil {
+			cleanupOnError(fmt.Sprintf("persisting backup verification: %v", err), err)
 			return nil, fmt.Errorf("persist backup verification: %w", err)
 		}
 	}
@@ -314,6 +315,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 		backup.Status = domain.InstanceBackupStatusPendingUpload
 		backup.ErrorMessage = "Verified local backup retained; external upload pending"
 		if err := s.repo.Update(backup); err != nil {
+			cleanupOnError(fmt.Sprintf("updating backup record: %v", err), err)
 			return nil, err
 		}
 		if err := s.uploadVerifiedBackup(ctx, backup); err != nil {
@@ -328,6 +330,7 @@ func (s *InstanceBackupService) runPreparedInstanceBackupWithContext(ctx context
 			cleanupOnError("backup cancelled", err)
 			return nil, err
 		}
+		cleanupOnError(fmt.Sprintf("updating backup record: %v", err), err)
 		return nil, fmt.Errorf("updating backup record: %w", err)
 	}
 

@@ -14,7 +14,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/service"
 )
@@ -180,3 +183,61 @@ func instanceBackupRestoreTestArchive(t *testing.T, name, content string) []byte
 	}
 	return body.Bytes()
 }
+
+type mockInstanceBackupRepoForHandlerTest struct {
+	backup *domain.InstanceBackup
+}
+
+func (m *mockInstanceBackupRepoForHandlerTest) Create(backup *domain.InstanceBackup) error {
+	return nil
+}
+
+func (m *mockInstanceBackupRepoForHandlerTest) GetByID(id uuid.UUID) (*domain.InstanceBackup, error) {
+	if m.backup != nil && m.backup.ID == id {
+		return m.backup, nil
+	}
+	return nil, nil
+}
+
+func (m *mockInstanceBackupRepoForHandlerTest) List() ([]domain.InstanceBackup, error) {
+	return nil, nil
+}
+
+func (m *mockInstanceBackupRepoForHandlerTest) Update(backup *domain.InstanceBackup) error {
+	return nil
+}
+
+func (m *mockInstanceBackupRepoForHandlerTest) Delete(id uuid.UUID) error {
+	return nil
+}
+
+func (m *mockInstanceBackupRepoForHandlerTest) ListSuccessfulOldest() ([]domain.InstanceBackup, error) {
+	return nil, nil
+}
+
+func (m *mockInstanceBackupRepoForHandlerTest) DeleteFailedOlderThan(cutoff time.Time) (int, error) {
+	return 0, nil
+}
+
+func TestInstanceBackupHandlerDeleteRunningRejection(t *testing.T) {
+	id := uuid.New()
+	runningBackup := &domain.InstanceBackup{
+		ID:     id,
+		Status: domain.InstanceBackupStatusRunning,
+	}
+	repo := &mockInstanceBackupRepoForHandlerTest{backup: runningBackup}
+	svc := service.NewInstanceBackupService(nil, repo, nil, t.TempDir(), t.TempDir(), "", t.TempDir(), "", []byte("0123456789abcdef"))
+	handler := NewInstanceBackupHandler(svc)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/instance-backups/"+id.String(), nil)
+	rec := httptest.NewRecorder()
+	handler.HandleDelete(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "backup is running") {
+		t.Fatalf("expected body to contain 'backup is running', got %s", rec.Body.String())
+	}
+}
+

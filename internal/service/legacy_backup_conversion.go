@@ -93,11 +93,17 @@ func (m *Maintenance) ConvertLegacyArchive(ctx context.Context, input, output st
 		return nil, err
 	}
 	backup := &domain.InstanceBackup{ID: uuid.New(), FileName: filepath.Base(output), FilePath: output, MigrationVersion: manifest.MigrationVersion, CreatedAt: created, Trigger: domain.InstanceBackupTriggerManual}
-	_, verification, err := svc.createArchiveWithProtection(ctx, output, artifact, files, known, plan.manifestJSON, &plan.manifest, backup.ID, private)
+	tempOutput := output + ".tmp"
+	_ = os.Remove(tempOutput)
+	defer func() { _ = os.Remove(tempOutput) }()
+	_, verification, err := svc.createArchiveWithProtection(ctx, tempOutput, artifact, files, known, plan.manifestJSON, &plan.manifest, backup.ID, private)
 	if err != nil {
 		return nil, err
 	}
-	if err := svc.verifyProtectedBackup(ctx, output, verification); err != nil {
+	if err := svc.verifyProtectedBackup(ctx, tempOutput, verification); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tempOutput, output); err != nil {
 		return nil, err
 	}
 	backup.SHA256, err = computeFileHashContext(ctx, output)

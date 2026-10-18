@@ -312,3 +312,18 @@ func TestAddCollectedFileToTarContextRejectsGrowthAfterQuotaCollection(t *testin
 		t.Fatalf("error = %v, want RestoreLimitError", err)
 	}
 }
+
+func TestInstanceBackupDeleteRunningRejection(t *testing.T) {
+	backup := &domain.InstanceBackup{
+		ID:     uuid.New(),
+		Status: domain.InstanceBackupStatusRunning,
+	}
+	repo := newInstanceBackupCancelTestRepo(backup)
+	svc := NewInstanceBackupService(nil, repo, nil, t.TempDir(), "", "", "", "", nil)
+
+	err := svc.Delete(context.Background(), backup.ID)
+	if !errors.Is(err, ErrInstanceBackupAlreadyRunning) {
+		t.Fatalf("Delete error = %v, want ErrInstanceBackupAlreadyRunning", err)
+	}
+}
+

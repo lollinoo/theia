@@ -195,7 +195,7 @@ func (h *InstanceBackupHandler) HandleDelete(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		if errors.Is(err, service.ErrInstanceBackupNotRunning) {
+		if errors.Is(err, service.ErrInstanceBackupAlreadyRunning) || errors.Is(err, service.ErrInstanceBackupNotRunning) {
 			writeError(w, http.StatusConflict, "backup is running")
 			return
 		}

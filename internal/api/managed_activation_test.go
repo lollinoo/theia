@@ -47,3 +47,18 @@ func TestManagedActivationHTTPBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedActivationReadyzNilDB(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := WithManagedActivation(next, nil, nil)
+	r := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "database unavailable") {
+		t.Fatalf("expected body to contain 'database unavailable', got %q", w.Body.String())
+	}
+}
+
