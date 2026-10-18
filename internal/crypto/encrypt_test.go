@@ -243,13 +243,13 @@ func TestLoadKeyringFromEnvParsesNewVariablesAndLegacyFallback(t *testing.T) {
 
 	keyring, err = LoadKeyringFromEnv()
 	if err != nil {
-		t.Fatalf("LoadKeyringFromEnv merged legacy fallback failed: %v", err)
+		t.Fatalf("LoadKeyringFromEnv with explicit keyring failed: %v", err)
 	}
 	if got := keyring.ActiveKeyID(); got != "kid-c" {
-		t.Fatalf("merged fallback ActiveKeyID = %q, want kid-c", got)
+		t.Fatalf("ActiveKeyID = %q, want kid-c", got)
 	}
-	if !keyring.HasKey("kid-c") || !keyring.HasKey(LegacyKeyID) {
-		t.Fatal("keyring should include configured active key and legacy fallback key")
+	if !keyring.HasKey("kid-c") || keyring.HasKey(LegacyKeyID) {
+		t.Fatal("keyring should only include configured keys from THEIA_ENCRYPTION_KEYS without injecting legacy parameter")
 	}
 
 	t.Setenv("THEIA_ENCRYPTION_KEY_ID", "")

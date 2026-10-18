@@ -12,10 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 
+	"github.com/lollinoo/theia/internal/secretinput"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -121,7 +121,7 @@ func ParseKeyring(activeID, keyList string) (*Keyring, error) {
 		rawPair = strings.TrimSpace(rawPair)
 		id, secret, ok := strings.Cut(rawPair, "=")
 		if !ok {
-			return nil, fmt.Errorf("malformed encryption key entry %q: expected key_id=secret", rawPair)
+			return nil, fmt.Errorf("malformed encryption key entry: expected key_id=secret")
 		}
 		id = strings.TrimSpace(id)
 		secret = strings.TrimSpace(secret)
@@ -141,26 +141,23 @@ func ParseKeyring(activeID, keyList string) (*Keyring, error) {
 
 // LoadKeyringFromEnv loads keyring from env data for the cryptographic storage.
 func LoadKeyringFromEnv() (*Keyring, error) {
-	activeID := os.Getenv("THEIA_ENCRYPTION_KEY_ID")
-	keyList := os.Getenv("THEIA_ENCRYPTION_KEYS")
+	activeID, err := secretinput.Read("THEIA_ENCRYPTION_KEY_ID")
+	if err != nil {
+		return nil, err
+	}
+	keyList, err := secretinput.Read("THEIA_ENCRYPTION_KEYS")
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := secretinput.Read("THEIA_ENCRYPTION_KEY")
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(activeID) != "" || strings.TrimSpace(keyList) != "" {
-		keyring, err := ParseKeyring(activeID, keyList)
-		if err != nil {
-			return nil, err
-		}
-		legacySecret := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
-		if legacySecret == "" || keyring.HasKey(LegacyKeyID) {
-			return keyring, nil
-		}
-		secrets := make(map[string]string, len(keyring.keys)+1)
-		for id, secret := range keyring.keys {
-			secrets[id] = secret
-		}
-		secrets[LegacyKeyID] = legacySecret
-		return NewKeyring(keyring.activeID, secrets)
+		return ParseKeyring(activeID, keyList)
 	}
 
-	legacySecret := strings.TrimSpace(os.Getenv("THEIA_ENCRYPTION_KEY"))
+	legacySecret := strings.TrimSpace(legacy)
 	if legacySecret == "" {
 		return nil, fmt.Errorf(
 			"THEIA_ENCRYPTION_KEY_ID and THEIA_ENCRYPTION_KEYS are required. " +
@@ -174,6 +171,19 @@ func (k *Keyring) ActiveKeyID() string {
 		return ""
 	}
 	return k.activeID
+}
+
+// Secrets returns an independent copy for protected persistence and encrypted backups.
+// Callers must never log this map or include it in public operation metadata.
+func (k *Keyring) Secrets() map[string]string {
+	if k == nil {
+		return nil
+	}
+	secrets := make(map[string]string, len(k.keys))
+	for id, secret := range k.keys {
+		secrets[id] = secret
+	}
+	return secrets
 }
 
 func (k *Keyring) HasKey(id string) bool {
@@ -206,6 +216,50 @@ func (k *Keyring) LegacyKeyHashes() []string {
 	}
 	sort.Strings(hashes)
 	return hashes
+}
+
+// KeyHashForID returns a non-reversible verification digest for a configured key id.
+func (k *Keyring) KeyHashForID(id string) (string, bool) {
+	if k == nil {
+		return "", false
+	}
+	secret, ok := k.keys[id]
+	if !ok {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte("theia-key-check:v1:" + id + ":" + secret))
+	return hex.EncodeToString(sum[:]), true
+}
+
+// KeyHashes returns verification digests for all keys in the keyring.
+func (k *Keyring) KeyHashes() map[string]string {
+	if k == nil {
+		return nil
+	}
+	hashes := make(map[string]string, len(k.keys))
+	for id := range k.keys {
+		if h, ok := k.KeyHashForID(id); ok {
+			hashes[id] = h
+		}
+	}
+	return hashes
+}
+
+// WithAdditionalKeys returns a new Keyring with extra key_id=secret entries merged in.
+func (k *Keyring) WithAdditionalKeys(extra map[string]string) (*Keyring, error) {
+	if k == nil {
+		return nil, fmt.Errorf("encryption keyring is nil")
+	}
+	merged := k.Secrets()
+	for id, secret := range extra {
+		id = strings.TrimSpace(id)
+		secret = strings.TrimSpace(secret)
+		if id == "" || secret == "" {
+			continue
+		}
+		merged[id] = secret
+	}
+	return NewKeyring(k.activeID, merged)
 }
 
 func (k *Keyring) EncryptString(plaintext string) (string, error) {

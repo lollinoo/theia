@@ -20,6 +20,9 @@ const (
 	InstanceBackupStatusFailed InstanceBackupStatus = "failed"
 	// InstanceBackupStatusCancelled indicates the backup was cancelled before completion.
 	InstanceBackupStatusCancelled InstanceBackupStatus = "cancelled"
+	// InstanceBackupStatusPendingUpload preserves a verified local recovery point
+	// until a configured external copy has been uploaded and verified.
+	InstanceBackupStatusPendingUpload InstanceBackupStatus = "pending_upload"
 )
 
 // InstanceBackupTrigger represents what initiated a backup.

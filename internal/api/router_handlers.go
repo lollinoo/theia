@@ -560,6 +560,20 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			}
 		}),
+		routeHandlerInstanceBackupEncryptionKey: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			instanceBackupHandler.HandleGetEncryptionKeyStatus(w, r)
+		}),
+		routeHandlerInstanceBackupEncryptionKeyAck: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			instanceBackupHandler.HandleAcknowledgeEncryptionKey(w, r)
+		}),
 		routeHandlerInstanceBackupRestoreStatus: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")

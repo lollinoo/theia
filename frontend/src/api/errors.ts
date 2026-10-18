@@ -13,6 +13,17 @@ export class ValidationError extends Error {
   }
 }
 
+/** Thrown when a restore archive requires an encryption key that is missing or mismatched. */
+export class RestoreEncryptionKeyRequiredError extends ValidationError {
+  public readonly missingKeyIds: string[];
+
+  constructor(message: string, missingKeyIds: string[] = []) {
+    super(message);
+    this.name = 'RestoreEncryptionKeyRequiredError';
+    this.missingKeyIds = missingKeyIds;
+  }
+}
+
 /** Indicates that a confirmed restore may have been accepted before its connection was interrupted. */
 export class RestoreOutcomeUnknownError extends Error {
   constructor() {

@@ -7,6 +7,12 @@ config.yaml
 .gemini/
 frontend/node_modules/
 docs/
+# Version architectural decisions while retaining the general docs ignore rule.
+!/docs/
+/docs/*
+!/docs/adr/
+/docs/adr/*
+!/docs/adr/*.md
 frontend/dist/
 frontend/dist/index.html
 frontend/playwright-report/

@@ -12,10 +12,13 @@
 # ---------------------------------------------------------------------------
 FROM postgres:18-bookworm AS postgres-tools
 
+# Normalize the libpq location for both AMD64 and ARM64 development images.
+RUN mkdir -p /theia-libs && cp -L "$(pg_config --libdir)/libpq.so.5" /theia-libs/libpq.so.5
+
 # ---------------------------------------------------------------------------
 # Stage: dev — Development with Air hot-reload
 # ---------------------------------------------------------------------------
-FROM golang:1.27.1-bookworm AS dev
+FROM golang:1.27.2-bookworm AS dev
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl libpq5 libreadline8 && \
@@ -24,13 +27,16 @@ RUN apt-get update && \
 COPY --from=postgres-tools /usr/lib/postgresql/18/bin/pg_dump /usr/local/bin/pg_dump
 COPY --from=postgres-tools /usr/lib/postgresql/18/bin/pg_restore /usr/local/bin/pg_restore
 COPY --from=postgres-tools /usr/lib/postgresql/18/bin/psql /usr/local/bin/psql
-COPY --from=postgres-tools /usr/lib/x86_64-linux-gnu/libpq.so.5* /usr/lib/x86_64-linux-gnu/
+COPY --from=postgres-tools /theia-libs/libpq.so.5 /usr/local/lib/libpq.so.5
+RUN ldconfig
 
 # Install dev/test tooling.
 RUN go install github.com/air-verse/air@v1.67.4 && \
     go install golang.org/x/vuln/cmd/govulncheck@latest
 
-ENV CGO_ENABLED=0
+ENV CGO_ENABLED=0 \
+    THEIA_DATA_DIR=/app/data \
+    THEIA_BRIDGE_BINARIES_DIR=/app/bridge_binaries
 
 WORKDIR /app
 
@@ -47,7 +53,10 @@ CMD ["air", "-c", ".air.toml"]
 # ---------------------------------------------------------------------------
 # Stage: builder — Compile production binary
 # ---------------------------------------------------------------------------
-FROM golang:1.27.1-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2-bookworm AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
@@ -62,12 +71,12 @@ RUN go mod download 2>/dev/null || true
 
 COPY . .
 
-RUN go build -o /app/theia ./cmd/theia/
+RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -o /app/theia ./cmd/theia/
 
 # ---------------------------------------------------------------------------
 # Stage: production — Minimal runtime image
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim AS production
+FROM postgres:18-bookworm AS production
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates libc6 curl libpq5 libreadline8 && \
@@ -76,12 +85,13 @@ RUN apt-get update && \
 WORKDIR /app
 
 COPY --from=builder /app/theia /usr/local/bin/theia
-COPY --from=postgres-tools /usr/lib/postgresql/18/bin/pg_dump /usr/local/bin/pg_dump
-COPY --from=postgres-tools /usr/lib/postgresql/18/bin/pg_restore /usr/local/bin/pg_restore
-COPY --from=postgres-tools /usr/lib/postgresql/18/bin/psql /usr/local/bin/psql
-COPY --from=postgres-tools /usr/lib/x86_64-linux-gnu/libpq.so.5* /usr/lib/x86_64-linux-gnu/
+# The PostgreSQL tools and server in this base image verify every managed backup
+# in an isolated local cluster; the live database stays in its own service.
 
 RUN mkdir -p /data
+
+ENV THEIA_DATA_DIR=/data \
+    THEIA_BRIDGE_BINARIES_DIR=/data/bridge_binaries
 
 EXPOSE 8080
 

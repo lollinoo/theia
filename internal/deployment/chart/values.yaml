@@ -1,0 +1,25 @@
+releaseTag: ""
+backendImage: ""
+frontendImage: ""
+imagePullPolicy: IfNotPresent
+bootstrapSecret: ""
+databaseSecret: ""
+replicas: 1
+maintenanceMode: false
+persistence:
+  claimName: ""
+  storageClass: ""
+  size: 10Gi
+postgres:
+  bundled: true
+  image: postgres:18-bookworm
+  claimName: ""
+  storageClass: ""
+  size: 10Gi
+ingress:
+  enabled: true
+  hostname: ""
+  className: ""
+  tlsSecret: ""
+  annotations: {}
+trustedProxies: ""

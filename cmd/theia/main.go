@@ -14,7 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/collector"
-	"github.com/lollinoo/theia/internal/crypto"
+	"github.com/lollinoo/theia/internal/config"
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/repository/postgres"
 	"github.com/lollinoo/theia/internal/scheduler"
@@ -43,12 +43,16 @@ func wireRuntimeResetter(deviceService *service.DeviceService, resetter deviceRu
 }
 
 func applyPendingPostgresRestore(stateDir, dbDSN, deviceBackupDir, knownHostsPath string) error {
+	return applyPendingPostgresRestoreWithConfig(stateDir, dbDSN, deviceBackupDir, knownHostsPath, &config.Config{})
+}
+
+func applyPendingPostgresRestoreWithConfig(stateDir, dbDSN, deviceBackupDir, knownHostsPath string, cfg *config.Config) error {
 	coordinator := service.NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath)
 	coordinator.SetCompletionVerifier(func(ctx context.Context, reportPhase func(service.RestoreOperationPhase) error) error {
 		if err := reportPhase(service.RestorePhaseVerifyingKeyring); err != nil {
 			return err
 		}
-		keyring, err := crypto.LoadKeyringFromEnv()
+		keyring, err := cfg.CredentialKeyring()
 		if err != nil {
 			return fmt.Errorf("load restore credential keyring: %w", err)
 		}
@@ -92,6 +96,12 @@ var newBootstrapRunner = func() bootstrapRunner {
 }
 
 func runMain(args []string) error {
+	if len(args) > 0 && args[0] == "maintenance" {
+		return runMaintenanceCommand(args[1:], os.Stdout)
+	}
+	if len(args) > 0 && args[0] == "instance" {
+		return runInstanceStateCommand(args[1:], os.Stdout)
+	}
 	flags := flag.NewFlagSet("theia", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "", "Path to config file")

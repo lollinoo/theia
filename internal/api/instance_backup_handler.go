@@ -167,7 +167,7 @@ func (h *InstanceBackupHandler) HandleDownload(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusNotFound, "backup not found")
 		return
 	}
-	if backup.Status != domain.InstanceBackupStatusSuccess {
+	if backup.Status != domain.InstanceBackupStatusSuccess && backup.Status != domain.InstanceBackupStatusPendingUpload {
 		writeError(w, http.StatusBadRequest, "backup is not ready for download")
 		return
 	}
@@ -195,7 +195,7 @@ func (h *InstanceBackupHandler) HandleDelete(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		if errors.Is(err, service.ErrInstanceBackupNotRunning) {
+		if errors.Is(err, service.ErrInstanceBackupAlreadyRunning) || errors.Is(err, service.ErrInstanceBackupNotRunning) {
 			writeError(w, http.StatusConflict, "backup is running")
 			return
 		}
@@ -257,8 +257,47 @@ func (h *InstanceBackupHandler) HandleRestoreStatus(w http.ResponseWriter, r *ht
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": status})
 }
 
+// HandleGetEncryptionKeyStatus handles GET /api/v1/instance-backups/encryption-key.
+func (h *InstanceBackupHandler) HandleGetEncryptionKeyStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	status, err := h.svc.EncryptionKeyStatus()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "reading encryption key status", err)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": status})
+}
+
+// HandleAcknowledgeEncryptionKey handles POST /api/v1/instance-backups/encryption-key/acknowledge.
+func (h *InstanceBackupHandler) HandleAcknowledgeEncryptionKey(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureConfigured(w) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := h.svc.AcknowledgeEncryptionKey(); err != nil {
+		writeError(w, http.StatusInternalServerError, "acknowledging encryption key", err)
+		return
+	}
+	status, err := h.svc.EncryptionKeyStatus()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "reading encryption key status", err)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": status})
+}
+
 // HandleRestore handles POST /api/v1/instance-backups/restore.
-// Accepts multipart/form-data with a "file" field containing a .tar.gz archive.
+// Accepts multipart/form-data with a "file" field containing a .tar.gz archive,
+// and an optional "encryption_keys" form field or "X-Theia-Encryption-Keys" header.
 // Query param dry_run=true validates without staging.
 func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureConfigured(w) {
@@ -276,7 +315,7 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	if compressedLimit > 0 {
 		r.Body = http.MaxBytesReader(w, r.Body, compressedLimit+restoreMultipartEnvelopeOverheadBytes)
 	}
-	file, fileName, err := restoreUploadPart(r)
+	file, fileName, formEncryptionKeys, err := restoreUploadPart(r)
 	if err != nil {
 		if isRequestBodyTooLarge(err) {
 			recordInstanceRestoreRejection("compressed_size_limit")
@@ -287,6 +326,11 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 		return
 	}
 	defer file.Close()
+
+	rawEncryptionKeys := strings.TrimSpace(r.Header.Get("X-Theia-Encryption-Keys"))
+	if rawEncryptionKeys == "" {
+		rawEncryptionKeys = strings.TrimSpace(formEncryptionKeys)
+	}
 
 	// Validate filename
 	if !strings.HasSuffix(fileName, ".tar.gz") {
@@ -322,12 +366,23 @@ func (h *InstanceBackupHandler) HandleRestore(w http.ResponseWriter, r *http.Req
 	tmpFile.Close()
 
 	// Validate and stage restore
-	report, err := h.svc.ValidateAndStageRestoreContext(r.Context(), tmpFile.Name(), dryRun)
+	report, err := h.svc.ValidateAndStageRestoreWithKeysContext(r.Context(), tmpFile.Name(), dryRun, rawEncryptionKeys)
 	if err != nil {
 		var limitErr *service.RestoreLimitError
 		if errors.As(err, &limitErr) {
 			recordInstanceRestoreRejection("archive_quota_limit")
 			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
+		var keyErr *service.RestoreEncryptionKeyError
+		if errors.As(err, &keyErr) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":                   keyErr.Error(),
+				"requires_encryption_key": true,
+				"missing_key_ids":         keyErr.MissingKeyIDs,
+			})
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -357,25 +412,33 @@ func isRequestBodyTooLarge(err error) bool {
 	return errors.As(err, &maxBytesErr)
 }
 
-// restoreUploadPart streams the multipart file field without buffering the whole upload.
-func restoreUploadPart(r *http.Request) (io.ReadCloser, string, error) {
+// restoreUploadPart streams the multipart file field without buffering the whole upload,
+// while also reading an optional preceding "encryption_keys" text field.
+func restoreUploadPart(r *http.Request) (io.ReadCloser, string, string, error) {
 	reader, err := r.MultipartReader()
 	if err != nil {
-		return nil, "", fmt.Errorf("invalid multipart form data")
+		return nil, "", "", fmt.Errorf("invalid multipart form data")
 	}
+	var encryptionKeys string
 	for {
 		part, err := reader.NextPart()
 		if err == io.EOF {
-			return nil, "", fmt.Errorf("missing 'file' field in multipart form")
+			return nil, "", "", fmt.Errorf("missing 'file' field in multipart form")
 		}
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
+		}
+		if part.FormName() == "encryption_keys" {
+			data, _ := io.ReadAll(io.LimitReader(part, 16*1024))
+			encryptionKeys = strings.TrimSpace(string(data))
+			part.Close()
+			continue
 		}
 		if part.FormName() != "file" {
 			part.Close()
 			continue
 		}
-		return part, part.FileName(), nil
+		return part, part.FileName(), encryptionKeys, nil
 	}
 }
 

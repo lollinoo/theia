@@ -74,15 +74,15 @@ func isLegacySQLiteRestoreArchiveFile(name string) bool {
 func isAllowedRestoreArchiveFile(name string) bool {
 	normalized := strings.ReplaceAll(name, "\\", "/")
 	switch normalized {
-	case "manifest.json", postgresArchiveDBEntry, "known_hosts":
+	case "manifest.json", postgresArchiveDBEntry, "known_hosts", "instance-secrets.json":
 		return true
 	default:
-		return strings.HasPrefix(normalized, "backups/")
+		return strings.HasPrefix(normalized, "backups/") || strings.HasPrefix(normalized, "certificates/")
 	}
 }
 
 // isAllowedRestoreArchiveDirectory checks if a directory entry matches the restore archive contract.
 func isAllowedRestoreArchiveDirectory(name string) bool {
 	normalized := strings.ReplaceAll(name, "\\", "/")
-	return normalized == "backups" || strings.HasPrefix(normalized, "backups/")
+	return normalized == "backups" || strings.HasPrefix(normalized, "backups/") || normalized == "certificates" || strings.HasPrefix(normalized, "certificates/")
 }

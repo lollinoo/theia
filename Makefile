@@ -5,7 +5,7 @@
 	       scale-lab-evidence scale-lab-validate \
        development prod production prod-metrics prod-down prod-build prod-logs prod-clean \
        staging staging-down staging-logs \
-       backend-fast frontend-fast govulncheck \
+       backend-fast frontend-fast govulncheck maintenance-test deployment-test postgres-upgrade-test kubernetes-test \
        realtime-stress collector-contract browser-e2e \
        bridge-build-all
 
@@ -27,21 +27,11 @@ SCALE_LAB_MODE ?= synthetic
 WISP_SEED_TARGET_MODE ?= auto
 
 define PROD_COMPOSE_ENV
-set -e; set -a; . ./.env.prod; set +a; \
-if [ -z "$$THEIA_DB_DSN" ]; then \
-	: "$${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"; \
-	THEIA_DB_DSN="$$(printf '%s://%s:%s@postgres:5432/%s?sslmode=disable' postgres "$${POSTGRES_USER:-theia}" "$$POSTGRES_PASSWORD" "$${POSTGRES_DB:-theia}")"; \
-	export THEIA_DB_DSN; \
-fi
+set -e; set -a; . ./.env.prod; set +a
 endef
 
 define STAGING_COMPOSE_ENV
-set -e; set -a; . ./.env.staging; set +a; \
-if [ -z "$$THEIA_DB_DSN" ]; then \
-	: "$${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"; \
-	THEIA_DB_DSN="$$(printf '%s://%s:%s@postgres:5432/%s?sslmode=disable' postgres "$${POSTGRES_USER:-theia}" "$$POSTGRES_PASSWORD" "$${POSTGRES_DB:-theia}")"; \
-	export THEIA_DB_DSN; \
-fi
+set -e; set -a; . ./.env.staging; set +a
 endef
 
 # Default target
@@ -151,7 +141,7 @@ govulncheck: ## Run Go vulnerability scanning
 backend-fast: ## Run the backend-fast quality gate locally
 	@New-Item -ItemType Directory -Force coverage | Out-Null
 	go vet ./...
-	go build ./cmd/theia/
+	go build ./cmd/theia/ ./cmd/theia-admin/
 	$(MAKE) govulncheck
 	go test ./... -count=1 -covermode=atomic -coverprofile=coverage/backend-fast.out
 	@& ./scripts/check-go-cover.ps1 coverage/backend-fast.out 45
@@ -163,11 +153,23 @@ govulncheck: ## Run Go vulnerability scanning
 backend-fast: ## Run the backend-fast quality gate locally
 	mkdir -p coverage
 	go vet ./...
-	go build ./cmd/theia/
+	go build ./cmd/theia/ ./cmd/theia-admin/
 	$(MAKE) govulncheck
 	go test ./... -count=1 -covermode=atomic -coverprofile=coverage/backend-fast.out
 	bash scripts/check-go-cover.sh coverage/backend-fast.out 45
 endif
+
+maintenance-test: ## Verify encrypted recovery using isolated PostgreSQL clusters in Docker
+	bash scripts/test-maintenance.sh
+
+deployment-test: ## Verify guided HTTPS deployment, activation, upgrade and replacement restore
+	bash scripts/test-deployment.sh
+
+postgres-upgrade-test: ## Verify PostgreSQL 17 to 18 cutover and return to the retained original volume
+	bash scripts/test-postgres-upgrade.sh
+
+kubernetes-test: ## Verify Helm deployment and shared maintenance Jobs in an isolated kind cluster
+	bash scripts/test-kubernetes.sh
 
 realtime-stress: ## Run focused realtime stress tests locally
 	go test ./internal/ws ./internal/worker ./internal/service ./internal/scalelab -count=1 -run 'Test(HubBroadcastMarksLegacyClientForResyncWhenMailboxIsFull|HubBroadcastAvoidsSnapshotForHTTPBootstrapClientWhenMailboxIsFull|HubRepeatedDetailSubscriptionsConvergeToSingleTarget|PipelineResyncRequiredSnapshotSequenceStaysStableAcrossBurstReplay|BurstReplayFixtureKeepsDeterministicLinkCountsAcrossPasses)'

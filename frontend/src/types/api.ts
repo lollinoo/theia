@@ -1155,7 +1155,12 @@ export interface BulkOperationStatus {
 }
 
 /** InstanceBackupStatus is the lifecycle state for full application backup archives. */
-export type InstanceBackupStatus = 'running' | 'success' | 'failed' | 'cancelled';
+export type InstanceBackupStatus =
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'cancelled'
+  | 'pending_upload';
 
 /** InstanceBackupProgress reports best-effort phase progress for a running archive job. */
 export interface InstanceBackupProgress {
@@ -1214,6 +1219,16 @@ export interface RestoreStatus {
   missing_key_id: string;
   created_at: string;
   updated_at: string;
+}
+
+/** EncryptionKeyStatus describes the active keyring and one-time bootstrap onboarding status. */
+export interface EncryptionKeyStatus {
+  active_key_id: string;
+  key_ids: string[];
+  acknowledged: boolean;
+  managed_by_env: boolean;
+  pending_secret?: string;
+  env_snippet?: string;
 }
 
 /** VendorConfig is a parsed vendor capability profile used for metrics and backup behavior. */

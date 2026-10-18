@@ -24,21 +24,38 @@ import (
 // It owns archive limits, operation tracking, and restore staging paths; RestoreCoordinator owns
 // live process handoff after a staged restore marker has been written.
 type InstanceBackupService struct {
-	db              *sql.DB
-	repo            domain.InstanceBackupRepository
-	settingsRepo    domain.SettingsRepository
-	backupDir       string // THEIA_INSTANCE_BACKUP_DIR
-	deviceBackupDir string // THEIA_BACKUP_DIR (device config files)
-	knownHostsPath  string // SSH known hosts file path
-	stateDir        string // local restore marker/staging directory
-	dbDSN           string // live DB DSN for postgres backups/restores
-	encryptionKey   []byte // legacy key hash in old manifests
-	keyring         *crypto.Keyring
-	restoreLimits   RestoreArchiveLimits
-	backupLimits    BackupArchiveLimits
-	createMu        sync.Mutex
-	operations      *instanceBackupOperationTracker
+	db                  *sql.DB
+	repo                domain.InstanceBackupRepository
+	settingsRepo        domain.SettingsRepository
+	backupDir           string // THEIA_INSTANCE_BACKUP_DIR
+	deviceBackupDir     string // THEIA_BACKUP_DIR (device config files)
+	knownHostsPath      string // SSH known hosts file path
+	stateDir            string // local restore marker/staging directory
+	dbDSN               string // live DB DSN for postgres backups/restores
+	encryptionKey       []byte // legacy key hash in old manifests
+	keyring             *crypto.Keyring
+	restoreLimits       RestoreArchiveLimits
+	backupLimits        BackupArchiveLimits
+	createMu            sync.Mutex
+	operations          *instanceBackupOperationTracker
+	managedStatePath    string
+	externalDestination BackupDestination
 }
+
+// BackupDestination verifies external copies against the complete local archive digest.
+type BackupDestination interface {
+	PutVerified(context.Context, string, string, string) error
+	Delete(context.Context, string) error
+}
+
+// SetBackupDestination configures an optional external destination before startup.
+func (s *InstanceBackupService) SetBackupDestination(destination BackupDestination) {
+	s.externalDestination = destination
+}
+
+// SetManagedState enables encrypted backups with protected instance secrets.
+// Configure once before serving requests or starting scheduled backup workers.
+func (s *InstanceBackupService) SetManagedState(path string) { s.managedStatePath = path }
 
 type archiveSourceFile struct {
 	archiveName string
@@ -105,6 +122,22 @@ func (s *InstanceBackupService) RestoreOperationStatus() (*RestoreOperationStatu
 	return readRestoreOperationStatus(s.stateDir)
 }
 
+// EncryptionKeyStatus returns the current instance encryption keyring status and any unacknowledged bootstrap key.
+func (s *InstanceBackupService) EncryptionKeyStatus() (*crypto.EncryptionKeyStatus, error) {
+	if s == nil {
+		return &crypto.EncryptionKeyStatus{ManagedByEnv: true, Acknowledged: true}, nil
+	}
+	return crypto.ReadEncryptionKeyStatus(s.stateDir, s.keyring)
+}
+
+// AcknowledgeEncryptionKey marks the auto-generated bootstrap encryption key as saved by the administrator.
+func (s *InstanceBackupService) AcknowledgeEncryptionKey() error {
+	if s == nil {
+		return nil
+	}
+	return crypto.AcknowledgeEncryptionKey(s.stateDir)
+}
+
 // RestoreReport contains the results of archive validation and staging.
 type RestoreReport struct {
 	Valid            bool   `json:"valid"`
@@ -131,6 +164,15 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 // ValidateAndStageRestoreContext validates and stages a restore archive while observing caller cancellation.
 // Non-dry-run calls extract into a private staging directory and write a pending marker for restart activation.
 func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Context, archivePath string, dryRun bool) (*RestoreReport, error) {
+	return s.ValidateAndStageRestoreWithKeysContext(ctx, archivePath, dryRun, "")
+}
+
+// ValidateAndStageRestoreWithKeysContext validates and stages a restore archive, optionally merging
+// operator-supplied encryption keys for backups created on another Theia instance.
+func (s *InstanceBackupService) ValidateAndStageRestoreWithKeysContext(ctx context.Context, archivePath string, dryRun bool, rawExtraKeys string) (*RestoreReport, error) {
+	if s.managedStatePath != "" {
+		return nil, fmt.Errorf("managed restore requires the administration command and the operator recovery file")
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -166,8 +208,46 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	}
 	extractedDBPath := filepath.Join(tempDir, filepath.FromSlash(dbEntryName))
 
-	// Step 4: Verify configured encryption keys
-	if err := validateRestoreManifestEncryptionKey(manifest, s.restoreEncryptionKeySource()); err != nil {
+	// Step 4: Verify configured encryption keys (merging operator-provided keys when supplied)
+	keySource := s.restoreEncryptionKeySource()
+	var parsedExtraKeys map[string]string
+	if strings.TrimSpace(rawExtraKeys) != "" {
+		defaultKeyID := ""
+		if missing := missingRestoreManifestKeyIDs(manifest, keySource); len(missing) > 0 && missing[0] != crypto.LegacyKeyID {
+			defaultKeyID = missing[0]
+		} else if manifest.Encryption != nil && len(manifest.Encryption.RequiredKeyIDs) > 0 {
+			defaultKeyID = manifest.Encryption.RequiredKeyIDs[0]
+		} else if manifest.Encryption != nil && strings.TrimSpace(manifest.Encryption.ActiveKeyID) != "" {
+			defaultKeyID = manifest.Encryption.ActiveKeyID
+		}
+		parsedExtraKeys, err = crypto.ParseFlexibleEncryptionKeys(rawExtraKeys, defaultKeyID)
+		if err != nil {
+			return nil, &RestoreEncryptionKeyError{
+				MissingKeyIDs: missingRestoreManifestKeyIDs(manifest, keySource),
+				Message:       err.Error(),
+			}
+		}
+		if s.keyring != nil {
+			merged, mergeErr := s.keyring.WithAdditionalKeys(parsedExtraKeys)
+			if mergeErr != nil {
+				return nil, &RestoreEncryptionKeyError{
+					MissingKeyIDs: missingRestoreManifestKeyIDs(manifest, keySource),
+					Message:       mergeErr.Error(),
+				}
+			}
+			keySource = merged
+		} else {
+			merged, mergeErr := crypto.NewKeyring(defaultKeyID, parsedExtraKeys)
+			if mergeErr != nil {
+				return nil, &RestoreEncryptionKeyError{
+					MissingKeyIDs: missingRestoreManifestKeyIDs(manifest, keySource),
+					Message:       mergeErr.Error(),
+				}
+			}
+			keySource = merged
+		}
+	}
+	if err := validateRestoreManifestEncryptionKey(manifest, keySource); err != nil {
 		return nil, err
 	}
 
@@ -225,6 +305,15 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	// Persist any operator-supplied encryption keys before staging the restore so the restarted process can decrypt restored rows.
+	if len(parsedExtraKeys) > 0 {
+		updatedKeyring, saveErr := crypto.SaveAdditionalEncryptionKeys(s.stateDir, s.keyring, parsedExtraKeys)
+		if saveErr != nil {
+			return nil, fmt.Errorf("persisting restore encryption keys: %w", saveErr)
+		}
+		s.keyring = updatedKeyring
 	}
 
 	// Step 14: Stage files for restore
@@ -318,6 +407,16 @@ func (s *InstanceBackupService) FailStaleRunning() {
 	}
 	for i := range backups {
 		if backups[i].Status == domain.InstanceBackupStatusRunning {
+			if s.managedStatePath != "" || strings.HasSuffix(backups[i].FileName, ".age") {
+				if err := s.reconcileVerifiedBackup(context.Background(), &backups[i]); err != nil {
+					backups[i].Status = domain.InstanceBackupStatusFailed
+					backups[i].ErrorMessage = "backup interrupted before complete verification; create a new backup"
+				}
+				if err := s.repo.Update(&backups[i]); err != nil {
+					log.Printf("Warning: failed to reconcile managed backup: %v", err)
+				}
+				continue
+			}
 			// The VACUUM snapshot is taken before FilePath is set, so for
 			// self-referential backups (restored from own archive) FilePath is "".
 			// Reconstruct the expected path: {backupDir}/{id}/{fileName}
@@ -371,7 +470,12 @@ func (s *InstanceBackupService) Delete(ctx context.Context, id uuid.UUID) error 
 		return ErrInstanceBackupNotFound
 	}
 	if backup.Status == domain.InstanceBackupStatusRunning {
-		return ErrInstanceBackupNotRunning
+		return ErrInstanceBackupAlreadyRunning
+	}
+	if s.externalDestination != nil && (backup.Status == domain.InstanceBackupStatusSuccess || backup.Status == domain.InstanceBackupStatusPendingUpload) {
+		if err := s.externalDestination.Delete(ctx, backup.ID.String()+"/"+backup.FileName); err != nil {
+			return err
+		}
 	}
 
 	// Remove the UUID subdirectory containing the archive and sidecar

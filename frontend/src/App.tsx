@@ -17,6 +17,7 @@ import { AdminDashboard } from './components/AdminDashboard';
 import Canvas from './components/Canvas';
 import type { ImportedNodePlacementRequest } from './components/canvas/importedNodePlacementRequest';
 import { Dashboard } from './components/Dashboard';
+import { EncryptionKeyOnboardingModal } from './components/EncryptionKeyOnboardingModal';
 import NavigationPill from './components/NavigationPill';
 import UserSettingsPage from './components/settings/UserSettingsPage';
 import {
@@ -675,6 +676,9 @@ function App() {
             />
           </>
         )}
+        <EncryptionKeyOnboardingModal
+          enabled={canViewAdmin && hasPermission('backups:read') && hasPermission('backups:update')}
+        />
       </div>
     </ThemeProvider>
   );

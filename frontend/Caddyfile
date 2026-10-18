@@ -1,0 +1,65 @@
+{
+	admin off
+	servers {
+		trusted_proxies static {$THEIA_TRUSTED_PROXIES:127.0.0.1/32 ::1/128}
+	}
+}
+
+{$THEIA_SITE_ADDRESS::80} {
+	{$THEIA_TLS_DIRECTIVE}
+	encode zstd gzip
+	header X-Content-Type-Options nosniff
+	route {
+		handle /frontend-readyz {
+			respond 200
+		}
+		handle /maintenance/status {
+			root * /status
+			rewrite * /status.json
+			header Cache-Control no-store
+			file_server
+		}
+		# Serve the public root certificate without exposing any private CA material.
+		handle /ca.crt {
+			root * /data/caddy/pki/authorities/local
+			rewrite * /root.crt
+			file_server
+		}
+		@maintenance file {
+			root /status
+			try_files /maintenance /deployment-maintenance
+		}
+		@probes path /readyz /livez
+		handle @probes {
+			reverse_proxy {$BACKEND_ADDRESS:backend}:{$BACKEND_PORT:8080}
+		}
+		handle @maintenance {
+			root * /srv
+			rewrite * /maintenance.html
+			header Retry-After 30
+			file_server {
+				status 503
+			}
+		}
+		@backend path /api/* /activate /livez /readyz
+		handle @backend {
+			request_body {
+				max_size 512MB
+			}
+			reverse_proxy {$BACKEND_ADDRESS:backend}:{$BACKEND_PORT:8080}
+		}
+		handle {
+			root * /srv
+			try_files {path} /index.html
+			file_server
+		}
+	}
+	handle_errors {
+		root * /srv
+		rewrite * /maintenance.html
+		header Retry-After 30
+		file_server {
+			status 503
+		}
+	}
+}

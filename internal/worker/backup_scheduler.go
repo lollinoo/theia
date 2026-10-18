@@ -84,6 +84,9 @@ func (s *BackupScheduler) Status() string {
 
 // tick is called each cycle to check if a backup is due and run retention.
 func (s *BackupScheduler) tick(ctx context.Context) {
+	if err := s.backupService.RetryPendingUploads(ctx); err != nil {
+		log.Printf("BackupScheduler: external backup retry: %v", err)
+	}
 	interval := GetBackupInterval(s.settingsRepo)
 
 	if interval > 0 {

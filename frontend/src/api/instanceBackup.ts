@@ -2,9 +2,20 @@
  * Provides frontend API helpers for instance backup endpoints.
  * Keeps request construction and backend response handling out of UI components.
  */
-import { type InstanceBackup, type RestoreReport, type RestoreStatus } from '../types/api';
-import { RestoreOutcomeUnknownError, ServerError, ValidationError } from './errors';
 import {
+  type EncryptionKeyStatus,
+  type InstanceBackup,
+  type RestoreReport,
+  type RestoreStatus,
+} from '../types/api';
+import {
+  RestoreEncryptionKeyRequiredError,
+  RestoreOutcomeUnknownError,
+  ServerError,
+  ValidationError,
+} from './errors';
+import {
+  parseEncryptionKeyStatus,
   parseInstanceBackup,
   parseRestoreReport,
   parseRestoreStatus,
@@ -53,8 +64,29 @@ export async function fetchRestoreStatus(): Promise<RestoreStatus | null> {
   return parseRestoreStatus(data);
 }
 
+/** Fetches the active encryption key status and any pending one-time bootstrap secret. */
+export async function fetchEncryptionKeyStatus(): Promise<EncryptionKeyStatus> {
+  const payload = await requestJSON('/api/v1/instance-backups/encryption-key');
+  const data = (payload as Record<string, unknown>)?.data;
+  return parseEncryptionKeyStatus(data);
+}
+
+/** Marks the auto-generated bootstrap encryption key as saved so its secret is no longer exposed. */
+export async function acknowledgeEncryptionKey(): Promise<EncryptionKeyStatus> {
+  const payload = await requestJSONWithBody(
+    '/api/v1/instance-backups/encryption-key/acknowledge',
+    'POST',
+  );
+  const data = (payload as Record<string, unknown>)?.data;
+  return parseEncryptionKeyStatus(data);
+}
+
 // restoreInstanceBackup uploads an archive through multipart form data and parses the restore report.
-export async function restoreInstanceBackup(file: File, dryRun: boolean): Promise<RestoreReport> {
+export async function restoreInstanceBackup(
+  file: File,
+  dryRun: boolean,
+  encryptionKeys?: string,
+): Promise<RestoreReport> {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -62,11 +94,16 @@ export async function restoreInstanceBackup(file: File, dryRun: boolean): Promis
     ? '/api/v1/instance-backups/restore?dry_run=true'
     : '/api/v1/instance-backups/restore';
 
+  const trimmedKeys = encryptionKeys?.trim();
+  const extraHeaders: Record<string, string> = trimmedKeys
+    ? { 'X-Theia-Encryption-Keys': trimmedKeys }
+    : {};
+
   let response: Response;
   try {
     response = await fetch(url, {
       method: 'POST',
-      headers: headersWithCsrf({}),
+      headers: headersWithCsrf(extraHeaders),
       body: formData,
       // Do NOT set Content-Type - browser sets multipart boundary automatically
     });
@@ -83,15 +120,18 @@ export async function restoreInstanceBackup(file: File, dryRun: boolean): Promis
 
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
+    const record =
+      typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : null;
     const errorMessage =
-      typeof payload === 'object' &&
-      payload !== null &&
-      'error' in payload &&
-      typeof (payload as Record<string, unknown>).error === 'string'
-        ? ((payload as Record<string, unknown>).error as string)
-        : response.statusText;
+      record !== null && typeof record.error === 'string' ? record.error : response.statusText;
 
     if (response.status === 400) {
+      if (record?.requires_encryption_key === true) {
+        const missingKeyIds = Array.isArray(record.missing_key_ids)
+          ? record.missing_key_ids.filter((id): id is string => typeof id === 'string')
+          : [];
+        throw new RestoreEncryptionKeyRequiredError(errorMessage, missingKeyIds);
+      }
       throw new ValidationError(errorMessage);
     }
 

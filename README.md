@@ -30,7 +30,7 @@ Theia currently includes:
 - **Administration**: first-party password auth, session and CSRF protection, RBAC permissions, admin users, roles, role permissions, password reset, and audit logs.
 - **Bridge Connector**: local desktop connector for launching WinBox from Theia with per-user Bridge Secrets and one-time launch tokens.
 - **WISP lab**: Docker-based MikroTik-flavoured lab topology with FRRouting, OSPF, BGP/default-route checks, SNMP/LLDP data, and seed scripts for repeatable demos.
-- **Deployment surfaces**: development, staging, and production Docker Compose stacks; Makefile targets for common workflows; release-image deployment with a local production build override.
+- **Deployment surfaces**: guided Docker and Kubernetes administration, encrypted verified recovery, and Linux AMD64/ARM64 release bundles; existing Compose stacks and Makefile targets remain available for development.
 
 ## Architecture
 
@@ -41,7 +41,7 @@ Browser
   |
   | REST + WebSocket
   v
-React/Vite frontend  <---- nginx proxy in production
+React/Vite frontend  <---- Caddy HTTPS proxy in managed deployments
   |
   v
 Go backend API
@@ -59,7 +59,7 @@ Go backend API
 
 ### Backend
 
-The backend entrypoint is `cmd/theia`. It loads configuration, runs PostgreSQL migrations, wires repositories and services, starts polling and backup workers, exposes `/api/v1` REST endpoints, serves `/api/v1/ws` for realtime browser updates, and exposes `/metrics` for Prometheus-compatible scraping.
+The backend entrypoint is `cmd/theia`. It loads configuration, wires repositories and services, starts polling and backup workers, exposes `/api/v1` REST endpoints, serves `/api/v1/ws` for realtime browser updates, and exposes `/metrics` for Prometheus-compatible scraping. Managed deployments verify offline PostgreSQL migrations before HTTP startup through the shared maintenance engine.
 
 The main backend packages live under `internal/`:
 
@@ -86,6 +86,18 @@ The top-level app keeps the topology canvas mounted while switching between canv
 6. The frontend combines canonical topology with runtime state to render the live canvas, dashboards, alerts, panels, and admin workflows.
 
 ## Installation
+
+For server deployments, the standalone administration command automates secrets,
+PostgreSQL initialization, migrations, HTTPS and first-administrator activation:
+
+```sh
+theia-admin install -dir /opt/theia -hostname theia.example.org
+```
+
+Use the administration binary from a versioned release. See
+[instance administration](OPERATIONS.md) for LAN certificates, external PostgreSQL,
+upgrade, backup and replacement-host restore. Docker hosts need Docker and Compose;
+`install -platform kubernetes` uses an existing cluster, Helm and kubectl.
 
 The fastest way to run Theia locally is the Docker Compose development stack. No local Go or Node.js install is required for the standard dev path.
 

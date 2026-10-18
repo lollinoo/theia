@@ -15,7 +15,7 @@
 #   1. Optional GHCR login if authenticated pulls are needed for rate limits:
 #      echo $GHCR_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
 #   2. Copy env file:           cp .env.prod.example .env.prod
-#   3. Set IMAGE_TAG, THEIA_ENCRYPTION_KEY_ID, THEIA_ENCRYPTION_KEYS, THEIA_SESSION_SECRET, THEIA_METRICS_TOKEN, THEIA_DB_DSN, and POSTGRES_PASSWORD in .env.prod
+#   3. Set IMAGE_TAG, THEIA_SESSION_SECRET, THEIA_METRICS_TOKEN, and POSTGRES_PASSWORD in .env.prod
 #   4. Start the stack:         docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 # =============================================================================
 
@@ -51,25 +51,15 @@ services:
       - theia-data:/data
     environment:
       - THEIA_DEPLOYMENT_ENV=production
-      - THEIA_DB_DSN=${THEIA_DB_DSN:?THEIA_DB_DSN must be set}
-      - THEIA_DB_MAX_OPEN_CONNS=${THEIA_DB_MAX_OPEN_CONNS:-16}
-      - THEIA_DB_MAX_IDLE_CONNS=${THEIA_DB_MAX_IDLE_CONNS:-8}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-      - THEIA_DATA_DIR=${THEIA_DATA_DIR:-/data}
-      - THEIA_LISTEN_ADDR=:${BACKEND_PORT:-8080}
-      - THEIA_LOG_LEVEL=${LOG_LEVEL:-info}
-      - THEIA_ENCRYPTION_KEY_ID=${THEIA_ENCRYPTION_KEY_ID:-}
-      - THEIA_ENCRYPTION_KEYS=${THEIA_ENCRYPTION_KEYS:-}
-      - THEIA_ENCRYPTION_KEY=${THEIA_ENCRYPTION_KEY:-}
+      - THEIA_DB_DSN=${THEIA_DB_DSN:-}
       - THEIA_SESSION_SECRET=${THEIA_SESSION_SECRET:?THEIA_SESSION_SECRET must be set}
       - THEIA_METRICS_TOKEN=${THEIA_METRICS_TOKEN:?THEIA_METRICS_TOKEN must be set}
-      - THEIA_ALLOWED_ORIGINS=${THEIA_ALLOWED_ORIGINS:-}
-      - THEIA_BRIDGE_BINARIES_DIR=${THEIA_BRIDGE_BINARIES_DIR:-/data/bridge_binaries}
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf \"http://localhost:${BACKEND_PORT:-8080}/api/v1/auth/me\""]
+      test: ["CMD-SHELL", "curl -sf \"http://localhost:${BACKEND_PORT:-8080}/readyz\""]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -97,7 +87,7 @@ services:
       start_period: 10s
 
   # ---------------------------------------------------------------------------
-  # Frontend -- nginx serving compiled React SPA + API proxy (pulled from GHCR)
+  # Frontend -- Caddy serving compiled React SPA + API proxy (pulled from GHCR)
   # ---------------------------------------------------------------------------
   frontend:
     image: ghcr.io/lollinoo/theia-frontend:${IMAGE_TAG:-latest}
@@ -105,8 +95,6 @@ services:
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-80}:80"
-    environment:
-      - BACKEND_PORT=${BACKEND_PORT:-8080}
     networks:
       - theia-net
     depends_on:

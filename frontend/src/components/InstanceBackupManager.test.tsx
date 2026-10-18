@@ -3,7 +3,12 @@
  */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RestoreOutcomeUnknownError, ServerError, ValidationError } from '../api/errors';
+import {
+  RestoreEncryptionKeyRequiredError,
+  RestoreOutcomeUnknownError,
+  ServerError,
+  ValidationError,
+} from '../api/errors';
 import type { InstanceBackup, RestoreStatus } from '../types/api';
 import { InstanceBackupManager } from './InstanceBackupManager';
 
@@ -546,14 +551,14 @@ describe('InstanceBackupManager — SC-5: restore UI', () => {
     expect(screen.getByText(message)).toBeInTheDocument();
   });
 
-  it('renders missing key restore status with legacy recovery guidance', async () => {
+  it('renders missing key restore status with recovery guidance', async () => {
     const { fetchRestoreStatus } = await import('../api/client');
     (fetchRestoreStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       operation_id: 'restore-1',
       phase: 'failed_operator_action_required',
       attempt_count: 1,
       last_error: '',
-      missing_key_id: 'legacy',
+      missing_key_id: 'kid-old',
       created_at: '2026-06-05T00:00:00Z',
       updated_at: '2026-06-05T00:01:00Z',
     });
@@ -562,12 +567,12 @@ describe('InstanceBackupManager — SC-5: restore UI', () => {
 
     expect(
       screen.getByText(
-        'Restore blocked because key id legacy is missing from THEIA_ENCRYPTION_KEYS.',
+        'Restore blocked because key id kid-old is missing from THEIA_ENCRYPTION_KEYS.',
       ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Add legacy=<old secret> to THEIA_ENCRYPTION_KEYS or set THEIA_ENCRYPTION_KEY as fallback, restart, then create and restore-test a fresh backup.',
+        'Add kid-old=<old secret> to THEIA_ENCRYPTION_KEYS, restart, then create and restore-test a fresh backup.',
       ),
     ).toBeInTheDocument();
   });
@@ -1486,5 +1491,55 @@ describe('InstanceBackupManager — SC-5: failed backup shows error message', ()
 
     // X mark character for failed
     expect(screen.getByText('\u2717')).toBeInTheDocument();
+  });
+
+  it('prompts for encryption key when restore archive requires a missing key and passes it on confirm', async () => {
+    const { restoreInstanceBackup } = await import('../api/client');
+    vi.mocked(restoreInstanceBackup)
+      .mockRejectedValueOnce(
+        new RestoreEncryptionKeyRequiredError(
+          'archive requires encryption key id k-20261018-abcd1234, but it is not configured',
+          ['k-20261018-abcd1234'],
+        ),
+      )
+      .mockResolvedValueOnce(mockRestoreReport)
+      .mockResolvedValueOnce(mockRestoreReport);
+
+    await renderAndWait();
+
+    const file = new File(['dummy'], 'backup.tar.gz', { type: 'application/gzip' });
+    selectRestoreFile(file);
+
+    await waitFor(() => {
+      expect(screen.getByText('Encryption Key Required')).toBeInTheDocument();
+    });
+    expect(screen.getByText('k-20261018-abcd1234')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Encryption Key or Recovery File Content'), {
+      target: { value: 'k-20261018-abcd1234=my-saved-secret-value' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate Key & Continue' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Confirm Restore')).toBeInTheDocument();
+    });
+    expect(restoreInstanceBackup).toHaveBeenNthCalledWith(
+      2,
+      file,
+      true,
+      'k-20261018-abcd1234=my-saved-secret-value',
+    );
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Restore Now' }));
+
+    await waitFor(() => {
+      expect(restoreInstanceBackup).toHaveBeenNthCalledWith(
+        3,
+        file,
+        false,
+        'k-20261018-abcd1234=my-saved-secret-value',
+      );
+    });
   });
 });

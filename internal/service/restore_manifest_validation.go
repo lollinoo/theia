@@ -41,27 +41,82 @@ func manifestDatabaseEntryName(manifest backupManifest) (string, error) {
 	return postgresArchiveDBEntry, nil
 }
 
+// RestoreEncryptionKeyError indicates that an instance backup archive requires one or more
+// encryption keys that are missing or mismatched in the active runtime keyring.
+type RestoreEncryptionKeyError struct {
+	MissingKeyIDs []string `json:"missing_key_ids"`
+	Message       string   `json:"message"`
+}
+
+func (e *RestoreEncryptionKeyError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
 // validateRestoreManifestEncryptionKey ensures the configured keyring can decrypt the archive.
 func validateRestoreManifestEncryptionKey(manifest backupManifest, encryptionKey any) error {
 	if manifest.Encryption != nil {
 		keyring, ok := encryptionKey.(*crypto.Keyring)
 		if !ok || keyring == nil {
-			return fmt.Errorf("archive requires encryption key metadata, but no encryption keyring is configured")
+			return &RestoreEncryptionKeyError{
+				MissingKeyIDs: append([]string(nil), manifest.Encryption.RequiredKeyIDs...),
+				Message:       "archive requires encryption key metadata, but no encryption keyring is configured",
+			}
 		}
+		missing := missingRestoreManifestKeyIDs(manifest, encryptionKey)
 		for _, keyID := range manifest.Encryption.RequiredKeyIDs {
 			if !keyring.HasKey(keyID) {
-				return fmt.Errorf("archive requires encryption key id %s, but it is not configured", keyID)
+				return &RestoreEncryptionKeyError{
+					MissingKeyIDs: missing,
+					Message:       fmt.Sprintf("archive requires encryption key id %s, but it is not configured", keyID),
+				}
+			}
+			if expectedHash, ok := manifest.Encryption.KeyHashes[keyID]; ok && expectedHash != "" {
+				actualHash, hasActual := keyring.KeyHashForID(keyID)
+				if !hasActual || actualHash != expectedHash {
+					return &RestoreEncryptionKeyError{
+						MissingKeyIDs: missing,
+						Message:       fmt.Sprintf("encryption key mismatch for key id %s: provided secret does not match backup", keyID),
+					}
+				}
 			}
 		}
 		return nil
 	}
 
 	currentKeyHash, ok := encryptionKeyHashForConfiguredKey(encryptionKey, manifest.EncryptionKeyHash)
-	if !ok {
-		return fmt.Errorf("encryption key mismatch: backup was created with a different THEIA_ENCRYPTION_KEY")
+	if !ok || manifest.EncryptionKeyHash != currentKeyHash {
+		return &RestoreEncryptionKeyError{
+			MissingKeyIDs: []string{crypto.LegacyKeyID},
+			Message:       "encryption key mismatch: backup was created with a different THEIA_ENCRYPTION_KEY",
+		}
 	}
-	if manifest.EncryptionKeyHash != currentKeyHash {
-		return fmt.Errorf("encryption key mismatch: backup was created with a different THEIA_ENCRYPTION_KEY")
+	return nil
+}
+
+// missingRestoreManifestKeyIDs returns key IDs required by the backup manifest that are missing or mismatched in encryptionKey.
+func missingRestoreManifestKeyIDs(manifest backupManifest, encryptionKey any) []string {
+	if manifest.Encryption != nil {
+		keyring, _ := encryptionKey.(*crypto.Keyring)
+		var missing []string
+		for _, keyID := range manifest.Encryption.RequiredKeyIDs {
+			if keyring == nil || !keyring.HasKey(keyID) {
+				missing = append(missing, keyID)
+				continue
+			}
+			if expectedHash, ok := manifest.Encryption.KeyHashes[keyID]; ok && expectedHash != "" {
+				if actualHash, hasActual := keyring.KeyHashForID(keyID); !hasActual || actualHash != expectedHash {
+					missing = append(missing, keyID)
+				}
+			}
+		}
+		return missing
+	}
+	currentKeyHash, ok := encryptionKeyHashForConfiguredKey(encryptionKey, manifest.EncryptionKeyHash)
+	if !ok || manifest.EncryptionKeyHash != currentKeyHash {
+		return []string{crypto.LegacyKeyID}
 	}
 	return nil
 }
