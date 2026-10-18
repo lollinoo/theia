@@ -214,7 +214,7 @@ spec:
         podAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             - labelSelector:
-                matchLabels: {app: {{ $name }}-backend}
+                matchLabels: {theia-instance: {{ $name }}}
               topologyKey: kubernetes.io/hostname
       initContainers:
         - name: wait-for-instance

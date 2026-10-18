@@ -7,7 +7,9 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -69,9 +71,31 @@ func (a *Admin) waitHTTPS(ctx context.Context, c Config) error {
 			}
 		}
 		if caReady {
-			request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Origin()+"/readyz", nil)
-			if err != nil {
-				return err
+			var request *http.Request
+			if c.TLSMode == "proxy" {
+				probeHost := c.BindAddress
+				if probeHost == "" || probeHost == "0.0.0.0" || probeHost == "::" {
+					probeHost = "127.0.0.1"
+				}
+				probeURL := (&url.URL{
+					Scheme: "http",
+					Host:   net.JoinHostPort(probeHost, fmt.Sprint(c.HTTPPort)),
+					Path:   "/readyz",
+				}).String()
+				var err error
+				request, err = http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+				if err != nil {
+					return err
+				}
+				if c.Hostname != "" {
+					request.Host = c.Hostname
+				}
+			} else {
+				var err error
+				request, err = http.NewRequestWithContext(ctx, http.MethodGet, c.Origin()+"/readyz", nil)
+				if err != nil {
+					return err
+				}
 			}
 			response, err := client.Do(request)
 			if err == nil {

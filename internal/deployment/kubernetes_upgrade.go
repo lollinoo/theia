@@ -45,7 +45,7 @@ func (k *Kubernetes) Upgrade(ctx context.Context, release, backend, frontend str
 	}
 	if data, err := os.ReadFile(filepath.Join(k.Dir, "control", "kubernetes-upgrade.json")); err == nil {
 		var previous kubernetesUpgrade
-		if json.Unmarshal(data, &previous) != nil || previous.Phase != "completed" {
+		if json.Unmarshal(data, &previous) != nil || (previous.Phase != "completed" && previous.Phase != "rolled_back") {
 			return fmt.Errorf("a Kubernetes upgrade is incomplete; run resume")
 		}
 	} else if !os.IsNotExist(err) {
@@ -87,7 +87,10 @@ func (k *Kubernetes) Upgrade(ctx context.Context, release, backend, frontend str
 			if err := k.helm(ctx, *original); err != nil {
 				return err
 			}
-			journal.Phase = "completed"
+			if err := k.kubectl(ctx, *original, "exec", "deployment/"+original.Name+"-backend", "--", "rm", "-f", "/persist/control/public/deployment-maintenance"); err != nil {
+				return err
+			}
+			journal.Phase = "rolled_back"
 			_ = k.saveUpgrade(journal)
 		}
 		return migrationErr
@@ -100,6 +103,9 @@ func (k *Kubernetes) Upgrade(ctx context.Context, release, backend, frontend str
 		return err
 	}
 	if err := k.helm(ctx, target); err != nil {
+		return err
+	}
+	if err := k.kubectl(ctx, target, "exec", "deployment/"+target.Name+"-backend", "--", "rm", "-f", "/persist/control/public/deployment-maintenance"); err != nil {
 		return err
 	}
 	journal.Phase = "completed"
@@ -120,7 +126,7 @@ func (k *Kubernetes) Resume(ctx context.Context) error {
 		if json.Unmarshal(data, &candidate) != nil {
 			return fmt.Errorf("invalid Kubernetes upgrade journal")
 		}
-		if candidate.Phase != "completed" {
+		if candidate.Phase != "completed" && candidate.Phase != "rolled_back" {
 			journal = &candidate
 			*c = candidate.Target
 		}

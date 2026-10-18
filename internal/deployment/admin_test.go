@@ -8,10 +8,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lollinoo/theia/internal/domain"
@@ -206,5 +211,288 @@ func TestBackupExportVerifiesBytesAndPreservesExistingFiles(t *testing.T) {
 				t.Fatal("existing export was overwritten")
 			}
 		})
+	}
+}
+
+func TestKubernetesInstallExternalPostgresTrimsCRLFAndRejectsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	k := &Kubernetes{Dir: dir, Output: io.Discard, Runner: func(_ context.Context, _ string, _ []string, _ io.Writer) error {
+		return nil
+	}}
+	cfg := KubernetesConfig{
+		Name:          "theia",
+		Namespace:     "theia",
+		Context:       "test-ctx",
+		Release:       "v1.8.0",
+		BackendImage:  "test-backend:v1.8.0",
+		FrontendImage: "test-frontend:v1.8.0",
+		Hostname:      "theia.local",
+		TLSSecret:     "theia-tls",
+	}
+
+	emptyFile := filepath.Join(dir, "empty.dsn")
+	if err := os.WriteFile(emptyFile, []byte("\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Install(context.Background(), cfg, emptyFile, false); err == nil || !strings.Contains(err.Error(), "external database connection file is empty") {
+		t.Fatalf("expected empty DSN error, got: %v", err)
+	}
+
+	validFile := filepath.Join(dir, "valid.dsn")
+	dsn := "postgres://user:pass@host:5432/theia?sslmode=disable"
+	if err := os.WriteFile(validFile, []byte(dsn+"\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var capturedDSN string
+	k.Runner = func(_ context.Context, program string, args []string, out io.Writer) error {
+		cmd := strings.Join(args, " ")
+		if strings.Contains(cmd, "apply -f") {
+			for i, arg := range args {
+				if arg == "-f" && i+1 < len(args) {
+					content, err := os.ReadFile(args[i+1])
+					if err == nil {
+						var obj map[string]any
+						if json.Unmarshal(content, &obj) == nil {
+							if stringData, ok := obj["stringData"].(map[string]any); ok {
+								if stateJSON, ok := stringData["state.json"].(string); ok {
+									var st instance.State
+									if json.Unmarshal([]byte(stateJSON), &st) == nil {
+										capturedDSN = st.DBDSN
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if strings.Contains(cmd, "jsonpath={.items[0].metadata.name}") {
+			_, _ = io.WriteString(out, "test-pod")
+		}
+		return nil
+	}
+	dir2 := t.TempDir()
+	k.Dir = dir2
+	if err := k.Install(context.Background(), cfg, validFile, false); err != nil {
+		t.Fatal(err)
+	}
+	if capturedDSN != dsn {
+		t.Fatalf("expected trimmed DSN %q, got %q", dsn, capturedDSN)
+	}
+}
+
+func TestKubernetesUpgradeSuccessAndRollbackRemoveMaintenance(t *testing.T) {
+	dir := t.TempDir()
+	cfg := KubernetesConfig{
+		Name:          "theia",
+		Namespace:     "theia",
+		Context:       "test-ctx",
+		Release:       "v1.8.0",
+		BackendImage:  "test-backend:v1.8.0",
+		FrontendImage: "test-frontend:v1.8.0",
+		Hostname:      "theia.local",
+		TLSSecret:     "theia-tls",
+	}
+	cfgData, _ := json.Marshal(cfg)
+	_ = instance.WritePrivateFile(filepath.Join(dir, "control", "kubernetes.json"), cfgData)
+
+	var commands []string
+	k := &Kubernetes{
+		Dir:    dir,
+		Output: io.Discard,
+		Runner: func(_ context.Context, program string, args []string, out io.Writer) error {
+			cmd := program + " " + strings.Join(args, " ")
+			commands = append(commands, cmd)
+			if strings.Contains(cmd, "jsonpath={.items[0].metadata.name}") {
+				_, _ = io.WriteString(out, "test-pod")
+			}
+			if strings.Contains(cmd, "theia maintenance status") {
+				_ = json.NewEncoder(out).Encode(&service.MaintenanceOperation{Phase: "completed", VerifiedReleaseTag: "v1.9.0"})
+			}
+			return nil
+		},
+	}
+
+	// 1. Successful upgrade
+	if err := k.Upgrade(context.Background(), "v1.9.0", "test-backend:v1.9.0", "test-frontend:v1.9.0"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(commands, "\n")
+	rmMaintenance := "kubectl --context test-ctx --namespace theia exec deployment/theia-backend -- rm -f /persist/control/public/deployment-maintenance"
+	if !strings.Contains(joined, rmMaintenance) {
+		t.Fatalf("expected rm -f deployment-maintenance on success, got commands:\n%s", joined)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "control", "kubernetes-upgrade.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var journal kubernetesUpgrade
+	if err := json.Unmarshal(data, &journal); err != nil {
+		t.Fatal(err)
+	}
+	if journal.Phase != "completed" {
+		t.Fatalf("expected completed journal phase, got %s", journal.Phase)
+	}
+
+	// 2. Rollback upgrade
+	commands = nil
+	k.Runner = func(_ context.Context, program string, args []string, out io.Writer) error {
+		cmd := program + " " + strings.Join(args, " ")
+		commands = append(commands, cmd)
+		if strings.Contains(cmd, "jsonpath={.items[0].metadata.name}") {
+			_, _ = io.WriteString(out, "test-pod")
+		}
+		if strings.Contains(cmd, "theia maintenance migrate") {
+			return fmt.Errorf("migration failure")
+		}
+		if strings.Contains(cmd, "theia maintenance status") {
+			_ = json.NewEncoder(out).Encode(&service.MaintenanceOperation{Phase: "rolled_back", VerifiedReleaseTag: "v1.9.0"})
+		}
+		return nil
+	}
+	if err := k.Upgrade(context.Background(), "v2.0.0", "test-backend:v2.0.0", "test-frontend:v2.0.0"); err == nil {
+		t.Fatal("expected migration failure error")
+	}
+	joined = strings.Join(commands, "\n")
+	if !strings.Contains(joined, rmMaintenance) {
+		t.Fatalf("expected rm -f deployment-maintenance on rollback, got commands:\n%s", joined)
+	}
+	data, err = os.ReadFile(filepath.Join(dir, "control", "kubernetes-upgrade.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &journal); err != nil {
+		t.Fatal(err)
+	}
+	if journal.Phase != "rolled_back" {
+		t.Fatalf("expected rolled_back journal phase, got %s", journal.Phase)
+	}
+
+	// 3. New upgrade after rolled_back should succeed and not fail as incomplete
+	commands = nil
+	k.Runner = func(_ context.Context, program string, args []string, out io.Writer) error {
+		cmd := program + " " + strings.Join(args, " ")
+		commands = append(commands, cmd)
+		if strings.Contains(cmd, "jsonpath={.items[0].metadata.name}") {
+			_, _ = io.WriteString(out, "test-pod")
+		}
+		if strings.Contains(cmd, "theia maintenance status") {
+			_ = json.NewEncoder(out).Encode(&service.MaintenanceOperation{Phase: "completed", VerifiedReleaseTag: "v2.0.0"})
+		}
+		return nil
+	}
+	if err := k.Upgrade(context.Background(), "v2.0.0", "test-backend:v2.0.0", "test-frontend:v2.0.0"); err != nil {
+		t.Fatalf("unexpected error starting upgrade after rollback: %v", err)
+	}
+}
+
+func TestKubernetesRestoreRemovesMaintenanceWhenNotPrepared(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepared=%v", prepared), func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := KubernetesConfig{
+				Name:           "theia",
+				Namespace:      "theia",
+				Context:        "test-ctx",
+				Release:        "v1.8.0",
+				BackendImage:   "test-backend:v1.8.0",
+				FrontendImage:  "test-frontend:v1.8.0",
+				Hostname:       "theia.local",
+				TLSSecret:      "theia-tls",
+				PrepareRestore: prepared,
+			}
+			cfgData, _ := json.Marshal(cfg)
+			_ = instance.WritePrivateFile(filepath.Join(dir, "control", "kubernetes.json"), cfgData)
+
+			recoveryFile := filepath.Join(dir, "recovery.txt")
+			_ = os.WriteFile(recoveryFile, []byte("test-recovery-key"), 0600)
+			archiveFile := filepath.Join(dir, "archive.age")
+			_ = os.WriteFile(archiveFile, []byte("test-archive"), 0600)
+
+			var commands []string
+			k := &Kubernetes{
+				Dir:    dir,
+				Output: io.Discard,
+				Runner: func(_ context.Context, program string, args []string, out io.Writer) error {
+					cmd := program + " " + strings.Join(args, " ")
+					commands = append(commands, cmd)
+					if strings.Contains(cmd, "jsonpath={.items[0].metadata.name}") {
+						_, _ = io.WriteString(out, "test-pod")
+					}
+					return nil
+				},
+			}
+
+			if err := k.Restore(context.Background(), archiveFile, recoveryFile); err != nil {
+				t.Fatal(err)
+			}
+			joined := strings.Join(commands, "\n")
+			rmMaintenance := "kubectl --context test-ctx --namespace theia exec deployment/theia-backend -- rm -f /persist/control/public/deployment-maintenance"
+			if !prepared {
+				if !strings.Contains(joined, rmMaintenance) {
+					t.Fatalf("expected rm -f deployment-maintenance on restore when !prepared, got commands:\n%s", joined)
+				}
+			} else {
+				if strings.Contains(joined, rmMaintenance) {
+					t.Fatalf("did not expect rm -f deployment-maintenance on restore when prepared, got commands:\n%s", joined)
+				}
+			}
+		})
+	}
+}
+
+func TestWaitHTTPSProxyMode(t *testing.T) {
+	var requestedHost string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedHost = r.Host
+		if r.URL.Path == "/readyz" {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portStr, _ := net.SplitHostPort(u.Host)
+	var port int
+	_, _ = fmt.Sscanf(portStr, "%d", &port)
+
+	cfg := testConfig()
+	cfg.TLSMode = "proxy"
+	cfg.Hostname = "theia.custom-domain.internal"
+	cfg.BindAddress = host
+	cfg.HTTPPort = port
+
+	a := &Admin{Dir: t.TempDir(), Output: io.Discard}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := a.waitHTTPS(ctx, cfg); err != nil {
+		t.Fatalf("waitHTTPS failed: %v", err)
+	}
+	if requestedHost != cfg.Hostname {
+		t.Fatalf("expected request Host %q, got %q", cfg.Hostname, requestedHost)
+	}
+}
+
+func TestChartFrontendPodAffinityUsesTheiaInstance(t *testing.T) {
+	dir := t.TempDir()
+	if err := ExportChart(dir); err != nil {
+		t.Fatal(err)
+	}
+	resourcesData, err := os.ReadFile(filepath.Join(dir, "templates", "resources.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(resourcesData)
+	if strings.Contains(content, "podAffinity:\n          requiredDuringSchedulingIgnoredDuringExecution:\n            - labelSelector:\n                matchLabels: {app: {{ $name }}-backend}") {
+		t.Fatal("resources.yaml frontend podAffinity still matches backend app label")
+	}
+	if !strings.Contains(content, "podAffinity:\n          requiredDuringSchedulingIgnoredDuringExecution:\n            - labelSelector:\n                matchLabels: {theia-instance: {{ $name }}}") {
+		t.Fatal("resources.yaml frontend podAffinity does not match theia-instance label")
 	}
 }

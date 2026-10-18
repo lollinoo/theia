@@ -202,7 +202,10 @@ func (k *Kubernetes) Install(ctx context.Context, c KubernetesConfig, dsnFile st
 		if err != nil {
 			return err
 		}
-		state.DBDSN = string(data)
+		state.DBDSN = strings.TrimRight(string(data), "\r\n")
+		if state.DBDSN == "" {
+			return fmt.Errorf("external database connection file is empty")
+		}
 	} else {
 		connection := &url.URL{Scheme: "postgres", Host: c.Name + "-postgres:5432", Path: "/theia", User: url.UserPassword("theia", state.DatabasePassword), RawQuery: "sslmode=disable"}
 		state.DBDSN = connection.String()

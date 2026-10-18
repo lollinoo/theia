@@ -205,7 +205,8 @@ func (k *Kubernetes) Restore(ctx context.Context, archive, recoveryFile string) 
 	if err := k.exec(ctx, *c, pod, append([]string{"theia", "maintenance", "verify"}, args...)...); err != nil {
 		return fmt.Errorf("archive rejected before stopping the active writer: %w", err)
 	}
-	if !c.PrepareRestore {
+	prepareRestore := c.PrepareRestore
+	if !prepareRestore {
 		if err := k.stop(ctx, *c); err != nil {
 			return err
 		}
@@ -222,7 +223,13 @@ func (k *Kubernetes) Restore(ctx context.Context, archive, recoveryFile string) 
 	}
 	// Release the Job's exclusive lease before backend init maintenance runs.
 	cleanup()
-	return k.Up(ctx)
+	if err := k.Up(ctx); err != nil {
+		return err
+	}
+	if !prepareRestore {
+		return k.kubectl(ctx, *c, "exec", "deployment/"+c.Name+"-backend", "--", "rm", "-f", "/persist/control/public/deployment-maintenance")
+	}
+	return nil
 }
 
 func (k *Kubernetes) Status(ctx context.Context) error {
