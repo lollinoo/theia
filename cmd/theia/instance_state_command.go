@@ -223,6 +223,7 @@ func runInstanceStateCommand(args []string, output io.Writer) error {
 			s.RecoveryRecipient = recipient
 			return nil
 		}); err != nil {
+			_ = os.Remove(file)
 			return err
 		}
 		_, err = fmt.Fprintln(output, "Recovery file exported and verified. Move it to independent storage outside this host before enabling managed backups.")

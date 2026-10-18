@@ -148,3 +148,24 @@ func TestKeyParseErrorsDoNotExposeSecretValues(t *testing.T) {
 		t.Fatal("parse error exposes secret")
 	}
 }
+
+func TestCreatePrivateFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "private.dat")
+	f, err := CreatePrivateFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("expected 0600 permissions, got %v", info.Mode().Perm())
+	}
+	if _, err := CreatePrivateFile(path); err == nil {
+		t.Fatal("expected error when file already exists")
+	}
+}
+

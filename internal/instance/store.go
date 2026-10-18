@@ -78,6 +78,7 @@ func CreatePrivateFile(path string) (*os.File, error) {
 	}
 	if err := preservePrivateFileOwner(f, filepath.Dir(path)); err != nil {
 		f.Close()
+		_ = os.Remove(path)
 		return nil, err
 	}
 	return f, nil

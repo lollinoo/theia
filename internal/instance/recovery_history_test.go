@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -30,7 +31,11 @@ func TestRecoveryReplacementRetainsEveryHistoricalIdentity(t *testing.T) {
 	if _, err := ExportRecoveryHistory(first, third, recipient); err == nil {
 		t.Fatal("existing recovery file overwritten")
 	}
-	if _, err := ExportRecoveryHistory(first, filepath.Join(root, "wrong"), next); err == nil {
+	wrongPath := filepath.Join(root, "wrong")
+	if _, err := ExportRecoveryHistory(first, wrongPath, next); err == nil {
 		t.Fatal("wrong original recovery identity accepted")
+	}
+	if _, err := os.Stat(wrongPath); !os.IsNotExist(err) {
+		t.Fatalf("expected %s to not exist, stat err: %v", wrongPath, err)
 	}
 }

@@ -4,12 +4,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // AcquireLease excludes another application or maintenance process for this
 // instance. The OS releases it after a crash; no stale lock deletion is needed.
 // The same persistent path must be mounted in application containers and Jobs.
 func AcquireLease(statePath string) (func(), error) {
+	if strings.TrimSpace(statePath) == "" {
+		return nil, fmt.Errorf("instance state path is required")
+	}
 	if err := PrivateDirectory(filepath.Dir(statePath)); err != nil {
 		return nil, err
 	}

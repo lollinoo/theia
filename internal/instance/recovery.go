@@ -26,9 +26,11 @@ func ExportRecoveryFile(path string) (string, error) {
 	syncErr := f.Sync()
 	closeErr := f.Close()
 	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		_ = os.Remove(path)
 		return "", err
 	}
 	if err := VerifyRecoveryFile(path, identity.Recipient().String()); err != nil {
+		_ = os.Remove(path)
 		return "", err
 	}
 	return identity.Recipient().String(), nil
@@ -100,12 +102,15 @@ func ExportRecoveryHistory(original, output, previousRecipient string) (string, 
 		writeErr = errors.Join(writeErr, err)
 	}
 	if err := errors.Join(writeErr, f.Sync(), f.Close()); err != nil {
+		_ = os.Remove(output)
 		return "", err
 	}
 	if err := VerifyRecoveryFile(output, identity.Recipient().String()); err != nil {
+		_ = os.Remove(output)
 		return "", err
 	}
 	if err := VerifyRecoveryFile(output, previousRecipient); err != nil {
+		_ = os.Remove(output)
 		return "", err
 	}
 	return identity.Recipient().String(), nil

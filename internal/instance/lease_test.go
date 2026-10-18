@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -21,4 +22,17 @@ func TestRuntimeAndMaintenanceCannotOverlap(t *testing.T) {
 		t.Fatal("lease was not released")
 	}
 	release()
+}
+
+func TestAcquireLeaseEmptyPath(t *testing.T) {
+	for _, p := range []string{"", "   ", "\t\n"} {
+		_, err := AcquireLease(p)
+		if err == nil {
+			t.Fatalf("expected error for empty statePath %q", p)
+		}
+	}
+	if _, err := os.Stat(".runtime.lock"); err == nil {
+		_ = os.Remove(".runtime.lock")
+		t.Fatal(".runtime.lock was created for empty path")
+	}
 }
