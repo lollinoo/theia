@@ -28,10 +28,11 @@ type backupManifest struct {
 }
 
 type backupManifestEncryption struct {
-	Version         int      `json:"version"`
-	ActiveKeyID     string   `json:"active_key_id"`
-	RequiredKeyIDs  []string `json:"required_key_ids"`
-	LegacyKeyHashes []string `json:"legacy_key_hashes,omitempty"`
+	Version         int               `json:"version"`
+	ActiveKeyID     string            `json:"active_key_id"`
+	RequiredKeyIDs  []string          `json:"required_key_ids"`
+	LegacyKeyHashes []string          `json:"legacy_key_hashes,omitempty"`
+	KeyHashes       map[string]string `json:"key_hashes,omitempty"`
 }
 
 const (
@@ -88,6 +89,7 @@ func buildInstanceBackupArchiveManifestPlan(input instanceBackupArchiveManifestI
 			Version:        1,
 			ActiveKeyID:    input.encryptionKeyring.ActiveKeyID(),
 			RequiredKeyIDs: requiredBackupManifestEncryptionKeyIDs(input.encryptionKeyring.ActiveKeyID(), input.requiredKeyIDs),
+			KeyHashes:      input.encryptionKeyring.KeyHashes(),
 		}
 	} else {
 		manifest.EncryptionKeyHash = computeEncryptionKeyHash(input.encryptionKey)

@@ -122,6 +122,22 @@ func (s *InstanceBackupService) RestoreOperationStatus() (*RestoreOperationStatu
 	return readRestoreOperationStatus(s.stateDir)
 }
 
+// EncryptionKeyStatus returns the current instance encryption keyring status and any unacknowledged bootstrap key.
+func (s *InstanceBackupService) EncryptionKeyStatus() (*crypto.EncryptionKeyStatus, error) {
+	if s == nil {
+		return &crypto.EncryptionKeyStatus{ManagedByEnv: true, Acknowledged: true}, nil
+	}
+	return crypto.ReadEncryptionKeyStatus(s.stateDir, s.keyring)
+}
+
+// AcknowledgeEncryptionKey marks the auto-generated bootstrap encryption key as saved by the administrator.
+func (s *InstanceBackupService) AcknowledgeEncryptionKey() error {
+	if s == nil {
+		return nil
+	}
+	return crypto.AcknowledgeEncryptionKey(s.stateDir)
+}
+
 // RestoreReport contains the results of archive validation and staging.
 type RestoreReport struct {
 	Valid            bool   `json:"valid"`
@@ -148,6 +164,12 @@ func (s *InstanceBackupService) ValidateAndStageRestore(archivePath string, dryR
 // ValidateAndStageRestoreContext validates and stages a restore archive while observing caller cancellation.
 // Non-dry-run calls extract into a private staging directory and write a pending marker for restart activation.
 func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Context, archivePath string, dryRun bool) (*RestoreReport, error) {
+	return s.ValidateAndStageRestoreWithKeysContext(ctx, archivePath, dryRun, "")
+}
+
+// ValidateAndStageRestoreWithKeysContext validates and stages a restore archive, optionally merging
+// operator-supplied encryption keys for backups created on another Theia instance.
+func (s *InstanceBackupService) ValidateAndStageRestoreWithKeysContext(ctx context.Context, archivePath string, dryRun bool, rawExtraKeys string) (*RestoreReport, error) {
 	if s.managedStatePath != "" {
 		return nil, fmt.Errorf("managed restore requires the administration command and the operator recovery file")
 	}
@@ -186,8 +208,46 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	}
 	extractedDBPath := filepath.Join(tempDir, filepath.FromSlash(dbEntryName))
 
-	// Step 4: Verify configured encryption keys
-	if err := validateRestoreManifestEncryptionKey(manifest, s.restoreEncryptionKeySource()); err != nil {
+	// Step 4: Verify configured encryption keys (merging operator-provided keys when supplied)
+	keySource := s.restoreEncryptionKeySource()
+	var parsedExtraKeys map[string]string
+	if strings.TrimSpace(rawExtraKeys) != "" {
+		defaultKeyID := ""
+		if missing := missingRestoreManifestKeyIDs(manifest, keySource); len(missing) > 0 && missing[0] != crypto.LegacyKeyID {
+			defaultKeyID = missing[0]
+		} else if manifest.Encryption != nil && len(manifest.Encryption.RequiredKeyIDs) > 0 {
+			defaultKeyID = manifest.Encryption.RequiredKeyIDs[0]
+		} else if manifest.Encryption != nil && strings.TrimSpace(manifest.Encryption.ActiveKeyID) != "" {
+			defaultKeyID = manifest.Encryption.ActiveKeyID
+		}
+		parsedExtraKeys, err = crypto.ParseFlexibleEncryptionKeys(rawExtraKeys, defaultKeyID)
+		if err != nil {
+			return nil, &RestoreEncryptionKeyError{
+				MissingKeyIDs: missingRestoreManifestKeyIDs(manifest, keySource),
+				Message:       err.Error(),
+			}
+		}
+		if s.keyring != nil {
+			merged, mergeErr := s.keyring.WithAdditionalKeys(parsedExtraKeys)
+			if mergeErr != nil {
+				return nil, &RestoreEncryptionKeyError{
+					MissingKeyIDs: missingRestoreManifestKeyIDs(manifest, keySource),
+					Message:       mergeErr.Error(),
+				}
+			}
+			keySource = merged
+		} else {
+			merged, mergeErr := crypto.NewKeyring(defaultKeyID, parsedExtraKeys)
+			if mergeErr != nil {
+				return nil, &RestoreEncryptionKeyError{
+					MissingKeyIDs: missingRestoreManifestKeyIDs(manifest, keySource),
+					Message:       mergeErr.Error(),
+				}
+			}
+			keySource = merged
+		}
+	}
+	if err := validateRestoreManifestEncryptionKey(manifest, keySource); err != nil {
 		return nil, err
 	}
 
@@ -245,6 +305,15 @@ func (s *InstanceBackupService) ValidateAndStageRestoreContext(ctx context.Conte
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	// Persist any operator-supplied encryption keys before staging the restore so the restarted process can decrypt restored rows.
+	if len(parsedExtraKeys) > 0 {
+		updatedKeyring, saveErr := crypto.SaveAdditionalEncryptionKeys(s.stateDir, s.keyring, parsedExtraKeys)
+		if saveErr != nil {
+			return nil, fmt.Errorf("persisting restore encryption keys: %w", saveErr)
+		}
+		s.keyring = updatedKeyring
 	}
 
 	// Step 14: Stage files for restore

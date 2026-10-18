@@ -66,10 +66,12 @@ const (
 	routeHandlerGrafanaProfileCollection    routeHandlerKey = "grafanaProfileCollection"
 	routeHandlerGrafanaProfileItem          routeHandlerKey = "grafanaProfileItem"
 	routeHandlerHealth                      routeHandlerKey = "health"
-	routeHandlerInstanceBackupCollection    routeHandlerKey = "instanceBackupCollection"
-	routeHandlerInstanceBackupItem          routeHandlerKey = "instanceBackupItem"
-	routeHandlerInstanceBackupRestore       routeHandlerKey = "instanceBackupRestore"
-	routeHandlerInstanceBackupRestoreStatus routeHandlerKey = "instanceBackupRestoreStatus"
+	routeHandlerInstanceBackupCollection       routeHandlerKey = "instanceBackupCollection"
+	routeHandlerInstanceBackupEncryptionKey    routeHandlerKey = "instanceBackupEncryptionKey"
+	routeHandlerInstanceBackupEncryptionKeyAck routeHandlerKey = "instanceBackupEncryptionKeyAck"
+	routeHandlerInstanceBackupItem             routeHandlerKey = "instanceBackupItem"
+	routeHandlerInstanceBackupRestore          routeHandlerKey = "instanceBackupRestore"
+	routeHandlerInstanceBackupRestoreStatus    routeHandlerKey = "instanceBackupRestoreStatus"
 	routeHandlerLinkCollection              routeHandlerKey = "linkCollection"
 	routeHandlerLinkItem                    routeHandlerKey = "linkItem"
 	routeHandlerPositionCollection          routeHandlerKey = "positionCollection"
@@ -575,6 +577,8 @@ var apiRouteSpecs = []apiRouteSpec{
 		methodPolicy(http.MethodHead, domain.PermissionBackupsRead),
 		methodPolicy(http.MethodPost, domain.PermissionBackupsUpdate),
 	)),
+	protectedRoute("instance backup encryption key acknowledge", "/api/v1/instance-backups/encryption-key/acknowledge", "/api/v1/instance-backups/encryption-key/acknowledge", routeHandlerInstanceBackupEncryptionKeyAck, routeMiddlewareNormalJSON, postPolicy(domain.PermissionBackupsUpdate)),
+	protectedRoute("instance backup encryption key", "/api/v1/instance-backups/encryption-key", "/api/v1/instance-backups/encryption-key", routeHandlerInstanceBackupEncryptionKey, routeMiddlewareNormalJSON, readPolicy(domain.PermissionBackupsRead)),
 	protectedRoute("instance backup restore status", "/api/v1/instance-backups/restore-status", "/api/v1/instance-backups/restore-status", routeHandlerInstanceBackupRestoreStatus, routeMiddlewareNormalJSON, readPolicy(domain.PermissionBackupsRead)),
 	protectedRoute("instance backup restore", "/api/v1/instance-backups/restore", "/api/v1/instance-backups/restore", routeHandlerInstanceBackupRestore, routeMiddlewareRestoreUpload, postPolicy(domain.PermissionBackupsUpdate)),
 	protectedRoute("instance backup download", "/api/v1/instance-backups/{backupID}/download", "/api/v1/instance-backups/", routeHandlerInstanceBackupItem, routeMiddlewareBinaryDownload, readPolicy(domain.PermissionBackupsRead)),
