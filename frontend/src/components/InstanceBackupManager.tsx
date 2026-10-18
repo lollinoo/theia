@@ -14,7 +14,12 @@ import {
   restoreInstanceBackup,
   updateSetting,
 } from '../api/client';
-import { RestoreOutcomeUnknownError, ServerError, ValidationError } from '../api/errors';
+import {
+  RestoreEncryptionKeyRequiredError,
+  RestoreOutcomeUnknownError,
+  ServerError,
+  ValidationError,
+} from '../api/errors';
 import { useAsyncPolling } from '../hooks/useAsyncPolling';
 import type { InstanceBackup, RestoreReport, RestoreStatus } from '../types/api';
 import { validateIntervalAllowlist, validateRetentionCount } from '../utils/validation';
@@ -75,7 +80,12 @@ export function InstanceBackupManager() {
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreConfirmed, setRestoreConfirmed] = useState(false);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [showRestoreKeyModal, setShowRestoreKeyModal] = useState(false);
+  const [restoreEncryptionKeys, setRestoreEncryptionKeys] = useState('');
+  const [restoreMissingKeyIds, setRestoreMissingKeyIds] = useState<string[]>([]);
+  const [restoreKeyError, setRestoreKeyError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const keyFileInputRef = useRef<HTMLInputElement>(null);
   const [scheduleInterval, setScheduleInterval] = useState('0');
   const [retentionCount, setRetentionCount] = useState('5');
   const [savedSchedule, setSavedSchedule] = useState(false);
@@ -449,6 +459,10 @@ export function InstanceBackupManager() {
     setRestoreLoading(true);
     setRestoreReport(null);
     setRestoreConfirmed(false);
+    setShowRestoreKeyModal(false);
+    setRestoreEncryptionKeys('');
+    setRestoreMissingKeyIds([]);
+    setRestoreKeyError('');
 
     try {
       // Dry-run validation first (D-11)
@@ -456,7 +470,11 @@ export function InstanceBackupManager() {
       setRestoreReport(report);
       setShowRestoreModal(true);
     } catch (err) {
-      if (err instanceof ServerError) {
+      if (err instanceof RestoreEncryptionKeyRequiredError) {
+        setRestoreMissingKeyIds(err.missingKeyIds);
+        setRestoreKeyError('');
+        setShowRestoreKeyModal(true);
+      } else if (err instanceof ServerError) {
         const msg = err.correlationId
           ? `Something went wrong (ref: ${err.correlationId})`
           : 'Something went wrong';
@@ -466,6 +484,45 @@ export function InstanceBackupManager() {
       } else {
         const message = err instanceof Error ? err.message : 'Validation failed';
         setRestoreError(message);
+      }
+    } finally {
+      setRestoreLoading(false);
+    }
+  };
+
+  const handleRestoreKeyFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    try {
+      const content = await file.text();
+      setRestoreEncryptionKeys(content.trim());
+      setRestoreKeyError('');
+    } catch {
+      setRestoreKeyError('Could not read the selected key file.');
+    }
+  };
+
+  const handleRestoreKeySubmit = async () => {
+    if (!restoreFile || !restoreEncryptionKeys.trim()) return;
+    setRestoreLoading(true);
+    setRestoreKeyError('');
+
+    try {
+      const report = await restoreInstanceBackup(restoreFile, true, restoreEncryptionKeys.trim());
+      setShowRestoreKeyModal(false);
+      setRestoreReport(report);
+      setShowRestoreModal(true);
+    } catch (err) {
+      if (err instanceof RestoreEncryptionKeyRequiredError) {
+        if (err.missingKeyIds.length > 0) {
+          setRestoreMissingKeyIds(err.missingKeyIds);
+        }
+        setRestoreKeyError(err.message);
+      } else if (err instanceof ValidationError) {
+        setRestoreKeyError(err.message);
+      } else {
+        setRestoreKeyError(err instanceof Error ? err.message : 'Invalid encryption key');
       }
     } finally {
       setRestoreLoading(false);
@@ -494,7 +551,12 @@ export function InstanceBackupManager() {
     }
 
     try {
-      await restoreInstanceBackup(restoreFile, false);
+      const trimmedKeys = restoreEncryptionKeys.trim();
+      if (trimmedKeys) {
+        await restoreInstanceBackup(restoreFile, false, trimmedKeys);
+      } else {
+        await restoreInstanceBackup(restoreFile, false);
+      }
       clearRestoreSelection();
       beginRestoreVerification(baselineOperationId, 'Restore staged. Restart pending.');
     } catch (err) {
@@ -516,7 +578,11 @@ export function InstanceBackupManager() {
 
   const clearRestoreSelection = () => {
     setShowRestoreModal(false);
+    setShowRestoreKeyModal(false);
     setRestoreError('');
+    setRestoreKeyError('');
+    setRestoreEncryptionKeys('');
+    setRestoreMissingKeyIds([]);
     setRestoreFile(null);
     setRestoreReport(null);
     setRestoreConfirmed(false);
@@ -566,13 +632,9 @@ export function InstanceBackupManager() {
         return ['Restore failed but can retry on restart.', status.last_error].filter(Boolean);
       case 'failed_operator_action_required': {
         const keyId = status.missing_key_id || 'unknown';
-        const guidance =
-          keyId === 'legacy'
-            ? 'Add legacy=<old secret> to THEIA_ENCRYPTION_KEYS or set THEIA_ENCRYPTION_KEY as fallback, restart, then create and restore-test a fresh backup.'
-            : `Add ${keyId}=<old secret> to THEIA_ENCRYPTION_KEYS, restart, then create and restore-test a fresh backup.`;
         return [
           `Restore blocked because key id ${keyId} is missing from THEIA_ENCRYPTION_KEYS.`,
-          guidance,
+          `Add ${keyId}=<old secret> to THEIA_ENCRYPTION_KEYS, restart, then create and restore-test a fresh backup.`,
         ];
       }
       default:
@@ -867,6 +929,103 @@ export function InstanceBackupManager() {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* RESTORE ENCRYPTION KEY MODAL */}
+      {showRestoreKeyModal && restoreFile && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="restore-encryption-key-title"
+        >
+          <div className="mx-4 w-full max-w-md rounded-xl bg-surface-high p-5 shadow-xl space-y-4">
+            <div className="space-y-1">
+              <h3 id="restore-encryption-key-title" className="text-sm font-semibold text-on-bg">
+                Encryption Key Required
+              </h3>
+              <p className="text-xs text-on-bg-secondary">
+                This backup was created with an encryption key that is not present on this Theia
+                instance. Enter the backup&apos;s encryption key or upload the recovery file to
+                continue.
+              </p>
+            </div>
+
+            {restoreMissingKeyIds.length > 0 && (
+              <div className="rounded-lg bg-bg/50 p-2.5 text-xs flex items-center justify-between">
+                <span className="text-on-bg-secondary">Required Key ID</span>
+                <span className="font-mono text-on-bg font-medium">
+                  {restoreMissingKeyIds.join(', ')}
+                </span>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label
+                  htmlFor="restore-encryption-keys-input"
+                  className="text-[11px] font-medium text-on-bg-secondary"
+                >
+                  Encryption Key or Recovery File Content
+                </label>
+                <input
+                  ref={keyFileInputRef}
+                  type="file"
+                  accept=".txt,.env"
+                  className="hidden"
+                  onChange={(e) => {
+                    void handleRestoreKeyFileSelected(e);
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => keyFileInputRef.current?.click()}
+                  className="text-[11px] font-medium text-primary hover:underline"
+                >
+                  Load .txt file
+                </button>
+              </div>
+              <textarea
+                id="restore-encryption-keys-input"
+                rows={3}
+                value={restoreEncryptionKeys}
+                onChange={(e) => setRestoreEncryptionKeys(e.target.value)}
+                placeholder={
+                  restoreMissingKeyIds[0]
+                    ? `${restoreMissingKeyIds[0]}=<secret> or paste recovery file`
+                    : 'THEIA_ENCRYPTION_KEYS=<id>=<secret> or paste recovery file'
+                }
+                className="w-full rounded-lg border border-outline-subtle bg-elevated px-2.5 py-1.5 text-xs font-mono text-on-bg focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none"
+              />
+            </div>
+
+            {restoreKeyError && (
+              <div className="rounded-md border border-status-down/20 bg-status-down/5 p-2 text-xs text-status-down">
+                {restoreKeyError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleRestoreCancel}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-on-bg-secondary hover:bg-elevated/50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleRestoreKeySubmit();
+                }}
+                disabled={!restoreEncryptionKeys.trim() || restoreLoading}
+                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              >
+                {restoreLoading ? 'Validating...' : 'Validate Key & Continue'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

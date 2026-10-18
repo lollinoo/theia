@@ -1221,6 +1221,16 @@ export interface RestoreStatus {
   updated_at: string;
 }
 
+/** EncryptionKeyStatus describes the active keyring and one-time bootstrap onboarding status. */
+export interface EncryptionKeyStatus {
+  active_key_id: string;
+  key_ids: string[];
+  acknowledged: boolean;
+  managed_by_env: boolean;
+  pending_secret?: string;
+  env_snippet?: string;
+}
+
 /** VendorConfig is a parsed vendor capability profile used for metrics and backup behavior. */
 export interface VendorConfig {
   name: string;

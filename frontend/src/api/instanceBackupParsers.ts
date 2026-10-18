@@ -3,6 +3,7 @@
  * Keeps API boundary validation close to the transport helpers that consume it.
  */
 import {
+  type EncryptionKeyStatus,
   type InstanceBackup,
   type InstanceBackupProgress,
   type InstanceBackupStatus,
@@ -88,5 +89,27 @@ export function parseRestoreStatus(data: unknown): RestoreStatus | null {
     missing_key_id: typeof record.missing_key_id === 'string' ? record.missing_key_id : '',
     created_at: typeof record.created_at === 'string' ? record.created_at : '',
     updated_at: typeof record.updated_at === 'string' ? record.updated_at : '',
+  };
+}
+
+/** Parses encryption key onboarding status for the frontend API boundary. */
+export function parseEncryptionKeyStatus(data: unknown): EncryptionKeyStatus {
+  if (!data || typeof data !== 'object') {
+    return { active_key_id: '', key_ids: [], acknowledged: true, managed_by_env: false };
+  }
+  const record = data as Record<string, unknown>;
+  return {
+    active_key_id: typeof record.active_key_id === 'string' ? record.active_key_id : '',
+    key_ids: Array.isArray(record.key_ids)
+      ? record.key_ids.filter((id): id is string => typeof id === 'string')
+      : [],
+    acknowledged: typeof record.acknowledged === 'boolean' ? record.acknowledged : true,
+    managed_by_env: typeof record.managed_by_env === 'boolean' ? record.managed_by_env : false,
+    ...(typeof record.pending_secret === 'string' && record.pending_secret
+      ? { pending_secret: record.pending_secret }
+      : {}),
+    ...(typeof record.env_snippet === 'string' && record.env_snippet
+      ? { env_snippet: record.env_snippet }
+      : {}),
   };
 }
