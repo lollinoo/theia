@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -258,6 +260,12 @@ func Load(path string) (*Config, error) {
 		if cfg.DBDSN == "" {
 			cfg.DBDSN = state.DBDSN
 		}
+	} else if strings.TrimSpace(cfg.DBDSN) == "" {
+		derivedDSN, err := derivePostgresDSNFromEnv()
+		if err != nil {
+			return nil, err
+		}
+		cfg.DBDSN = derivedDSN
 	}
 	if cfg.DBMaxOpenConns <= 0 {
 		return nil, fmt.Errorf("db_max_open_conns must be positive")
@@ -288,12 +296,12 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// CredentialKeyring resolves managed state or the compatible legacy environment.
+// CredentialKeyring resolves managed state, environment keys, or the persistent auto-generated keyring in DataDir.
 func (cfg *Config) CredentialKeyring() (*crypto.Keyring, error) {
 	if cfg.instanceState != nil {
 		return cfg.instanceState.Keyring()
 	}
-	return crypto.LoadKeyringFromEnv()
+	return crypto.LoadOrGenerateKeyring(cfg.DataDir)
 }
 
 // InstanceID exposes only the public identifier used by the maintenance receipt.
@@ -544,3 +552,42 @@ func splitAllowedOrigins(value string) []string {
 	}
 	return origins
 }
+
+func derivePostgresDSNFromEnv() (string, error) {
+	password, err := secretinput.Read("POSTGRES_PASSWORD")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(password) == "" {
+		return "", nil
+	}
+	user := strings.TrimSpace(os.Getenv("POSTGRES_USER"))
+	if user == "" {
+		user = "theia"
+	}
+	db := strings.TrimSpace(os.Getenv("POSTGRES_DB"))
+	if db == "" {
+		db = "theia"
+	}
+	host := strings.TrimSpace(os.Getenv("POSTGRES_HOST"))
+	if host == "" {
+		host = "postgres"
+	}
+	port := strings.TrimSpace(os.Getenv("POSTGRES_PORT"))
+	if port == "" {
+		port = "5432"
+	}
+	sslmode := strings.TrimSpace(os.Getenv("POSTGRES_SSLMODE"))
+	if sslmode == "" {
+		sslmode = "disable"
+	}
+	dsn := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
+		Host:     net.JoinHostPort(host, port),
+		Path:     "/" + db,
+		RawQuery: "sslmode=" + url.QueryEscape(sslmode),
+	}
+	return dsn.String(), nil
+}
+

@@ -34,7 +34,9 @@ RUN ldconfig
 RUN go install github.com/air-verse/air@v1.67.4 && \
     go install golang.org/x/vuln/cmd/govulncheck@latest
 
-ENV CGO_ENABLED=0
+ENV CGO_ENABLED=0 \
+    THEIA_DATA_DIR=/app/data \
+    THEIA_BRIDGE_BINARIES_DIR=/app/bridge_binaries
 
 WORKDIR /app
 
@@ -87,6 +89,9 @@ COPY --from=builder /app/theia /usr/local/bin/theia
 # in an isolated local cluster; the live database stays in its own service.
 
 RUN mkdir -p /data
+
+ENV THEIA_DATA_DIR=/data \
+    THEIA_BRIDGE_BINARIES_DIR=/data/bridge_binaries
 
 EXPOSE 8080
 

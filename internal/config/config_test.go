@@ -24,6 +24,9 @@ func TestConfigSchemaIsPostgresOnly(t *testing.T) {
 }
 
 func TestLoad_DefaultsToPostgresDSNConfiguration(t *testing.T) {
+	t.Setenv("THEIA_DB_DSN", "")
+	t.Setenv("POSTGRES_PASSWORD", "")
+	t.Setenv("POSTGRES_PASSWORD_FILE", "")
 	cfg, err := Load("/nonexistent-config.yaml")
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
@@ -37,7 +40,38 @@ func TestLoad_DefaultsToPostgresDSNConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoad_DerivesPostgresDSNFromPasswordEnv(t *testing.T) {
+	t.Setenv("THEIA_DB_DSN", "")
+	t.Setenv("POSTGRES_USER", "")
+	t.Setenv("POSTGRES_DB", "")
+	t.Setenv("POSTGRES_HOST", "")
+	t.Setenv("POSTGRES_PORT", "")
+	t.Setenv("POSTGRES_SSLMODE", "")
+	t.Setenv("POSTGRES_PASSWORD", "p@ss:word/with?special#chars")
+
+	cfg, err := Load("/nonexistent-config.yaml")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	want := "postgres://theia:p%40ss%3Aword%2Fwith%3Fspecial%23chars@postgres:5432/theia?sslmode=disable"
+	if cfg.DBDSN != want {
+		t.Fatalf("DBDSN = %q, want %q", cfg.DBDSN, want)
+	}
+
+	t.Setenv("THEIA_DB_DSN", "postgres://custom:dsn@external-db:5432/theia?sslmode=require")
+	cfgOverride, err := Load("/nonexistent-config.yaml")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfgOverride.DBDSN != "postgres://custom:dsn@external-db:5432/theia?sslmode=require" {
+		t.Fatalf("DBDSN = %q, want explicit THEIA_DB_DSN override", cfgOverride.DBDSN)
+	}
+}
+
 func TestLoad_DefaultsArchiveLimitsToConservativeValues(t *testing.T) {
+	if got, want := (&Config{}).InstanceID(), ""; got != want {
+		t.Fatalf("InstanceID = %q, want empty", got)
+	}
 	cfg, err := Load("/nonexistent-config.yaml")
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)

@@ -27,21 +27,11 @@ SCALE_LAB_MODE ?= synthetic
 WISP_SEED_TARGET_MODE ?= auto
 
 define PROD_COMPOSE_ENV
-set -e; set -a; . ./.env.prod; set +a; \
-if [ -z "$$THEIA_DB_DSN" ]; then \
-	: "$${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"; \
-	THEIA_DB_DSN="$$(printf '%s://%s:%s@postgres:5432/%s?sslmode=disable' postgres "$${POSTGRES_USER:-theia}" "$$POSTGRES_PASSWORD" "$${POSTGRES_DB:-theia}")"; \
-	export THEIA_DB_DSN; \
-fi
+set -e; set -a; . ./.env.prod; set +a
 endef
 
 define STAGING_COMPOSE_ENV
-set -e; set -a; . ./.env.staging; set +a; \
-if [ -z "$$THEIA_DB_DSN" ]; then \
-	: "$${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"; \
-	THEIA_DB_DSN="$$(printf '%s://%s:%s@postgres:5432/%s?sslmode=disable' postgres "$${POSTGRES_USER:-theia}" "$$POSTGRES_PASSWORD" "$${POSTGRES_DB:-theia}")"; \
-	export THEIA_DB_DSN; \
-fi
+set -e; set -a; . ./.env.staging; set +a
 endef
 
 # Default target
