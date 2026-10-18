@@ -280,6 +280,9 @@ func (m *Maintenance) activateArtifacts(staging string) error {
 // Resume rolls an interrupted mutation back to its immutable verified snapshot.
 // It never captures a second source snapshot after live state may have changed.
 func (m *Maintenance) Resume(ctx context.Context) error {
+	if err := m.validatePaths(); err != nil {
+		return err
+	}
 	release, err := instance.AcquireLease(m.StatePath)
 	if err != nil {
 		return err
@@ -297,6 +300,18 @@ func (m *Maintenance) Resume(ctx context.Context) error {
 	}
 	if op.Phase == "preparing" || op.Phase == "snapshot_preparing" {
 		op.Error = "operation interrupted before live changes; start a new operation"
+		if op.VerifiedInstanceID == "" || op.VerifiedActiveKeyID == "" || op.VerifiedReleaseTag == "" {
+			state, err := (instance.Store{Path: m.StatePath}).Load()
+			if err == nil && state != nil {
+				if err := m.verifyCurrentState(ctx, state); err == nil {
+					op.VerifiedInstanceID = state.InstanceID
+					op.VerifiedActiveKeyID = state.ActiveKeyID
+					if op.VerifiedReleaseTag == "" {
+						op.VerifiedReleaseTag = op.OriginalReleaseTag
+					}
+				}
+			}
+		}
 		return m.persist(op, "rolled_back")
 	}
 	if op.Attempt >= 3 {
@@ -304,6 +319,47 @@ func (m *Maintenance) Resume(ctx context.Context) error {
 	}
 	op.Attempt++
 	return m.rollback(ctx, op)
+}
+
+func (m *Maintenance) verifyCurrentState(ctx context.Context, state *instance.State) error {
+	if state == nil {
+		return fmt.Errorf("missing instance state")
+	}
+	if m.DBDSN == "" && state.DBDSN != "" {
+		m.DBDSN = state.DBDSN
+	}
+	db, err := m.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var schemaExists bool
+	if err := db.QueryRowContext(ctx, "SELECT to_regclass('public.schema_migrations') IS NOT NULL").Scan(&schemaExists); err != nil {
+		return err
+	}
+	if !schemaExists {
+		var tables int
+		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'").Scan(&tables); err != nil {
+			return err
+		}
+		if tables != 0 {
+			return fmt.Errorf("database has existing tables without Theia migration metadata")
+		}
+		return nil
+	}
+	var version int
+	var dirty bool
+	if err := db.QueryRowContext(ctx, "SELECT version,dirty FROM schema_migrations").Scan(&version, &dirty); err != nil {
+		return err
+	}
+	if dirty || version > postgres.SupportedSchemaVersion() {
+		return fmt.Errorf("source migration metadata is dirty or newer than this release")
+	}
+	keys, err := state.Keyring()
+	if err != nil {
+		return err
+	}
+	return VerifyStoredCredentials(ctx, db, keys, false)
 }
 
 // Restore validates and decrypts with an operator-held identity before taking the
@@ -346,6 +402,9 @@ func (m *Maintenance) Restore(ctx context.Context, archive, recoveryFile string)
 		// Destination connectivity remains local; archive credentials protect the
 		// recovered data without requiring manual key-history edits on the new host.
 		recovered.DBDSN, recovered.DatabasePassword = prior.DBDSN, prior.DatabasePassword
+		if len(prior.DeploymentMetadata) > 0 {
+			recovered.DeploymentMetadata = prior.DeploymentMetadata
+		}
 		if err := (instance.Store{Path: m.StatePath}).Update(func(current *instance.State) error { *current = *recovered; return nil }); err != nil {
 			return err
 		}

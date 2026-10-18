@@ -14,6 +14,9 @@ func pathContains(parent, child string) bool {
 // validatePaths keeps control keys/journals and recovery archives outside the
 // directories replaced by restore. Reject overlap before any live mutation.
 func (m *Maintenance) validatePaths() error {
+	if strings.TrimSpace(m.StatePath) == "" {
+		return fmt.Errorf("maintenance requires explicit persistent data paths")
+	}
 	paths := make([]string, 4)
 	for i, path := range []string{filepath.Dir(m.StatePath), m.DataDir, m.DeviceBackupDir, m.BackupDir} {
 		if path == "" {

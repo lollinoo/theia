@@ -207,16 +207,6 @@ func (m *Maintenance) AbortPostgresUpgrade(ctx context.Context) (result error) {
 	if op.Phase == "rolled_back" {
 		return nil
 	}
-	if op.Attempt >= 3 {
-		return fmt.Errorf("PostgreSQL upgrade recovery retry limit reached")
-	}
-	op.Attempt++
-	defer func() {
-		if result != nil {
-			op.Error = "original version 17 recovery could not be verified; instance remains in maintenance"
-			_ = m.persist(op, "operator_required")
-		}
-	}()
 	db, err := m.openDB()
 	if err != nil {
 		return err
@@ -229,6 +219,16 @@ func (m *Maintenance) AbortPostgresUpgrade(ctx context.Context) (result error) {
 	if major != 17 {
 		return fmt.Errorf("restart the original PostgreSQL 17 volume before aborting the cutover")
 	}
+	if op.Attempt >= 3 {
+		return fmt.Errorf("PostgreSQL upgrade recovery retry limit reached")
+	}
+	op.Attempt++
+	defer func() {
+		if result != nil {
+			op.Error = "original version 17 recovery could not be verified; instance remains in maintenance"
+			_ = m.persist(op, "operator_required")
+		}
+	}()
 	if op.SnapshotSHA256 == "" {
 		if op.Phase != "preparing" && op.Phase != "snapshot_preparing" {
 			return fmt.Errorf("missing verified snapshot for an ambiguous cutover")

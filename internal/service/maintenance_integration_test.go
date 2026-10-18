@@ -177,6 +177,26 @@ func TestMaintenanceIntegration(t *testing.T) {
 		if err := m.RequireReady(); err != nil {
 			return err
 		}
+		third := &MaintenanceOperation{ID: uuid.NewString(), Action: "migrate", Attempt: 1, CreatedAt: time.Now().UTC(), OriginalReleaseTag: m.ReleaseTag}
+		if err := m.persist(third, "preparing"); err != nil {
+			return err
+		}
+		if err := m.Resume(ctx); err != nil {
+			return err
+		}
+		thirdStatus, err := m.Status()
+		if err != nil {
+			return err
+		}
+		if thirdStatus.Phase != "rolled_back" {
+			t.Fatalf("thirdStatus.Phase = %s, want rolled_back", thirdStatus.Phase)
+		}
+		if thirdStatus.VerifiedInstanceID != state.InstanceID || thirdStatus.VerifiedActiveKeyID != state.ActiveKeyID || thirdStatus.VerifiedReleaseTag != m.ReleaseTag {
+			t.Fatalf("interrupted preparing operation lost verified receipts: %+v", thirdStatus)
+		}
+		if err := m.RequireVerifiedState(state.InstanceID, state.ActiveKeyID); err != nil {
+			return fmt.Errorf("RequireVerifiedState failed after preparing resume: %w", err)
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
