@@ -156,7 +156,7 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 				return fmt.Errorf("%s deployment rejects example managed credential keys", deploymentEnv)
 			}
 		}
-	} else if err := validateEncryptionKeySecretPolicy(deploymentEnv); err != nil {
+	} else if err := validateEncryptionKeySecretPolicy(deploymentEnv, cfg.DataDir); err != nil {
 		return err
 	}
 
@@ -184,7 +184,7 @@ func validateDeploymentSecretPolicy(cfg *runtimeConfig) error {
 	return nil
 }
 
-func validateEncryptionKeySecretPolicy(deploymentEnv string) error {
+func validateEncryptionKeySecretPolicy(deploymentEnv, dataDir string) error {
 	activeKeyID, err := secretinput.Read("THEIA_ENCRYPTION_KEY_ID")
 	if err != nil {
 		return err
@@ -216,6 +216,18 @@ func validateEncryptionKeySecretPolicy(deploymentEnv string) error {
 	}
 	encryptionKey = strings.TrimSpace(encryptionKey)
 	if encryptionKey == "" {
+		if strings.TrimSpace(dataDir) != "" {
+			keyring, err := crypto.LoadOrGenerateKeyring(dataDir)
+			if err != nil {
+				return err
+			}
+			for _, secret := range keyring.Secrets() {
+				if isKnownSecretPlaceholder(secret) {
+					return fmt.Errorf("%s deployment rejects example encryption key values", deploymentEnv)
+				}
+			}
+			return nil
+		}
 		return fmt.Errorf("THEIA_ENCRYPTION_KEY is required for %s deployment", deploymentEnv)
 	}
 	if isKnownSecretPlaceholder(encryptionKey) {
