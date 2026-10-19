@@ -281,6 +281,7 @@ export default function Canvas({
   const linkBadgeReadabilityScaleRef = useRef('1');
   const topologyZoomBandRef = useRef<TopologyZoomBand>('detail');
   const highlightTimerRef = useRef<number | null>(null);
+  const focusRafRef = useRef<number | null>(null);
   const highlightedDeviceIdRef = useRef<string | null>(null);
   const areaColorNodeCacheRef = useRef(new Map<string, CanvasRenderProjectionNodeCacheEntry>());
   const ghostNodeMeasurementCacheRef = useRef(
@@ -288,7 +289,8 @@ export default function Canvas({
   );
   const lastProjectionDiagnosticsSignatureRef = useRef<string>('');
   const reactFlow = useReactFlow<DeviceNode, LinkEdgeType>();
-  useCanvasFrameMetrics();
+  const showDiagnostics = diagnosticsVisible;
+  useCanvasFrameMetrics(showDiagnostics);
   const { resolvedTheme } = useTheme();
   const {
     bridgeChecked,
@@ -883,6 +885,10 @@ export default function Canvas({
   useEffect(
     () => () => {
       if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+      if (focusRafRef.current !== null) {
+        window.cancelAnimationFrame(focusRafRef.current);
+        focusRafRef.current = null;
+      }
     },
     [],
   );
@@ -950,20 +956,30 @@ export default function Canvas({
   );
 
   function focusOnDevice(deviceID: string) {
+    if (focusRafRef.current !== null) {
+      window.cancelAnimationFrame(focusRafRef.current);
+      focusRafRef.current = null;
+    }
+
     // If the target device is not in the current area view, switch to its area first
     const device = devices.find((d) => d.id === deviceID);
     if (device && effectiveAreaId && !device.area_ids?.includes(effectiveAreaId)) {
       // Switch to the device's area (or global if unassigned)
       onAreaSelect?.(device.area_ids?.[0] ?? null);
       // Defer the focus/highlight until after the area switch triggers a re-render
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
+      focusRafRef.current = window.requestAnimationFrame(() => {
+        focusRafRef.current = window.requestAnimationFrame(() => {
+          focusRafRef.current = null;
           const target = reactFlow.getNodes().find((n) => n.id === deviceID);
           if (!target) return;
-          reactFlow.setCenter(target.position.x + 110, target.position.y + 44, {
-            zoom: 1.2,
-            duration: 500,
-          });
+          reactFlow.setCenter(
+            target.position.x + (target.measured?.width ?? 220) / 2,
+            target.position.y + (target.measured?.height ?? 88) / 2,
+            {
+              zoom: 1.2,
+              duration: 500,
+            },
+          );
           applyDeviceHighlight(deviceID);
           scheduleHighlightClear(deviceID);
         });
@@ -973,10 +989,14 @@ export default function Canvas({
 
     const target = reactFlow.getNodes().find((n) => n.id === deviceID);
     if (!target) return;
-    reactFlow.setCenter(target.position.x + 110, target.position.y + 44, {
-      zoom: 1.2,
-      duration: 500,
-    });
+    reactFlow.setCenter(
+      target.position.x + (target.measured?.width ?? 220) / 2,
+      target.position.y + (target.measured?.height ?? 88) / 2,
+      {
+        zoom: 1.2,
+        duration: 500,
+      },
+    );
     applyDeviceHighlight(deviceID);
     scheduleHighlightClear(deviceID);
   }
