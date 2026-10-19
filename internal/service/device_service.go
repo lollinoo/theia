@@ -206,12 +206,16 @@ func (s *DeviceService) defaultTopologyDiscoveryMode() domain.TopologyDiscoveryM
 }
 
 func (s *DeviceService) populateEffectiveTopologyDiscoveryMode(device *domain.Device) {
+	s.populateEffectiveTopologyDiscoveryModeWithDefault(device, s.defaultTopologyDiscoveryMode())
+}
+
+func (s *DeviceService) populateEffectiveTopologyDiscoveryModeWithDefault(device *domain.Device, defaultMode domain.TopologyDiscoveryMode) {
 	if device == nil {
 		return
 	}
 	device.TopologyDiscoveryMode = domain.NormalizeTopologyDiscoveryMode(device.TopologyDiscoveryMode, domain.TopologyDiscoveryModeInherit)
 	device.TopologyBootstrapState = domain.NormalizeTopologyBootstrapState(device.TopologyBootstrapState)
-	device.EffectiveTopologyDiscoveryMode = domain.ResolveTopologyDiscoveryMode(device, s.defaultTopologyDiscoveryMode())
+	device.EffectiveTopologyDiscoveryMode = domain.ResolveTopologyDiscoveryMode(device, defaultMode)
 }
 
 func (s *DeviceService) SetPollRescheduler(rescheduler pollRescheduler) {
