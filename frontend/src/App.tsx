@@ -3,7 +3,7 @@
  * Keeps global layout decisions separate from feature-specific components.
  */
 import { ReactFlowProvider } from '@xyflow/react';
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   createCanvasMap,
   deleteCanvasMap,
@@ -12,13 +12,10 @@ import {
   setCanvasMapPrimary,
   updateCanvasMap,
 } from './api/client';
-import { AdminDashboard } from './components/AdminDashboard';
 import Canvas from './components/Canvas';
 import type { ImportedNodePlacementRequest } from './components/canvas/importedNodePlacementRequest';
-import { Dashboard } from './components/Dashboard';
 import { EncryptionKeyOnboardingModal } from './components/EncryptionKeyOnboardingModal';
 import NavigationPill from './components/NavigationPill';
-import UserSettingsPage from './components/settings/UserSettingsPage';
 import {
   CreateMapDialog,
   type CreateMapDialogSubmit,
@@ -39,13 +36,33 @@ import {
   RenameMapDialog,
   type RenameMapDialogSubmit,
 } from './components/topology-hub/RenameMapDialog';
-import TopologyHub from './components/topology-hub/TopologyHub';
 import { Watermark } from './components/Watermark';
 import { useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useRuntimeUpdatePause } from './hooks/useRuntimeUpdatePause';
 import { useWebSocket } from './hooks/useWebSocket';
 import type { Area, CanvasMap, CanvasMapFilter, Device, Link } from './types/api';
+
+const AdminDashboard = lazy(() =>
+  import('./components/AdminDashboard').then((m) => ({
+    default: m.AdminDashboard,
+  })),
+);
+const Dashboard = lazy(() =>
+  import('./components/Dashboard').then((m) => ({
+    default: m.Dashboard,
+  })),
+);
+const TopologyHub = lazy(() =>
+  import('./components/topology-hub/TopologyHub').then((m) => ({
+    default: m.TopologyHub,
+  })),
+);
+const UserSettingsPage = lazy(() =>
+  import('./components/settings/UserSettingsPage').then((m) => ({
+    default: m.UserSettingsPage,
+  })),
+);
 
 /** Top-level route-like application views rendered without unmounting the canvas runtime. */
 export type ActiveView = 'hub' | 'canvas' | 'dashboard' | 'admin' | 'settings';
@@ -84,6 +101,8 @@ function App() {
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
   const [selectedMapId, setSelectedMapId] = useState<string | null>(null);
   const [selectedMapName, setSelectedMapName] = useState('Default');
+  const selectedMapIdRef = useRef<string | null>(null);
+  selectedMapIdRef.current = selectedMapId;
   const [detailDeviceId, setDetailDeviceId] = useState<string | null>(null);
   const [canvasDevices, setCanvasDevices] = useState<Device[]>([]);
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
@@ -136,10 +155,27 @@ function App() {
     setCanvasMapsError(null);
 
     try {
-      const maps = await fetchCanvasMaps();
-      setCanvasMaps(maps);
+      const nextMaps = await fetchCanvasMaps();
+      setCanvasMaps(nextMaps);
       setCanvasMapsLoaded(true);
-      return maps;
+      const currentSelectedId = selectedMapIdRef.current;
+      const defaultMap = fallbackCanvasMap(nextMaps);
+      if (
+        nextMaps.length > 0 &&
+        (currentSelectedId === null || !nextMaps.some((map) => map.id === currentSelectedId))
+      ) {
+        const fallbackTarget = defaultMap ?? nextMaps[0] ?? null;
+        const nextId = fallbackTarget?.id ?? null;
+        setSelectedMapId(nextId);
+        if (fallbackTarget) {
+          setSelectedMapName(fallbackTarget.name);
+        }
+        if (currentSelectedId !== null && currentSelectedId !== nextId) {
+          setSelectedAreaId(null);
+          setCanvasTopologyAreas([]);
+        }
+      }
+      return nextMaps;
     } catch (error) {
       setCanvasMapsError(canvasMapErrorMessage(error, 'Failed to load maps'));
       return null;
@@ -510,36 +546,40 @@ function App() {
             }}
           />
         )}
-        {/* All views stay mounted; inactive ones keep dimensions for React Flow. */}
-        <div
-          {...viewLayerStateProps(activeView === 'hub')}
-          className={viewLayerClass(activeView === 'hub', 'overflow-y-auto')}
-        >
-          <TopologyHub
-            devices={canvasDevices}
-            areas={navigationAreas}
-            links={canvasLinks}
-            snapshot={snapshot}
-            maps={mapsForHub}
-            mapsLoading={mapsLoadingForHub}
-            mapsError={mapsErrorForHub}
-            selectedMapId={selectedMapId}
-            selectedMapName={selectedMapName}
-            savedMapsEnabled={enableSavedMaps}
-            onOpenArea={(areaId) => handleOpenArea(areaId)}
-            onSelectMap={handleSelectMapContext}
-            onOpenMap={handleOpenMap}
-            onCreateEmptyMap={handleCreateEmptyMap}
-            onCreateMapFromArea={handleCreateMapFromArea}
-            onAreasChange={handleAreasChange}
-            onRenameMap={handleRenameMap}
-            onDuplicateMap={handleDuplicateMap}
-            onDeleteMap={handleDeleteMap}
-            onSetPrimaryMap={handleSetPrimaryMap}
-            canOpenSettings={canOpenSettings}
-            onOpenSettings={handleOpenSettings}
-          />
-        </div>
+        {/* Inactive top-level views are mounted on demand; Canvas stays mounted to preserve React Flow dimensions and runtime state. */}
+        {activeView === 'hub' && (
+          <div
+            {...viewLayerStateProps(activeView === 'hub')}
+            className={viewLayerClass(activeView === 'hub', 'overflow-y-auto')}
+          >
+            <Suspense fallback={null}>
+              <TopologyHub
+                devices={canvasDevices}
+                areas={navigationAreas}
+                links={canvasLinks}
+                snapshot={snapshot}
+                maps={mapsForHub}
+                mapsLoading={mapsLoadingForHub}
+                mapsError={mapsErrorForHub}
+                selectedMapId={selectedMapId}
+                selectedMapName={selectedMapName}
+                savedMapsEnabled={enableSavedMaps}
+                onOpenArea={(areaId) => handleOpenArea(areaId)}
+                onSelectMap={handleSelectMapContext}
+                onOpenMap={handleOpenMap}
+                onCreateEmptyMap={handleCreateEmptyMap}
+                onCreateMapFromArea={handleCreateMapFromArea}
+                onAreasChange={handleAreasChange}
+                onRenameMap={handleRenameMap}
+                onDuplicateMap={handleDuplicateMap}
+                onDeleteMap={handleDeleteMap}
+                onSetPrimaryMap={handleSetPrimaryMap}
+                canOpenSettings={canOpenSettings}
+                onOpenSettings={handleOpenSettings}
+              />
+            </Suspense>
+          </div>
+        )}
         <div
           {...viewLayerStateProps(activeView === 'canvas')}
           className={viewLayerClass(activeView === 'canvas', 'overflow-hidden')}
@@ -584,34 +624,42 @@ function App() {
             </div>
           )}
         </div>
-        <div
-          {...viewLayerStateProps(activeView === 'dashboard')}
-          className={viewLayerClass(activeView === 'dashboard', 'overflow-hidden')}
-        >
-          <Dashboard
-            devices={canvasDevices}
-            areas={navigationAreas}
-            snapshot={snapshot}
-            selectedAreaId={selectedAreaId}
-            onAreaSelect={handleAreaFilterSelect}
-            onOpenMap={openCanvasView}
-            loading={canvasTopologyLoading}
-          />
-        </div>
-        {canViewAdmin && (
+        {activeView === 'dashboard' && (
+          <div
+            {...viewLayerStateProps(activeView === 'dashboard')}
+            className={viewLayerClass(activeView === 'dashboard', 'overflow-hidden')}
+          >
+            <Suspense fallback={null}>
+              <Dashboard
+                devices={canvasDevices}
+                areas={navigationAreas}
+                snapshot={snapshot}
+                selectedAreaId={selectedAreaId}
+                onAreaSelect={handleAreaFilterSelect}
+                onOpenMap={openCanvasView}
+                loading={canvasTopologyLoading}
+              />
+            </Suspense>
+          </div>
+        )}
+        {canViewAdmin && activeView === 'admin' && (
           <div
             {...viewLayerStateProps(activeView === 'admin')}
             className={viewLayerClass(activeView === 'admin', 'overflow-y-auto')}
           >
-            <AdminDashboard visible={activeView === 'admin'} onOpenMap={handleOpenMap} />
+            <Suspense fallback={null}>
+              <AdminDashboard visible={activeView === 'admin'} onOpenMap={handleOpenMap} />
+            </Suspense>
           </div>
         )}
-        {canOpenUserSettings && (
+        {canOpenUserSettings && activeView === 'settings' && (
           <div
             {...viewLayerStateProps(activeView === 'settings')}
             className={viewLayerClass(activeView === 'settings', 'overflow-y-auto')}
           >
-            <UserSettingsPage />
+            <Suspense fallback={null}>
+              <UserSettingsPage />
+            </Suspense>
           </div>
         )}
         {enableSavedMaps && (
