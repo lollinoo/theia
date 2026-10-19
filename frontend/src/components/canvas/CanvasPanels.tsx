@@ -45,6 +45,10 @@ function sameAreaIds(first: string[] = [], second: string[] = []): boolean {
   return sortedFirst.every((value, index) => value === sortedSecond[index]);
 }
 
+function resolveVirtualSubtype(device: Device): string | undefined {
+  return device.device_type === 'virtual' ? (device.tags?.virtual_subtype ?? 'generic') : undefined;
+}
+
 function buildPromotedAddressPayloads(device: Device, addressId: string): DeviceAddressPayload[] {
   return device.addresses.map((address) => {
     const promoted = address.id === addressId;
@@ -311,12 +315,6 @@ export function CanvasPanels({
                             data: {
                               ...n.data,
                               device: updated,
-                              isVirtual: updated.device_type === 'virtual',
-                              monitoringState: resolveDeviceMonitoringState(updated),
-                              subtype:
-                                updated.device_type === 'virtual'
-                                  ? (updated.tags?.virtual_subtype ?? 'generic')
-                                  : undefined,
                               runtime: {
                                 ...n.data.runtime,
                                 status: ipChanged ? updated.status : n.data.runtime.status,
@@ -329,6 +327,8 @@ export function CanvasPanels({
                                       resolveDeviceMonitoringState(updated),
                                     ),
                               },
+                              isVirtual: updated.device_type === 'virtual',
+                              subtype: resolveVirtualSubtype(updated),
                             },
                           }
                         : n,
@@ -369,17 +369,28 @@ export function CanvasPanels({
                 areas={topologyAreas}
                 mapContext={mapId ? { mapId, mapName } : undefined}
                 onDevicesUpdated={(updatedDevices) => {
-                  setDevices((prev) => {
-                    const updatedMap = new Map(updatedDevices.map((d) => [d.id, d]));
-                    return prev.map((d) => updatedMap.get(d.id) ?? d);
-                  });
-                  setNodes((prev) => {
-                    const updatedMap = new Map(updatedDevices.map((d) => [d.id, d]));
-                    return prev.map((n) => {
-                      const updated = updatedMap.get(n.id);
-                      return updated ? { ...n, data: { ...n.data, device: updated } } : n;
-                    });
-                  });
+                  const updatedMap = new Map(updatedDevices.map((d) => [d.id, d]));
+                  setDevices((prev) => prev.map((d) => updatedMap.get(d.id) ?? d));
+                  setNodes((nds) =>
+                    nds.map((n) => {
+                      const u = updatedMap.get(n.id);
+                      return u
+                        ? {
+                            ...n,
+                            data: {
+                              ...n.data,
+                              device: u,
+                              runtime: {
+                                ...n.data.runtime,
+                                monitoringState: resolveDeviceMonitoringState(u),
+                              },
+                              isVirtual: u.device_type === 'virtual',
+                              subtype: resolveVirtualSubtype(u),
+                            },
+                          }
+                        : n;
+                    }),
+                  );
                   // Re-open bulk panel with fresh device data
                   setPanelContent({
                     type: 'bulkEdit',
