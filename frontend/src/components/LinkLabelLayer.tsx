@@ -3,7 +3,7 @@
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
 import { EdgeLabelRenderer } from '@xyflow/react';
-import { useSyncExternalStore } from 'react';
+import { memo, useSyncExternalStore } from 'react';
 import {
   getLinkLabelSnapshot,
   type RegisteredLinkLabel,
@@ -55,6 +55,8 @@ function LinkLabelStack({ label }: { label: RegisteredLinkLabel }) {
   );
 }
 
+const MemoizedLinkLabelStack = memo(LinkLabelStack);
+
 /** Renders the LinkLabelLayer component within the UI component boundary. */
 export function LinkLabelLayer() {
   const labels = useSyncExternalStore(
@@ -70,7 +72,7 @@ export function LinkLabelLayer() {
   return (
     <EdgeLabelRenderer>
       {labels.map((label) => (
-        <LinkLabelStack key={label.edgeId} label={label} />
+        <MemoizedLinkLabelStack key={label.edgeId} label={label} />
       ))}
     </EdgeLabelRenderer>
   );
