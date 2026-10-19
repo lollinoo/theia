@@ -1,8 +1,9 @@
 /**
+ * @vitest-environment jsdom
  * Exercises use positions hook lifecycle behavior so refactors preserve the documented contract.
  */
 import { act, renderHook } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   exportCanvasDiagnostics,
@@ -664,6 +665,221 @@ describe('usePositions diagnostics', () => {
       lastSaveStatus: 'pending',
       lastSaveError: undefined,
     });
+  });
+
+  it('flushes pending debounced save on unmount and updates diagnostics cleanly', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
+    const { result, unmount } = renderHook(() => usePositions(null));
+
+    await act(async () => {
+      await result.current.savePositions([
+        { device_id: 'dev-unmount', x: 12, y: 34, pinned: false },
+      ]);
+    });
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(exportCanvasDiagnostics().diagnostics.positions).toMatchObject({
+      pendingSaveCount: 1,
+      lastSaveStatus: 'pending',
+    });
+
+    await act(async () => {
+      unmount();
+      await flushMicrotasks();
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/positions',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({
+          positions: [{ device_id: 'dev-unmount', x: 12, y: 34, pinned: false }],
+        }),
+      }),
+    );
+
+    expect(exportCanvasDiagnostics().diagnostics.positions).toMatchObject({
+      pendingSaveCount: 0,
+      lastSaveStatus: 'success',
+    });
+    expect(exportCanvasDiagnostics().events.map((e) => e.event)).toContain(
+      'positions.save.succeeded',
+    );
+
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('updates diagnostics with error when an unmount flush fails', async () => {
+    vi.mocked(fetch).mockResolvedValue(errorResponse(500, 'server error', { error: 'disk full' }));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { result, unmount } = renderHook(() => usePositions(null));
+
+    await act(async () => {
+      await result.current.savePositions([{ device_id: 'dev-err', x: 50, y: 60, pinned: true }]);
+    });
+
+    await act(async () => {
+      unmount();
+      await flushMicrotasks();
+    });
+
+    expect(consoleError).toHaveBeenCalled();
+    expect(exportCanvasDiagnostics().diagnostics.positions).toMatchObject({
+      pendingSaveCount: 0,
+      lastSaveStatus: 'error',
+      lastSaveError: expect.stringContaining('disk full'),
+    });
+  });
+
+  it('aborts the previous in-flight fetch when fetchPositions is called again', async () => {
+    const signals: AbortSignal[] = [];
+    const firstDeferred = createDeferred<Response>();
+    const secondDeferred = createDeferred<Response>();
+
+    vi.mocked(fetch).mockImplementation((_input, init) => {
+      if (init?.signal) {
+        signals.push(init.signal as AbortSignal);
+      }
+      if (signals.length === 1) {
+        return firstDeferred.promise;
+      }
+      return secondDeferred.promise;
+    });
+
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    let firstPromise!: Promise<Map<string, unknown>>;
+    let secondPromise!: Promise<Map<string, unknown>>;
+
+    await act(async () => {
+      firstPromise = result.current.fetchPositions();
+    });
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0].aborted).toBe(false);
+
+    await act(async () => {
+      secondPromise = result.current.fetchPositions();
+    });
+
+    expect(signals).toHaveLength(2);
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+
+    await act(async () => {
+      secondDeferred.resolve(
+        jsonResponse({
+          data: [{ device_id: 'dev-new', x: 100, y: 200, pinned: false }],
+        }),
+      );
+      await secondPromise;
+    });
+
+    expect(result.current.positions).toEqual(
+      new Map([['dev-new', { x: 100, y: 200, pinned: false }]]),
+    );
+
+    let firstResult: unknown;
+    await act(async () => {
+      firstDeferred.resolve(
+        jsonResponse({
+          data: [{ device_id: 'dev-old', x: 1, y: 2, pinned: true }],
+        }),
+      );
+      firstResult = await firstPromise;
+    });
+
+    expect(firstResult).toEqual(new Map());
+    expect(result.current.positions).toEqual(
+      new Map([['dev-new', { x: 100, y: 200, pinned: false }]]),
+    );
+  });
+
+  it('aborts in-flight fetch when mapId changes or on unmount', async () => {
+    const signals: AbortSignal[] = [];
+    const deferred = createDeferred<Response>();
+
+    vi.mocked(fetch).mockImplementation((_input, init) => {
+      if (init?.signal) {
+        signals.push(init.signal as AbortSignal);
+      }
+      return deferred.promise;
+    });
+
+    const { result, rerender, unmount } = renderHook(({ mapId }) => usePositions(mapId), {
+      initialProps: { mapId: 'map-1' as string | null },
+    });
+
+    await act(async () => {
+      void result.current.fetchPositions();
+    });
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0].aborted).toBe(false);
+
+    rerender({ mapId: 'map-2' });
+
+    expect(signals[0].aborted).toBe(true);
+
+    await act(async () => {
+      void result.current.fetchPositions();
+    });
+    expect(signals).toHaveLength(2);
+    expect(signals[1].aborted).toBe(false);
+
+    unmount();
+    expect(signals[1].aborted).toBe(true);
+  });
+
+  it('ignores AbortError when a fetch is superseded or aborted', async () => {
+    vi.mocked(fetch).mockImplementation((_input, init) => {
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const abortError = new DOMException('The user aborted a request.', 'AbortError');
+          reject(abortError);
+        });
+      });
+    });
+
+    const { result } = renderHook(() => usePositions('map-1'));
+
+    let firstPromise!: Promise<Map<string, unknown>>;
+    await act(async () => {
+      firstPromise = result.current.fetchPositions();
+    });
+
+    await act(async () => {
+      void result.current.fetchPositions();
+    });
+
+    let firstResult: unknown;
+    await act(async () => {
+      firstResult = await firstPromise;
+    });
+
+    expect(firstResult).toEqual(new Map());
+  });
+
+  it('avoids redundant state updates when saving identical positions', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ data: [] }));
+    const { result } = renderHook(() => usePositions(null));
+    const initialPayload = [{ device_id: 'dev-1', x: 10, y: 20, pinned: true }];
+
+    await act(async () => {
+      await result.current.savePositions(initialPayload);
+    });
+
+    const positionsRefAfterFirstSave = result.current.positions;
+
+    await act(async () => {
+      await result.current.savePositions([{ device_id: 'dev-1', x: 10, y: 20, pinned: true }]);
+    });
+
+    expect(result.current.positions).toBe(positionsRefAfterFirstSave);
   });
 });
 
