@@ -11,6 +11,27 @@ import {
 } from '../deviceVisualState';
 import { resolveOsVersion } from './parseOsVersion';
 
+const OS_VERSION_CACHE_LIMIT = 2000;
+export const osVersionCache = new Map<string, string | null>();
+
+/** Caches and resolves OS version for runtime device rows. */
+export function getCachedOsVersion(osVersion: string | undefined, sysDescr: string): string {
+  const normalized = osVersion?.trim();
+  if (normalized) {
+    return normalized;
+  }
+  const cached = osVersionCache.get(sysDescr);
+  if (cached !== undefined) {
+    return cached ?? '';
+  }
+  if (osVersionCache.size >= OS_VERSION_CACHE_LIMIT) {
+    osVersionCache.clear();
+  }
+  const resolved = resolveOsVersion(undefined, sysDescr);
+  osVersionCache.set(sysDescr, resolved || null);
+  return resolved;
+}
+
 /** Describes the runtime device row contract used by the operations dashboard. */
 export interface RuntimeDeviceRow {
   id: string;
@@ -92,7 +113,7 @@ export function buildRuntimeDeviceRows({
       statusState,
       uptimeSecs: readouts.uptimeSecs,
       uptimeLabel: readouts.uptimeSecs === null ? null : formatUptime(readouts.uptimeSecs),
-      osVersion: resolveOsVersion(device.os_version, device.sys_descr),
+      osVersion: getCachedOsVersion(device.os_version, device.sys_descr),
     };
   });
 }

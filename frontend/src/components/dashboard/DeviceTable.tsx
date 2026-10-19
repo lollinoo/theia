@@ -2,7 +2,7 @@
  * Defines device table behavior for the operations dashboard.
  * Keeps table, backup, and device-management responsibilities isolated by module.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ResolvedTheme } from '../../contexts/ThemeContext';
 import type { Area, Device } from '../../types/api';
 import { DeviceRow } from './DeviceRow';
@@ -61,48 +61,51 @@ export function DeviceTable({
     }
   };
 
-  const sorted = [...rows].sort((a, b) => {
-    let aVal: string | number;
-    let bVal: string | number;
-    if (sortKey === 'area') {
-      aVal = a.areaSortName;
-      bVal = b.areaSortName;
-    } else if (sortKey === 'status') {
-      aVal = a.statusSortLabel;
-      bVal = b.statusSortLabel;
-    } else if (sortKey === 'uptime') {
-      aVal = a.uptimeSecs ?? -1;
-      bVal = b.uptimeSecs ?? -1;
-      const cmp = (aVal as number) - (bVal as number);
+  const sorted = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      let aVal: string | number;
+      let bVal: string | number;
+      if (sortKey === 'area') {
+        aVal = a.areaSortName;
+        bVal = b.areaSortName;
+      } else if (sortKey === 'status') {
+        aVal = a.statusSortLabel;
+        bVal = b.statusSortLabel;
+      } else if (sortKey === 'uptime') {
+        aVal = a.uptimeSecs ?? -1;
+        bVal = b.uptimeSecs ?? -1;
+        const cmp = (aVal as number) - (bVal as number);
+        return sortDir === 'asc' ? cmp : -cmp;
+      } else if (sortKey === 'os_version') {
+        aVal = a.osVersion;
+        bVal = b.osVersion;
+      } else if (sortKey === 'hostname') {
+        aVal = a.hostname.toLowerCase();
+        bVal = b.hostname.toLowerCase();
+      } else if (sortKey === 'ip') {
+        aVal = a.ip.toLowerCase();
+        bVal = b.ip.toLowerCase();
+      } else if (sortKey === 'vendor') {
+        aVal = a.vendor.toLowerCase();
+        bVal = b.vendor.toLowerCase();
+      } else if (sortKey === 'hardware_model') {
+        aVal = a.modelLabel.toLowerCase();
+        bVal = b.modelLabel.toLowerCase();
+      } else {
+        aVal = '';
+        bVal = '';
+      }
+      const cmp = String(aVal).localeCompare(String(bVal));
       return sortDir === 'asc' ? cmp : -cmp;
-    } else if (sortKey === 'os_version') {
-      aVal = a.osVersion;
-      bVal = b.osVersion;
-    } else if (sortKey === 'hostname') {
-      aVal = a.hostname.toLowerCase();
-      bVal = b.hostname.toLowerCase();
-    } else if (sortKey === 'ip') {
-      aVal = a.ip.toLowerCase();
-      bVal = b.ip.toLowerCase();
-    } else if (sortKey === 'vendor') {
-      aVal = a.vendor.toLowerCase();
-      bVal = b.vendor.toLowerCase();
-    } else if (sortKey === 'hardware_model') {
-      aVal = a.modelLabel.toLowerCase();
-      bVal = b.modelLabel.toLowerCase();
-    } else {
-      aVal = '';
-      bVal = '';
-    }
-    const cmp = String(aVal).localeCompare(String(bVal));
-    return sortDir === 'asc' ? cmp : -cmp;
-  });
+    });
+  }, [rows, sortDir, sortKey]);
 
-  const regularRows = sorted.filter(
-    (row) => !isVirtualNodeWithIp(row) && !isVirtualNodeWithoutIp(row),
+  const regularRows = useMemo(
+    () => sorted.filter((row) => !isVirtualNodeWithIp(row) && !isVirtualNodeWithoutIp(row)),
+    [sorted],
   );
-  const virtualRowsWithIp = sorted.filter(isVirtualNodeWithIp);
-  const virtualRowsWithoutIp = sorted.filter(isVirtualNodeWithoutIp);
+  const virtualRowsWithIp = useMemo(() => sorted.filter(isVirtualNodeWithIp), [sorted]);
+  const virtualRowsWithoutIp = useMemo(() => sorted.filter(isVirtualNodeWithoutIp), [sorted]);
 
   const columns: { key: SortKey; label: string; className?: string }[] = [
     { key: 'hostname', label: 'Name' },

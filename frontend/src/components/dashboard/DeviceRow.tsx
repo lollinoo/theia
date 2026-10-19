@@ -2,26 +2,53 @@
  * Defines device row behavior for the operations dashboard.
  * Keeps table, backup, and device-management responsibilities isolated by module.
  */
+import { memo, useCallback } from 'react';
 import type { ResolvedTheme } from '../../contexts/ThemeContext';
 import { adaptAreaColor } from '../../contexts/ThemeContext';
-import type { Area } from '../../types/api';
+import type { Area, Device } from '../../types/api';
 import { MaterialIcon } from '../MaterialIcon';
 import { StatusDot } from '../StatusDot';
 import type { RuntimeDeviceRow } from './runtimeDeviceRows';
 
-interface DeviceRowProps {
+export interface DeviceRowProps {
   row: RuntimeDeviceRow;
   areaMap: Map<string, Area>;
   resolvedTheme: ResolvedTheme;
-  onSSHCredentials: () => void;
-  onBackup: () => void;
-  onBackupHistory: () => void;
-  onViewConfig: () => void;
-  onDeletePermanently?: () => void;
+  onSSHCredentials: (device?: Device) => void;
+  onBackup: (device?: Device) => void;
+  onBackupHistory: (device?: Device) => void;
+  onViewConfig: (device?: Device) => void;
+  onDeletePermanently?: (device?: Device) => void;
+}
+
+function areDeviceRowPropsEqual(prev: DeviceRowProps, next: DeviceRowProps): boolean {
+  if (prev.row !== next.row) {
+    if (
+      prev.row.id !== next.row.id ||
+      prev.row.displayName !== next.row.displayName ||
+      prev.row.sysName !== next.row.sysName ||
+      prev.row.ip !== next.row.ip ||
+      prev.row.vendor !== next.row.vendor ||
+      prev.row.modelLabel !== next.row.modelLabel ||
+      prev.row.osVersion !== next.row.osVersion ||
+      prev.row.uptimeLabel !== next.row.uptimeLabel ||
+      prev.row.statusState.dotStatus !== next.row.statusState.dotStatus ||
+      prev.row.statusState.label !== next.row.statusState.label ||
+      prev.row.areaIds.length !== next.row.areaIds.length ||
+      prev.row.areaIds.some((id, idx) => id !== next.row.areaIds[idx])
+    ) {
+      return false;
+    }
+  }
+  return (
+    prev.resolvedTheme === next.resolvedTheme &&
+    prev.areaMap === next.areaMap &&
+    Boolean(prev.onDeletePermanently) === Boolean(next.onDeletePermanently)
+  );
 }
 
 /** Renders the DeviceRow component within the operations dashboard. */
-export function DeviceRow({
+export const DeviceRow = memo(function DeviceRow({
   row,
   areaMap,
   resolvedTheme,
@@ -32,6 +59,26 @@ export function DeviceRow({
   onDeletePermanently,
 }: DeviceRowProps) {
   const deviceAreas = row.areaIds.map((id) => areaMap.get(id)).filter((a): a is Area => !!a);
+
+  const handleSSHCredentials = useCallback(() => {
+    onSSHCredentials(row.device);
+  }, [onSSHCredentials, row.device]);
+
+  const handleBackup = useCallback(() => {
+    onBackup(row.device);
+  }, [onBackup, row.device]);
+
+  const handleBackupHistory = useCallback(() => {
+    onBackupHistory(row.device);
+  }, [onBackupHistory, row.device]);
+
+  const handleViewConfig = useCallback(() => {
+    onViewConfig(row.device);
+  }, [onViewConfig, row.device]);
+
+  const handleDeletePermanently = useCallback(() => {
+    onDeletePermanently?.(row.device);
+  }, [onDeletePermanently, row.device]);
 
   return (
     <tr className="[&:nth-child(even)]:bg-surface-high/30 hover:bg-elevated/50 transition-colors duration-150">
@@ -96,17 +143,17 @@ export function DeviceRow({
         <div className="flex items-center justify-end gap-0.5">
           {row.deviceType !== 'virtual' && (
             <>
-              <IconAction icon="terminal" title="SSH Credentials" onClick={onSSHCredentials} />
-              <IconAction icon="backup" title="Backup Now" onClick={onBackup} />
-              <IconAction icon="history" title="Backup History" onClick={onBackupHistory} />
-              <IconAction icon="description" title="View Config" onClick={onViewConfig} />
+              <IconAction icon="terminal" title="SSH Credentials" onClick={handleSSHCredentials} />
+              <IconAction icon="backup" title="Backup Now" onClick={handleBackup} />
+              <IconAction icon="history" title="Backup History" onClick={handleBackupHistory} />
+              <IconAction icon="description" title="View Config" onClick={handleViewConfig} />
             </>
           )}
           {onDeletePermanently && (
             <IconAction
               icon="delete"
               title="Delete permanently"
-              onClick={onDeletePermanently}
+              onClick={handleDeletePermanently}
               danger
             />
           )}
@@ -114,7 +161,7 @@ export function DeviceRow({
       </td>
     </tr>
   );
-}
+}, areDeviceRowPropsEqual);
 
 function IconAction({
   icon,
