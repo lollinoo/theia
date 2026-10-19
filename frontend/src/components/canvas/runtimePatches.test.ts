@@ -2,7 +2,7 @@
  * Exercises runtime patches topology canvas behavior so refactors preserve the documented contract.
  */
 import { describe, expect, it, vi } from 'vitest';
-
+import { mockDevice, mockLink } from '../../test/canvasFixtures';
 import type { Device, Link } from '../../types/api';
 import type { DeviceRuntimeDTO, LinkRuntimeDTO, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
@@ -15,47 +15,6 @@ import {
   patchRuntimeEdges,
   patchRuntimeNodes,
 } from './runtimePatches';
-
-function mockDevice(id: string, overrides: Partial<Device> = {}): Device {
-  return {
-    id,
-    hostname: id,
-    ip: `10.0.0.${id.slice(-1)}`,
-    device_type: 'router',
-    poll_class: 'standard',
-    poll_interval_override: null,
-    status: 'up',
-    sys_name: id,
-    sys_descr: 'RouterOS',
-    hardware_model: 'RB4011',
-    vendor: 'mikrotik',
-    managed: true,
-    interfaces: [],
-    area_ids: [],
-    backup_supported: true,
-    metrics_source: 'prometheus',
-    prometheus_label_name: 'instance',
-    prometheus_label_value: `10.0.0.${id.slice(-1)}:9100`,
-    ...overrides,
-  };
-}
-
-function mockLink(id: string, sourceDeviceId: string, targetDeviceId: string): Link {
-  return {
-    id,
-    source_device_id: sourceDeviceId,
-    source_if_name: 'ether1',
-    source_if_mac: '',
-    source_if_speed: 1_000_000_000,
-    source_if_oper_status: 'up',
-    target_device_id: targetDeviceId,
-    target_if_name: 'ether2',
-    target_if_mac: '',
-    target_if_speed: 1_000_000_000,
-    target_if_oper_status: 'up',
-    discovery_protocol: 'lldp',
-  };
-}
 
 function mockDeviceRuntime(
   deviceId: string,

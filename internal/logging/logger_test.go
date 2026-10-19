@@ -50,15 +50,11 @@ func TestLoggerFiltersBelowConfiguredLevel(t *testing.T) {
 	Configure("warn")
 	Debugf("hidden debug")
 	Infof("hidden info")
-	Warnf("visible warn")
 	Errorf("visible error")
 
 	output := buf.String()
 	if strings.Contains(output, "hidden") {
 		t.Fatalf("output contains filtered message: %q", output)
-	}
-	if !strings.Contains(output, "WARN visible warn") {
-		t.Fatalf("output missing warn message: %q", output)
 	}
 	if !strings.Contains(output, "ERROR visible error") {
 		t.Fatalf("output missing error message: %q", output)

@@ -18,6 +18,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/service"
 	"github.com/lollinoo/theia/internal/snmp"
+	"github.com/lollinoo/theia/internal/testutil"
 	"github.com/lollinoo/theia/internal/vendor"
 )
 
@@ -432,72 +433,10 @@ func (r *mockSettingsRepo) Update(key string, update func(string) (string, error
 
 // --- Mock CredentialProfileRepo ---
 
-type mockCredentialProfileRepo struct {
-	mu       sync.Mutex
-	profiles map[uuid.UUID]*domain.CredentialProfile
-}
+type mockCredentialProfileRepo = testutil.MockCredentialProfileRepo
 
 func newMockCredentialProfileRepo() *mockCredentialProfileRepo {
-	return &mockCredentialProfileRepo{profiles: make(map[uuid.UUID]*domain.CredentialProfile)}
-}
-
-func (r *mockCredentialProfileRepo) Create(profile *domain.CredentialProfile) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if profile.ID == uuid.Nil {
-		profile.ID = uuid.New()
-	}
-	now := time.Now().UTC()
-	profile.CreatedAt = now
-	profile.UpdatedAt = now
-	r.profiles[profile.ID] = profile
-	return nil
-}
-
-func (r *mockCredentialProfileRepo) GetByID(id uuid.UUID) (*domain.CredentialProfile, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	p, ok := r.profiles[id]
-	if !ok {
-		return nil, fmt.Errorf("credential profile not found: %s", id)
-	}
-	cp := *p
-	return &cp, nil
-}
-
-func (r *mockCredentialProfileRepo) GetAll() ([]domain.CredentialProfile, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var result []domain.CredentialProfile
-	for _, p := range r.profiles {
-		result = append(result, *p)
-	}
-	return result, nil
-}
-
-func (r *mockCredentialProfileRepo) Update(profile *domain.CredentialProfile) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.profiles[profile.ID]; !ok {
-		return fmt.Errorf("credential profile not found: %s", profile.ID)
-	}
-	profile.UpdatedAt = time.Now().UTC()
-	r.profiles[profile.ID] = profile
-	return nil
-}
-
-func (r *mockCredentialProfileRepo) Delete(id uuid.UUID) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.profiles[id]; !ok {
-		return fmt.Errorf("credential profile not found: %s", id)
-	}
-	delete(r.profiles, id)
-	return nil
-}
-
-func (r *mockCredentialProfileRepo) GetBackupProfileForDevice(deviceID uuid.UUID) (*domain.CredentialProfile, error) {
-	return nil, nil
+	return testutil.NewMockCredentialProfileRepo()
 }
 
 // --- Helper to build test VendorRegistry ---

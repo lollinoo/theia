@@ -3,6 +3,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDocumentCookie } from '../test/documentCookie';
+import { mockResponse } from '../test/mockResponse';
 import {
   fetchBackupFileContent,
   fetchBackupJobs,
@@ -10,20 +11,6 @@ import {
   resetSSHHostKey,
   startBulkBackupRun,
 } from './backup';
-
-function mockResponse(
-  body: unknown,
-  init: { ok?: boolean; status?: number; statusText?: string } = {},
-) {
-  const { ok = true, status = 200, statusText = 'OK' } = init;
-  return {
-    ok,
-    status,
-    statusText,
-    json: () => Promise.resolve(body),
-    headers: new Headers(),
-  } as unknown as Response;
-}
 
 beforeEach(() => {
   vi.restoreAllMocks();

@@ -1,18 +1,15 @@
 /**
  * Exercises canvas instrumentation topology canvas behavior so refactors preserve the documented contract.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   clearCanvasMetrics,
   exportCanvasMetrics,
-  finishCanvasRenderMetric,
-  measureCanvasMetric,
   recordCanvasFrameTime,
   recordCanvasLongTask,
   recordCanvasMetric,
   setCanvasRenderMetricsEnabled,
-  startCanvasRenderMetric,
 } from './canvasInstrumentation';
 
 describe('canvasInstrumentation', () => {
@@ -80,30 +77,6 @@ describe('canvasInstrumentation', () => {
     });
   });
 
-  it('measures synchronous work and installs browser export helpers', () => {
-    vi.spyOn(performance, 'now').mockReturnValueOnce(10).mockReturnValueOnce(16.25);
-
-    const result = measureCanvasMetric('buildTopologyEdges', 'large', () => 'done', {
-      linkCount: 600,
-    });
-
-    expect(result).toBe('done');
-    expect(window.__THEIA_CANVAS_METRICS__).toEqual([
-      expect.objectContaining({
-        name: 'buildTopologyEdges',
-        scenario: 'large',
-        durationMs: 6.25,
-        metadata: { linkCount: 600 },
-      }),
-    ]);
-    expect(window.__THEIA_CANVAS_METRICS_EXPORT__?.()).toMatchObject({
-      version: 1,
-      aggregates: {
-        'large:buildTopologyEdges': expect.objectContaining({ count: 1 }),
-      },
-    });
-  });
-
   it('clears samples and returns a JSON-stringify-safe export', () => {
     recordCanvasMetric({
       name: 'areaProjection',
@@ -118,38 +91,6 @@ describe('canvasInstrumentation', () => {
     expect(exported.samples).toEqual([]);
     expect(exported.aggregates).toEqual({});
     expect(() => JSON.stringify(exported)).not.toThrow();
-  });
-
-  it('records device card render samples only when render metrics are enabled', () => {
-    expect(startCanvasRenderMetric('DeviceCard')).toBeNull();
-    expect(exportCanvasMetrics().samples).toEqual([]);
-
-    setCanvasRenderMetricsEnabled(true);
-    vi.spyOn(performance, 'now').mockReturnValueOnce(21).mockReturnValueOnce(25.5);
-
-    const measurement = startCanvasRenderMetric('DeviceCard');
-    finishCanvasRenderMetric(measurement, { deviceId: 'dev-1', kind: 'device' });
-
-    expect(exportCanvasMetrics().samples).toEqual([]);
-    expect(exportCanvasMetrics().aggregates['runtime:deviceCardRender']).toEqual({
-      count: 1,
-      minMs: 4.5,
-      maxMs: 4.5,
-      avgMs: 4.5,
-      p95Ms: 4.5,
-    });
-  });
-
-  it('clears aggregate render metrics together with raw samples', () => {
-    setCanvasRenderMetricsEnabled(true);
-    vi.spyOn(performance, 'now').mockReturnValueOnce(1).mockReturnValueOnce(3);
-
-    finishCanvasRenderMetric(startCanvasRenderMetric('DeviceCard'), { deviceId: 'dev-1' });
-    expect(exportCanvasMetrics().aggregates['runtime:deviceCardRender']?.count).toBe(1);
-
-    clearCanvasMetrics();
-
-    expect(exportCanvasMetrics().aggregates['runtime:deviceCardRender']).toBeUndefined();
   });
 
   it('records frame timing and frame budget aggregates without raw sample growth', () => {

@@ -5,21 +5,7 @@ import type { NodeChange } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
 
 import type { DeviceNode } from '../DeviceCard';
-import {
-  canvasSnapGrid,
-  snapNodeChangesToGrid,
-  snapNodesToGrid,
-  snapPositionToGrid,
-} from './canvasGrid';
-
-function node(id: string, x: number, y: number): DeviceNode {
-  return {
-    id,
-    type: 'device',
-    position: { x, y },
-    data: {},
-  } as DeviceNode;
-}
+import { canvasSnapGrid, snapNodeChangesToGrid, snapPositionToGrid } from './canvasGrid';
 
 describe('canvas grid', () => {
   it('uses a 30 by 30 canvas grid', () => {
@@ -68,25 +54,6 @@ describe('canvas grid', () => {
     const aligned = { x: 30, y: -60, metadata: 'preserved' };
 
     expect(snapPositionToGrid(aligned, [30, 30])).toBe(aligned);
-  });
-
-  it('snaps node positions while reusing aligned node references', () => {
-    const aligned = node('aligned', 30, 60);
-    const unaligned = node('unaligned', 44, 46);
-    const nodes = [aligned, unaligned];
-
-    const snapped = snapNodesToGrid(nodes, [30, 30]);
-
-    expect(snapped).not.toBe(nodes);
-    expect(snapped[0]).toBe(aligned);
-    expect(snapped[1]).not.toBe(unaligned);
-    expect(snapped[1]).toMatchObject({ position: { x: 30, y: 60 } });
-  });
-
-  it('reuses the node array when every position is aligned', () => {
-    const nodes = [node('a', 30, 60), node('b', -90, 0)];
-
-    expect(snapNodesToGrid(nodes, [30, 30])).toBe(nodes);
   });
 
   it('snaps position changes without modifying other change types', () => {

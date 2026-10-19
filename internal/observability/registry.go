@@ -703,10 +703,6 @@ func (r *Registry) SetSchedulerQueueLag(volatility domain.VolatilityClass, lag t
 	r.schedulerQueueLagSeconds[volatility] = lag.Seconds()
 }
 
-func (r *Registry) IncSchedulerTaskDispatch(volatility domain.VolatilityClass) {
-	r.IncSchedulerTaskDispatchForTask("unknown", volatility)
-}
-
 func (r *Registry) IncSchedulerTaskDispatchForTask(taskKind string, volatility domain.VolatilityClass) {
 	taskKind = strings.TrimSpace(taskKind)
 	if taskKind == "" {
@@ -879,16 +875,6 @@ func (r *Registry) SetPollingEssentialOverloaded(overloaded bool) {
 		return
 	}
 	r.pollingEssentialOverloaded = 0
-}
-
-func (r *Registry) SetRuntimeWorkerSettingEffective(setting string, value float64) {
-	if !runtimeWorkerSettingAllowed(setting) {
-		return
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.runtimeWorkerSettings[setting] = value
 }
 
 func (r *Registry) SetRuntimeWorkerSettingsEffective(settings []RuntimeWorkerSettingEffective) {

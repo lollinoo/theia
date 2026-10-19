@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -343,7 +344,7 @@ func TestCanvasMapRepoUpdateDeviceAreaMembershipsIsMapLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get first membership: %v", err)
 	}
-	if len(firstMembership.Devices) != 1 || !uuidSlicesEqual(firstMembership.Devices[0].AreaIDs, []uuid.UUID{areaB}) {
+	if len(firstMembership.Devices) != 1 || !slices.Equal(firstMembership.Devices[0].AreaIDs, []uuid.UUID{areaB}) {
 		t.Fatalf("first map device areas = %#v, want only %s", firstMembership.Devices, areaB)
 	}
 
@@ -351,7 +352,7 @@ func TestCanvasMapRepoUpdateDeviceAreaMembershipsIsMapLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get second membership: %v", err)
 	}
-	if len(secondMembership.Devices) != 1 || !uuidSlicesEqual(secondMembership.Devices[0].AreaIDs, []uuid.UUID{areaA}) {
+	if len(secondMembership.Devices) != 1 || !slices.Equal(secondMembership.Devices[0].AreaIDs, []uuid.UUID{areaA}) {
 		t.Fatalf("second map device areas = %#v, want original %s", secondMembership.Devices, areaA)
 	}
 
@@ -825,7 +826,7 @@ func assertCanvasMapMembershipEqual(t *testing.T, got, want domain.CanvasMapMemb
 		if got.Devices[i].DeviceID != want.Devices[i].DeviceID ||
 			got.Devices[i].Role != want.Devices[i].Role ||
 			!optionalStringEqual(got.Devices[i].VisualColor, want.Devices[i].VisualColor) ||
-			!uuidSlicesEqual(got.Devices[i].AreaIDs, want.Devices[i].AreaIDs) {
+			!slices.Equal(got.Devices[i].AreaIDs, want.Devices[i].AreaIDs) {
 			t.Fatalf("device membership[%d] = %#v, want %#v", i, got.Devices[i], want.Devices[i])
 		}
 	}
@@ -854,18 +855,6 @@ func optionalStringEqual(got, want *string) bool {
 		return got == want
 	}
 	return *got == *want
-}
-
-func uuidSlicesEqual(got, want []uuid.UUID) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func insertCanvasMapRepoTestDevice(t *testing.T, db *sql.DB, id uuid.UUID) {

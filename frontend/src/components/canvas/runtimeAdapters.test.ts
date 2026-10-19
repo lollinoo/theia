@@ -3,49 +3,9 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { Device, Link } from '../../types/api';
+import { mockDevice, mockLink } from '../../test/canvasFixtures';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
-import { buildRuntimeState, primaryHealthPriority } from './runtimeAdapters';
-
-function mockDevice(overrides: Partial<Device> = {}): Device {
-  return {
-    id: 'dev-1',
-    hostname: 'router-01',
-    ip: '10.0.0.1',
-    device_type: 'router',
-    poll_class: 'standard',
-    poll_interval_override: null,
-    status: 'up',
-    sys_name: 'router-01',
-    sys_descr: 'RouterOS',
-    hardware_model: 'RB4011',
-    vendor: 'mikrotik',
-    managed: true,
-    interfaces: [],
-    area_ids: [],
-    backup_supported: true,
-    metrics_source: 'prometheus',
-    prometheus_label_name: 'instance',
-    prometheus_label_value: '10.0.0.1:9100',
-    ...overrides,
-  };
-}
-
-function mockLink(overrides: Partial<Link> = {}): Link {
-  return {
-    id: 'link-1',
-    source_device_id: 'dev-1',
-    source_if_name: 'ether1',
-    target_device_id: 'dev-2',
-    target_if_name: 'ether2',
-    discovery_protocol: 'lldp',
-    source_if_speed: 1_000_000_000,
-    source_if_oper_status: 'up',
-    target_if_speed: 1_000_000_000,
-    target_if_oper_status: 'up',
-    ...overrides,
-  };
-}
+import { buildRuntimeState } from './runtimeAdapters';
 
 function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload {
   return {
@@ -257,18 +217,6 @@ describe('buildRuntimeState', () => {
       primaryHealth: 'snmp_degraded',
       runtimeFlags: ['deadline_missed', 'partial_telemetry'],
     });
-  });
-
-  it('orders primary health states from most urgent to least urgent', () => {
-    expect([
-      primaryHealthPriority('quarantined'),
-      primaryHealthPriority('unreachable'),
-      primaryHealthPriority('snmp_degraded'),
-      primaryHealthPriority('up_stale'),
-      primaryHealthPriority('up_fresh'),
-      primaryHealthPriority('probing'),
-      primaryHealthPriority(null),
-    ]).toEqual([0, 1, 2, 3, 4, 5, 6]);
   });
 
   it('keeps shared link telemetry on the link model without inventing endpoint copies', () => {

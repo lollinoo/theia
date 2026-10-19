@@ -400,28 +400,6 @@ func normalizeSensitiveMigrationField(value string, key any) (string, bool, erro
 	return encrypted, true, nil
 }
 
-func hasUndecryptableEncryptedSNMPCredentials(creds *domain.SNMPCredentials, key any) bool {
-	if creds == nil {
-		return false
-	}
-	if creds.V2c != nil && isUndecryptableEncryptedSNMPField(creds.V2c.Community, key) {
-		return true
-	}
-	if creds.V3 != nil {
-		return isUndecryptableEncryptedSNMPField(creds.V3.AuthPassword, key) ||
-			isUndecryptableEncryptedSNMPField(creds.V3.PrivPassword, key)
-	}
-	return false
-}
-
-func isUndecryptableEncryptedSNMPField(value string, key any) bool {
-	if !looksLikeEncryptedSNMPField(value) {
-		return false
-	}
-	_, ok := tryDecryptFieldWithKeySource(value, key)
-	return !ok
-}
-
 func looksLikeEncryptedSNMPField(value string) bool {
 	if value == "" {
 		return false

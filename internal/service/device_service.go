@@ -188,12 +188,6 @@ func WithTopologyObservationStore(store topology.ObservationStore) DeviceService
 	}
 }
 
-func WithBootstrapScheduler(scheduler bootstrapScheduler) DeviceServiceOption {
-	return func(s *DeviceService) {
-		s.bootstrapScheduler = scheduler
-	}
-}
-
 func (s *DeviceService) defaultTopologyDiscoveryMode() domain.TopologyDiscoveryMode {
 	if s.settingsRepo == nil {
 		return domain.TopologyDiscoveryModeLLDPCDP
@@ -228,6 +222,21 @@ func (s *DeviceService) SetBootstrapScheduler(scheduler bootstrapScheduler) {
 
 func (s *DeviceService) SetRuntimeResetter(resetter runtimeResetter) {
 	s.runtimeResetter = resetter
+}
+
+// PollReschedulerForTest returns the configured pollRescheduler for testing wiring.
+func (s *DeviceService) PollReschedulerForTest() any {
+	return s.pollRescheduler
+}
+
+// BootstrapSchedulerForTest returns the configured bootstrapScheduler for testing wiring.
+func (s *DeviceService) BootstrapSchedulerForTest() any {
+	return s.bootstrapScheduler
+}
+
+// RuntimeResetterForTest returns the configured runtimeResetter for testing wiring.
+func (s *DeviceService) RuntimeResetterForTest() any {
+	return s.runtimeResetter
 }
 
 func (s *DeviceService) lifecycleErr() error {

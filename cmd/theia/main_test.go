@@ -4,11 +4,9 @@ package main
 
 import (
 	"errors"
-	"reflect"
 	"slices"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/google/uuid"
 	"github.com/gosnmp/gosnmp"
@@ -265,38 +263,11 @@ func TestWirePollRescheduler_AttachesSchedulerToDeviceService(t *testing.T) {
 
 	wirePollRescheduler(deviceService, sched)
 
-	field := reflect.ValueOf(deviceService).Elem().FieldByName("pollRescheduler")
-	if !field.IsValid() {
-		t.Fatal("pollRescheduler field missing on DeviceService")
+	if got := deviceService.PollReschedulerForTest(); got != sched {
+		t.Fatalf("attached scheduler = %p, want %p", got, sched)
 	}
-	if field.IsNil() {
-		t.Fatal("pollRescheduler field is nil after wirePollRescheduler")
-	}
-
-	attached := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface()
-	attachedScheduler, ok := attached.(*scheduler.Scheduler)
-	if !ok {
-		t.Fatalf("pollRescheduler concrete type = %T, want *scheduler.Scheduler", attached)
-	}
-	if attachedScheduler != sched {
-		t.Fatalf("attached scheduler = %p, want %p", attachedScheduler, sched)
-	}
-
-	bootstrapField := reflect.ValueOf(deviceService).Elem().FieldByName("bootstrapScheduler")
-	if !bootstrapField.IsValid() {
-		t.Fatal("bootstrapScheduler field missing on DeviceService")
-	}
-	if bootstrapField.IsNil() {
-		t.Fatal("bootstrapScheduler field is nil after wirePollRescheduler")
-	}
-
-	attachedBootstrap := reflect.NewAt(bootstrapField.Type(), unsafe.Pointer(bootstrapField.UnsafeAddr())).Elem().Interface()
-	bootstrapScheduler, ok := attachedBootstrap.(*scheduler.Scheduler)
-	if !ok {
-		t.Fatalf("bootstrapScheduler concrete type = %T, want *scheduler.Scheduler", attachedBootstrap)
-	}
-	if bootstrapScheduler != sched {
-		t.Fatalf("attached bootstrap scheduler = %p, want %p", bootstrapScheduler, sched)
+	if got := deviceService.BootstrapSchedulerForTest(); got != sched {
+		t.Fatalf("attached bootstrap scheduler = %p, want %p", got, sched)
 	}
 }
 
@@ -306,20 +277,7 @@ func TestWireRuntimeResetter_AttachesPipelineToDeviceService(t *testing.T) {
 
 	wireRuntimeResetter(deviceService, resetter)
 
-	field := reflect.ValueOf(deviceService).Elem().FieldByName("runtimeResetter")
-	if !field.IsValid() {
-		t.Fatal("runtimeResetter field missing on DeviceService")
-	}
-	if field.IsNil() {
-		t.Fatal("runtimeResetter field is nil after wireRuntimeResetter")
-	}
-
-	attached := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface()
-	attachedResetter, ok := attached.(*stubRuntimeResetter)
-	if !ok {
-		t.Fatalf("runtimeResetter concrete type = %T, want *stubRuntimeResetter", attached)
-	}
-	if attachedResetter != resetter {
-		t.Fatalf("attached runtime resetter = %p, want %p", attachedResetter, resetter)
+	if got := deviceService.RuntimeResetterForTest(); got != resetter {
+		t.Fatalf("attached runtime resetter = %p, want %p", got, resetter)
 	}
 }

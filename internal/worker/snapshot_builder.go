@@ -57,15 +57,6 @@ func buildPipelineSnapshot(
 	return snapshot
 }
 
-func buildDeviceDetailDelta(
-	device domain.Device,
-	deviceState state.DeviceState,
-	alerts []domain.AlertState,
-	promStatus ws.PrometheusStatusPayload,
-) *ws.SnapshotPayload {
-	return buildDeviceDetailDeltaWithLinks(device, deviceState, nil, alerts, promStatus)
-}
-
 func buildDeviceDetailDeltaWithLinks(
 	device domain.Device,
 	deviceState state.DeviceState,

@@ -804,10 +804,6 @@ func (p *PipelineOrchestrator) getOrBuildOverviewStateLocked() ws.RuntimeOvervie
 	return state
 }
 
-func (p *PipelineOrchestrator) IsPromAvailable() bool {
-	return p.runtime.isPromAvailable()
-}
-
 // GetPrometheusStatus retrieves prometheus status data from the background worker lifecycle.
 func (p *PipelineOrchestrator) GetPrometheusStatus() ws.PrometheusStatusPayload {
 	return p.runtime.getPrometheusStatus()
@@ -902,18 +898,6 @@ func completionTime(collectedAt time.Time) time.Time {
 	return collectedAt.UTC()
 }
 
-func cloneHostnameOverrides(in map[uuid.UUID]string) map[uuid.UUID]string {
-	if len(in) == 0 {
-		return nil
-	}
-
-	out := make(map[uuid.UUID]string, len(in))
-	for id, hostname := range in {
-		out[id] = hostname
-	}
-	return out
-}
-
 func cloneAlertGroups(in map[uuid.UUID][]domain.AlertState) map[uuid.UUID][]domain.AlertState {
 	if len(in) == 0 {
 		return nil
@@ -966,28 +950,6 @@ func snapshotPayloadEmpty(payload *ws.SnapshotPayload) bool {
 
 	return len(payload.Devices) == 0 &&
 		len(payload.Links) == 0
-}
-
-func mergeSnapshotPayload(base *ws.SnapshotPayload, delta *ws.SnapshotPayload) *ws.SnapshotPayload {
-	merged := ws.CloneSnapshot(base)
-	if merged == nil {
-		merged = ws.EmptySnapshot()
-	}
-	if delta == nil {
-		syncSnapshotCompatibility(merged)
-		return merged
-	}
-
-	for key, value := range delta.Devices {
-		merged.Devices[key] = value
-	}
-	for key, value := range delta.Links {
-		merged.Links[key] = value
-	}
-
-	syncSnapshotCompatibility(merged)
-
-	return merged
 }
 
 func applySnapshotDeltaToRuntime(base *ws.SnapshotPayload, hashes *sectionHashes, delta *ws.SnapshotPayload) (*ws.SnapshotPayload, *sectionHashes) {

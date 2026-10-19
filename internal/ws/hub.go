@@ -912,12 +912,6 @@ func (c *Client) acceptHello(cmd clientControlMessage) {
 	}
 }
 
-func (c *Client) initializeRuntimeHello(cmd clientControlMessage) {
-	c.mu.Lock()
-	c.initializeRuntimeHelloLocked(cmd)
-	c.mu.Unlock()
-}
-
 func (c *Client) initializeRuntimeQueryHello(cmd clientControlMessage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

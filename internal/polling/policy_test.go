@@ -148,7 +148,7 @@ func TestPolicyWarnsWhenIntervalCannotOutrunTimeout(t *testing.T) {
 
 	_, warnings := PolicyFromSettings(settings, 500, 300*time.Millisecond, 10*time.Second)
 
-	if !HasWarning(warnings, WarningIntervalBelowTimeoutWindow) {
+	if !hasWarning(warnings, WarningIntervalBelowTimeoutWindow) {
 		t.Fatalf("warnings = %#v, want %q", warnings, WarningIntervalBelowTimeoutWindow)
 	}
 }
@@ -164,7 +164,7 @@ func TestPolicyWarnsWhenEstimatedWorkersExceedCapacity(t *testing.T) {
 	if !policy.DegradedRisk {
 		t.Fatalf("DegradedRisk = false, want true")
 	}
-	if !HasWarning(warnings, WarningEstimatedWorkersExceeded) {
+	if !hasWarning(warnings, WarningEstimatedWorkersExceeded) {
 		t.Fatalf("warnings = %#v, want %q", warnings, WarningEstimatedWorkersExceeded)
 	}
 }
@@ -183,7 +183,7 @@ func TestPolicyFallsBackForNonFiniteSafetyMargin(t *testing.T) {
 	if !policy.DegradedRisk {
 		t.Fatalf("DegradedRisk = false, want true")
 	}
-	if !HasWarning(warnings, WarningEstimatedWorkersExceeded) {
+	if !hasWarning(warnings, WarningEstimatedWorkersExceeded) {
 		t.Fatalf("warnings = %#v, want %q", warnings, WarningEstimatedWorkersExceeded)
 	}
 }
@@ -267,7 +267,16 @@ func TestPolicyWarnsForBudgetIsolationBypass(t *testing.T) {
 
 	_, warnings := PolicyFromSettings(settings, 10, 100*time.Millisecond, 30*time.Second)
 
-	if !HasWarning(warnings, WarningBudgetExceedsGlobal) {
+	if !hasWarning(warnings, WarningBudgetExceedsGlobal) {
 		t.Fatalf("warnings = %#v, want %q", warnings, WarningBudgetExceedsGlobal)
 	}
+}
+
+func hasWarning(warnings []CapacityWarning, code WarningCode) bool {
+	for _, warning := range warnings {
+		if warning.Code == code {
+			return true
+		}
+	}
+	return false
 }

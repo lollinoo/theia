@@ -70,10 +70,6 @@ func Infof(format string, args ...any) {
 	logf(LevelInfo, "INFO", format, args...)
 }
 
-func Warnf(format string, args ...any) {
-	logf(LevelWarn, "WARN", format, args...)
-}
-
 func Errorf(format string, args ...any) {
 	logf(LevelError, "ERROR", format, args...)
 }

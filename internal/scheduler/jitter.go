@@ -6,20 +6,7 @@ import (
 	"hash/fnv"
 	"math/rand"
 	"time"
-
-	"github.com/google/uuid"
 )
-
-func initialOffset(deviceID uuid.UUID, interval time.Duration) time.Duration {
-	if interval <= 0 {
-		return 0
-	}
-
-	hasher := fnv.New64a()
-	_, _ = hasher.Write(deviceID[:])
-
-	return time.Duration(hasher.Sum64() % uint64(interval))
-}
 
 func initialOffsetForKey(key TaskKey, interval time.Duration) time.Duration {
 	if interval <= 0 {

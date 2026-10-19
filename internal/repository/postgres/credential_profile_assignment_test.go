@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -374,7 +375,7 @@ func TestGetBackupProfileForDevice_NoProfileAssigned(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when no profile assigned to device, got nil")
 	}
-	if !containsString(err.Error(), "no credential profile assigned") {
+	if !strings.Contains(err.Error(), "no credential profile assigned") {
 		t.Errorf("expected error to contain %q, got %q", "no credential profile assigned", err.Error())
 	}
 }
@@ -434,19 +435,6 @@ func TestGetBackupProfileForDevice_PrefersNonWinBox(t *testing.T) {
 		t.Errorf("expected non-WinBox profile ID %s, got %s (WinBox profile was returned instead)",
 			nonWinboxProfileID, profile.ID)
 	}
-}
-
-// containsString is a helper to avoid importing strings in this test file.
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
-			}
-			return false
-		}())
 }
 
 // --- Timestamp test: verify created_at is a valid recent time ---
