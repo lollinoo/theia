@@ -35,6 +35,7 @@ import {
   removeRouteWaypoint,
 } from './linkRouteEditing';
 import {
+  computeLinkBadgeAnchor,
   type LinkEdgeData,
   type LinkRouteEditToken,
   resolveEdgeTone,
@@ -219,7 +220,53 @@ function LinkEdgeInner({
   const sign = index % 2 === 0 ? 1 : -1;
   const magnitude = Math.ceil(index / 2) * 20;
   const labelOffsetY = sign * magnitude;
-  const tone = resolveEdgeTone(data);
+  const operStatus = data?.operStatus;
+  const alertStatus = data?.alertStatus;
+  const discoveryProtocol = data?.link?.discovery_protocol;
+  const utilization = data?.utilization;
+  const tone = useMemo(
+    () =>
+      resolveEdgeTone(
+        data
+          ? {
+              ...data,
+              operStatus,
+              alertStatus,
+              link: data.link,
+              utilization,
+            }
+          : undefined,
+      ),
+    [
+      operStatus,
+      alertStatus,
+      discoveryProtocol,
+      utilization,
+      data?.link,
+      data?.sourceIfStatus,
+      data?.targetIfStatus,
+      data?.sourceDeviceStatus,
+      data?.targetDeviceStatus,
+      data?.sourceDeviceAlertStatus,
+      data?.targetDeviceAlertStatus,
+      data?.sourceDeviceHealth,
+      data?.targetDeviceHealth,
+      data?.sourceDevicePrimaryHealth,
+      data?.targetDevicePrimaryHealth,
+      data?.sourceDeviceReachability,
+      data?.targetDeviceReachability,
+      data?.sourceDeviceNetworkReachable,
+      data?.targetDeviceNetworkReachable,
+      data?.sourceDeviceSnmpReachable,
+      data?.targetDeviceSnmpReachable,
+      data?.inertVirtualLink,
+      data?.sourceIsVirtual,
+      data?.targetIsVirtual,
+      data?.speedMismatch,
+      data?.negotiationState,
+      data?.areaColor,
+    ],
+  );
   const haloColor =
     isConnected &&
     data?.areaColor &&
@@ -239,11 +286,18 @@ function LinkEdgeInner({
           : 0.72;
   const strokeWidth = isActive || isConnected ? tone.width + 0.7 : tone.width;
   const labelYOffset = labelY + labelOffsetY;
+  const bandwidthLabel = data?.bandwidthLabel;
+  const throughputLabel = data?.throughputLabel;
+  const badgeZoom = 1;
+  const badgeAnchor = useMemo(
+    () => computeLinkBadgeAnchor(edgePath, { x: labelX, y: labelYOffset }),
+    [edgePath, labelX, labelYOffset],
+  );
   const badgePresentation = useMemo(
     () =>
       resolveLinkBadgePresentation({
         data,
-        zoom: 1,
+        zoom: badgeZoom,
         path: edgePath,
         fallbackX: labelX,
         fallbackY: labelYOffset,
@@ -252,8 +306,21 @@ function LinkEdgeInner({
         isActive,
         isConnected,
         isMuted,
+        anchor: badgeAnchor,
       }),
-    [data, edgePath, isActive, isConnected, isMuted, labelX, labelYOffset, tone],
+    [
+      badgeAnchor,
+      badgeZoom,
+      bandwidthLabel,
+      throughputLabel,
+      tone,
+      isActive,
+      isConnected,
+      isMuted,
+      edgePath,
+      labelX,
+      labelYOffset,
+    ],
   );
   const registeredBadgePresentation = canEditRoute
     ? null

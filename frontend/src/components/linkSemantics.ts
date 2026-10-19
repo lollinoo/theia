@@ -6,10 +6,47 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { Link, LinkRoute } from '../types/api';
 import { type AlertStatus, type DeviceMetricsDTO, type LinkMetricsDTO } from '../types/metrics';
 import {
-  computeLinkBadgeAnchor,
+  computeLinkBadgeAnchor as baseComputeLinkBadgeAnchor,
   type EdgeBadgeAnchor,
-  measureEdgePathLength,
 } from './edgeBadgeAnchors';
+
+/** Describes the link badge anchor contract used by the UI component boundary. */
+export type LinkBadgeAnchor = EdgeBadgeAnchor;
+
+/** Computes link badge anchor for the UI component boundary. */
+export function computeLinkBadgeAnchor(options: {
+  path: string;
+  fallbackX: number;
+  fallbackY: number;
+  parallelIndex?: number;
+}): LinkBadgeAnchor;
+export function computeLinkBadgeAnchor(
+  path: string,
+  fallbackPoint: { x: number; y: number },
+  parallelIndex?: number,
+): LinkBadgeAnchor;
+export function computeLinkBadgeAnchor(
+  pathOrOptions:
+    | string
+    | {
+        path: string;
+        fallbackX: number;
+        fallbackY: number;
+        parallelIndex?: number;
+      },
+  fallbackPoint?: { x: number; y: number },
+  parallelIndex?: number,
+): LinkBadgeAnchor {
+  if (typeof pathOrOptions === 'string') {
+    return baseComputeLinkBadgeAnchor({
+      path: pathOrOptions,
+      fallbackX: fallbackPoint?.x ?? 0,
+      fallbackY: fallbackPoint?.y ?? 0,
+      parallelIndex,
+    });
+  }
+  return baseComputeLinkBadgeAnchor(pathOrOptions);
+}
 
 /** Describes the edge emphasis contract used by the UI component boundary. */
 export type EdgeEmphasis = 'default' | 'muted' | 'connected';
@@ -161,7 +198,7 @@ interface NormalizedLinkState {
 
 interface ResolveLinkBadgeVisibilityOptions {
   zoom: number;
-  pathLength: number;
+  pathLength?: number;
   bandwidthLabel?: string;
   throughputLabel?: string;
 }
@@ -177,6 +214,7 @@ interface ResolveLinkBadgePresentationOptions {
   isActive: boolean;
   isConnected: boolean;
   isMuted: boolean;
+  anchor?: LinkBadgeAnchor;
 }
 
 const LINK_BADGE_STACK_ORDER: readonly LinkBadgeKind[] = ['rate', 'throughput'];
@@ -714,23 +752,24 @@ export function resolveLinkBadgePresentation({
   isActive,
   isConnected,
   isMuted,
+  anchor,
 }: ResolveLinkBadgePresentationOptions): LinkBadgePresentation {
-  const pathLength = measureEdgePathLength(path);
   const visibility = resolveLinkBadgeVisibility({
     zoom,
-    pathLength,
     bandwidthLabel: data?.bandwidthLabel,
     throughputLabel: data?.throughputLabel,
   });
   const items = buildStackedLinkBadgeItems(data, visibility, edgeTone);
 
   return {
-    anchor: computeLinkBadgeAnchor({
-      path,
-      fallbackX,
-      fallbackY,
-      parallelIndex,
-    }),
+    anchor:
+      anchor ??
+      computeLinkBadgeAnchor({
+        path,
+        fallbackX,
+        fallbackY,
+        parallelIndex,
+      }),
     items,
     opacity: isMuted ? 0.5 : isConnected ? 1 : isActive ? 0.96 : 0.9,
     scale: resolveLinkBadgeScale(zoom),
