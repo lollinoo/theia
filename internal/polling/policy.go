@@ -125,15 +125,6 @@ func EstimateRequiredWorkers(deviceCount int, observedP95 time.Duration, shortes
 	return int(math.Ceil(workers))
 }
 
-func HasWarning(warnings []CapacityWarning, code WarningCode) bool {
-	for _, warning := range warnings {
-		if warning.Code == code {
-			return true
-		}
-	}
-	return false
-}
-
 func intSetting(repo SettingsGetter, key string, fallback int) int {
 	if repo == nil {
 		return fallback

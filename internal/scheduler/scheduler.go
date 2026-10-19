@@ -683,21 +683,6 @@ func (s *Scheduler) pushReadyFront(item *heapItem) {
 	s.ready[priority] = append([]*heapItem{item}, s.ready[priority]...)
 }
 
-func (s *Scheduler) popReady() *heapItem {
-	for priority := range s.ready {
-		if len(s.ready[priority]) == 0 {
-			continue
-		}
-
-		item := s.ready[priority][0]
-		s.ready[priority] = s.ready[priority][1:]
-		item.queued = false
-		return item
-	}
-
-	return nil
-}
-
 func (s *Scheduler) popReadyEligible(limits dispatchLimits, scanState *dispatchScanState) *heapItem {
 	// Bootstrap-Once is bounded operator-initiated work. Prefer it after essential health checks,
 	// but before recurring background queues so an overloaded profile cannot starve discovery.
@@ -1101,14 +1086,6 @@ func taskIsBackground(task PollTask) bool {
 	return task.Kind == polling.TaskKindBackground || task.Key.Kind == polling.TaskKindBackground
 }
 
-func (s *Scheduler) maxInFlight() int {
-	return pollingbudget.Sum(s.classBudgets())
-}
-
-func (s *Scheduler) maxDispatchInFlight() int {
-	return s.dispatchLimits().globalLimit
-}
-
 func (s *Scheduler) maxEssentialInFlight() int {
 	policy, _ := polling.PolicyFromSettings(s.settingsRepo, 0, 0, 0)
 	return clampEssentialLimit(policy.EssentialWorkers, s.bufferLimit())
@@ -1139,22 +1116,6 @@ func clampEssentialLimit(limit int, bufferLimit int) int {
 		return 1
 	}
 	return limit
-}
-
-func (s *Scheduler) canDispatch(task PollTask, budgets map[domain.VolatilityClass]int, policy polling.Policy) bool {
-	return s.dispatchBlockReason(task, budgets, policy) == ""
-}
-
-func (s *Scheduler) dispatchBlockReason(task PollTask, budgets map[domain.VolatilityClass]int, policy polling.Policy) string {
-	return s.dispatchBlockReasonWithLimits(task, dispatchLimits{
-		budgets:        budgets,
-		policy:         policy,
-		essentialLimit: s.maxEssentialInFlight(),
-	})
-}
-
-func (s *Scheduler) dispatchBlockReasonWithLimits(task PollTask, limits dispatchLimits) string {
-	return s.dispatchBlockWithLimits(task, limits).reason
 }
 
 func (s *Scheduler) dispatchBlockWithLimits(task PollTask, limits dispatchLimits) isolationBlock {
@@ -1189,14 +1150,6 @@ func (s *Scheduler) decrementInFlight(task PollTask) {
 		s.inFlightByClass[task.VolatilityClass]--
 	}
 	s.decrementIsolationCounts(task)
-}
-
-func (s *Scheduler) withinIsolationBudgets(task PollTask, policy polling.Policy) bool {
-	return s.isolationBlockReason(task, policy) == ""
-}
-
-func (s *Scheduler) isolationBlockReason(task PollTask, policy polling.Policy) string {
-	return s.isolationBlock(task, policy).reason
 }
 
 func (s *Scheduler) isolationBlock(task PollTask, policy polling.Policy) isolationBlock {
@@ -1405,10 +1358,6 @@ func scheduledVolatilityClasses() []domain.VolatilityClass {
 		domain.VolatilityClassOperational,
 		domain.VolatilityClassStatic,
 	}
-}
-
-func scheduledVolatilityClassesForDevice(device domain.Device) []domain.VolatilityClass {
-	return scheduledBackgroundVolatilityClassesForDevice(device)
 }
 
 func scheduledBackgroundVolatilityClassesForDevice(device domain.Device) []domain.VolatilityClass {
@@ -1653,13 +1602,6 @@ drainRedueRequests:
 			return
 		}
 	}
-}
-
-func (s *Scheduler) recordMetrics() {
-	now := s.now().UTC()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	s.recordMetricsLocked(now)
 }
 
 func (s *Scheduler) recordMetricsLocked(now time.Time) {
