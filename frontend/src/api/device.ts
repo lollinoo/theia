@@ -12,9 +12,7 @@ import {
   parseDevicesResponse,
   parseInterfacesResponse,
   parseLinksResponse,
-  parseWinBoxCredentialsResponse,
   type TopologyDiscoveryMode,
-  type WinBoxCredentials,
 } from '../types/api';
 import { requestJSON, requestJSONWithBody } from './transport';
 
@@ -379,14 +377,6 @@ export async function clearWinBoxProfile(deviceId: string): Promise<void> {
     `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-profile`,
     'DELETE',
   );
-}
-
-// fetchWinBoxCredentials requests privileged WinBox credentials for one device.
-export async function fetchWinBoxCredentials(deviceId: string): Promise<WinBoxCredentials> {
-  const payload = await requestJSON(
-    `/api/v1/devices/${encodeURIComponent(deviceId)}/winbox-credentials`,
-  );
-  return parseWinBoxCredentialsResponse(payload);
 }
 
 // createBridgeLaunchRequest creates a short-lived bridge launch token for one device.
