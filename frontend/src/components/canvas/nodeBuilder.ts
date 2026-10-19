@@ -13,27 +13,7 @@ import {
 } from '../deviceVisualState';
 import { snapPositionToGrid } from './canvasGrid';
 import { preferVisibleLinks } from './edgeBuilder';
-
-function normalizeSnapshotStatus(status: string | undefined): Device['status'] | undefined {
-  switch (status) {
-    case 'up':
-    case 'down':
-    case 'probing':
-    case 'unknown':
-      return status;
-    default:
-      return undefined;
-  }
-}
-
-function snapshotMonitoringState(
-  device: Device,
-  runtimeDevice: SnapshotPayload['devices'][string] | undefined,
-) {
-  return runtimeDevice?.operational_status === 'unmonitored'
-    ? 'unmonitored'
-    : resolveDeviceMonitoringState(device);
-}
+import { buildRuntimeState, type RuntimeState } from './runtimeAdapters';
 
 function hasUsablePosition(
   position: { x: number; y: number; pinned?: boolean } | undefined,
@@ -48,24 +28,104 @@ function selfLinkScore(link: Link): number {
   return score;
 }
 
+export interface BuildTopologyNodesInput {
+  devices: Device[];
+  savedPositions?: Map<string, { x: number; y: number; pinned?: boolean }>;
+  computedPositions?: Map<string, { x: number; y: number }>;
+  explicitPositions?: Map<string, { x: number; y: number }>;
+  editMode?: boolean;
+  openDeviceMenu?: (event: React.MouseEvent, deviceId: string) => void;
+  pendingSnapshot?: SnapshotPayload | null;
+  snapshot?: SnapshotPayload | null;
+  alerts?: AlertDTO[];
+  links?: Link[];
+  onSelfLinkClick?: (link: Link) => void;
+  currentPositions?: Map<string, { x: number; y: number; pinned?: boolean }>;
+  placementDeviceIds?: Set<string>;
+  snapGrid?: SnapGrid | null;
+  runtimeState?: RuntimeState;
+}
+
 /** Builds topology nodes for the topology canvas. */
 export function buildTopologyNodes(
   devices: Device[],
-  savedPositions: Map<string, { x: number; y: number; pinned?: boolean }>,
-  computedPositions: Map<string, { x: number; y: number }>,
-  explicitPositions: Map<string, { x: number; y: number }>,
-  editMode: boolean,
-  openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void,
-  pendingSnapshot: SnapshotPayload | null,
+  savedPositions?: Map<string, { x: number; y: number; pinned?: boolean }>,
+  computedPositions?: Map<string, { x: number; y: number }>,
+  explicitPositions?: Map<string, { x: number; y: number }>,
+  editMode?: boolean,
+  openDeviceMenu?: (event: React.MouseEvent, deviceId: string) => void,
+  pendingSnapshot?: SnapshotPayload | null,
+  alerts?: AlertDTO[],
+  links?: Link[],
+  onSelfLinkClick?: (link: Link) => void,
+  currentPositions?: Map<string, { x: number; y: number; pinned?: boolean }>,
+  placementDeviceIds?: Set<string>,
+  snapGrid?: SnapGrid | null,
+  runtimeState?: RuntimeState,
+): DeviceNode[];
+export function buildTopologyNodes(input: BuildTopologyNodesInput): DeviceNode[];
+export function buildTopologyNodes(
+  devicesOrInput: Device[] | BuildTopologyNodesInput,
+  savedPositions: Map<string, { x: number; y: number; pinned?: boolean }> = new Map(),
+  computedPositions: Map<string, { x: number; y: number }> = new Map(),
+  explicitPositions: Map<string, { x: number; y: number }> = new Map(),
+  editMode = false,
+  openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void = () => undefined,
+  pendingSnapshot: SnapshotPayload | null = null,
   alerts: AlertDTO[] = [],
   links: Link[] = [],
   onSelfLinkClick?: (link: Link) => void,
   currentPositions: Map<string, { x: number; y: number; pinned?: boolean }> = new Map(),
-  placementDeviceIds: Set<string> = new Set(devices.map((device) => device.id)),
+  placementDeviceIds?: Set<string>,
   snapGrid: SnapGrid | null = null,
+  runtimeState?: RuntimeState,
 ): DeviceNode[] {
+  const input: BuildTopologyNodesInput = Array.isArray(devicesOrInput)
+    ? {
+        devices: devicesOrInput,
+        savedPositions,
+        computedPositions,
+        explicitPositions,
+        editMode,
+        openDeviceMenu,
+        pendingSnapshot,
+        alerts,
+        links,
+        onSelfLinkClick,
+        currentPositions,
+        placementDeviceIds:
+          placementDeviceIds ?? new Set(devicesOrInput.map((device) => device.id)),
+        snapGrid,
+        runtimeState,
+      }
+    : devicesOrInput;
+
+  const devices = input.devices;
+  const resolvedSavedPositions = input.savedPositions ?? new Map();
+  const resolvedComputedPositions = input.computedPositions ?? new Map();
+  const resolvedExplicitPositions = input.explicitPositions ?? new Map();
+  const resolvedCurrentPositions = input.currentPositions ?? new Map();
+  const resolvedPlacementDeviceIds =
+    input.placementDeviceIds ?? new Set(devices.map((device) => device.id));
+  const resolvedEditMode = input.editMode ?? false;
+  const resolvedOpenDeviceMenu = input.openDeviceMenu ?? (() => undefined);
+  const resolvedAlerts = input.alerts ?? [];
+  const resolvedLinks = input.links ?? [];
+  const resolvedSnapGrid = input.snapGrid ?? null;
+  const snapshot = input.snapshot ?? input.pendingSnapshot ?? null;
+
+  const resolvedRuntimeState =
+    input.runtimeState ??
+    buildRuntimeState({
+      devices,
+      links: resolvedLinks,
+      snapshot,
+      alerts: resolvedAlerts,
+      prometheusStatus: null,
+    });
+
   const selfLinksByDeviceId = new Map<string, Link[]>();
-  for (const link of preferVisibleLinks(links)) {
+  for (const link of preferVisibleLinks(resolvedLinks)) {
     if (link.source_device_id !== link.target_device_id) continue;
     const deviceLinks = selfLinksByDeviceId.get(link.source_device_id) ?? [];
     deviceLinks.push(link);
@@ -81,11 +141,11 @@ export function buildTopologyNodes(
   }
 
   return devices.map((device) => {
-    const current = currentPositions.get(device.id);
-    const saved = savedPositions.get(device.id);
-    const explicit = explicitPositions.get(device.id);
-    const computed = placementDeviceIds.has(device.id)
-      ? computedPositions.get(device.id)
+    const current = resolvedCurrentPositions.get(device.id);
+    const saved = resolvedSavedPositions.get(device.id);
+    const explicit = resolvedExplicitPositions.get(device.id);
+    const computed = resolvedPlacementDeviceIds.has(device.id)
+      ? resolvedComputedPositions.get(device.id)
       : undefined;
     const position = hasUsablePosition(explicit)
       ? explicit
@@ -99,29 +159,26 @@ export function buildTopologyNodes(
       !hasUsablePosition(current) && !hasUsablePosition(saved) && hasUsablePosition(computed);
     const unresolvedPosition = position ?? { x: 0, y: 0 };
     const resolvedPosition =
-      snapGrid && (explicitlyPlaced || computedPlacement)
-        ? snapPositionToGrid(unresolvedPosition, snapGrid)
+      resolvedSnapGrid && (explicitlyPlaced || computedPlacement)
+        ? snapPositionToGrid(unresolvedPosition, resolvedSnapGrid)
         : unresolvedPosition;
     const selfLinks = selfLinksByDeviceId.get(device.id);
 
-    const runtimeDevice = pendingSnapshot?.devices[device.id];
-    const monitoringState = snapshotMonitoringState(device, runtimeDevice);
-    const runtimeStatus =
-      normalizeSnapshotStatus(runtimeDevice?.operational_status) ?? device.status;
-    const runtimeDeviceForDisplay =
-      device.status === runtimeStatus ? device : { ...device, status: runtimeStatus };
-
-    const nodeMetrics = sanitizeDeviceMetricsForDisplay(
-      runtimeDeviceForDisplay,
-      runtimeDevice ?? null,
-      monitoringState,
-    );
-    const runtime: DeviceNodeRuntimeData = {
-      status: runtimeStatus,
-      metrics: nodeMetrics,
-      alertStatus: runtimeDevice?.alert_status ?? alertStatusForDevice(device.id, alerts),
-      monitoringState,
-    };
+    const runtimeDevice = resolvedRuntimeState.devicesById.get(device.id);
+    const monitoringState = runtimeDevice?.monitoringState ?? resolveDeviceMonitoringState(device);
+    const runtime: DeviceNodeRuntimeData = runtimeDevice
+      ? {
+          status: runtimeDevice.device.status,
+          metrics: runtimeDevice.metrics,
+          alertStatus: runtimeDevice.alertStatus,
+          monitoringState: runtimeDevice.monitoringState,
+        }
+      : {
+          status: device.status,
+          metrics: sanitizeDeviceMetricsForDisplay(device, null, monitoringState),
+          alertStatus: alertStatusForDevice(device.id, resolvedAlerts),
+          monitoringState,
+        };
 
     // Virtual devices have no SNMP metrics; detect and propagate flags
     const isVirtual = device.device_type === 'virtual';
@@ -138,12 +195,12 @@ export function buildTopologyNodes(
         runtime,
         pinned: explicitlyPlaced ? false : (current?.pinned ?? saved?.pinned ?? false),
         highlighted: false,
-        editMode,
-        onContextMenu: openDeviceMenu,
+        editMode: resolvedEditMode,
+        onContextMenu: resolvedOpenDeviceMenu,
         isVirtual,
         subtype: isVirtual ? (device.tags?.virtual_subtype ?? 'generic') : undefined,
         selfLinks,
-        onSelfLinkClick,
+        onSelfLinkClick: input.onSelfLinkClick,
       },
     };
   });
