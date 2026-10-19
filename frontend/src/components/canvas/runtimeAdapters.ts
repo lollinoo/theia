@@ -213,23 +213,3 @@ export function buildRuntimeState({
     interfaceMetricsByDeviceId,
   };
 }
-
-/** Primary health priority for the topology canvas. */
-export function primaryHealthPriority(value: PrimaryHealth | null): number {
-  switch (value) {
-    case 'quarantined':
-      return 0;
-    case 'unreachable':
-      return 1;
-    case 'snmp_degraded':
-      return 2;
-    case 'up_stale':
-      return 3;
-    case 'up_fresh':
-      return 4;
-    case 'probing':
-      return 5;
-    default:
-      return 6;
-  }
-}

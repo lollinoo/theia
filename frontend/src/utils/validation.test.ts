@@ -8,7 +8,6 @@ import {
   SNMP_AUTH_PROTOCOLS,
   SNMP_PRIV_PROTOCOLS,
   SNMP_SECURITY_LEVELS,
-  validateCoordinate,
   validateIntervalAllowlist,
   validateIPOrHostname,
   validateMaxLength,
@@ -270,34 +269,6 @@ describe('validateSNMPv3SecurityLevel', () => {
     expect(validateSNMPv3SecurityLevel('invalid')).toBe(
       'Security level must be one of: noAuthNoPriv, authNoPriv, authPriv',
     );
-  });
-});
-
-// --- validateCoordinate ---
-
-describe('validateCoordinate', () => {
-  it('returns null for positive number', () => {
-    expect(validateCoordinate(100, 'X')).toBeNull();
-  });
-
-  it('returns null for negative number', () => {
-    expect(validateCoordinate(-500, 'Y')).toBeNull();
-  });
-
-  it('returns null for zero', () => {
-    expect(validateCoordinate(0, 'X')).toBeNull();
-  });
-
-  it('returns error for NaN', () => {
-    expect(validateCoordinate(NaN, 'X')).toBe('X must be a valid number');
-  });
-
-  it('returns error for positive Infinity', () => {
-    expect(validateCoordinate(Infinity, 'X')).toBe('X must be a valid number');
-  });
-
-  it('returns error for negative Infinity', () => {
-    expect(validateCoordinate(-Infinity, 'Y')).toBe('Y must be a valid number');
   });
 });
 

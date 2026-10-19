@@ -87,18 +87,10 @@ const maxCanvasMetricSamples = 1000;
 const maxCanvasRenderMetricDurations = 1000;
 let nodeCanvasMetrics: CanvasMetricSample[] = [];
 let canvasRenderMetricsEnabled = false;
-let canvasRenderMetricSequence = 0;
 const canvasRuntimeMetricAggregates = new Map<
   string,
   { count: number; minMs: number; maxMs: number; totalMs: number; durations: number[] }
 >();
-
-/** Describes the canvas render metric measurement contract used by the topology canvas. */
-export interface CanvasRenderMetricMeasurement {
-  component: string;
-  startedAt: number;
-  markPrefix: string;
-}
 
 function metricSamples(): CanvasMetricSample[] {
   if (typeof window === 'undefined') {
@@ -263,65 +255,6 @@ function finalizeMeasurement(
     recordedAt,
     metadata: { trigger },
   });
-}
-
-/** Measures canvas metric for the topology canvas. */
-export function measureCanvasMetric<T>(
-  name: CanvasMetricName,
-  scenario: CanvasPerfScenarioName,
-  work: () => T,
-  metadata?: Record<string, unknown>,
-): T {
-  const startedAt = nowMs();
-  const markPrefix = `theia:canvas:${scenario}:${name}:${Date.now()}`;
-  safeMark(`${markPrefix}:start`);
-
-  try {
-    return work();
-  } finally {
-    const endedAt = nowMs();
-    const durationMs = Math.max(0, roundMetric(endedAt - startedAt));
-    const endMark = `${markPrefix}:end`;
-    safeMark(endMark);
-    safeMeasure(markPrefix, `${markPrefix}:start`, endMark);
-    recordCanvasMetric({
-      name,
-      scenario,
-      durationMs,
-      timestamp: Date.now(),
-      metadata,
-    });
-  }
-}
-
-/** Starts canvas render metric for the topology canvas. */
-export function startCanvasRenderMetric(component: string): CanvasRenderMetricMeasurement | null {
-  if (!isCanvasRenderMetricsEnabled()) {
-    return null;
-  }
-
-  const startedAt = nowMs();
-  canvasRenderMetricSequence += 1;
-  const markPrefix = `theia:canvas:render:${component}:${Date.now()}:${canvasRenderMetricSequence}`;
-  safeMark(`${markPrefix}:start`);
-  return { component, startedAt, markPrefix };
-}
-
-/** Finishes canvas render metric for the topology canvas. */
-export function finishCanvasRenderMetric(
-  measurement: CanvasRenderMetricMeasurement | null,
-  metadata: Record<string, unknown> = {},
-): void {
-  if (measurement === null) {
-    return;
-  }
-
-  const endedAt = nowMs();
-  const durationMs = Math.max(0, roundMetric(endedAt - measurement.startedAt));
-  const endMark = `${measurement.markPrefix}:end`;
-  safeMark(endMark);
-  safeMeasure(measurement.markPrefix, `${measurement.markPrefix}:start`, endMark);
-  recordCanvasComponentRenderMetric(measurement.component, durationMs, metadata);
 }
 
 /** Records canvas component render metric for the topology canvas. */

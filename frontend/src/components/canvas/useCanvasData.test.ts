@@ -23,15 +23,16 @@ import {
   resetCanvasRuntimeBootstrap,
 } from '../../hooks/canvasRuntimeBootstrap';
 import { computeForceLayout } from '../../hooks/useAutoLayout';
-import type { Area, Device, Link, LinkRoute } from '../../types/api';
+import { mockDevice, mockLink } from '../../test/canvasFixtures';
+import type { Area, Device, LinkRoute } from '../../types/api';
 import type { PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { exportCanvasDiagnostics, resetCanvasDiagnostics } from './canvasDiagnostics';
 import {
+  defaultPollingIntervalMs,
   manualEdgeMigrationStorageKey,
   manualEdgeStorageKey,
-  staleThresholdMs,
 } from './canvasHelpers';
 import type { CanvasMeasurementRecord } from './canvasInstrumentation';
 import { buildTopologyEdges } from './edgeBuilder';
@@ -105,30 +106,6 @@ vi.mock('./edgeBuilder', () => ({
   preferVisibleLinks: vi.fn((links) => links),
 }));
 
-function mockDevice(overrides: Partial<Device> = {}): Device {
-  return {
-    id: 'dev-1',
-    hostname: 'router-01',
-    ip: '10.0.0.1',
-    device_type: 'router',
-    poll_class: 'standard',
-    poll_interval_override: null,
-    status: 'up',
-    sys_name: 'router-01',
-    sys_descr: 'RouterOS',
-    hardware_model: 'RB4011',
-    vendor: 'mikrotik',
-    managed: true,
-    interfaces: [],
-    area_ids: [],
-    backup_supported: true,
-    metrics_source: 'prometheus',
-    prometheus_label_name: 'instance',
-    prometheus_label_value: '10.0.0.1:9100',
-    ...overrides,
-  };
-}
-
 function mockArea(overrides: Partial<Area> = {}): Area {
   return {
     id: 'area-1',
@@ -138,22 +115,6 @@ function mockArea(overrides: Partial<Area> = {}): Area {
     device_count: 1,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
-    ...overrides,
-  };
-}
-
-function mockLink(overrides: Partial<Link> = {}): Link {
-  return {
-    id: 'link-1',
-    source_device_id: 'dev-1',
-    source_if_name: 'ether1',
-    target_device_id: 'dev-2',
-    target_if_name: 'ether2',
-    discovery_protocol: 'lldp',
-    source_if_speed: 1_000_000_000,
-    source_if_oper_status: 'up',
-    target_if_speed: 1_000_000_000,
-    target_if_oper_status: 'up',
     ...overrides,
   };
 }
@@ -1538,7 +1499,7 @@ describe('useCanvasData', () => {
     });
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(staleThresholdMs + 10_000);
+      await vi.advanceTimersByTimeAsync(defaultPollingIntervalMs * 2 + 10_000);
     });
 
     expect(result.current.nodes).toHaveLength(1);

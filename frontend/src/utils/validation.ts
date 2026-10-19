@@ -190,17 +190,6 @@ export function validateSNMPv3SecurityLevel(level: string): string | null {
 }
 
 /**
- * Validates that a coordinate value is a finite number (not NaN or Infinity).
- * Returns an error message string or null if valid.
- */
-export function validateCoordinate(value: number, fieldName: string): string | null {
-  if (!Number.isFinite(value)) {
-    return `${fieldName} must be a valid number`;
-  }
-  return null;
-}
-
-/**
  * Validates that a value is in the allowed backup interval allowlist.
  * Returns an error message string or null if valid.
  */

@@ -2,48 +2,10 @@
  * Exercises edge builder topology canvas behavior so refactors preserve the documented contract.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { Device, Link } from '../../types/api';
+import { mockDevice, mockLink } from '../../test/canvasFixtures';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import { buildEdgeData, buildTopologyEdges } from './edgeBuilder';
-
-function mockDevice(overrides: Partial<Device> = {}): Device {
-  return {
-    id: 'dev-1',
-    hostname: 'router-01',
-    ip: '10.0.0.1',
-    device_type: 'router',
-    status: 'up',
-    sys_name: 'router-01',
-    sys_descr: 'RouterOS',
-    hardware_model: 'RB4011',
-    vendor: 'mikrotik',
-    managed: true,
-    interfaces: [],
-    backup_supported: false,
-    metrics_source: 'prometheus',
-    prometheus_label_name: 'instance',
-    prometheus_label_value: '10.0.0.1:9100',
-    area_ids: [],
-    ...overrides,
-  };
-}
-
-function mockLink(overrides: Partial<Link> = {}): Link {
-  return {
-    id: 'link-1',
-    source_device_id: 'dev-1',
-    source_if_name: 'ether1',
-    target_device_id: 'dev-2',
-    target_if_name: 'ether2',
-    discovery_protocol: 'lldp',
-    source_if_speed: 0,
-    source_if_oper_status: '',
-    target_if_speed: 0,
-    target_if_oper_status: '',
-    ...overrides,
-  };
-}
 
 function mockNode(id: string, x: number, y: number): DeviceNode {
   return {
