@@ -48,7 +48,7 @@ import { type ScreenRect } from './newNodePlacement';
 import { buildExplicitNodePlacements } from './newNodePlacementAdapter';
 import { buildManualNodePositionUpdate } from './nodePositionUpdate';
 import { buildAlertsPanelModel } from './panelAdapters';
-import { buildRuntimeState } from './runtimeAdapters';
+import { buildRuntimeState, type RuntimeState } from './runtimeAdapters';
 import { applyRuntimeSnapshotPatch } from './runtimeSnapshotPatch';
 import {
   createStructuralRefreshQueue,
@@ -86,7 +86,6 @@ interface UseCanvasDataParams {
   mapName?: string;
   snapshot: SnapshotPayload | null;
   alerts?: AlertDTO[];
-  reconnecting: boolean;
   prometheusStatus: PrometheusStatusPayload | null;
   editMode: boolean;
   openDeviceMenu: (event: React.MouseEvent, deviceId: string) => void;
@@ -113,6 +112,7 @@ interface UseCanvasDataReturn {
   setDevices: React.Dispatch<React.SetStateAction<Device[]>>;
   topologyLinks: Link[];
   topologyAreas: Area[];
+  runtimeState: RuntimeState;
   runtimeSummary: RuntimeSummary;
   loading: boolean;
   error: string | null;
@@ -225,21 +225,26 @@ export function useCanvasData({
   const { fetchPositions, savePositions, savePositionsImmediately, withPositionSaveFence } =
     usePositions(mapId);
 
+  const runtimeState = useMemo<RuntimeState>(
+    () =>
+      buildRuntimeState({
+        devices,
+        links: topologyLinks,
+        snapshot,
+        alerts,
+        prometheusStatus,
+      }),
+    [alerts, devices, prometheusStatus, snapshot, topologyLinks],
+  );
+
   const runtimeSummary = useMemo<RuntimeSummary>(() => {
-    const runtimeState = buildRuntimeState({
-      devices,
-      links: topologyLinks,
-      snapshot,
-      alerts,
-      prometheusStatus,
-    });
     const alertsPanelModel = buildAlertsPanelModel({ alerts, runtimeState });
 
     return {
       alertCount: alertsPanelModel.activeAlertCount,
       prometheusDiagnosticsVisible: isPrometheusUnavailable(prometheusStatus),
     };
-  }, [alerts, devices, prometheusStatus, snapshot, topologyLinks]);
+  }, [alerts, prometheusStatus, runtimeState]);
 
   const [topologyRecoveryNotice, setTopologyRecoveryNotice] =
     useState<TopologyRecoveryNotice | null>(null);
@@ -1067,6 +1072,7 @@ export function useCanvasData({
     setDevices,
     topologyLinks,
     topologyAreas,
+    runtimeState,
     runtimeSummary,
     loading,
     error,

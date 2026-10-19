@@ -228,13 +228,3 @@ func isWinboxCredentialsRevealPath(path string) bool {
 		parts[1] == "winbox-credentials" &&
 		parts[2] == "reveal"
 }
-
-// indexOf returns the first byte offset of a substring or -1 when absent.
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}

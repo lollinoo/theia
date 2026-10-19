@@ -22,7 +22,7 @@ import { removeDeviceFromCanvasMap } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useWinboxFlow } from '../hooks/useWinboxFlow';
-import type { Area, CanvasMap, Device, Link } from '../types/api';
+import type { Area, Device, Link } from '../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../types/metrics';
 import { resolveGrafanaDashboardUrl } from '../utils/grafanaDashboard';
 import { CanvasChromeControls } from './canvas/CanvasChromeControls';
@@ -189,13 +189,9 @@ interface CanvasProps {
   topologyImportEnabled?: boolean;
   importedNodePlacementRequest?: ImportedNodePlacementRequest | null;
   onImportedNodePlacementConsumed?: (requestId: string) => void;
-  maps?: CanvasMap[];
-  areas?: Area[];
   onDevicesChange?: (devices: Device[]) => void;
   onLinksChange?: (links: Link[]) => void;
   onAreaSelect?: (areaId: string | null) => void;
-  onMapSelect?: (map: CanvasMap) => void;
-  onManageMaps?: () => void;
   onTopologyAreasChange?: (areas: Area[]) => void;
   onTopologyLoadingChange?: (loading: boolean) => void;
   onDetailDeviceChange?: (deviceId: string | null) => void;
@@ -373,20 +369,8 @@ export default function Canvas({
 
   useEffect(() => {
     if (!effectiveChromeHidden) return;
-
-    setPanelContent(null);
-    setDeviceMenu(null);
-    setEdgeMenu(null);
-    setShowSearch(false);
-    setShowShortcuts(false);
-  }, [
-    effectiveChromeHidden,
-    setDeviceMenu,
-    setEdgeMenu,
-    setPanelContent,
-    setShowSearch,
-    setShowShortcuts,
-  ]);
+    closeCanvasOverlays();
+  }, [closeCanvasOverlays, effectiveChromeHidden]);
 
   useEffect(() => {
     if (previousMapKeyRef.current === null) {
@@ -542,6 +526,7 @@ export default function Canvas({
     setDevices,
     topologyLinks,
     topologyAreas = [],
+    runtimeState: canvasRuntimeState,
     loading,
     error,
     renderedMapKey,
@@ -562,7 +547,6 @@ export default function Canvas({
     mapName,
     snapshot,
     alerts,
-    reconnecting,
     prometheusStatus,
     editMode,
     onLinkRouteCommit,
@@ -709,6 +693,7 @@ export default function Canvas({
   );
   const runtimeState = useMemo(
     () =>
+      canvasRuntimeState ??
       buildRuntimeState({
         devices,
         links: topologyLinks,
@@ -716,7 +701,7 @@ export default function Canvas({
         alerts,
         prometheusStatus,
       }),
-    [devices, topologyLinks, snapshot, alerts, prometheusStatus],
+    [canvasRuntimeState, devices, topologyLinks, snapshot, alerts, prometheusStatus],
   );
 
   // Build a lookup for area colors (adapted for current theme)

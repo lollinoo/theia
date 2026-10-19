@@ -8,7 +8,6 @@ import {
   createCanvasMap,
   deleteCanvasMap,
   duplicateCanvasMap,
-  fetchAreas,
   fetchCanvasMaps,
   setCanvasMapPrimary,
   updateCanvasMap,
@@ -88,7 +87,6 @@ function App() {
   const [detailDeviceId, setDetailDeviceId] = useState<string | null>(null);
   const [canvasDevices, setCanvasDevices] = useState<Device[]>([]);
   const [canvasLinks, setCanvasLinks] = useState<Link[]>([]);
-  const [, setAreas] = useState<Area[]>([]);
   const [canvasTopologyAreas, setCanvasTopologyAreas] = useState<Area[]>([]);
   const [canvasTopologyLoading, setCanvasTopologyLoading] = useState(true);
   const [canvasMaps, setCanvasMaps] = useState<CanvasMap[]>([]);
@@ -129,15 +127,6 @@ function App() {
     { requireRuntimeBootstrap: true, runtimeUpdatesPaused },
   );
 
-  // Fetch areas on mount
-  useEffect(() => {
-    fetchAreas()
-      .then(setAreas)
-      .catch(() => {
-        // Area fetch failure is non-fatal; Hub will show empty state
-      });
-  }, []);
-
   const loadCanvasMaps = useCallback(async (): Promise<CanvasMap[] | null> => {
     if (!enableSavedMaps) {
       return null;
@@ -163,15 +152,10 @@ function App() {
     void loadCanvasMaps();
   }, [loadCanvasMaps]);
 
-  // Re-fetch areas/maps when switching to hub view (pick up changes from settings)
+  // Re-fetch maps when switching to hub view if not yet loaded
   useEffect(() => {
-    if (activeView === 'hub') {
-      fetchAreas()
-        .then(setAreas)
-        .catch(() => {});
-      if (!canvasMapsLoaded && !canvasMapsLoading) {
-        void loadCanvasMaps();
-      }
+    if (activeView === 'hub' && !canvasMapsLoaded && !canvasMapsLoading) {
+      void loadCanvasMaps();
     }
   }, [activeView, canvasMapsLoaded, canvasMapsLoading, loadCanvasMaps]);
 
@@ -305,12 +289,7 @@ function App() {
   const handleAreasChange = useCallback(() => {
     if (enableSavedMaps && selectedMapId) {
       setTopologyRefreshRevision((revision) => revision + 1);
-      return;
     }
-
-    fetchAreas()
-      .then(setAreas)
-      .catch(() => {});
   }, [selectedMapId]);
 
   const handleCreateMapFromArea = useCallback((area: Area) => {

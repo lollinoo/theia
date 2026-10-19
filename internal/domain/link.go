@@ -3,10 +3,78 @@ package domain
 // This file defines link domain contracts and lifecycle invariants.
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// NormalizeSysNameLookup normalizes an SNMP sysName to its lowercase short hostname for topology matching.
+func NormalizeSysNameLookup(sysName string) string {
+	normalized := strings.ToLower(strings.TrimSpace(sysName))
+	normalized = strings.TrimSuffix(normalized, ".")
+	if idx := strings.Index(normalized, "."); idx >= 0 {
+		normalized = normalized[:idx]
+	}
+	return normalized
+}
+
+// PhysicalInterfaceAnchor extracts a canonical physical interface anchor for topology link deduplication.
+func PhysicalInterfaceAnchor(name string) string {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if normalized == "" {
+		return ""
+	}
+
+	virtualHints := []string{
+		"vlan", "vrf", "vpn", "bridge", "br-", "bond", "loopback", "lo",
+		"gre", "eoip", "wg", "wireguard", "pppoe", "ppp", "sstp", "ovpn",
+		"l2tp", "vxlan", "veth", "tap", "tun",
+	}
+	for _, hint := range virtualHints {
+		if strings.Contains(normalized, hint) {
+			return ""
+		}
+	}
+
+	physicalPatterns := []string{
+		"ether", "eth", "sfp-sfpplus", "sfp", "qsfp", "ens", "eno", "enp",
+		"gigabitethernet", "tengigabitethernet", "fastethernet", "ge-", "xe-", "et-",
+	}
+	for _, pattern := range physicalPatterns {
+		if idx := strings.Index(normalized, pattern); idx >= 0 {
+			anchor := normalized[idx:]
+			for i, r := range anchor {
+				if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '/') {
+					anchor = anchor[:i]
+					break
+				}
+			}
+			anchor = strings.Trim(anchor, "- /")
+			if hasDigit(anchor) {
+				return anchor
+			}
+		}
+	}
+
+	shortPrefixes := []string{"gi", "te", "fo", "port"}
+	for _, prefix := range shortPrefixes {
+		if strings.HasPrefix(normalized, prefix) && hasDigit(normalized) {
+			return normalized
+		}
+	}
+
+	return ""
+}
+
+func hasDigit(value string) bool {
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
+}
 
 // DiscoveryProtocol indicates how a link was discovered.
 type DiscoveryProtocol string

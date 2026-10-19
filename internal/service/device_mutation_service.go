@@ -387,11 +387,7 @@ func (m *deviceMutationService) GetAllDevices(ctx context.Context) ([]domain.Dev
 	if err != nil {
 		return nil, err
 	}
-	for i := range devices {
-		domain.NormalizeDevicePollingEnabled(&devices[i])
-		domain.NormalizeVirtualDevice(&devices[i])
-		m.parent.populateEffectiveTopologyDiscoveryMode(&devices[i])
-	}
+	m.normalizeTopologyDevices(devices)
 	return devices, nil
 }
 
@@ -410,11 +406,7 @@ func (m *deviceMutationService) GetOrphanDevices(ctx context.Context) ([]domain.
 	if err != nil {
 		return nil, err
 	}
-	for i := range devices {
-		domain.NormalizeDevicePollingEnabled(&devices[i])
-		domain.NormalizeVirtualDevice(&devices[i])
-		m.parent.populateEffectiveTopologyDiscoveryMode(&devices[i])
-	}
+	m.normalizeTopologyDevices(devices)
 	return devices, nil
 }
 
@@ -454,11 +446,7 @@ func (m *deviceMutationService) GetDevicesByIDs(ctx context.Context, ids []uuid.
 		return nil, err
 	}
 
-	for i := range devices {
-		domain.NormalizeDevicePollingEnabled(&devices[i])
-		domain.NormalizeVirtualDevice(&devices[i])
-		m.parent.populateEffectiveTopologyDiscoveryMode(&devices[i])
-	}
+	m.normalizeTopologyDevices(devices)
 	return devices, nil
 }
 
@@ -493,9 +481,13 @@ func (m *deviceMutationService) GetTopologyDevicesByIDs(ctx context.Context, ids
 }
 
 func (m *deviceMutationService) normalizeTopologyDevices(devices []domain.Device) {
+	if len(devices) == 0 {
+		return
+	}
+	defaultMode := m.parent.defaultTopologyDiscoveryMode()
 	for i := range devices {
 		domain.NormalizeDevicePollingEnabled(&devices[i])
 		domain.NormalizeVirtualDevice(&devices[i])
-		m.parent.populateEffectiveTopologyDiscoveryMode(&devices[i])
+		m.parent.populateEffectiveTopologyDiscoveryModeWithDefault(&devices[i], defaultMode)
 	}
 }

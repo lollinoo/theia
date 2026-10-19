@@ -11,7 +11,6 @@ import {
 import {
   RestoreEncryptionKeyRequiredError,
   RestoreOutcomeUnknownError,
-  ServerError,
   ValidationError,
 } from './errors';
 import {
@@ -20,7 +19,13 @@ import {
   parseRestoreReport,
   parseRestoreStatus,
 } from './instanceBackupParsers';
-import { headersWithCsrf, requestJSON, requestJSONWithBody } from './transport';
+import {
+  errorMessageFromPayload,
+  headersWithCsrf,
+  requestJSON,
+  requestJSONWithBody,
+  serverErrorFromMessage,
+} from './transport';
 
 // createInstanceBackup starts an instance backup and parses the created backup envelope.
 export async function createInstanceBackup(): Promise<InstanceBackup> {
@@ -122,8 +127,7 @@ export async function restoreInstanceBackup(
     const payload = await response.json().catch(() => null);
     const record =
       typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : null;
-    const errorMessage =
-      record !== null && typeof record.error === 'string' ? record.error : response.statusText;
+    const errorMessage = errorMessageFromPayload(payload, response.statusText);
 
     if (response.status === 400) {
       if (record?.requires_encryption_key === true) {
@@ -136,12 +140,7 @@ export async function restoreInstanceBackup(
     }
 
     if (response.status === 500) {
-      const refMatch = /ref:\s*([a-zA-Z0-9-]+)/.exec(errorMessage);
-      const correlationId = refMatch ? refMatch[1] : undefined;
-      const userMessage = correlationId
-        ? `Something went wrong (ref: ${correlationId})`
-        : 'Something went wrong';
-      throw new ServerError(userMessage, correlationId);
+      throw serverErrorFromMessage(errorMessage);
     }
 
     throw new Error(`${url} failed: ${response.status} ${errorMessage}`);

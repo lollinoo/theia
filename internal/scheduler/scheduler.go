@@ -397,12 +397,12 @@ func (s *Scheduler) run(ctx context.Context) {
 			default:
 				s.handleReduePerformanceTask(request)
 			}
-			s.recordMetricsLocked(s.now().UTC())
+			s.recordQueueAndInFlightMetricsLocked(s.now().UTC())
 			s.mu.Unlock()
 		case completion := <-s.completions:
 			s.mu.Lock()
 			s.handleCompletion(completion)
-			s.recordMetricsLocked(s.now().UTC())
+			s.recordQueueAndInFlightMetricsLocked(s.now().UTC())
 			s.mu.Unlock()
 		}
 	}
@@ -1364,6 +1364,9 @@ func decrementCount(counts map[string]int, key string) {
 }
 
 func (s *Scheduler) markElapsedInFlightWindows(now time.Time) {
+	if s.inFlight <= 0 {
+		return
+	}
 	for _, item := range s.items {
 		if item == nil || !item.inFlight || item.dueAt.After(now) {
 			continue
@@ -1660,9 +1663,13 @@ func (s *Scheduler) recordMetrics() {
 }
 
 func (s *Scheduler) recordMetricsLocked(now time.Time) {
+	s.recordEffectiveRuntimeWorkerSettingsLocked()
+	s.recordQueueAndInFlightMetricsLocked(now)
+}
+
+func (s *Scheduler) recordQueueAndInFlightMetricsLocked(now time.Time) {
 	observability.Default().SetSchedulerInFlight(s.inFlight)
 	observability.Default().SetPollingEssentialOverloaded(s.pollingEssentialOverloadedLocked(now))
-	s.recordEffectiveRuntimeWorkerSettingsLocked()
 	for _, volatility := range scheduledVolatilityClasses() {
 		priority := VolatilityPriority(volatility)
 		depth := 0

@@ -500,6 +500,7 @@ func (s *bulkRunProcessor) prepareBulkRunBatch(items []domain.BulkBackupRunItem)
 	}
 	// Only TCP probes run concurrently; repository reads and job transitions stay ordered.
 	reachability := checkBulkBackupReachability(backups, ssh.CheckReachable)
+	var recalcRunID uuid.UUID
 	for i, candidate := range candidates {
 		item := candidate.item
 		if reachability[i] != nil {
@@ -514,9 +515,12 @@ func (s *bulkRunProcessor) prepareBulkRunBatch(items []domain.BulkBackupRunItem)
 			s.completeBulkRunItem(item, domain.BulkBackupRunItemStatusFailed, fmt.Sprintf("failed to create or attach job: %v", err), nil)
 			continue
 		}
-		s.recalculateBulkRunCounters(item.RunID)
+		recalcRunID = item.RunID
 		candidate.backup.jobID = job.ID
 		queued = append(queued, candidate.backup)
+	}
+	if recalcRunID != uuid.Nil {
+		s.recalculateBulkRunCounters(recalcRunID)
 	}
 	return queued
 }
@@ -557,8 +561,10 @@ func (s *bulkRunProcessor) claimBulkRunBatch(items []domain.BulkBackupRunItem) [
 			if !ok || claimedItem == nil {
 				continue
 			}
-			s.recalculateBulkRunCounters(item.RunID)
 			claimed = append(claimed, *claimedItem)
+		}
+		if len(claimed) > 0 {
+			s.recalculateBulkRunCounters(claimed[0].RunID)
 		}
 		return claimed
 	}
@@ -577,8 +583,10 @@ func (s *bulkRunProcessor) markBulkRunBatchActive(items []domain.BulkBackupRunIt
 			log.Printf("Warning: failed to mark bulk run item %s active: %v", item.ID, err)
 			continue
 		}
-		s.recalculateBulkRunCounters(item.RunID)
 		activeItems = append(activeItems, item)
+	}
+	if len(activeItems) > 0 {
+		s.recalculateBulkRunCounters(activeItems[0].RunID)
 	}
 	return activeItems
 }

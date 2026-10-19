@@ -344,15 +344,6 @@ func (b *pipelineSnapshotBroadcaster) hasOverviewClients() bool {
 	return b.pipeline.hub.HasOverviewClients()
 }
 
-func (b *pipelineSnapshotBroadcaster) skipOverviewWorkWithoutClients() bool {
-	if b == nil || b.pipeline == nil {
-		return true
-	}
-	b.pipeline.overviewBuildMu.Lock()
-	defer b.pipeline.overviewBuildMu.Unlock()
-	return b.skipOverviewWorkWithoutClientsLocked()
-}
-
 func (b *pipelineSnapshotBroadcaster) skipOverviewWorkWithoutClientsLocked() bool {
 	if b.hasOverviewClients() {
 		return false
@@ -511,16 +502,6 @@ func clonePollingHealth(health polling.HealthSnapshot) polling.HealthSnapshot {
 	return health
 }
 
-func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshot(_ context.Context, reason string, topologyChanged bool) error {
-	p := b.pipeline
-	if p == nil {
-		return nil
-	}
-	p.overviewBuildMu.Lock()
-	defer p.overviewBuildMu.Unlock()
-	return b.broadcastFullSnapshotLocked(context.Background(), reason, topologyChanged)
-}
-
 func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotLocked(_ context.Context, reason string, topologyChanged bool) error {
 	p := b.pipeline
 	observability.Default().IncRefreshTopologyReload(reason)
@@ -551,16 +532,6 @@ func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotLocked(_ context.Cont
 	}
 
 	return nil
-}
-
-func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotWithResync(_ context.Context, reason string, resyncReason string, topologyChanged bool) error {
-	p := b.pipeline
-	if p == nil {
-		return nil
-	}
-	p.overviewBuildMu.Lock()
-	defer p.overviewBuildMu.Unlock()
-	return b.broadcastFullSnapshotWithResyncLocked(context.Background(), reason, resyncReason, topologyChanged)
 }
 
 func (b *pipelineSnapshotBroadcaster) broadcastFullSnapshotWithResyncLocked(_ context.Context, reason string, resyncReason string, topologyChanged bool) error {

@@ -14,9 +14,6 @@ import { FloatingConnectionLine } from './FloatingConnectionLine';
 const defaultCanvasProps = {
   mapId: null,
   mapName: 'Default',
-  maps: [],
-  onMapSelect: vi.fn(),
-  onManageMaps: vi.fn(),
 };
 
 const topologyImportRequest: ImportedNodePlacementRequest = {
@@ -38,7 +35,6 @@ function topologyImportCanvas(request?: ImportedNodePlacementRequest) {
       reconnecting={false}
       prometheusStatus={null}
       selectedAreaId={null}
-      areas={[]}
     />
   );
 }

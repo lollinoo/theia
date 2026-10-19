@@ -19,11 +19,9 @@ import (
 
 // sectionHashes stores FNV-64a hashes for each section of the snapshot, keyed by device_id.
 type sectionHashes struct {
-	devices        map[string]uint64
-	links          map[string]uint64
-	deviceMetrics  map[string]uint64
-	linkMetrics    map[string]uint64
-	deviceStatuses map[string]uint64
+	devices       map[string]uint64
+	links         map[string]uint64
+	deviceMetrics map[string]uint64
 }
 
 func buildPipelineSnapshot(
@@ -257,29 +255,25 @@ func formatFloatPtr(value *float64) string {
 
 func computeSnapshotHashes(snapshot *ws.SnapshotPayload) *sectionHashes {
 	sh := &sectionHashes{
-		devices:        make(map[string]uint64, len(snapshot.Devices)),
-		links:          make(map[string]uint64, len(snapshot.Links)),
-		deviceMetrics:  make(map[string]uint64, len(snapshot.Devices)),
-		linkMetrics:    make(map[string]uint64, len(snapshot.Links)),
-		deviceStatuses: make(map[string]uint64, len(snapshot.Devices)),
+		devices:       make(map[string]uint64, len(snapshot.Devices)),
+		links:         make(map[string]uint64, len(snapshot.Links)),
+		deviceMetrics: make(map[string]uint64, len(snapshot.Devices)),
 	}
 
 	for id, dm := range snapshot.Devices {
-		deviceHash, statusHash := computeDeviceRuntimeHashes(dm)
+		deviceHash := computeDeviceRuntimeHashes(dm)
 		sh.devices[id] = deviceHash
 		sh.deviceMetrics[id] = sh.devices[id]
-		sh.deviceStatuses[id] = statusHash
 	}
 
 	for id, lm := range snapshot.Links {
 		sh.links[id] = computeLinkRuntimeHash(lm)
-		sh.linkMetrics[id] = sh.links[id]
 	}
 
 	return sh
 }
 
-func computeDeviceRuntimeHashes(dm ws.DeviceRuntimeDTO) (uint64, uint64) {
+func computeDeviceRuntimeHashes(dm ws.DeviceRuntimeDTO) uint64 {
 	key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
 		dm.DeviceID,
 		dm.OperationalStatus,
@@ -304,7 +298,7 @@ func computeDeviceRuntimeHashes(dm ws.DeviceRuntimeDTO) (uint64, uint64) {
 		formatFloatPtr(dm.TempCelsius),
 		formatFloatPtr(dm.UptimeSecs),
 	)
-	return computeSectionHash(key), computeSectionHash(compatibilityOperationalStatus(dm.OperationalStatus))
+	return computeSectionHash(key)
 }
 
 func computeLinkRuntimeHash(lm ws.LinkRuntimeDTO) uint64 {
