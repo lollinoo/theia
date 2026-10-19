@@ -442,4 +442,22 @@ describe('buildTopologyHubModel', () => {
     ]);
     expect(model.areas.every((areaModel) => areaModel.degradedDeviceCount === 0)).toBe(true);
   });
+
+  it('does not return negative healthPercentage when area.device_count is smaller than actual area devices', () => {
+    const area = mockArea({ id: 'area-1', device_count: 1 });
+    const devices = [
+      mockDevice({ id: 'dev-1', status: 'down', area_ids: ['area-1'] }),
+      mockDevice({ id: 'dev-2', status: 'down', area_ids: ['area-1'] }),
+    ];
+    const model = buildTopologyHubModel({
+      areas: [area],
+      devices,
+      links: [],
+      snapshot: null,
+      maps: [],
+    });
+
+    expect(model.areas[0].healthPercentage).toBeGreaterThanOrEqual(0);
+    expect(model.areas[0].healthPercentage).toBe(0);
+  });
 });

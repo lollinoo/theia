@@ -51,18 +51,48 @@ export function validateMaxLength(value: string, max: number, fieldName: string)
   return null;
 }
 
+function isValidIPv6(value: string): boolean {
+  if (!value.includes(':') || value.includes(':::')) {
+    return false;
+  }
+  const doubleColonParts = value.split('::');
+  if (doubleColonParts.length > 2) {
+    return false;
+  }
+  const hexGroupRegex = /^[0-9a-fA-F]{1,4}$/;
+  if (doubleColonParts.length === 2) {
+    if (value.startsWith(':') && !value.startsWith('::')) return false;
+    if (value.endsWith(':') && !value.endsWith('::')) return false;
+    const [left, right] = doubleColonParts;
+    const leftGroups = left ? left.split(':') : [];
+    const rightGroups = right ? right.split(':') : [];
+    const totalGroups = leftGroups.length + rightGroups.length;
+    if (totalGroups > 7) {
+      return false;
+    }
+    return leftGroups.concat(rightGroups).every((g) => hexGroupRegex.test(g));
+  } else {
+    const groups = value.split(':');
+    if (groups.length !== 8) {
+      return false;
+    }
+    return groups.every((g) => hexGroupRegex.test(g));
+  }
+}
+
 /**
  * Validates that a value is a valid IP address (v4 or v6) or RFC 1123 hostname.
  * Returns an error message string or null if valid.
  */
 export function validateIPOrHostname(value: string): string | null {
-  if (value.trim() === '') {
+  const trimmed = value.trim();
+  if (trimmed === '') {
     return 'IP address or hostname is required';
   }
 
   // Try IPv4: four octets each 0-255
   const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-  const ipv4Match = ipv4Regex.exec(value);
+  const ipv4Match = ipv4Regex.exec(trimmed);
   if (ipv4Match) {
     const octets = [ipv4Match[1], ipv4Match[2], ipv4Match[3], ipv4Match[4]];
     const valid = octets.every((o) => {
@@ -72,18 +102,18 @@ export function validateIPOrHostname(value: string): string | null {
     if (valid) return null;
   }
 
-  // Try IPv6: contains ':' and only hex digits plus colons
-  if (value.includes(':')) {
-    const ipv6Regex = /^[0-9a-fA-F:]+$/;
-    if (ipv6Regex.test(value)) {
+  // Try IPv6: contains ':' and valid group structure
+  if (trimmed.includes(':')) {
+    if (isValidIPv6(trimmed)) {
       return null;
     }
+    return 'Invalid IP address or hostname';
   }
 
   // Try hostname: total length <= 253, each label starts/ends with alphanumeric,
   // may contain hyphens in the middle, and must contain at least one letter.
   // Purely numeric labels (e.g. "12345") are rejected — they are not valid hostnames.
-  if (value.length > 253) {
+  if (trimmed.length > 253) {
     return 'Invalid IP address or hostname';
   }
 
@@ -91,7 +121,7 @@ export function validateIPOrHostname(value: string): string | null {
   // and must contain at least one letter (rejects bare numbers like "12345").
   const labelRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
   const hasLetter = /[a-zA-Z]/;
-  const labels = value.split('.');
+  const labels = trimmed.split('.');
   const hostnameValid = labels.every((label) => labelRegex.test(label) && hasLetter.test(label));
   if (hostnameValid) {
     return null;
@@ -194,9 +224,10 @@ export function validateSNMPv3SecurityLevel(level: string): string | null {
  * Returns an error message string or null if valid.
  */
 export function validateIntervalAllowlist(value: string): string | null {
-  const n = parseInt(value, 10);
+  const trimmed = value.trim();
+  const n = parseInt(trimmed, 10);
   const allowed: readonly number[] = INTERVAL_ALLOWLIST;
-  if (isNaN(n) || !allowed.includes(n)) {
+  if (!/^-?\d+$/.test(trimmed) || isNaN(n) || !allowed.includes(n)) {
     return `Interval must be one of: ${INTERVAL_ALLOWLIST.join(', ')}`;
   }
   return null;
@@ -207,8 +238,9 @@ export function validateIntervalAllowlist(value: string): string | null {
  * Returns an error message string or null if valid.
  */
 export function validateRetentionCount(value: string): string | null {
-  const n = parseInt(value, 10);
-  if (isNaN(n)) {
+  const trimmed = value.trim();
+  const n = parseInt(trimmed, 10);
+  if (!/^-?\d+$/.test(trimmed) || isNaN(n)) {
     return 'Retention count must be a number';
   }
   if (n < 1 || n > 365) {

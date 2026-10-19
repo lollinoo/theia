@@ -120,13 +120,15 @@ export function buildTopologyHubModel({
     const healthLabel: TopologyHubAreaModel['healthLabel'] =
       degradedDeviceCount > 0 || degradedLinkCount > 0 ? 'Needs attention' : 'Healthy';
 
+    const effectiveDeviceCount = Math.max(deviceCount, areaDevices.length);
+
     return {
       area,
       deviceCount,
       activeLinkCount: activeAreaLinks.length,
       degradedDeviceCount,
       degradedLinkCount,
-      healthPercentage: healthPercentage(deviceCount, degradedDeviceCount),
+      healthPercentage: healthPercentage(effectiveDeviceCount, degradedDeviceCount),
       healthLabel,
     };
   });
