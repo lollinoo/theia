@@ -153,6 +153,7 @@ export function buildEdgeData(
   devicesByID: Map<string, Device>,
   existingData?: LinkEdgeData,
   onContextMenu?: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void,
+  onSelfLinkClick?: (link: Link) => void,
 ): LinkEdgeData {
   const sourceDevice = devicesByID.get(link.source_device_id);
   const targetDevice = devicesByID.get(link.target_device_id);
@@ -191,6 +192,7 @@ export function buildEdgeData(
       sourceIsVirtual: !!sourceIsVirtual,
       targetIsVirtual: !!targetIsVirtual,
       onContextMenu,
+      onSelfLinkClick: onSelfLinkClick ?? existingData?.onSelfLinkClick,
       route: existingData?.route,
       routeEditable: existingData?.routeEditable,
       routeEditToken: existingData?.routeEditToken,
@@ -198,6 +200,7 @@ export function buildEdgeData(
       metrics: existingData?.metrics,
       throughputLabel: existingData?.throughputLabel,
       utilization: existingData?.utilization,
+      alertStatus: existingData?.alertStatus ?? 'normal',
       sourceIfStatus: sourceIsVirtual ? undefined : sourceIfOperStatus,
       targetIfStatus: targetIsVirtual ? undefined : targetIfOperStatus,
       sourceDeviceStatus: suppressSourceDeviceState
@@ -247,6 +250,7 @@ export function buildEdgeData(
     sourceIsVirtual: false,
     targetIsVirtual: false,
     onContextMenu,
+    onSelfLinkClick: onSelfLinkClick ?? existingData?.onSelfLinkClick,
     route: existingData?.route,
     routeEditable: existingData?.routeEditable,
     routeEditToken: existingData?.routeEditToken,
@@ -254,6 +258,7 @@ export function buildEdgeData(
     metrics: existingData?.metrics,
     throughputLabel: existingData?.throughputLabel,
     utilization: existingData?.utilization,
+    alertStatus: existingData?.alertStatus ?? 'normal',
     sourceIfStatus: sourceIfOperStatus,
     targetIfStatus: targetIfOperStatus,
     sourceDeviceStatus: existingData?.sourceDeviceStatus ?? sourceDevice?.status,
@@ -304,15 +309,16 @@ export function buildTopologyEdges(
   nodes: DeviceNode[],
   existingEdgeDataByID?: Map<string, LinkEdgeData>,
   onContextMenu?: (event: MouseEvent | React.MouseEvent<SVGPathElement>, edgeID: string) => void,
-  alerts: AlertDTO[] = [],
+  alerts?: AlertDTO[],
+  onSelfLinkClick?: (link: Link) => void,
 ): LinkEdgeType[] {
-  const nodesByID = new Map(nodes.map((node) => [node.id, node]));
+  const nodesById = new Map<string, DeviceNode>(nodes.map((node) => [node.id, node]));
   const seenPhysicalLinks = new Set<string>();
   const visibleLinks = preferVisibleLinks(links);
 
   const candidateEdges = visibleLinks
     .filter((link) => {
-      if (!nodesByID.has(link.source_device_id) || !nodesByID.has(link.target_device_id)) {
+      if (!nodesById.has(link.source_device_id) || !nodesById.has(link.target_device_id)) {
         return false;
       }
 
@@ -330,21 +336,20 @@ export function buildTopologyEdges(
       return true;
     })
     .map((link) => {
-      const sourceNode = nodesByID.get(link.source_device_id)!;
-      const targetNode = nodesByID.get(link.target_device_id)!;
+      const sourceNode = nodesById.get(link.source_device_id)!;
+      const targetNode = nodesById.get(link.target_device_id)!;
       const { sourceHandle, targetHandle } = getHandleSide(
         sourceNode.position,
         targetNode.position,
         link.source_device_id === link.target_device_id,
       );
 
-      const data = buildEdgeData(
-        link,
-        devicesByID,
-        existingEdgeDataByID?.get(link.id),
-        onContextMenu,
-      );
-      data.alertStatus = alertStatusForLink(link, alerts);
+      const existingData = existingEdgeDataByID?.get(link.id);
+      const data = buildEdgeData(link, devicesByID, existingData, onContextMenu, onSelfLinkClick);
+      data.alertStatus =
+        alerts !== undefined
+          ? alertStatusForLink(link, alerts)
+          : (existingData?.alertStatus ?? 'normal');
 
       return {
         id: link.id,

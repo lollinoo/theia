@@ -1,7 +1,7 @@
 /**
  * Exercises node position update topology canvas behavior so refactors preserve the documented contract.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { Device, Link } from '../../types/api';
 import type { DeviceNode } from '../DeviceCard';
@@ -160,5 +160,52 @@ describe('node position update planning', () => {
         snapGrid: null,
       }),
     ).toBeNull();
+  });
+
+  it('preserves edge alertStatus, onSelfLinkClick, and selected state when rebuilding edges after node move', () => {
+    const devices = [device('dev-1'), device('dev-2'), device('dev-3')];
+    const links = [link('link-1', 'dev-1', 'dev-2'), link('link-2', 'dev-1', 'dev-3')];
+    const onSelfLinkClick = vi.fn();
+    const currentEdges = [
+      {
+        id: 'link-1',
+        selected: true,
+        data: {
+          alertStatus: 'down',
+          onSelfLinkClick,
+          metrics: { source: 'existing' },
+        },
+      } as unknown as LinkEdgeType,
+      {
+        id: 'link-2',
+        selected: false,
+        data: {
+          alertStatus: 'degraded',
+          metrics: { source: 'existing-2' },
+        },
+      } as unknown as LinkEdgeType,
+    ];
+
+    const plan = buildManualNodePositionUpdate({
+      deviceId: 'dev-1',
+      position: { x: 321, y: 654 },
+      nodes: [node('dev-1', 10, 20), node('dev-2', 100, 200), node('dev-3', 200, 300)],
+      devices,
+      links,
+      openEdgeMenu: () => undefined,
+      snapGrid: null,
+    });
+    const edges = plan?.buildEdges(currentEdges);
+
+    expect(edges).toHaveLength(2);
+
+    const edge1 = edges?.find((e) => e.id === 'link-1');
+    expect(edge1?.selected).toBe(true);
+    expect(edge1?.data?.alertStatus).toBe('down');
+    expect(edge1?.data?.onSelfLinkClick).toBe(onSelfLinkClick);
+
+    const edge2 = edges?.find((e) => e.id === 'link-2');
+    expect(edge2?.selected).toBeUndefined();
+    expect(edge2?.data?.alertStatus).toBe('degraded');
   });
 });
