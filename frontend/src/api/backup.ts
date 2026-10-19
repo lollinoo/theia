@@ -174,12 +174,6 @@ export async function fetchBackupFileContent(fileId: string): Promise<BackupFile
   return parseBackupFileContent(data, backupFileDownloadUrl(fileId));
 }
 
-// bulkDownloadUrl preserves the historical endpoint helper for form-post downloads.
-export function bulkDownloadUrl(_deviceIds: string[]): string {
-  // We use a form POST for the download, so return the endpoint URL
-  return '/api/v1/backups/bulk-download';
-}
-
 /** Describes the bulk download result contract used by the frontend API boundary. */
 export type BulkDownloadResult = 'saved' | 'cancelled';
 
@@ -305,7 +299,7 @@ function defaultBulkDownloadFilename(): string {
   return `${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15)}_THEIA_BACKUPS.zip`;
 }
 
-// prepareStreamingSaveTarget opens an optional streaming save target and maps user cancel to null.
+// prepareStreamingSaveTarget opens an optional streaming save target and maps non-abort errors to null fallback.
 function prepareStreamingSaveTarget(filename: string): StreamingSaveTarget {
   const saveFilePicker = browserSaveFilePicker();
   if (!saveFilePicker) {
@@ -320,10 +314,13 @@ function prepareStreamingSaveTarget(filename: string): StreamingSaveTarget {
       },
     ],
   }).catch((error) => {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      return null;
+    const isAbort =
+      (error instanceof DOMException && error.name === 'AbortError') ||
+      (error instanceof Error && error.name === 'AbortError');
+    if (isAbort) {
+      throw error;
     }
-    throw error;
+    return null;
   });
 }
 
@@ -336,18 +333,20 @@ async function saveDownloadResponse(
   if (response.body && saveTarget) {
     try {
       const handle = await saveTarget;
-      if (!handle) {
-        await response.body.cancel();
-        return 'cancelled';
+      if (handle) {
+        const writable = await handle.createWritable().catch(async (error) => {
+          await response.body?.cancel().catch(() => {});
+          throw error;
+        });
+        await response.body.pipeTo(writable);
+        return 'saved';
       }
-      const writable = await handle.createWritable().catch(async (error) => {
-        await response.body?.cancel();
-        throw error;
-      });
-      await response.body.pipeTo(writable);
-      return 'saved';
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
+      const isAbort =
+        (error instanceof DOMException && error.name === 'AbortError') ||
+        (error instanceof Error && error.name === 'AbortError');
+      if (isAbort) {
+        await response.body.cancel().catch(() => {});
         return 'cancelled';
       }
       throw error;

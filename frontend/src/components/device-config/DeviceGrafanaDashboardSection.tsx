@@ -113,16 +113,20 @@ export function DeviceGrafanaDashboardSection({
 
   async function saveGrafanaOverride(profileId: string, customUrl: string) {
     const saveGeneration = saveGenerationRef.current;
-    const nextConfig = await saveDeviceGrafanaDashboardOverride(device.id, {
-      profile_id: profileId || null,
-      custom_url: customUrl.trim(),
-    });
-    if (saveGeneration !== saveGenerationRef.current) {
-      return;
+    try {
+      const nextConfig = await saveDeviceGrafanaDashboardOverride(device.id, {
+        profile_id: profileId || null,
+        custom_url: customUrl.trim(),
+      });
+      if (saveGeneration !== saveGenerationRef.current) {
+        return;
+      }
+      setGrafanaProfiles(nextConfig.profiles);
+      showSaved();
+      onSettingsChange?.();
+    } catch {
+      // ignore background save failure
     }
-    setGrafanaProfiles(nextConfig.profiles);
-    showSaved();
-    onSettingsChange?.();
   }
 
   function scheduleGrafanaUpdate(value: string, profileId: string) {

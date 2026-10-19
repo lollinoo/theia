@@ -52,6 +52,8 @@ export function DeviceDestructiveActionsSection({
     setRemoveFromMapLoading(true);
     try {
       await onRemoveFromMap(deviceId);
+    } catch {
+      setConfirmDeleteDeviceId(null);
     } finally {
       setRemoveFromMapLoading(false);
     }

@@ -134,6 +134,33 @@ describe('validateIPOrHostname', () => {
   it('accepts hostname label starting with digit but containing letter', () => {
     expect(validateIPOrHostname('1e100.net')).toBeNull();
   });
+
+  it('accepts unspecified IPv6 address ::', () => {
+    expect(validateIPOrHostname('::')).toBeNull();
+  });
+
+  it('accepts full uncompressed IPv6 address', () => {
+    expect(validateIPOrHostname('2001:0db8:85a3:0000:0000:8a2e:0370:7334')).toBeNull();
+  });
+
+  it('accepts trimmed IPv4, IPv6, and hostnames with leading/trailing spaces', () => {
+    expect(validateIPOrHostname('  192.168.1.1  ')).toBeNull();
+    expect(validateIPOrHostname('  ::1  ')).toBeNull();
+    expect(validateIPOrHostname('  router-01.local  ')).toBeNull();
+  });
+
+  it('rejects malformed IPv6 strings', () => {
+    expect(validateIPOrHostname(':')).toBe('Invalid IP address or hostname');
+    expect(validateIPOrHostname('::::')).toBe('Invalid IP address or hostname');
+    expect(validateIPOrHostname('1:2')).toBe('Invalid IP address or hostname');
+    expect(validateIPOrHostname(':::')).toBe('Invalid IP address or hostname');
+    expect(validateIPOrHostname('1::2::3')).toBe('Invalid IP address or hostname');
+    expect(validateIPOrHostname(':1::')).toBe('Invalid IP address or hostname');
+    expect(validateIPOrHostname('::1:')).toBe('Invalid IP address or hostname');
+    expect(validateIPOrHostname('2001:db8:85a3:8d3:1319:8a2e:370:73489')).toBe(
+      'Invalid IP address or hostname',
+    );
+  });
 });
 
 // --- validatePort ---
@@ -306,6 +333,20 @@ describe('validateIntervalAllowlist', () => {
   it('returns error for non-numeric string', () => {
     expect(validateIntervalAllowlist('abc')).toBe('Interval must be one of: 0, 6, 12, 24, 48, 168');
   });
+
+  it('rejects partial strings and decimal numbers', () => {
+    expect(validateIntervalAllowlist('12abc')).toBe(
+      'Interval must be one of: 0, 6, 12, 24, 48, 168',
+    );
+    expect(validateIntervalAllowlist('30.5')).toBe(
+      'Interval must be one of: 0, 6, 12, 24, 48, 168',
+    );
+    expect(validateIntervalAllowlist('  ')).toBe('Interval must be one of: 0, 6, 12, 24, 48, 168');
+  });
+
+  it('accepts valid interval with leading/trailing spaces', () => {
+    expect(validateIntervalAllowlist('  24  ')).toBeNull();
+  });
 });
 
 // --- validateRetentionCount ---
@@ -319,6 +360,10 @@ describe('validateRetentionCount', () => {
     expect(validateRetentionCount('365')).toBeNull();
   });
 
+  it('accepts valid count with leading/trailing spaces', () => {
+    expect(validateRetentionCount('  30  ')).toBeNull();
+  });
+
   it('returns error for 0', () => {
     expect(validateRetentionCount('0')).toBe('Retention count must be between 1 and 365');
   });
@@ -329,6 +374,12 @@ describe('validateRetentionCount', () => {
 
   it('returns error for non-numeric string', () => {
     expect(validateRetentionCount('abc')).toBe('Retention count must be a number');
+  });
+
+  it('rejects partial strings and decimal numbers', () => {
+    expect(validateRetentionCount('12abc')).toBe('Retention count must be a number');
+    expect(validateRetentionCount('30.5')).toBe('Retention count must be a number');
+    expect(validateRetentionCount('  ')).toBe('Retention count must be a number');
   });
 });
 

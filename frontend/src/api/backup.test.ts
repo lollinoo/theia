@@ -10,6 +10,7 @@ import {
   fetchBulkOperationStatus,
   resetSSHHostKey,
   startBulkBackupRun,
+  triggerBulkDownload,
 } from './backup';
 
 beforeEach(() => {
@@ -144,5 +145,49 @@ describe('backup client', () => {
       size_bytes: 14,
       max_inline_size_bytes: 0,
     });
+  });
+
+  it('falls back to saveBlob when showSaveFilePicker fails with SecurityError', async () => {
+    const mockSecurityError = new DOMException('User activation expired', 'SecurityError');
+    (globalThis as unknown as { showSaveFilePicker: unknown }).showSaveFilePicker = vi
+      .fn()
+      .mockRejectedValue(mockSecurityError);
+
+    const blob = new Blob(['zip-content'], { type: 'application/zip' });
+    const response = new Response(blob, {
+      status: 200,
+      headers: { 'Content-Disposition': 'attachment; filename="backups.zip"' },
+    });
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-url');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+
+    const result = await triggerBulkDownload(['dev-1']);
+    expect(result).toBe('saved');
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+
+    delete (globalThis as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker;
+  });
+
+  it('returns cancelled when showSaveFilePicker throws AbortError', async () => {
+    const mockAbortError = new DOMException('The user aborted a request.', 'AbortError');
+    (globalThis as unknown as { showSaveFilePicker: unknown }).showSaveFilePicker = vi
+      .fn()
+      .mockRejectedValue(mockAbortError);
+
+    const blob = new Blob(['zip-content'], { type: 'application/zip' });
+    const response = new Response(blob, {
+      status: 200,
+      headers: { 'Content-Disposition': 'attachment; filename="backups.zip"' },
+    });
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const result = await triggerBulkDownload(['dev-1']);
+    expect(result).toBe('cancelled');
+
+    delete (globalThis as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker;
   });
 });
