@@ -2,7 +2,7 @@
  * Renders dashboard UI behavior for the Theia frontend.
  * Keeps this component's state and interaction boundary explicit for maintainers.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { deleteDevice, fetchDeviceCredentialProfiles, fetchOrphanDevices } from '../api/client';
 import { adaptAreaColor, useTheme } from '../contexts/ThemeContext';
 import type { Area, Device } from '../types/api';
@@ -63,6 +63,7 @@ export function Dashboard({
   // Fetched via fetchDeviceCredentialProfiles when the panel opens (Option A: live source of truth
   // after ssh_profile_id removal — avoids stale field dependency).
   const [sshPanelProfileId, setSSHPanelProfileId] = useState<string | undefined>(undefined);
+  const sshProfileRequestSeqRef = useRef(0);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -148,48 +149,61 @@ export function Dashboard({
     [areaMap, rows],
   );
 
-  const filteredRows = rowsWithAreaSortNames.filter((row) => {
-    if (statusFilter !== 'all' && row.statusState.dotStatus !== statusFilter) return false;
-    if (typeFilter !== 'all' && row.deviceType !== typeFilter) return false;
-    if (inventoryScope === 'all' && areaFilter !== 'all') {
-      if (areaFilter === 'unassigned') {
-        if (row.areaIds.length) return false;
-      } else {
-        if (!row.areaIds.includes(areaFilter)) return false;
-      }
-    }
-    if (search) {
-      const s = search.toLowerCase();
-      if (!row.searchText.includes(s)) return false;
-    }
-    return true;
-  });
+  const filteredRows = useMemo(
+    () =>
+      rowsWithAreaSortNames.filter((row) => {
+        if (statusFilter !== 'all' && row.statusState.dotStatus !== statusFilter) return false;
+        if (typeFilter !== 'all' && row.deviceType !== typeFilter) return false;
+        if (inventoryScope === 'all' && areaFilter !== 'all') {
+          if (areaFilter === 'unassigned') {
+            if (row.areaIds.length) return false;
+          } else {
+            if (!row.areaIds.includes(areaFilter)) return false;
+          }
+        }
+        if (search) {
+          const s = search.toLowerCase();
+          if (!row.searchText.includes(s)) return false;
+        }
+        return true;
+      }),
+    [areaFilter, inventoryScope, rowsWithAreaSortNames, search, statusFilter, typeFilter],
+  );
 
-  const types = [...new Set(activeDevices.map((d) => d.device_type))].sort();
+  const types = useMemo(
+    () => [...new Set(activeDevices.map((d) => d.device_type))].sort(),
+    [activeDevices],
+  );
 
-  const statusOptions: FilterOption[] = [
-    { value: 'all', label: 'All' },
-    { value: 'up', label: 'Up' },
-    { value: 'down', label: 'Down' },
-    { value: 'probing', label: 'Probing' },
-    { value: 'unknown', label: 'Unknown' },
-    { value: 'unmonitored', label: 'Unmonitored' },
-  ];
+  const statusOptions: FilterOption[] = useMemo(
+    () => [
+      { value: 'all', label: 'All' },
+      { value: 'up', label: 'Up' },
+      { value: 'down', label: 'Down' },
+      { value: 'probing', label: 'Probing' },
+      { value: 'unknown', label: 'Unknown' },
+      { value: 'unmonitored', label: 'Unmonitored' },
+    ],
+    [],
+  );
 
-  const typeOptions: FilterOption[] = [
-    { value: 'all', label: 'All' },
-    ...types.map((t) => ({ value: t, label: t })),
-  ];
+  const typeOptions: FilterOption[] = useMemo(
+    () => [{ value: 'all', label: 'All' }, ...types.map((t) => ({ value: t, label: t }))],
+    [types],
+  );
 
-  const areaOptions: FilterOption[] = [
-    { value: 'all', label: 'All' },
-    ...areas.map((a) => ({
-      value: a.id,
-      label: a.name,
-      color: adaptAreaColor(a.color, resolvedTheme),
-    })),
-    { value: 'unassigned', label: 'Unassigned' },
-  ];
+  const areaOptions: FilterOption[] = useMemo(
+    () => [
+      { value: 'all', label: 'All' },
+      ...areas.map((a) => ({
+        value: a.id,
+        label: a.name,
+        color: adaptAreaColor(a.color, resolvedTheme),
+      })),
+      { value: 'unassigned', label: 'Unassigned' },
+    ],
+    [areas, resolvedTheme],
+  );
 
   async function handleConfirmPermanentDelete() {
     if (!deleteTarget) {
@@ -210,6 +224,42 @@ export function Dashboard({
       setDeleteLoading(false);
     }
   }
+
+  const handleSSHCredentials = useCallback((device: Device) => {
+    // Fetch current credential profile assignment when opening the panel
+    // (Option A: live source of truth after ssh_profile_id removal)
+    setSSHPanelProfileId(undefined);
+    setPanel({ kind: 'ssh-credentials', device });
+    const seq = ++sshProfileRequestSeqRef.current;
+    void fetchDeviceCredentialProfiles(device.id)
+      .then((profiles) => {
+        // Guard against stale fetch: only apply if the request is still latest
+        if (sshProfileRequestSeqRef.current === seq) {
+          const nonWinbox = profiles.find((p) => !p.is_winbox);
+          setSSHPanelProfileId((nonWinbox ?? profiles[0])?.profile_id);
+        }
+      })
+      .catch(() => {
+        /* non-fatal — panel starts with no selection */
+      });
+  }, []);
+
+  const handleBackup = useCallback((device: Device) => {
+    setPanel({ kind: 'backup', device });
+  }, []);
+
+  const handleBackupHistory = useCallback((device: Device) => {
+    setPanel({ kind: 'backup-history', device });
+  }, []);
+
+  const handleViewConfig = useCallback((device: Device) => {
+    setPanel({ kind: 'config-viewer', device });
+  }, []);
+
+  const handleDeletePermanently = useCallback((device: Device) => {
+    setDeleteError(null);
+    setDeleteTarget(device);
+  }, []);
 
   const panelTitle = panel
     ? panel.kind === 'ssh-credentials'
@@ -356,41 +406,12 @@ export function Dashboard({
               rows={filteredRows}
               areaMap={areaMap}
               resolvedTheme={resolvedTheme}
-              onSSHCredentials={(device) => {
-                // Fetch current credential profile assignment when opening the panel
-                // (Option A: live source of truth after ssh_profile_id removal)
-                setSSHPanelProfileId(undefined);
-                setPanel({ kind: 'ssh-credentials', device });
-                const targetDeviceId = device.id;
-                void fetchDeviceCredentialProfiles(device.id)
-                  .then((profiles) => {
-                    // Guard against stale fetch: only apply if the panel is still open
-                    // for the same device (prevents race when user switches devices quickly).
-                    setPanel((current) => {
-                      if (
-                        current?.kind === 'ssh-credentials' &&
-                        current.device.id === targetDeviceId
-                      ) {
-                        const nonWinbox = profiles.find((p) => !p.is_winbox);
-                        setSSHPanelProfileId((nonWinbox ?? profiles[0])?.profile_id);
-                      }
-                      return current;
-                    });
-                  })
-                  .catch(() => {
-                    /* non-fatal — panel starts with no selection */
-                  });
-              }}
-              onBackup={(device) => setPanel({ kind: 'backup', device })}
-              onBackupHistory={(device) => setPanel({ kind: 'backup-history', device })}
-              onViewConfig={(device) => setPanel({ kind: 'config-viewer', device })}
+              onSSHCredentials={handleSSHCredentials}
+              onBackup={handleBackup}
+              onBackupHistory={handleBackupHistory}
+              onViewConfig={handleViewConfig}
               onDeletePermanently={
-                inventoryScope === 'unassigned'
-                  ? (device) => {
-                      setDeleteError(null);
-                      setDeleteTarget(device);
-                    }
-                  : undefined
+                inventoryScope === 'unassigned' ? handleDeletePermanently : undefined
               }
             />
           </div>
@@ -401,6 +422,7 @@ export function Dashboard({
       <SidePanel open={panel !== null} onClose={() => setPanel(null)} title={panelTitle}>
         {panel?.kind === 'ssh-credentials' && (
           <SSHCredentialForm
+            key={panel.device.id}
             deviceId={panel.device.id}
             currentProfileId={sshPanelProfileId}
             onProfileChanged={(profileId) => {
