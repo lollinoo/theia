@@ -17,9 +17,26 @@ import DeviceCard, { getDeviceRenderSignature } from './DeviceCard';
 import { type DeviceMonitoringState, resolveDeviceMonitoringState } from './deviceVisualState';
 
 vi.mock('./NodeBorderHandles', () => ({
-  NodeBorderHandles: ({ isConnectable }: { isConnectable: boolean }) => (
-    <span data-testid="node-border-handles" data-is-connectable={String(isConnectable)} />
-  ),
+  NodeBorderHandles: ({
+    isConnectable,
+    editMode,
+  }: {
+    isConnectable?: boolean;
+    editMode?: boolean;
+  }) => {
+    const isEnabled = editMode ?? isConnectable ?? false;
+    if (!isEnabled) {
+      return null;
+    }
+    return (
+      <span data-testid="node-border-handles" data-is-connectable="true">
+        <span data-testid="border-handle-top" className="react-flow__handle" />
+        <span data-testid="border-handle-right" className="react-flow__handle" />
+        <span data-testid="border-handle-bottom" className="react-flow__handle" />
+        <span data-testid="border-handle-left" className="react-flow__handle" />
+      </span>
+    );
+  },
 }));
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
@@ -150,13 +167,18 @@ function renderDeviceCard(data: DeviceCardTestData = {}) {
   );
 }
 
-function expectSingleBorderHandleSet(isConnectable: boolean) {
+function expectSingleBorderHandleSet(isConnectable: boolean = true) {
   const handleSets = screen.getAllByTestId('node-border-handles');
   const card = screen.getByTestId('device-node-card');
   expect(handleSets).toHaveLength(1);
   expect(handleSets[0]).toHaveAttribute('data-is-connectable', String(isConnectable));
   expect(handleSets[0].parentElement).toBe(card.parentElement);
   expect(card).not.toContainElement(handleSets[0]);
+}
+
+function expectNoBorderHandles() {
+  expect(screen.queryByTestId('node-border-handles')).not.toBeInTheDocument();
+  expect(document.querySelector('.react-flow__handle')).toBeNull();
 }
 
 function rgbContrastRatio(foreground: string, background: [number, number, number]): number {
@@ -181,7 +203,7 @@ function rgbContrastRatio(foreground: string, background: [number, number, numbe
 describe('DeviceCard', () => {
   it('makes physical node borders connectable only in edit mode', () => {
     const viewModeCard = renderDeviceCard({ metrics: mockMetrics() });
-    expectSingleBorderHandleSet(false);
+    expectNoBorderHandles();
     viewModeCard.unmount();
 
     renderDeviceCard({ editMode: true, metrics: mockMetrics() });
@@ -200,7 +222,7 @@ describe('DeviceCard', () => {
       subtype: 'cloud',
       metrics: mockMetrics(),
     });
-    expectSingleBorderHandleSet(false);
+    expectNoBorderHandles();
     viewModeCard.unmount();
 
     renderDeviceCard({
@@ -224,7 +246,7 @@ describe('DeviceCard', () => {
       isVirtual: true,
       subtype: 'cloud',
     });
-    expectSingleBorderHandleSet(false);
+    expectNoBorderHandles();
     viewModeCard.unmount();
 
     renderDeviceCard({
@@ -236,14 +258,25 @@ describe('DeviceCard', () => {
     expectSingleBorderHandleSet(true);
   });
 
-  it('keeps ghost border handles measured but never connectable', () => {
+  it('keeps ghost border handles unmounted even in edit mode', () => {
     renderDeviceCard({
       kind: 'ghost-device',
       isGhost: true,
       editMode: true,
     });
 
-    expectSingleBorderHandleSet(false);
+    expectNoBorderHandles();
+  });
+
+  it('does not mount handle elements when editMode is false and mounts them when editMode is true', () => {
+    const viewCard = renderDeviceCard({ editMode: false });
+    expect(screen.queryByTestId('node-border-handles')).not.toBeInTheDocument();
+    expect(document.querySelector('.react-flow__handle')).toBeNull();
+    viewCard.unmount();
+
+    renderDeviceCard({ editMode: true });
+    expect(screen.getByTestId('node-border-handles')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^border-handle-/)).toHaveLength(4);
   });
 
   it('renders physical node card body with hostname, status, address, telemetry, and compact runtime readouts', () => {

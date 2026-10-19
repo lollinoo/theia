@@ -21,8 +21,21 @@ const transparentHandleStyle: CSSProperties = {
   zIndex: 30,
 };
 
+export interface NodeBorderHandlesProps {
+  isConnectable?: boolean;
+  editMode?: boolean;
+}
+
 /** Renders four continuous, invisible connection hit zones around a node border. */
-export function NodeBorderHandles({ isConnectable }: { isConnectable: boolean }): JSX.Element {
+export function NodeBorderHandles({
+  isConnectable,
+  editMode,
+}: NodeBorderHandlesProps): JSX.Element | null {
+  const isEnabled = editMode ?? isConnectable ?? false;
+  if (!isEnabled) {
+    return null;
+  }
+
   return (
     <>
       {borderHandleDescriptors.map(({ id, position, style }) => (
@@ -31,11 +44,11 @@ export function NodeBorderHandles({ isConnectable }: { isConnectable: boolean })
           id={id}
           type="source"
           position={position}
-          isConnectable={isConnectable}
+          isConnectable={isEnabled}
           style={{
             ...transparentHandleStyle,
             ...style,
-            pointerEvents: isConnectable ? 'auto' : 'none',
+            pointerEvents: 'auto',
           }}
         />
       ))}
