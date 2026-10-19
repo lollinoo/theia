@@ -21,9 +21,10 @@ function supportsLongTaskObserver(): boolean {
 }
 
 /** Coordinates canvas frame metrics behavior for the topology canvas. */
-export function useCanvasFrameMetrics(): void {
+export function useCanvasFrameMetrics(enabled = true): void {
   useEffect(() => {
     if (
+      !enabled ||
       typeof window === 'undefined' ||
       typeof window.requestAnimationFrame !== 'function' ||
       typeof window.cancelAnimationFrame !== 'function'
@@ -56,6 +57,19 @@ export function useCanvasFrameMetrics(): void {
     };
 
     scheduleNextFrame();
+
+    return () => {
+      disposed = true;
+      if (frameId !== undefined) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled || typeof window === 'undefined') {
+      return;
+    }
 
     let longTaskObserver: PerformanceObserver | undefined;
     if (supportsLongTaskObserver()) {
@@ -91,11 +105,7 @@ export function useCanvasFrameMetrics(): void {
     }
 
     return () => {
-      disposed = true;
-      if (frameId !== undefined) {
-        window.cancelAnimationFrame(frameId);
-      }
       longTaskObserver?.disconnect();
     };
-  }, []);
+  }, [enabled]);
 }
