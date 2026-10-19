@@ -3,7 +3,7 @@
  */
 
 import { act, renderHook } from '@testing-library/react';
-import { type ReactNode, StrictMode, useEffect } from 'react';
+import React, { type ReactNode, StrictMode, useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAsyncPolling } from './useAsyncPolling';
 
@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 describe('useAsyncPolling', () => {
-  it('waits for an old request before polling again after stop and restart', async () => {
+  it('schedules a new poll immediately after stop and restart without waiting for an old request', async () => {
     const oldRequest = deferred<string>();
     const poll = vi
       .fn()
@@ -38,30 +38,74 @@ describe('useAsyncPolling', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
+    expect(poll).toHaveBeenCalledTimes(1);
+
+    // Stop and restart for a new version while old request is still in flight
     act(() => {
       result.current.stop();
       result.current.start();
     });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
-    });
-    expect(poll).toHaveBeenCalledTimes(1);
 
+    // It should immediately schedule the new version instead of being blocked behind oldRequest
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(poll).toHaveBeenCalledTimes(2);
+
+    // When the old request finally resolves, its result is discarded
     await act(async () => {
       oldRequest.resolve('old');
       await oldRequest.promise;
     });
-    expect(onResult).not.toHaveBeenCalled();
+    expect(onResult).not.toHaveBeenCalledWith('old');
+    expect(onResult).toHaveBeenCalledWith('new');
+  });
+
+  it('pauses polling when document is hidden and resumes when visible', async () => {
+    const poll = vi.fn().mockResolvedValue('result');
+    const onResult = vi.fn();
+    const { result } = renderHook(() => useAsyncPolling({ intervalMs: 1000, poll, onResult }));
+
+    let visibilityState = 'visible';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibilityState,
+    });
+
+    act(() => result.current.start());
+
+    // Switch to hidden before timer fires
+    visibilityState = 'hidden';
+    document.dispatchEvent(new Event('visibilitychange'));
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(poll).not.toHaveBeenCalled();
+
+    // Switch back to visible
+    visibilityState = 'visible';
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
     });
     expect(poll).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1);
-    });
-    expect(poll).toHaveBeenCalledTimes(2);
-    expect(onResult).toHaveBeenCalledWith('new');
+    expect(onResult).toHaveBeenCalledWith('result');
+  });
+
+  it('returns stable memoized controls across renders', () => {
+    const poll = vi.fn().mockResolvedValue('test');
+    const onResult = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useAsyncPolling({ intervalMs: 1000, poll, onResult }),
+    );
+
+    const initialControls = result.current;
+    rerender();
+    expect(result.current).toBe(initialControls);
+    expect(result.current.start).toBe(initialControls.start);
+    expect(result.current.stop).toBe(initialControls.stop);
   });
 
   it('clears a scheduled poll when unmounted', async () => {
@@ -108,7 +152,8 @@ describe('useAsyncPolling', () => {
   it('keeps one polling loop under StrictMode effect replay', async () => {
     const poll = vi.fn().mockResolvedValue('result');
     const onResult = vi.fn();
-    const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      React.createElement(StrictMode, null, children);
 
     renderHook(
       () => {
