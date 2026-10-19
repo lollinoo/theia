@@ -7,6 +7,7 @@ import type { Device, Link } from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
+import type { RuntimeState } from './runtimeAdapters';
 import { applyRuntimeSnapshotPatch } from './runtimeSnapshotPatch';
 
 function device(id: string, status: Device['status'] = 'up'): Device {
@@ -125,5 +126,102 @@ describe('applyRuntimeSnapshotPatch', () => {
     expect(result).toBe(nextSnapshot);
     expect(setNodes).toHaveBeenCalledTimes(1);
     expect(setEdges).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses a provided runtimeState instead of computing a new one', () => {
+    const nextSnapshot = snapshot('down');
+    const customRuntimeState: RuntimeState = {
+      prometheusDown: false,
+      firingAlerts: [],
+      devicesById: new Map([
+        [
+          'dev-1',
+          {
+            device: device('dev-1', 'probing'),
+            monitoringState: 'monitored',
+            metrics: null,
+            alertStatus: 'down',
+            runtimeStatus: 'probing',
+            primaryHealth: null,
+            runtimeFlags: [],
+          },
+        ],
+      ]),
+      linksById: new Map(),
+      interfaceMetricsByDeviceId: new Map(),
+    };
+
+    const setNodes = vi.fn((updater: (nodes: DeviceNode[]) => DeviceNode[]) => {
+      const patched = updater([node()]);
+      expect(patched[0].data.runtime.status).toBe('probing');
+      expect(patched[0].data.runtime.alertStatus).toBe('down');
+    });
+    const setEdges = vi.fn();
+
+    const result = applyRuntimeSnapshotPatch({
+      previousSnapshot: snapshot('up'),
+      snapshot: nextSnapshot,
+      devices: [device('dev-1')],
+      links: [] as Link[],
+      alerts: [],
+      prometheusStatus: null,
+      setNodes,
+      setEdges,
+      openEdgeMenu: vi.fn(),
+      runtimeState: customRuntimeState,
+    });
+
+    expect(result).toBe(nextSnapshot);
+    expect(setNodes).toHaveBeenCalledTimes(1);
+  });
+
+  it('invokes setDevices via patchRuntimeDevices when device runtime statuses change', () => {
+    const nextSnapshot = snapshot('down');
+    const setNodes = vi.fn();
+    const setEdges = vi.fn();
+    const setDevices = vi.fn((updater: (devices: Device[]) => Device[]) => {
+      const patched = updater([device('dev-1', 'up')]);
+      expect(patched[0].status).toBe('down');
+      return patched;
+    });
+
+    const result = applyRuntimeSnapshotPatch({
+      previousSnapshot: snapshot('up'),
+      snapshot: nextSnapshot,
+      devices: [device('dev-1')],
+      links: [] as Link[],
+      alerts: [],
+      prometheusStatus: null,
+      setNodes,
+      setEdges,
+      openEdgeMenu: vi.fn(),
+      setDevices,
+    });
+
+    expect(result).toBe(nextSnapshot);
+    expect(setDevices).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not invoke setDevices when device runtime statuses do not change', () => {
+    const nextSnapshot = snapshot('up');
+    const setNodes = vi.fn();
+    const setEdges = vi.fn();
+    const setDevices = vi.fn();
+
+    const result = applyRuntimeSnapshotPatch({
+      previousSnapshot: snapshot('up'),
+      snapshot: nextSnapshot,
+      devices: [device('dev-1')],
+      links: [] as Link[],
+      alerts: [],
+      prometheusStatus: null,
+      setNodes,
+      setEdges,
+      openEdgeMenu: vi.fn(),
+      setDevices,
+    });
+
+    expect(result).toBe(nextSnapshot);
+    expect(setDevices).not.toHaveBeenCalled();
   });
 });

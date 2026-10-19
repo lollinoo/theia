@@ -47,8 +47,11 @@ import {
 import { type ScreenRect } from './newNodePlacement';
 import { buildExplicitNodePlacements } from './newNodePlacementAdapter';
 import { buildManualNodePositionUpdate } from './nodePositionUpdate';
-import { buildAlertsPanelModel } from './panelAdapters';
-import { buildRuntimeState, type RuntimeState } from './runtimeAdapters';
+import {
+  buildRuntimeState,
+  countActiveAlertsFromRuntimeState,
+  type RuntimeState,
+} from './runtimeAdapters';
 import { applyRuntimeSnapshotPatch } from './runtimeSnapshotPatch';
 import {
   createStructuralRefreshQueue,
@@ -238,10 +241,8 @@ export function useCanvasData({
   );
 
   const runtimeSummary = useMemo<RuntimeSummary>(() => {
-    const alertsPanelModel = buildAlertsPanelModel({ alerts, runtimeState });
-
     return {
-      alertCount: alertsPanelModel.activeAlertCount,
+      alertCount: countActiveAlertsFromRuntimeState(runtimeState, alerts),
       prometheusDiagnosticsVisible: isPrometheusUnavailable(prometheusStatus),
     };
   }, [alerts, prometheusStatus, runtimeState]);
@@ -267,10 +268,13 @@ export function useCanvasData({
   snapGridRef.current = snapGrid;
   editModeRef.current = editMode;
   activeMapKeyRef.current = mapKey;
-  currentNodePositionsByMapRef.current.set(
-    nodesOwnerMapKeyRef.current,
-    nodePositionsToPositionMap(nodes),
-  );
+
+  useEffect(() => {
+    currentNodePositionsByMapRef.current.set(
+      nodesOwnerMapKeyRef.current,
+      nodePositionsToPositionMap(nodes),
+    );
+  }, [nodes]);
 
   useEffect(() => {
     return () => {
@@ -1045,12 +1049,16 @@ export function useCanvasData({
       openEdgeMenu,
       nodeIndexById: nodeIndexByIdRef?.current,
       edgeIndexById: edgeIndexByIdRef?.current,
+      runtimeState,
+      setDevices,
     });
   }, [
     edgeIndexByIdRef,
     nodeIndexByIdRef,
     openEdgeMenu,
     prometheusStatus,
+    runtimeState,
+    setDevices,
     setEdges,
     setNodes,
     snapshot,

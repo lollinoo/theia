@@ -2,17 +2,18 @@
  * Defines runtime snapshot patch behavior for the topology canvas.
  * Documents how canonical topology data is projected into the interactive view layer.
  */
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { Dispatch, MouseEvent as ReactMouseEvent, SetStateAction } from 'react';
 
 import type { Device, Link } from '../../types/api';
 import type { AlertDTO, PrometheusStatusPayload, SnapshotPayload } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import { measureCanvasWork } from './canvasInstrumentation';
-import { buildRuntimeState } from './runtimeAdapters';
+import { buildRuntimeState, type RuntimeState } from './runtimeAdapters';
 import {
   buildRuntimePatchPlan,
   hasRuntimePatchWork,
+  patchRuntimeDevices,
   patchRuntimeEdges,
   patchRuntimeNodes,
 } from './runtimePatches';
@@ -20,7 +21,7 @@ import {
 type RuntimeNodeUpdater = (updater: (currentNodes: DeviceNode[]) => DeviceNode[]) => void;
 type RuntimeEdgeUpdater = (updater: (currentEdges: LinkEdgeType[]) => LinkEdgeType[]) => void;
 
-interface ApplyRuntimeSnapshotPatchOptions {
+export interface ApplyRuntimeSnapshotPatchInput {
   previousSnapshot: SnapshotPayload | null;
   snapshot: SnapshotPayload;
   devices: Device[];
@@ -32,7 +33,11 @@ interface ApplyRuntimeSnapshotPatchOptions {
   openEdgeMenu: (event: MouseEvent | ReactMouseEvent<SVGPathElement>, edgeID: string) => void;
   nodeIndexById?: ReadonlyMap<string, number>;
   edgeIndexById?: ReadonlyMap<string, number>;
+  runtimeState?: RuntimeState;
+  setDevices?: Dispatch<SetStateAction<Device[]>>;
 }
+
+export type ApplyRuntimeSnapshotPatchOptions = ApplyRuntimeSnapshotPatchInput;
 
 // applyRuntimeSnapshotPatch applies runtime-only node and edge updates without recomposing topology.
 export function applyRuntimeSnapshotPatch({
@@ -47,7 +52,9 @@ export function applyRuntimeSnapshotPatch({
   openEdgeMenu,
   nodeIndexById,
   edgeIndexById,
-}: ApplyRuntimeSnapshotPatchOptions): SnapshotPayload | null {
+  runtimeState,
+  setDevices,
+}: ApplyRuntimeSnapshotPatchInput): SnapshotPayload | null {
   let appliedSnapshot = previousSnapshot;
 
   measureCanvasWork('theia:canvas:snapshot-apply', 'snapshot', () => {
@@ -66,18 +73,30 @@ export function applyRuntimeSnapshotPatch({
       return;
     }
 
-    const runtimeState = buildRuntimeState({
-      devices,
-      links,
-      snapshot,
-      alerts,
-      prometheusStatus,
-    });
+    const nextRuntimeState =
+      runtimeState ??
+      buildRuntimeState({
+        devices,
+        links,
+        snapshot,
+        alerts,
+        prometheusStatus,
+      });
+
+    if (setDevices && patchPlan.deviceIds.size > 0) {
+      setDevices((currentDevices) =>
+        patchRuntimeDevices({
+          devices: currentDevices,
+          runtimeState: nextRuntimeState,
+          plan: patchPlan,
+        }),
+      );
+    }
 
     setNodes((currentNodes) =>
       patchRuntimeNodes({
         nodes: currentNodes,
-        runtimeState,
+        runtimeState: nextRuntimeState,
         plan: patchPlan,
         nodeIndexById,
       }),
@@ -86,7 +105,7 @@ export function applyRuntimeSnapshotPatch({
       patchRuntimeEdges({
         edges: currentEdges,
         links,
-        runtimeState,
+        runtimeState: nextRuntimeState,
         alerts,
         onEdgeContextMenu: openEdgeMenu,
         plan: patchPlan,
