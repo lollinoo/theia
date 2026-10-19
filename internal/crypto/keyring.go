@@ -338,21 +338,6 @@ func (k *Keyring) DecryptLegacyString(value string) (plaintext string, keyID str
 	return "", "", fmt.Errorf("legacy ciphertext cannot be decrypted with any configured key")
 }
 
-func (k *Keyring) RewrapString(value string) (string, error) {
-	if IsEnvelope(value) {
-		plaintext, err := k.DecryptString(value)
-		if err != nil {
-			return "", err
-		}
-		return k.EncryptString(plaintext)
-	}
-	plaintext, _, err := k.DecryptLegacyString(value)
-	if err != nil {
-		return "", err
-	}
-	return k.EncryptString(plaintext)
-}
-
 func IsEnvelope(value string) bool {
 	return strings.HasPrefix(value, EnvelopePrefix)
 }

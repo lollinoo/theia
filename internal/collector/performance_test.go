@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -168,7 +169,7 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 					snmp.OidEntPhySensorType,
 					snmp.OidEntPhySensorValue,
 				} {
-					if containsString(client.bulkWalkCalls, oid) {
+					if slices.Contains(client.bulkWalkCalls, oid) {
 						t.Fatalf("BulkWalk calls = %v, want no performance device-health walk %s", client.bulkWalkCalls, oid)
 					}
 				}
@@ -295,7 +296,7 @@ func TestPerformanceCollectorPoll(t *testing.T) {
 				if len(client.getCalls) != 0 {
 					t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
 				}
-				if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+				if !slices.Contains(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !slices.Contains(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
 					t.Fatalf("BulkWalk calls = %v, want counter walk attempts", client.bulkWalkCalls)
 				}
 				if client.closeCalls != 1 {
@@ -577,7 +578,7 @@ func TestPerformanceCollectorPoll_SkipsResolvedCPUWalkOperation(t *testing.T) {
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil", result.Err)
 	}
-	if containsString(client.bulkWalkCalls, customCPUOID) {
+	if slices.Contains(client.bulkWalkCalls, customCPUOID) {
 		t.Fatalf("BulkWalk calls = %v, want no custom CPU walk in performance", client.bulkWalkCalls)
 	}
 	if result.Metrics.CPUPercent != nil || result.Metrics.MemPercent != nil || result.Metrics.TempCelsius != nil {
@@ -632,10 +633,10 @@ func TestPerformanceCollectorPoll_UsesCachedInterfaceNamesForCounters(t *testing
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil", result.Err)
 	}
-	if containsString(client.bulkWalkCalls, snmp.OidIfName) || containsString(client.bulkWalkCalls, snmp.OidIfDescr) {
+	if slices.Contains(client.bulkWalkCalls, snmp.OidIfName) || slices.Contains(client.bulkWalkCalls, snmp.OidIfDescr) {
 		t.Fatalf("BulkWalk calls = %v, want cached interface names without ifName/ifDescr walks", client.bulkWalkCalls)
 	}
-	if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+	if !slices.Contains(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !slices.Contains(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
 		t.Fatalf("BulkWalk calls = %v, want octet counter walks", client.bulkWalkCalls)
 	}
 	if len(result.Counters) != 2 {
@@ -685,7 +686,7 @@ func TestPerformanceCollectorPoll_SkipsInterfaceCountersWithoutCachedIndexes(t *
 		t.Fatalf("counter count = %d, want none without cached ifIndex mappings", len(result.Counters))
 	}
 	for _, oid := range []string{snmp.OidIfName, snmp.OidIfDescr, snmp.OidIfHCInOctets, snmp.OidIfHCOutOctets} {
-		if containsString(client.bulkWalkCalls, oid) {
+		if slices.Contains(client.bulkWalkCalls, oid) {
 			t.Fatalf("BulkWalk calls = %v, want no interface walks without cached ifIndex mappings", client.bulkWalkCalls)
 		}
 	}
@@ -730,11 +731,11 @@ func TestPerformanceCollectorPoll_SkipsDeviceHealthWalksWhenCountersAreAvailable
 		snmp.OidEntPhySensorType,
 		snmp.OidEntPhySensorValue,
 	} {
-		if containsString(client.bulkWalkCalls, oid) {
+		if slices.Contains(client.bulkWalkCalls, oid) {
 			t.Fatalf("BulkWalk calls = %v, want no performance device-health walk %s", client.bulkWalkCalls, oid)
 		}
 	}
-	if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+	if !slices.Contains(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !slices.Contains(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
 		t.Fatalf("BulkWalk calls = %v, want interface counter walks to remain in performance", client.bulkWalkCalls)
 	}
 }
@@ -797,7 +798,7 @@ func TestPerformanceCollectorPollWithOptions_CounterTimeoutArmsCooldown(t *testi
 	if len(client.getCalls) != 0 {
 		t.Fatalf("Get calls = %v, want none from performance poll", client.getCalls)
 	}
-	if !containsString(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !containsString(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
+	if !slices.Contains(client.bulkWalkCalls, snmp.OidIfHCInOctets) || !slices.Contains(client.bulkWalkCalls, snmp.OidIfHCOutOctets) {
 		t.Fatalf("BulkWalk calls = %v, want both HC counter walks attempted", client.bulkWalkCalls)
 	}
 	assertCounterCooldownRecord(t, policy.records, deviceID, "if_hc_in_octets_walk", "timeout", 30*time.Second)
@@ -1095,15 +1096,6 @@ func performanceTestRegistry(t *testing.T, vendorName string, perfOIDs vendor.Pe
 		t.Fatalf("LoadRegistryFromDB() error = %v", err)
 	}
 	return registry
-}
-
-func containsString(values []string, needle string) bool {
-	for _, value := range values {
-		if value == needle {
-			return true
-		}
-	}
-	return false
 }
 
 func newPartialMetricsClient(registry *vendor.Registry) *scriptedPerformanceClient {
