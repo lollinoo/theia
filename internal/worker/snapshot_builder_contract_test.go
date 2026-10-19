@@ -177,7 +177,13 @@ func TestComputeSnapshotHashes_AllSections(t *testing.T) {
 		t.Fatal("computeSnapshotHashes returned nil")
 	}
 
-	// device_metrics: both devices should have entries.
+	// devices & device_metrics: both devices should have entries.
+	if _, ok := hashes.devices[devID1]; !ok {
+		t.Errorf("expected devices hash for %s", devID1)
+	}
+	if _, ok := hashes.devices[devID2]; !ok {
+		t.Errorf("expected devices hash for %s", devID2)
+	}
 	if _, ok := hashes.deviceMetrics[devID1]; !ok {
 		t.Errorf("expected deviceMetrics hash for %s", devID1)
 	}
@@ -187,19 +193,10 @@ func TestComputeSnapshotHashes_AllSections(t *testing.T) {
 
 	// links: devID1's link should have an entry.
 	for _, link := range snapshot.Links {
-		if _, ok := hashes.linkMetrics[link.LinkID]; !ok {
-			t.Errorf("expected linkMetrics hash for %s", link.LinkID)
+		if _, ok := hashes.links[link.LinkID]; !ok {
+			t.Errorf("expected links hash for %s", link.LinkID)
 		}
 	}
-
-	// device_statuses: both devices should have entries.
-	if _, ok := hashes.deviceStatuses[devID1]; !ok {
-		t.Errorf("expected deviceStatuses hash for %s", devID1)
-	}
-	if _, ok := hashes.deviceStatuses[devID2]; !ok {
-		t.Errorf("expected deviceStatuses hash for %s", devID2)
-	}
-
 }
 
 func TestBuildDelta_NoChanges_ReturnsNil(t *testing.T) {

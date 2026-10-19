@@ -141,8 +141,8 @@ func TestSnapshotBroadcasterJournalFullSnapshotRotatesStreamAndClearsReplay(t *t
 		t.Fatal("expected sparse delta to be replayable before full snapshot")
 	}
 
-	if err := pipeline.broadcaster.broadcastFullSnapshot(context.Background(), refreshReloadReasonFullResync, false); err != nil {
-		t.Fatalf("broadcastFullSnapshot returned error: %v", err)
+	if err := pipeline.broadcaster.broadcastFullSnapshotLocked(context.Background(), refreshReloadReasonFullResync, false); err != nil {
+		t.Fatalf("broadcastFullSnapshotLocked returned error: %v", err)
 	}
 	afterFull := pipeline.GetOrBuildOverviewState()
 	if afterFull.StreamID == beforeFull.StreamID {
@@ -270,8 +270,8 @@ func TestOverviewMailboxRecoveryFullSnapshotRotatesStreamAndInstallsCompleteBatc
 	)
 	defer releaseWritePump()
 
-	if err := pipeline.broadcaster.broadcastFullSnapshot(context.Background(), refreshReloadReasonFullResync, false); err != nil {
-		t.Fatalf("broadcastFullSnapshot returned error: %v", err)
+	if err := pipeline.broadcaster.broadcastFullSnapshotLocked(context.Background(), refreshReloadReasonFullResync, false); err != nil {
+		t.Fatalf("broadcastFullSnapshotLocked returned error: %v", err)
 	}
 	current := pipeline.GetOrBuildOverviewState()
 	if current.StreamID == initial.StreamID {

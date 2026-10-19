@@ -864,14 +864,6 @@ func (p *PipelineOrchestrator) broadcastAlertsIfDirty(alertsDirty bool) {
 	p.broadcaster.broadcastAlertsIfDirty(alertsDirty)
 }
 
-func (p *PipelineOrchestrator) broadcastFullSnapshot(ctx context.Context, reason string, topologyChanged bool) error {
-	return p.broadcaster.broadcastFullSnapshot(ctx, reason, topologyChanged)
-}
-
-func (p *PipelineOrchestrator) broadcastFullSnapshotWithResync(ctx context.Context, reason string, resyncReason string, topologyChanged bool) error {
-	return p.broadcaster.broadcastFullSnapshotWithResync(ctx, reason, resyncReason, topologyChanged)
-}
-
 func (p *PipelineOrchestrator) buildFullOverviewSnapshot() (_ *ws.SnapshotPayload, err error) {
 	return p.broadcaster.buildFullOverviewSnapshot()
 }
@@ -1017,10 +1009,9 @@ func applySnapshotDeltaToRuntime(base *ws.SnapshotPayload, hashes *sectionHashes
 		base.DeviceMetrics[key] = value
 		base.DeviceStatuses[key] = compatibilityOperationalStatus(value.OperationalStatus)
 
-		deviceHash, statusHash := computeDeviceRuntimeHashes(value)
+		deviceHash := computeDeviceRuntimeHashes(value)
 		hashes.devices[key] = deviceHash
 		hashes.deviceMetrics[key] = deviceHash
-		hashes.deviceStatuses[key] = statusHash
 	}
 
 	for key, value := range delta.Links {
@@ -1035,7 +1026,6 @@ func applySnapshotDeltaToRuntime(base *ws.SnapshotPayload, hashes *sectionHashes
 
 		linkHash := computeLinkRuntimeHash(value)
 		hashes.links[key] = linkHash
-		hashes.linkMetrics[key] = linkHash
 	}
 
 	return base, hashes
@@ -1063,12 +1053,6 @@ func ensureSectionHashMaps(hashes *sectionHashes) {
 	}
 	if hashes.deviceMetrics == nil {
 		hashes.deviceMetrics = make(map[string]uint64)
-	}
-	if hashes.linkMetrics == nil {
-		hashes.linkMetrics = make(map[string]uint64)
-	}
-	if hashes.deviceStatuses == nil {
-		hashes.deviceStatuses = make(map[string]uint64)
 	}
 }
 
