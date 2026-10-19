@@ -24,12 +24,12 @@ func TestBridgeServiceUpdateSettingsOnlyChangesSafeSelfServiceFields(t *testing.
 	bridgeSvc := newBridgeServiceTestHarness(t, h.store)
 
 	result, err := bridgeSvc.service.UpdateSettings(context.Background(), bridgeAuthUser(user), UpdateUserSettingsInput{
-		DisplayName:        stringPtr("Alice Smith"),
-		Username:           stringPtr("AliceNew"),
-		Email:              stringPtr("AliceNew@example.test"),
-		Timezone:           stringPtr("Europe/Rome"),
-		Locale:             stringPtr("it-IT"),
-		BridgePortOverride: bridgeIntPtr(1444),
+		DisplayName:        strPtr("Alice Smith"),
+		Username:           strPtr("AliceNew"),
+		Email:              strPtr("AliceNew@example.test"),
+		Timezone:           strPtr("Europe/Rome"),
+		Locale:             strPtr("it-IT"),
+		BridgePortOverride: intPtr(1444),
 	})
 	if err != nil {
 		t.Fatalf("UpdateSettings: %v", err)
@@ -46,13 +46,13 @@ func TestBridgeServiceUpdateSettingsOnlyChangesSafeSelfServiceFields(t *testing.
 	}
 
 	_, err = bridgeSvc.service.UpdateSettings(context.Background(), bridgeAuthUser(stored), UpdateUserSettingsInput{
-		Username: stringPtr(strings.ToUpper(other.Username)),
+		Username: strPtr(strings.ToUpper(other.Username)),
 	})
 	if !errors.Is(err, ErrDuplicateUserIdentifier) {
 		t.Fatalf("duplicate username error = %v, want ErrDuplicateUserIdentifier", err)
 	}
 	_, err = bridgeSvc.service.UpdateSettings(context.Background(), bridgeAuthUser(stored), UpdateUserSettingsInput{
-		Email: stringPtr(strings.ToUpper(other.Email)),
+		Email: strPtr(strings.ToUpper(other.Email)),
 	})
 	if !errors.Is(err, ErrDuplicateUserIdentifier) {
 		t.Fatalf("duplicate email error = %v, want ErrDuplicateUserIdentifier", err)
@@ -71,10 +71,10 @@ func TestBridgeServiceUpdateSettingsRejectsInvalidSelfServiceFields(t *testing.T
 		name  string
 		input UpdateUserSettingsInput
 	}{
-		{name: "blank username", input: UpdateUserSettingsInput{Username: stringPtr(" ")}},
-		{name: "invalid email", input: UpdateUserSettingsInput{Email: stringPtr("not-an-email")}},
-		{name: "invalid timezone", input: UpdateUserSettingsInput{Timezone: stringPtr("Mars/Base")}},
-		{name: "invalid bridge port override", input: UpdateUserSettingsInput{BridgePortOverride: bridgeIntPtr(70000)}},
+		{name: "blank username", input: UpdateUserSettingsInput{Username: strPtr(" ")}},
+		{name: "invalid email", input: UpdateUserSettingsInput{Email: strPtr("not-an-email")}},
+		{name: "invalid timezone", input: UpdateUserSettingsInput{Timezone: strPtr("Mars/Base")}},
+		{name: "invalid bridge port override", input: UpdateUserSettingsInput{BridgePortOverride: intPtr(70000)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -103,7 +103,7 @@ func TestBridgeServiceGetSettingsResolvesBridgePortFromGlobalDefaultAndUserOverr
 	}
 
 	updated, err := bridgeSvc.service.UpdateSettings(context.Background(), bridgeAuthUser(user), UpdateUserSettingsInput{
-		BridgePortOverride: bridgeIntPtr(1666),
+		BridgePortOverride: intPtr(1666),
 	})
 	if err != nil {
 		t.Fatalf("UpdateSettings override: %v", err)
@@ -340,9 +340,6 @@ func bridgeAuthUser(user domain.User) *AuthenticatedUser {
 		},
 	}
 }
-
-func stringPtr(value string) *string { return &value }
-func bridgeIntPtr(value int) *int    { return &value }
 
 type fakeBridgeRepo struct {
 	mu          sync.Mutex

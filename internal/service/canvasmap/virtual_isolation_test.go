@@ -4,6 +4,7 @@ package canvasmap
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -146,7 +147,7 @@ func TestIsolateVirtualDevicesClonesSharedVirtualDeviceAndRemapsMembershipLinksA
 	if gotMembership.Devices[0].VisualColor == nil || *gotMembership.Devices[0].VisualColor != color {
 		t.Fatalf("clone visual color = %v, want %s", gotMembership.Devices[0].VisualColor, color)
 	}
-	if !uuidSlicesEqual(gotMembership.LinkIDs, []uuid.UUID{clonedLinkID}) {
+	if !slices.Equal(gotMembership.LinkIDs, []uuid.UUID{clonedLinkID}) {
 		t.Fatalf("replaced membership links = %v, want cloned link %s", gotMembership.LinkIDs, clonedLinkID)
 	}
 	if len(gotMembership.Areas) != 1 || gotMembership.Areas[0].AreaID != areaID {

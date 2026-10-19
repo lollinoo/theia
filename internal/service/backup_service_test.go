@@ -32,6 +32,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
 	internalssh "github.com/lollinoo/theia/internal/ssh"
+	"github.com/lollinoo/theia/internal/testutil"
 	"github.com/lollinoo/theia/internal/vendor"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -540,76 +541,10 @@ func (r *mockBulkBackupRunRepo) copyRunLocked(id uuid.UUID) *domain.BulkBackupRu
 }
 
 // mockCredentialProfileRepo implements domain.CredentialProfileRepository.
-type mockCredentialProfileRepo struct {
-	mu       sync.Mutex
-	profiles map[uuid.UUID]*domain.CredentialProfile
-}
+type mockCredentialProfileRepo = testutil.MockCredentialProfileRepo
 
 func newMockCredentialProfileRepo() *mockCredentialProfileRepo {
-	return &mockCredentialProfileRepo{profiles: make(map[uuid.UUID]*domain.CredentialProfile)}
-}
-
-func (r *mockCredentialProfileRepo) Create(profile *domain.CredentialProfile) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if profile.ID == uuid.Nil {
-		profile.ID = uuid.New()
-	}
-	now := time.Now().UTC()
-	profile.CreatedAt = now
-	profile.UpdatedAt = now
-	r.profiles[profile.ID] = profile
-	return nil
-}
-
-func (r *mockCredentialProfileRepo) GetByID(id uuid.UUID) (*domain.CredentialProfile, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	p, ok := r.profiles[id]
-	if !ok {
-		return nil, fmt.Errorf("credential profile not found: %s", id)
-	}
-	cp := *p
-	return &cp, nil
-}
-
-func (r *mockCredentialProfileRepo) GetAll() ([]domain.CredentialProfile, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var result []domain.CredentialProfile
-	for _, p := range r.profiles {
-		result = append(result, *p)
-	}
-	return result, nil
-}
-
-func (r *mockCredentialProfileRepo) Update(profile *domain.CredentialProfile) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.profiles[profile.ID]; !ok {
-		return fmt.Errorf("credential profile not found: %s", profile.ID)
-	}
-	profile.UpdatedAt = time.Now().UTC()
-	r.profiles[profile.ID] = profile
-	return nil
-}
-
-func (r *mockCredentialProfileRepo) Delete(id uuid.UUID) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.profiles, id)
-	return nil
-}
-
-func (r *mockCredentialProfileRepo) GetBackupProfileForDevice(deviceID uuid.UUID) (*domain.CredentialProfile, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	// Return the first profile found for any device (test helper: return any profile)
-	for _, p := range r.profiles {
-		cp := *p
-		return &cp, nil
-	}
-	return nil, fmt.Errorf("no credential profile assigned to device %s", deviceID)
+	return testutil.NewMockCredentialProfileRepo()
 }
 
 type recordingSSHHostKeyStore struct {
@@ -2521,47 +2456,6 @@ func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool
 	t.Fatal("condition was not met before timeout")
 }
 
-type mockBulkOperationLeaseRepo struct {
-	mu     sync.Mutex
-	active map[string]struct{}
-}
-
-func newMockBulkOperationLeaseRepo() *mockBulkOperationLeaseRepo {
-	return &mockBulkOperationLeaseRepo{active: make(map[string]struct{})}
-}
-
-func (r *mockBulkOperationLeaseRepo) TryAcquireBulkOperationLease(_ context.Context, key string) (domain.BulkOperationLease, bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.active[key]; ok {
-		return nil, false, nil
-	}
-	r.active[key] = struct{}{}
-	return mockBulkOperationLease{release: func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		delete(r.active, key)
-	}}, true, nil
-}
-
-func (r *mockBulkOperationLeaseRepo) isActive(key string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	_, ok := r.active[key]
-	return ok
-}
-
-type mockBulkOperationLease struct {
-	release func()
-}
-
-func (l mockBulkOperationLease) Release() error {
-	if l.release != nil {
-		l.release()
-	}
-	return nil
-}
-
 func setupBulkDownloadServiceWithFiles(
 	t *testing.T,
 	fileSizes []int,
@@ -3089,7 +2983,7 @@ func TestRunTextExportReconcilesExistingDeviceBackupDirBeforeWritingBackupFile(t
 		if err == nil && len(files) > 0 {
 			break
 		}
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	files, err := fileRepo.GetByJobID(job.ID)
