@@ -75,26 +75,7 @@ type canvasMapPatchRequest struct {
 	Filter       *domain.CanvasMapFilter `json:"filter"`
 }
 
-type nullableCanvasMapString struct {
-	Present bool
-	Value   *string
-}
-
-// UnmarshalJSON records whether a nullable string field was present and whether it was null.
-func (v *nullableCanvasMapString) UnmarshalJSON(data []byte) error {
-	v.Present = true
-	if strings.TrimSpace(string(data)) == "null" {
-		v.Value = nil
-		return nil
-	}
-
-	var value string
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	v.Value = &value
-	return nil
-}
+type nullableCanvasMapString = optionalJSONField[string]
 
 type canvasMapDuplicateRequest struct {
 	Name string `json:"name"`
@@ -276,7 +257,7 @@ func (h *CanvasMapHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.SourceAreaID.Present {
+	if req.SourceAreaID.Set {
 		if req.SourceAreaID.Value == nil {
 			canvasMap.SourceAreaID = nil
 		} else {
@@ -292,7 +273,7 @@ func (h *CanvasMapHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 		Name:            req.Name,
 		Description:     req.Description,
 		SourceAreaID:    canvasMap.SourceAreaID,
-		SourceAreaIDSet: req.SourceAreaID.Present,
+		SourceAreaIDSet: req.SourceAreaID.Set,
 		Filter:          req.Filter,
 	})
 	if err != nil {
@@ -303,7 +284,7 @@ func (h *CanvasMapHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 		h.writeMapRepoMutationError(w, err)
 		return
 	}
-	if req.Filter != nil || req.SourceAreaID.Present {
+	if req.Filter != nil || req.SourceAreaID.Set {
 		if !h.requireTopologyDeps(w) {
 			return
 		}
@@ -627,7 +608,7 @@ func (h *CanvasMapHandler) HandlePatchDevice(w http.ResponseWriter, r *http.Requ
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if !req.VisualColor.Present {
+	if !req.VisualColor.Set {
 		writeError(w, http.StatusBadRequest, "visual_color is required")
 		return
 	}
@@ -911,7 +892,29 @@ func (h *CanvasMapHandler) HandleSavePositions(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	knownDevices, err := h.deviceService.GetAllDevices(r.Context())
+	positions := make([]domain.DevicePosition, 0, len(req.Positions))
+	requestedIDs := make([]uuid.UUID, 0, len(req.Positions))
+	for _, payload := range req.Positions {
+		deviceID, err := uuid.Parse(payload.DeviceID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid device_id")
+			return
+		}
+		if !isFiniteCoordinate(payload.X) || !isFiniteCoordinate(payload.Y) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid coordinate for device %s: NaN and Infinity are not allowed", deviceID))
+			return
+		}
+		requestedIDs = append(requestedIDs, deviceID)
+
+		positions = append(positions, domain.DevicePosition{
+			DeviceID: deviceID,
+			X:        payload.X,
+			Y:        payload.Y,
+			Pinned:   payload.Pinned,
+		})
+	}
+
+	knownDevices, err := h.deviceService.GetTopologyDevicesByIDs(r.Context(), requestedIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
 		return
@@ -920,29 +923,11 @@ func (h *CanvasMapHandler) HandleSavePositions(w http.ResponseWriter, r *http.Re
 	for _, device := range knownDevices {
 		knownDeviceIDs[device.ID] = struct{}{}
 	}
-
-	positions := make([]domain.DevicePosition, 0, len(req.Positions))
-	for _, payload := range req.Positions {
-		deviceID, err := uuid.Parse(payload.DeviceID)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid device_id")
+	for _, pos := range positions {
+		if _, ok := knownDeviceIDs[pos.DeviceID]; !ok {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown device_id: %s", pos.DeviceID))
 			return
 		}
-		if _, ok := knownDeviceIDs[deviceID]; !ok {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown device_id: %s", deviceID))
-			return
-		}
-		if !isFiniteCoordinate(payload.X) || !isFiniteCoordinate(payload.Y) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid coordinate for device %s: NaN and Infinity are not allowed", deviceID))
-			return
-		}
-
-		positions = append(positions, domain.DevicePosition{
-			DeviceID: deviceID,
-			X:        payload.X,
-			Y:        payload.Y,
-			Pinned:   payload.Pinned,
-		})
 	}
 
 	if err := h.mapPositionRepo.SaveAllForMap(canvasMap.ID, positions); err != nil {
@@ -1004,7 +989,7 @@ func (h *CanvasMapHandler) buildMapTopologyResponse(w http.ResponseWriter, r *ht
 	}
 
 	canvasMap = loaded.Map
-	response := h.canvasTopology.buildResponse(responsePlan.Devices, responsePlan.Links, responsePlan.Positions, responsePlan.Areas)
+	response := h.canvasTopology.buildResponseBase(responsePlan.Devices, responsePlan.Links, responsePlan.Positions, responsePlan.Areas)
 	applyCanvasMapDeviceVisualColors(response.Devices, responsePlan.VisualColors)
 	mapResponse := mapToResponse(canvasMap)
 	mapResponse.DeviceCount = responsePlan.DeviceCount
