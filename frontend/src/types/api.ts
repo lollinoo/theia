@@ -1008,13 +1008,6 @@ export interface DeviceCredentialProfile {
   is_winbox: boolean;
 }
 
-/** WinBoxCredentials holds the resolved credentials needed to launch WinBox. */
-export interface WinBoxCredentials {
-  ip: string;
-  username: string;
-  password: string;
-}
-
 /** Area represents a named device grouping used for filtering and map projections. */
 export interface Area {
   id: string;
@@ -1340,16 +1333,6 @@ export function parseDeviceCredentialProfilesResponse(payload: unknown): DeviceC
       is_winbox: typeof item.is_winbox === 'boolean' ? item.is_winbox : false,
     };
   });
-}
-
-// parseWinBoxCredentialsResponse preserves empty strings when privileged credentials are absent.
-export function parseWinBoxCredentialsResponse(payload: unknown): WinBoxCredentials {
-  if (!isRecord(payload)) return { ip: '', username: '', password: '' };
-  return {
-    ip: readString(payload, 'ip'),
-    username: readString(payload, 'username'),
-    password: readString(payload, 'password'),
-  };
 }
 
 // parseAreasResponse parses area lists and drops malformed or ID-less entries.
