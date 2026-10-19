@@ -14,8 +14,15 @@ import {
   parseBulkBackupRunResponse,
   parseBulkOperationStatus,
 } from './backupParsers';
-import { ServerError, ValidationError } from './errors';
-import { type ErrorPayload, headersWithCsrf, requestJSON, requestJSONWithBody } from './transport';
+import { ValidationError } from './errors';
+import {
+  type ErrorPayload,
+  errorMessageFromPayload,
+  headersWithCsrf,
+  requestJSON,
+  requestJSONWithBody,
+  serverErrorFromMessage,
+} from './transport';
 
 // triggerBackup starts a device backup and parses the created job envelope.
 export async function triggerBackup(deviceId: string): Promise<BackupJob> {
@@ -193,9 +200,8 @@ export async function triggerBulkDownload(
     body: JSON.stringify({ device_ids: deviceIds }),
   });
   if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-    const errorMessage =
-      payload && typeof payload.error === 'string' ? payload.error : response.statusText;
+    const payload = (await response.json().catch(() => null)) as ErrorPayload | unknown;
+    const errorMessage = errorMessageFromPayload(payload, response.statusText);
     if (response.status === 413) {
       throw new ValidationError(formatBulkLimitMessage(errorMessage));
     }
@@ -229,13 +235,7 @@ async function requestBulkJSON(
     if (response.status === 409 && options.returnConflictPayload) {
       return payload;
     }
-    const errorMessage =
-      typeof payload === 'object' &&
-      payload !== null &&
-      'error' in payload &&
-      typeof payload.error === 'string'
-        ? payload.error
-        : response.statusText;
+    const errorMessage = errorMessageFromPayload(payload, response.statusText);
     if (response.status === 413) {
       throw new ValidationError(formatBulkLimitMessage(errorMessage));
     }
@@ -243,12 +243,7 @@ async function requestBulkJSON(
       throw new ValidationError(errorMessage);
     }
     if (response.status === 500) {
-      const refMatch = /ref:\s*([a-zA-Z0-9-]+)/.exec(errorMessage);
-      const correlationId = refMatch ? refMatch[1] : undefined;
-      const userMessage = correlationId
-        ? `Something went wrong (ref: ${correlationId})`
-        : 'Something went wrong';
-      throw new ServerError(userMessage, correlationId);
+      throw serverErrorFromMessage(errorMessage);
     }
     throw new Error(`${operation} failed: ${response.status} ${errorMessage}`);
   }

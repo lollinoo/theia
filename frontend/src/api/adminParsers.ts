@@ -13,8 +13,7 @@ import { permissionKeysArray, recordField, stringField } from './parsers';
 
 // parseAdminAuditLog normalizes audit log records while preserving optional metadata fields.
 export function parseAdminAuditLog(value: unknown): AdminAuditLog {
-  const record =
-    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  const record = recordField(value) ?? {};
   return {
     id: stringField(record, 'id'),
     actor_user_id: stringField(record, 'actor_user_id') || undefined,
@@ -31,12 +30,8 @@ export function parseAdminAuditLog(value: unknown): AdminAuditLog {
 
 // parseAdminDashboard normalizes dashboard counters and embedded recent audit logs.
 export function parseAdminDashboard(payload: unknown): AdminDashboardResponse {
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
-  const stats =
-    typeof record.stats === 'object' && record.stats !== null
-      ? (record.stats as Record<string, unknown>)
-      : {};
+  const record = recordField(payload) ?? {};
+  const stats = recordField(record.stats) ?? {};
   const logs = Array.isArray(record.recent_audit_logs) ? record.recent_audit_logs : [];
   return {
     stats: {
@@ -56,8 +51,7 @@ export function parseAdminDashboard(payload: unknown): AdminDashboardResponse {
 
 // parseAdminRole normalizes role metadata and permission arrays from admin responses.
 export function parseAdminRole(value: unknown): AdminRole {
-  const record =
-    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  const record = recordField(value) ?? {};
   return {
     id: stringField(record, 'id'),
     name: stringField(record, 'name'),
@@ -69,46 +63,40 @@ export function parseAdminRole(value: unknown): AdminRole {
 
 // parseAdminUsersEnvelope extracts safe users from the admin users envelope.
 export function parseAdminUsersEnvelope(payload: unknown): AuthUser[] {
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const record = recordField(payload) ?? {};
   const users = Array.isArray(record.users) ? record.users : [];
   return users.map(parseAuthUser);
 }
 
 // parseAdminRolesEnvelope extracts role rows from the admin roles envelope.
 export function parseAdminRolesEnvelope(payload: unknown): AdminRole[] {
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const record = recordField(payload) ?? {};
   const roles = Array.isArray(record.roles) ? record.roles : [];
   return roles.map(parseAdminRole);
 }
 
 // parseAdminPermissionsEnvelope extracts permission keys from the admin permissions envelope.
 export function parseAdminPermissionsEnvelope(payload: unknown): string[] {
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const record = recordField(payload) ?? {};
   return permissionKeysArray(record.permissions);
 }
 
 // parseAdminAuditLogsEnvelope extracts audit log rows from the admin audit logs envelope.
 export function parseAdminAuditLogsEnvelope(payload: unknown): AdminAuditLog[] {
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const record = recordField(payload) ?? {};
   const logs = Array.isArray(record.audit_logs) ? record.audit_logs : [];
   return logs.map(parseAdminAuditLog);
 }
 
 // parseAdminUserEnvelope extracts one safe user from mutation responses.
 export function parseAdminUserEnvelope(payload: unknown): AuthUser {
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const record = recordField(payload) ?? {};
   return parseAuthUser(record.user);
 }
 
 // parseAdminPasswordResetResponse preserves reset_token and legacy token fallback behavior.
 export function parseAdminPasswordResetResponse(payload: unknown): AdminPasswordResetResponse {
-  const record =
-    typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
+  const record = recordField(payload) ?? {};
   const resetToken =
     typeof record.reset_token === 'string'
       ? record.reset_token

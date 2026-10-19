@@ -164,19 +164,30 @@ export async function fetchLinks(): Promise<Link[]> {
   }
 }
 
+function parseSingleDeviceEnvelope(
+  response: unknown,
+  invalidMessage: string,
+  emptyMessage: string,
+): Device {
+  const data = (response as Record<string, unknown>)?.data;
+  if (!data) {
+    throw new Error(invalidMessage);
+  }
+  const devices = parseDevicesResponse({ data: [data] });
+  if (devices.length === 0) {
+    throw new Error(emptyMessage);
+  }
+  return devices[0];
+}
+
 // createDevice creates a device and unwraps the single returned resource from the API envelope.
 export async function createDevice(payload: CreateDevicePayload): Promise<Device> {
   const response = await requestJSONWithBody('/api/v1/devices', 'POST', payload);
-  const data = (response as Record<string, unknown>)?.data;
-  if (!data) {
-    throw new Error('Invalid create device response');
-  }
-  const wrapped = { data: [data] };
-  const devices = parseDevicesResponse(wrapped);
-  if (devices.length === 0) {
-    throw new Error('No device returned from create');
-  }
-  return devices[0];
+  return parseSingleDeviceEnvelope(
+    response,
+    'Invalid create device response',
+    'No device returned from create',
+  );
 }
 
 // updateDevice replaces editable device metadata and unwraps the single returned resource.
@@ -205,16 +216,11 @@ export async function updateDevice(
     'PUT',
     payload,
   );
-  const data = (response as Record<string, unknown>)?.data;
-  if (!data) {
-    throw new Error('Invalid update device response');
-  }
-  const wrapped = { data: [data] };
-  const devices = parseDevicesResponse(wrapped);
-  if (devices.length === 0) {
-    throw new Error('No device returned from update');
-  }
-  return devices[0];
+  return parseSingleDeviceEnvelope(
+    response,
+    'Invalid update device response',
+    'No device returned from update',
+  );
 }
 
 // deleteDevice removes one device by ID.
@@ -251,18 +257,10 @@ export async function fetchDeviceInterfaces(deviceId: string): Promise<Interface
   }
 }
 
-// createLink creates a manual topology link and preserves legacy field defaults.
-export async function createLink(payload: {
-  source_device_id: string;
-  source_if_name: string;
-  target_device_id: string;
-  target_if_name: string;
-  migration_source?: 'browser_localstorage';
-}): Promise<Link> {
-  const response = await requestJSONWithBody('/api/v1/links', 'POST', payload);
+function parseSingleLinkEnvelope(response: unknown, invalidMessage: string): Link {
   const data = (response as Record<string, unknown>)?.data;
   if (!data || typeof data !== 'object') {
-    throw new Error('Invalid create link response');
+    throw new Error(invalidMessage);
   }
   const record = data as Record<string, unknown>;
   return {
@@ -282,6 +280,18 @@ export async function createLink(payload: {
   };
 }
 
+// createLink creates a manual topology link and preserves legacy field defaults.
+export async function createLink(payload: {
+  source_device_id: string;
+  source_if_name: string;
+  target_device_id: string;
+  target_if_name: string;
+  migration_source?: 'browser_localstorage';
+}): Promise<Link> {
+  const response = await requestJSONWithBody('/api/v1/links', 'POST', payload);
+  return parseSingleLinkEnvelope(response, 'Invalid create link response');
+}
+
 // updateLink replaces manual link endpoints and preserves legacy field defaults.
 export async function updateLink(
   id: string,
@@ -292,26 +302,7 @@ export async function updateLink(
     'PUT',
     payload,
   );
-  const data = (response as Record<string, unknown>)?.data;
-  if (!data || typeof data !== 'object') {
-    throw new Error('Invalid update link response');
-  }
-  const record = data as Record<string, unknown>;
-  return {
-    id: typeof record.id === 'string' ? record.id : '',
-    source_device_id: typeof record.source_device_id === 'string' ? record.source_device_id : '',
-    source_if_name: typeof record.source_if_name === 'string' ? record.source_if_name : '',
-    target_device_id: typeof record.target_device_id === 'string' ? record.target_device_id : '',
-    target_if_name: typeof record.target_if_name === 'string' ? record.target_if_name : '',
-    discovery_protocol:
-      typeof record.discovery_protocol === 'string' ? record.discovery_protocol : 'manual',
-    source_if_speed: typeof record.source_if_speed === 'number' ? record.source_if_speed : 0,
-    source_if_oper_status:
-      typeof record.source_if_oper_status === 'string' ? record.source_if_oper_status : '',
-    target_if_speed: typeof record.target_if_speed === 'number' ? record.target_if_speed : 0,
-    target_if_oper_status:
-      typeof record.target_if_oper_status === 'string' ? record.target_if_oper_status : '',
-  };
+  return parseSingleLinkEnvelope(response, 'Invalid update link response');
 }
 
 // deleteLink removes one topology link by ID.
