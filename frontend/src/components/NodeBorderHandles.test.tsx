@@ -15,17 +15,19 @@ interface MockHandleProps {
   style?: CSSProperties;
 }
 
+const handleMock = vi.fn(({ id, type, position, isConnectable, style }: MockHandleProps) => (
+  <span
+    data-testid={`border-handle-${id}`}
+    data-handle-id={id}
+    data-handle-type={type}
+    data-handle-position={position}
+    data-is-connectable={String(isConnectable)}
+    style={style}
+  />
+));
+
 vi.mock('@xyflow/react', () => ({
-  Handle: ({ id, type, position, isConnectable, style }: MockHandleProps) => (
-    <span
-      data-testid={`border-handle-${id}`}
-      data-handle-id={id}
-      data-handle-type={type}
-      data-handle-position={position}
-      data-is-connectable={String(isConnectable)}
-      style={style}
-    />
-  ),
+  Handle: (props: MockHandleProps) => handleMock(props),
   Position: {
     Top: 'top',
     Right: 'right',
@@ -35,9 +37,11 @@ vi.mock('@xyflow/react', () => ({
 }));
 
 describe('NodeBorderHandles', () => {
-  it('renders exactly four connectable source handles with stable ids and positions', () => {
+  it('renders exactly four connectable source handles with stable ids and positions in edit mode', () => {
+    handleMock.mockClear();
     render(<NodeBorderHandles isConnectable />);
 
+    expect(handleMock).toHaveBeenCalledTimes(4);
     const handles = screen.getAllByTestId(/^border-handle-/);
     expect(handles).toHaveLength(4);
     expect(
@@ -91,11 +95,19 @@ describe('NodeBorderHandles', () => {
     }
   });
 
-  it('removes pointer interaction from every disabled border strip', () => {
+  it('renders lightweight static DOM anchors when disabled without mounting React Flow Handle subscriptions', () => {
+    handleMock.mockClear();
     render(<NodeBorderHandles isConnectable={false} />);
 
-    for (const handle of screen.getAllByTestId(/^border-handle-/)) {
+    expect(handleMock).not.toHaveBeenCalled();
+    const handles = screen.getAllByTestId(/^border-handle-/);
+    expect(handles).toHaveLength(4);
+
+    for (const handle of handles) {
       expect(handle).toHaveAttribute('data-is-connectable', 'false');
+      expect(handle).toHaveClass('react-flow__handle', 'nodrag', 'source');
+      expect(handle.getAttribute('data-handleid')).toBeTruthy();
+      expect(handle.getAttribute('data-handlepos')).toBeTruthy();
       expect(handle).toHaveStyle({ pointerEvents: 'none' });
     }
   });
