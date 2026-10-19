@@ -2304,12 +2304,13 @@ func writeHistogramVec(b *strings.Builder, name, help string, rows []histogramRo
 	fmt.Fprintf(b, "# HELP %s %s\n", name, help)
 	fmt.Fprintf(b, "# TYPE %s histogram\n", name)
 	for _, row := range rows {
+		baseLabels := formatLabels(row.labels)
 		for i, bucket := range row.value.buckets {
-			fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatBucketLabels(row.labels, formatFloat(bucket)), row.value.counts[i])
+			fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatBucketLabelsFromBase(baseLabels, formatFloat(bucket)), row.value.counts[i])
 		}
-		fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatBucketLabels(row.labels, "+Inf"), row.value.count)
-		fmt.Fprintf(b, "%s_sum%s %s\n", name, formatLabels(row.labels), formatFloat(row.value.sum))
-		fmt.Fprintf(b, "%s_count%s %d\n", name, formatLabels(row.labels), row.value.count)
+		fmt.Fprintf(b, "%s_bucket%s %d\n", name, formatBucketLabelsFromBase(baseLabels, "+Inf"), row.value.count)
+		fmt.Fprintf(b, "%s_sum%s %s\n", name, baseLabels, formatFloat(row.value.sum))
+		fmt.Fprintf(b, "%s_count%s %d\n", name, baseLabels, row.value.count)
 	}
 }
 
@@ -2331,12 +2332,12 @@ func formatLabels(labels map[string]string) string {
 	return "{" + strings.Join(parts, ",") + "}"
 }
 
-func formatBucketLabels(labels map[string]string, le string) string {
-	if len(labels) == 0 {
+func formatBucketLabelsFromBase(baseLabels string, le string) string {
+	if baseLabels == "" {
 		return fmt.Sprintf(`{le="%s"}`, escapeLabelValue(le))
 	}
 
-	return strings.TrimSuffix(formatLabels(labels), "}") + fmt.Sprintf(`,le="%s"}`, escapeLabelValue(le))
+	return strings.TrimSuffix(baseLabels, "}") + fmt.Sprintf(`,le="%s"}`, escapeLabelValue(le))
 }
 
 func escapeLabelValue(value string) string {

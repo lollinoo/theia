@@ -48,7 +48,7 @@ type Policy struct {
 func PolicyFromSettings(repo SettingsGetter, deviceCount int, observedP95 time.Duration, shortestInterval time.Duration) (Policy, []CapacityWarning) {
 	backgroundProfile := TimeoutProfile{
 		Timeout: durationSecondsSetting(repo, domain.SettingSNMPTimeout, 5*time.Second),
-		Retries: nonNegativeIntSetting(repo, domain.SettingSNMPRetries, 0),
+		Retries: intSetting(repo, domain.SettingSNMPRetries, 0),
 	}
 	performanceCounterWalksProfile := backgroundProfile
 	if performanceCounterWalksProfile.Timeout > 2*time.Second {
@@ -57,7 +57,7 @@ func PolicyFromSettings(repo SettingsGetter, deviceCount int, observedP95 time.D
 	performanceCounterWalksProfile.Retries = 0
 	performanceCounterWalksProfile = TimeoutProfile{
 		Timeout: durationMSSetting(repo, domain.SettingSNMPPerformanceCounterTimeoutMillis, performanceCounterWalksProfile.Timeout),
-		Retries: nonNegativeIntSetting(repo, domain.SettingSNMPPerformanceCounterRetries, performanceCounterWalksProfile.Retries),
+		Retries: intSetting(repo, domain.SettingSNMPPerformanceCounterRetries, performanceCounterWalksProfile.Retries),
 	}
 
 	policy := Policy{
@@ -72,7 +72,7 @@ func PolicyFromSettings(repo SettingsGetter, deviceCount int, observedP95 time.D
 		Timeouts: map[Lane]TimeoutProfile{
 			LaneEssential: {
 				Timeout: durationMSSetting(repo, domain.SettingPollingEssentialTimeoutMillis, 1200*time.Millisecond),
-				Retries: nonNegativeIntSetting(repo, domain.SettingPollingEssentialRetries, 1),
+				Retries: intSetting(repo, domain.SettingPollingEssentialRetries, 1),
 			},
 			LaneBackground:              backgroundProfile,
 			LanePerformanceCounterWalks: performanceCounterWalksProfile,
@@ -135,17 +135,6 @@ func HasWarning(warnings []CapacityWarning, code WarningCode) bool {
 }
 
 func intSetting(repo SettingsGetter, key string, fallback int) int {
-	if repo == nil {
-		return fallback
-	}
-	value, err := repo.Get(key)
-	if err != nil {
-		return fallback
-	}
-	return domain.CoerceConstrainedInt(key, value, fallback)
-}
-
-func nonNegativeIntSetting(repo SettingsGetter, key string, fallback int) int {
 	if repo == nil {
 		return fallback
 	}
