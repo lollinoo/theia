@@ -4,7 +4,7 @@
  */
 import type { ReactFlowInstance } from '@xyflow/react';
 import type { Dispatch, SetStateAction } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
@@ -43,7 +43,25 @@ export function useCanvasSelection({
   openBulkEditPanel: () => void;
 } {
   const [selectedNodeCount, setSelectedNodeCount] = useState(0);
-  const selectedRealNodeIds = useMemo(() => resolveSelectedRealNodeIds(nodes), [nodes]);
+  const selectedRealNodeIdsRef = useRef<Set<string>>(new Set());
+  const selectedRealNodeIds = useMemo(() => {
+    const nextSet = resolveSelectedRealNodeIds(nodes);
+    const prevSet = selectedRealNodeIdsRef.current;
+    if (prevSet.size === nextSet.size) {
+      let equal = true;
+      for (const id of nextSet) {
+        if (!prevSet.has(id)) {
+          equal = false;
+          break;
+        }
+      }
+      if (equal) {
+        return prevSet;
+      }
+    }
+    selectedRealNodeIdsRef.current = nextSet;
+    return nextSet;
+  }, [nodes]);
 
   const openBulkEditPanel = useCallback(() => {
     if (!editMode) return;

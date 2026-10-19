@@ -88,14 +88,20 @@ function projectEdgesWithAreaColor(
   }
 
   const deviceAreaMap = new Map<string, string[]>();
+  const deviceAreaSetMap = new Map<string, Set<string>>();
   for (const device of devices) {
-    deviceAreaMap.set(device.id, device.area_ids ?? []);
+    const areaIds = device.area_ids ?? [];
+    deviceAreaMap.set(device.id, areaIds);
+    deviceAreaSetMap.set(device.id, new Set(areaIds));
   }
 
   return edges.map((edge) => {
-    const sourceAreas = new Set(deviceAreaMap.get(edge.source) ?? []);
-    const targetAreas = deviceAreaMap.get(edge.target) ?? [];
-    const sharedArea = targetAreas.find((areaId) => sourceAreas.has(areaId));
+    const sourceAreas = deviceAreaSetMap.get(edge.source);
+    const targetAreas = deviceAreaMap.get(edge.target);
+    const sharedArea =
+      sourceAreas && targetAreas
+        ? targetAreas.find((areaId) => sourceAreas.has(areaId))
+        : undefined;
     const color = sharedArea ? areaColorMap.get(sharedArea) : undefined;
     if (color === edge.data?.areaColor) {
       return edge;
@@ -162,16 +168,26 @@ function projectDisplayNodes({
   const nodesById = new Map(nodesWithAreaColor.map((node) => [node.id, node]));
   const areaNodesById = new Map(areaNodes.map((node) => [node.id, node]));
 
+  const ghostDeviceIds = new Set(ghostDevices.map((device) => device.id));
+  const firstInAreaDeviceIdByGhostId = new Map<string, string>();
+  for (const link of filteredLinks) {
+    if (
+      ghostDeviceIds.has(link.source_device_id) &&
+      !firstInAreaDeviceIdByGhostId.has(link.source_device_id)
+    ) {
+      firstInAreaDeviceIdByGhostId.set(link.source_device_id, link.target_device_id);
+    }
+    if (
+      ghostDeviceIds.has(link.target_device_id) &&
+      !firstInAreaDeviceIdByGhostId.has(link.target_device_id)
+    ) {
+      firstInAreaDeviceIdByGhostId.set(link.target_device_id, link.source_device_id);
+    }
+  }
+
   const ghostNodes: DeviceNode[] = ghostDevices.map((device) => {
     const existingNode = nodesById.get(device.id);
-    const connectedLink = filteredLinks.find(
-      (link) => link.source_device_id === device.id || link.target_device_id === device.id,
-    );
-    const connectedRealDeviceId = connectedLink
-      ? connectedLink.source_device_id === device.id
-        ? connectedLink.target_device_id
-        : connectedLink.source_device_id
-      : null;
+    const connectedRealDeviceId = firstInAreaDeviceIdByGhostId.get(device.id) ?? null;
     const connectedRealNode = connectedRealDeviceId
       ? areaNodesById.get(connectedRealDeviceId)
       : undefined;
@@ -225,6 +241,53 @@ function projectDisplayEdges(
   return applyEdgeEmphasis(areaEdges, selectedRealNodeIds);
 }
 
+interface DisplayEdgesCacheEntry {
+  edges: LinkEdgeType[];
+  devices: Device[];
+  effectiveAreaId: string | null;
+  filteredLinks: Link[];
+  areaColorMap: ReadonlyMap<string, string>;
+  selectedRealNodeIds: ReadonlySet<string>;
+  selectedEdgeIds: string[];
+  edgesWithAreaColor: LinkEdgeType[];
+  displayEdges: LinkEdgeType[];
+}
+
+let displayEdgesCache: DisplayEdgesCacheEntry | null = null;
+
+/** Clears display edges memoization cache for test isolation. */
+export function clearDisplayEdgesCache(): void {
+  displayEdgesCache = null;
+}
+
+function areSelectedNodeIdsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const id of a) {
+    if (!b.has(id)) return false;
+  }
+  return true;
+}
+
+function getSelectedEdgeIds(edges: LinkEdgeType[]): string[] {
+  const ids: string[] = [];
+  for (const edge of edges) {
+    if (edge.selected) {
+      ids.push(edge.id);
+    }
+  }
+  return ids;
+}
+
+function areSelectedEdgeIdsEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 /** Project canvas render graph for the topology canvas. */
 export function projectCanvasRenderGraph(
   input: ProjectCanvasRenderGraphInput,
@@ -234,11 +297,46 @@ export function projectCanvasRenderGraph(
     input.areaColorMap,
     input.areaColorNodeCache,
   );
-  const edgesWithAreaColor = projectEdgesWithAreaColor(
-    input.edges,
-    input.devices,
-    input.areaColorMap,
-  );
+
+  const currentSelectedEdgeIds = getSelectedEdgeIds(input.edges);
+  const canReuseDisplayEdges =
+    displayEdgesCache !== null &&
+    displayEdgesCache.edges === input.edges &&
+    displayEdgesCache.devices === input.devices &&
+    displayEdgesCache.effectiveAreaId === input.effectiveAreaId &&
+    displayEdgesCache.filteredLinks === input.filteredLinks &&
+    displayEdgesCache.areaColorMap === input.areaColorMap &&
+    (displayEdgesCache.selectedRealNodeIds === input.selectedRealNodeIds ||
+      areSelectedNodeIdsEqual(displayEdgesCache.selectedRealNodeIds, input.selectedRealNodeIds)) &&
+    areSelectedEdgeIdsEqual(displayEdgesCache.selectedEdgeIds, currentSelectedEdgeIds);
+
+  let edgesWithAreaColor: LinkEdgeType[];
+  let displayEdges: LinkEdgeType[];
+
+  if (canReuseDisplayEdges && displayEdgesCache) {
+    edgesWithAreaColor = displayEdgesCache.edgesWithAreaColor;
+    displayEdges = displayEdgesCache.displayEdges;
+  } else {
+    edgesWithAreaColor = projectEdgesWithAreaColor(input.edges, input.devices, input.areaColorMap);
+    displayEdges = projectDisplayEdges(
+      edgesWithAreaColor,
+      input.filteredLinks,
+      input.effectiveAreaId,
+      input.selectedRealNodeIds,
+    );
+    displayEdgesCache = {
+      edges: input.edges,
+      devices: input.devices,
+      effectiveAreaId: input.effectiveAreaId,
+      filteredLinks: input.filteredLinks,
+      areaColorMap: input.areaColorMap,
+      selectedRealNodeIds: input.selectedRealNodeIds,
+      selectedEdgeIds: currentSelectedEdgeIds,
+      edgesWithAreaColor,
+      displayEdges,
+    };
+  }
+
   const displayNodes = projectDisplayNodes({
     nodesWithAreaColor,
     filteredDevices: input.filteredDevices,
@@ -249,12 +347,6 @@ export function projectCanvasRenderGraph(
     ghostMeasurements: input.ghostMeasurements,
     onGhostClick: input.onGhostClick,
   });
-  const displayEdges = projectDisplayEdges(
-    edgesWithAreaColor,
-    input.filteredLinks,
-    input.effectiveAreaId,
-    input.selectedRealNodeIds,
-  );
 
   return {
     nodesWithAreaColor,
