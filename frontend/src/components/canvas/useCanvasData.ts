@@ -239,6 +239,8 @@ export function useCanvasData({
       }),
     [alerts, devices, prometheusStatus, snapshot, topologyLinks],
   );
+  const runtimeStateRef = useRef<RuntimeState>(runtimeState);
+  runtimeStateRef.current = runtimeState;
 
   const runtimeSummary = useMemo<RuntimeSummary>(() => {
     return {
@@ -1049,7 +1051,7 @@ export function useCanvasData({
       openEdgeMenu,
       nodeIndexById: nodeIndexByIdRef?.current,
       edgeIndexById: edgeIndexByIdRef?.current,
-      runtimeState,
+      runtimeState: runtimeStateRef.current,
       setDevices,
     });
   }, [
@@ -1057,7 +1059,6 @@ export function useCanvasData({
     nodeIndexByIdRef,
     openEdgeMenu,
     prometheusStatus,
-    runtimeState,
     setDevices,
     setEdges,
     setNodes,
