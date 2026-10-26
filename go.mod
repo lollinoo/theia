@@ -42,7 +42,7 @@ require (
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/gosnmp/gosnmp v1.45.0
+	github.com/gosnmp/gosnmp v1.46.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/pkg/sftp v1.13.11
