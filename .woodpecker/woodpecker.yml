@@ -99,6 +99,7 @@ steps:
       GOCACHE: /var/cache/theia-ci/gobuild
       npm_config_cache: /var/cache/theia-ci/npm
       PLAYWRIGHT_BROWSERS_PATH: /var/cache/theia-ci/playwright
+      PLAYWRIGHT_SKIP_BROWSER_GC: "1"
       THEIA_E2E_DB_DSN: postgres://theia:theia@postgres-e2e:5432/theia?sslmode=disable
     volumes:
       - /var/cache/theia-ci/gomod:/var/cache/theia-ci/gomod

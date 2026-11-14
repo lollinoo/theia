@@ -28,14 +28,14 @@ git -c safe.directory="$repo_dir" -C "$repo_dir" ls-files -z \
 playwright_version=$(awk '/"node_modules\/playwright-core": \{/{f=1} f&&/"version"/{gsub(/[",]/,"",$2); print $2; exit}' "$repo_dir/frontend/package-lock.json")
 docker build -f "$repo_dir/Dockerfile.deployment-test" --build-arg PLAYWRIGHT_VERSION="$playwright_version" \
   -t theia-managed-ci-runner:local "$repo_dir"
-# Host-side caches shared with the other CI steps; all are safe for concurrent use.
+# Host-side caches shared with the other CI steps; browser GC is off so other Playwright versions survive.
 cache=/var/cache/theia-ci
 docker run --rm --name theia-managed-ci-runner --network host \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$ci_work:$ci_work" -w "$ci_work/repo" \
   -v "$cache:$cache" \
   -e npm_config_cache="$cache/npm" -e GOMODCACHE="$cache/gomod" -e GOCACHE="$cache/gobuild" \
-  -e PLAYWRIGHT_BROWSERS_PATH="$cache/playwright" \
+  -e PLAYWRIGHT_BROWSERS_PATH="$cache/playwright" -e PLAYWRIGHT_SKIP_BROWSER_GC=1 \
   -e TMPDIR="$ci_work/tmp" -e CI=true \
   theia-managed-ci-runner:local bash -ec '
     npm --prefix frontend ci
