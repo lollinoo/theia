@@ -40,7 +40,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Stage: production — Caddy serving built files with API proxy and HTTPS
 # ---------------------------------------------------------------------------
-FROM caddy:2.11.7-alpine AS production
+FROM caddy:2.11.8-alpine AS production
 
 # Kubernetes serves an unprivileged HTTP port behind Ingress and drops all
 # capabilities. Remove the upstream file capability that blocks that execution.
