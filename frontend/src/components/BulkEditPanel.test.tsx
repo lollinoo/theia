@@ -400,4 +400,31 @@ describe('BulkEditPanel — bulk save behavior', () => {
     expect(removeFromMapMock).not.toHaveBeenCalled();
     expect(onDevicesDeleted).toHaveBeenCalled();
   });
+
+  it('calls onDevicesDeleted and reports error count when bulk delete partially fails', async () => {
+    const deleteDeviceMock = vi.mocked(deleteDevice);
+    deleteDeviceMock.mockResolvedValueOnce(undefined);
+    deleteDeviceMock.mockRejectedValueOnce(new Error('Device locked'));
+    const onDevicesDeleted = vi.fn();
+
+    render(
+      <BulkEditPanel
+        devices={[
+          mockDevice({ id: 'dev-1', hostname: 'router-01', ip: '10.0.0.1' }),
+          mockDevice({ id: 'dev-2', hostname: 'router-02', ip: '10.0.0.2' }),
+        ]}
+        onDevicesUpdated={vi.fn()}
+        onDevicesDeleted={onDevicesDeleted}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 2 devices everywhere' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete everywhere' }));
+
+    await waitFor(() => {
+      expect(deleteDeviceMock).toHaveBeenCalledTimes(2);
+      expect(onDevicesDeleted).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('1 of 2 deletes failed')).toBeInTheDocument();
+    });
+  });
 });

@@ -180,48 +180,15 @@ function patchAlertNodesByScan(
   return nextNodes ?? nodes;
 }
 
-function collectCandidateNodeAlertIds(
-  nodes: DeviceNode[],
-  snapshot: SnapshotPayload | null,
-  alerts: AlertDTO[],
-): Set<string> {
-  const candidateIds = new Set<string>();
-
-  if (snapshot) {
-    for (const deviceId of Object.keys(snapshot.devices)) {
-      candidateIds.add(deviceId);
-    }
-  }
-
-  for (const alert of alerts) {
-    candidateIds.add(alert.device_id);
-  }
-
-  for (const node of nodes) {
-    const alertStatus = runtimeAlertStatusForDevice(node.id, snapshot, alerts);
-    if (node.data.runtime.alertStatus !== alertStatus) {
-      candidateIds.add(node.id);
-    }
-  }
-
-  return candidateIds;
-}
-
 function patchAlertNodesByIndex(
   nodes: DeviceNode[],
   nodeIndexById: ReadonlyMap<string, number>,
   snapshot: SnapshotPayload | null,
   alerts: AlertDTO[],
 ): DeviceNode[] {
-  const candidateIds = collectCandidateNodeAlertIds(nodes, snapshot, alerts);
   let nextNodes: DeviceNode[] | null = null;
 
-  for (const deviceId of candidateIds) {
-    const nodeIndex = nodeIndexById.get(deviceId);
-    if (nodeIndex === undefined) {
-      continue;
-    }
-
+  for (const [deviceId, nodeIndex] of nodeIndexById) {
     const node = nodes[nodeIndex];
     if (!node || node.id !== deviceId) {
       continue;
@@ -274,37 +241,14 @@ function patchAlertEdgesByScan(edges: LinkEdgeType[], alerts: AlertDTO[]): LinkE
   return nextEdges ?? edges;
 }
 
-function collectCandidateEdgeAlertIds(edges: LinkEdgeType[], alerts: AlertDTO[]): Set<string> {
-  const candidateIds = new Set<string>();
-
-  for (const edge of edges) {
-    if (!edge.data) {
-      continue;
-    }
-
-    const alertStatus = alertStatusForEdge(edge, alerts);
-    if (edge.data.alertStatus !== alertStatus) {
-      candidateIds.add(edge.id);
-    }
-  }
-
-  return candidateIds;
-}
-
 function patchAlertEdgesByIndex(
   edges: LinkEdgeType[],
   edgeIndexById: ReadonlyMap<string, number>,
   alerts: AlertDTO[],
 ): LinkEdgeType[] {
-  const candidateIds = collectCandidateEdgeAlertIds(edges, alerts);
   let nextEdges: LinkEdgeType[] | null = null;
 
-  for (const edgeId of candidateIds) {
-    const edgeIndex = edgeIndexById.get(edgeId);
-    if (edgeIndex === undefined) {
-      continue;
-    }
-
+  for (const [edgeId, edgeIndex] of edgeIndexById) {
     const edge = edges[edgeIndex];
     if (!edge || edge.id !== edgeId || !edge.data) {
       continue;

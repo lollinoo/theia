@@ -201,6 +201,9 @@ export function BulkEditPanel({
       );
       setDeleteLoading(false);
       setConfirmDelete(null);
+      if (failures.length < devices.length) {
+        onDevicesDeleted();
+      }
       return;
     }
 

@@ -197,7 +197,7 @@ export function useWebSocket(
   /** Clears alert version state when reconnecting so the server can send a fresh alert baseline. */
   function resetAlertState() {
     alertVersionRef.current = null;
-    setAlerts([]);
+    setAlerts((prev) => (prev.length === 0 ? prev : []));
   }
 
   /** Returns the last fully applied protocol-v2 cursor when both lineage fields are valid. */
@@ -417,6 +417,9 @@ export function useWebSocket(
       runtimeAckSchedulerRef.current?.cancel();
       const runtimeAckScheduler = createRuntimeAckScheduler({
         send(control) {
+          if (ws.readyState !== WebSocket.OPEN) {
+            return;
+          }
           ws.send(JSON.stringify(control));
           updateCanvasDiagnosticsState({
             websocket: {
@@ -1229,7 +1232,29 @@ export function useWebSocket(
             }
           } else if (message.type === 'prometheus_status') {
             const payload = message.payload as PrometheusStatusPayload;
-            setPrometheusStatus(payload);
+            const nextStatus = payload as PrometheusStatusPayload & {
+              status?: unknown;
+              checkedAt?: unknown;
+            };
+            setPrometheusStatus((prev) => {
+              const prevStatus = prev as
+                | (PrometheusStatusPayload & {
+                    status?: unknown;
+                    checkedAt?: unknown;
+                  })
+                | null;
+              if (
+                prev &&
+                prevStatus?.status === nextStatus.status &&
+                prevStatus?.checkedAt === nextStatus.checkedAt &&
+                prev?.error === nextStatus.error &&
+                prev?.available === nextStatus.available &&
+                prev?.enabled === nextStatus.enabled
+              ) {
+                return prev;
+              }
+              return nextStatus;
+            });
             updateCanvasDiagnosticsState({
               runtime: {
                 prometheusStatus:
@@ -1255,7 +1280,9 @@ export function useWebSocket(
             if (payload.version !== undefined) {
               alertVersionRef.current = payload.version;
             }
-            setAlerts(payload.alerts);
+            setAlerts((prev) =>
+              prev.length === 0 && payload.alerts.length === 0 ? prev : payload.alerts,
+            );
           } else if (message.type === 'resync_required') {
             const payload = (message as ResyncRequiredWSMessage).payload;
             if (payload.strategy === 'stream') {

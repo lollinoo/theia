@@ -23,6 +23,7 @@ import (
 	"github.com/lollinoo/theia/internal/domain"
 	"github.com/lollinoo/theia/internal/observability"
 	"github.com/lollinoo/theia/internal/service"
+	"github.com/lollinoo/theia/internal/testutil"
 	"github.com/lollinoo/theia/internal/vendor"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -424,164 +425,10 @@ func (r *backupFileRepoForHandler) DeleteByJobID(jobID uuid.UUID) error {
 	return nil
 }
 
-type bulkBackupRunRepoForHandler struct {
-	mu    sync.Mutex
-	runs  map[uuid.UUID]*domain.BulkBackupRun
-	items map[uuid.UUID][]domain.BulkBackupRunItem
-}
+type bulkBackupRunRepoForHandler = testutil.MockBulkBackupRunRepo
 
 func newBulkBackupRunRepoForHandler() *bulkBackupRunRepoForHandler {
-	return &bulkBackupRunRepoForHandler{
-		runs:  make(map[uuid.UUID]*domain.BulkBackupRun),
-		items: make(map[uuid.UUID][]domain.BulkBackupRunItem),
-	}
-}
-
-func (r *bulkBackupRunRepoForHandler) CreateRun(run *domain.BulkBackupRun, items []domain.BulkBackupRunItem) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	now := time.Now().UTC()
-	if run.CreatedAt.IsZero() {
-		run.CreatedAt = now
-	}
-	if run.StartedAt == nil {
-		started := now
-		run.StartedAt = &started
-	}
-	cp := *run
-	r.runs[run.ID] = &cp
-	copied := append([]domain.BulkBackupRunItem(nil), items...)
-	r.items[run.ID] = copied
-	return nil
-}
-
-func (r *bulkBackupRunRepoForHandler) GetRun(id uuid.UUID) (*domain.BulkBackupRun, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.copyRunLocked(id), nil
-}
-
-func (r *bulkBackupRunRepoForHandler) GetLatestRun() (*domain.BulkBackupRun, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var latest *domain.BulkBackupRun
-	for _, run := range r.runs {
-		if latest == nil || run.CreatedAt.After(latest.CreatedAt) {
-			cp := *run
-			latest = &cp
-		}
-	}
-	if latest == nil {
-		return nil, nil
-	}
-	latest.Items = append([]domain.BulkBackupRunItem(nil), r.items[latest.ID]...)
-	return latest, nil
-}
-
-func (r *bulkBackupRunRepoForHandler) GetActiveRun() (*domain.BulkBackupRun, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for id, run := range r.runs {
-		if bulkRunActiveForHandlerTest(run.Status) {
-			return r.copyRunLocked(id), nil
-		}
-	}
-	return nil, nil
-}
-
-func (r *bulkBackupRunRepoForHandler) ListResumableRuns() ([]domain.BulkBackupRun, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var runs []domain.BulkBackupRun
-	for id, run := range r.runs {
-		if run.Status == domain.BulkBackupRunStatusRunning ||
-			run.Status == domain.BulkBackupRunStatusCancelling ||
-			run.Status == domain.BulkBackupRunStatusPausing {
-			cp := *run
-			cp.Items = append([]domain.BulkBackupRunItem(nil), r.items[id]...)
-			runs = append(runs, cp)
-		}
-	}
-	return runs, nil
-}
-
-func bulkRunActiveForHandlerTest(status domain.BulkBackupRunStatus) bool {
-	return status == domain.BulkBackupRunStatusRunning ||
-		status == domain.BulkBackupRunStatusCancelling ||
-		status == domain.BulkBackupRunStatusPausing ||
-		status == domain.BulkBackupRunStatusPaused
-}
-
-func (r *bulkBackupRunRepoForHandler) UpdateRun(run *domain.BulkBackupRun) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	cp := *run
-	r.runs[run.ID] = &cp
-	return nil
-}
-
-func (r *bulkBackupRunRepoForHandler) ListRunItems(runID uuid.UUID) ([]domain.BulkBackupRunItem, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]domain.BulkBackupRunItem(nil), r.items[runID]...), nil
-}
-
-func (r *bulkBackupRunRepoForHandler) UpdateRunItem(item *domain.BulkBackupRunItem) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	items := r.items[item.RunID]
-	for i := range items {
-		if items[i].ID == item.ID {
-			items[i] = *item
-			r.items[item.RunID] = items
-			return nil
-		}
-	}
-	r.items[item.RunID] = append(items, *item)
-	return nil
-}
-
-func (r *bulkBackupRunRepoForHandler) RecalculateRunCounters(runID uuid.UUID) (*domain.BulkBackupRun, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	run := r.runs[runID]
-	if run == nil {
-		return nil, nil
-	}
-	run.TotalCount = len(r.items[runID])
-	run.QueuedCount = 0
-	run.SuccessCount = 0
-	run.FailedCount = 0
-	run.SkippedCount = 0
-	run.CancelledCount = 0
-	for _, item := range r.items[runID] {
-		switch item.Status {
-		case domain.BulkBackupRunItemStatusActive,
-			domain.BulkBackupRunItemStatusQueued,
-			domain.BulkBackupRunItemStatusRunning,
-			domain.BulkBackupRunItemStatusChecking:
-			run.QueuedCount++
-		case domain.BulkBackupRunItemStatusSuccess:
-			run.SuccessCount++
-		case domain.BulkBackupRunItemStatusFailed:
-			run.FailedCount++
-		case domain.BulkBackupRunItemStatusSkipped:
-			run.SkippedCount++
-		case domain.BulkBackupRunItemStatusCancelled:
-			run.CancelledCount++
-		}
-	}
-	return r.copyRunLocked(runID), nil
-}
-
-func (r *bulkBackupRunRepoForHandler) copyRunLocked(id uuid.UUID) *domain.BulkBackupRun {
-	run := r.runs[id]
-	if run == nil {
-		return nil
-	}
-	cp := *run
-	cp.Items = append([]domain.BulkBackupRunItem(nil), r.items[id]...)
-	return &cp
+	return testutil.NewMockBulkBackupRunRepo()
 }
 
 func setupBackupHandler(t *testing.T) (*BackupHandler, *backupJobRepoForHandler, *backupFileRepoForHandler) {

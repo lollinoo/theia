@@ -73,10 +73,3 @@ function resolvedDeviceHostname(device: Device): string {
   }
   return hostname || sysName || ip || device.id;
 }
-
-/** Defines empty grafana dashboard config constants and helper contracts for the shared frontend utility layer. */
-export const EMPTY_GRAFANA_DASHBOARD_CONFIG: GrafanaDashboardConfig = {
-  profiles: [],
-  default_profile_id: '',
-  device_overrides: {},
-};

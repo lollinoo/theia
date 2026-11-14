@@ -3,27 +3,15 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDocumentCookie } from '../test/documentCookie';
+import { mockResponse } from '../test/mockResponse';
 import {
   fetchBackupFileContent,
   fetchBackupJobs,
   fetchBulkOperationStatus,
   resetSSHHostKey,
   startBulkBackupRun,
+  triggerBulkDownload,
 } from './backup';
-
-function mockResponse(
-  body: unknown,
-  init: { ok?: boolean; status?: number; statusText?: string } = {},
-) {
-  const { ok = true, status = 200, statusText = 'OK' } = init;
-  return {
-    ok,
-    status,
-    statusText,
-    json: () => Promise.resolve(body),
-    headers: new Headers(),
-  } as unknown as Response;
-}
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -157,5 +145,49 @@ describe('backup client', () => {
       size_bytes: 14,
       max_inline_size_bytes: 0,
     });
+  });
+
+  it('falls back to saveBlob when showSaveFilePicker fails with SecurityError', async () => {
+    const mockSecurityError = new DOMException('User activation expired', 'SecurityError');
+    (globalThis as unknown as { showSaveFilePicker: unknown }).showSaveFilePicker = vi
+      .fn()
+      .mockRejectedValue(mockSecurityError);
+
+    const blob = new Blob(['zip-content'], { type: 'application/zip' });
+    const response = new Response(blob, {
+      status: 200,
+      headers: { 'Content-Disposition': 'attachment; filename="backups.zip"' },
+    });
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-url');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+
+    const result = await triggerBulkDownload(['dev-1']);
+    expect(result).toBe('saved');
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+
+    delete (globalThis as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker;
+  });
+
+  it('returns cancelled when showSaveFilePicker throws AbortError', async () => {
+    const mockAbortError = new DOMException('The user aborted a request.', 'AbortError');
+    (globalThis as unknown as { showSaveFilePicker: unknown }).showSaveFilePicker = vi
+      .fn()
+      .mockRejectedValue(mockAbortError);
+
+    const blob = new Blob(['zip-content'], { type: 'application/zip' });
+    const response = new Response(blob, {
+      status: 200,
+      headers: { 'Content-Disposition': 'attachment; filename="backups.zip"' },
+    });
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    const result = await triggerBulkDownload(['dev-1']);
+    expect(result).toBe('cancelled');
+
+    delete (globalThis as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker;
   });
 });

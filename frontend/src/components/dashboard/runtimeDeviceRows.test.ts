@@ -5,7 +5,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { Device } from '../../types/api';
 import type { DeviceRuntimeDTO, SnapshotPayload } from '../../types/metrics';
-import { buildRuntimeDeviceRows, computeAreaHealthSummary } from './runtimeDeviceRows';
+import {
+  buildRuntimeDeviceRows,
+  computeAreaHealthSummary,
+  getCachedOsVersion,
+  osVersionCache,
+} from './runtimeDeviceRows';
 
 function mockDevice(overrides: Partial<Device> = {}): Device {
   return {
@@ -170,5 +175,30 @@ describe('runtimeDeviceRows', () => {
 
     expect(summary.percentage).toBeCloseTo(66.67, 1);
     expect(summary.label).toBe('Critical');
+  });
+
+  it('caches resolved OS version in osVersionCache across repeated calls', () => {
+    osVersionCache.clear();
+    const sysDescr = 'RouterOS 7.14.3';
+
+    const first = getCachedOsVersion(undefined, sysDescr);
+    expect(first).toBe('RouterOS 7.14.3');
+    expect(osVersionCache.has(sysDescr)).toBe(true);
+
+    const second = getCachedOsVersion(undefined, sysDescr);
+    expect(second).toBe('RouterOS 7.14.3');
+  });
+
+  it('clears osVersionCache when reaching the 2000 entry limit', () => {
+    osVersionCache.clear();
+    for (let i = 0; i < 2000; i++) {
+      osVersionCache.set(`dummy-${i}`, `v${i}`);
+    }
+    expect(osVersionCache.size).toBe(2000);
+
+    const result = getCachedOsVersion(undefined, 'RouterOS 7.15.1');
+    expect(result).toBe('RouterOS 7.15.1');
+    expect(osVersionCache.size).toBe(1);
+    expect(osVersionCache.get('RouterOS 7.15.1')).toBe('RouterOS 7.15.1');
   });
 });

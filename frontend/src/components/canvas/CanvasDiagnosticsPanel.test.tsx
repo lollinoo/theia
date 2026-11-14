@@ -12,12 +12,11 @@ import {
 } from './canvasDiagnostics';
 import {
   clearCanvasMetrics,
-  finishCanvasRenderMetric,
+  recordCanvasComponentRenderMetric,
   recordCanvasFrameTime,
   recordCanvasLongTask,
   recordCanvasMetric,
   setCanvasRenderMetricsEnabled,
-  startCanvasRenderMetric,
 } from './canvasInstrumentation';
 
 describe('CanvasDiagnosticsPanel', () => {
@@ -100,7 +99,7 @@ describe('CanvasDiagnosticsPanel', () => {
     recordCanvasFrameTime(42);
     recordCanvasLongTask(88);
     setCanvasRenderMetricsEnabled(true);
-    finishCanvasRenderMetric(startCanvasRenderMetric('DeviceCard'), { deviceId: 'dev-1' });
+    recordCanvasComponentRenderMetric('DeviceCard', 12, { deviceId: 'dev-1' });
     recordCanvasDiagnosticEvent({
       level: 'info',
       source: 'projection',

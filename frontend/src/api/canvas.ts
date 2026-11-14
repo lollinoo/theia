@@ -65,15 +65,16 @@ export function resetCanvasBootstrapRequestCache(): void {
   recentCanvasBootstraps.clear();
 }
 
+// getCanvasBootstrapRequestKey returns the cache key for default or map-scoped bootstrap requests.
+export function getCanvasBootstrapRequestKey(mapId?: string): CanvasBootstrapCacheKey {
+  return mapId ? `map:${mapId}` : `default:${defaultCanvasBootstrapCacheKey}`;
+}
+
 // fetchCanvasBootstrap loads the default canvas topology bootstrap with request reuse.
 export async function fetchCanvasBootstrap(
   options: FetchCanvasBootstrapOptions = {},
 ): Promise<{ topology: CanvasTopologyResponse }> {
-  return fetchCanvasBootstrapWithCache(
-    `default:${defaultCanvasBootstrapCacheKey}`,
-    '/api/v1/canvas',
-    options,
-  );
+  return fetchCanvasBootstrapWithCache(getCanvasBootstrapRequestKey(), '/api/v1/canvas', options);
 }
 
 // fetchCanvasBootstrapWithCache deduplicates concurrent bootstrap loads and short reuse windows.
@@ -218,14 +219,17 @@ export async function updateCanvasMap(
     filter: CanvasMapFilter;
   }>,
 ): Promise<CanvasMap> {
-  return parseCanvasMapResponse(
+  const result = parseCanvasMapResponse(
     await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}`, 'PATCH', payload),
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(id));
+  return result;
 }
 
 // deleteCanvasMap deletes a saved map and lets the backend enforce default-map conflicts.
 export async function deleteCanvasMap(id: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/canvas/maps/${encodeURIComponent(id)}`, 'DELETE');
+  recentCanvasBootstraps.clear();
 }
 
 /** Saves one map-local link route and returns the validated persisted route. */
@@ -239,6 +243,7 @@ export async function saveCanvasMapLinkRoute(
     'PUT',
     route,
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(mapId));
   const routePayload =
     typeof payload === 'object' && payload !== null && !Array.isArray(payload) && 'data' in payload
       ? payload.data
@@ -256,6 +261,7 @@ export async function deleteCanvasMapLinkRoute(mapId: string, linkId: string): P
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/link-routes/${encodeURIComponent(linkId)}`,
     'DELETE',
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(mapId));
 }
 
 // setCanvasMapPrimary promotes one saved map to primary and returns the updated map DTO.
@@ -271,6 +277,7 @@ export async function removeDeviceFromCanvasMap(mapId: string, deviceId: string)
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,
     'DELETE',
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(mapId));
 }
 
 // addDeviceToCanvasMap adds a device and optionally asks the backend to include missing links.
@@ -279,13 +286,15 @@ export async function addDeviceToCanvasMap(
   deviceId: string,
   payload: { include_connected_links?: boolean } = {},
 ): Promise<CanvasMap> {
-  return parseCanvasMapResponse(
+  const result = parseCanvasMapResponse(
     await requestJSONWithBody(
       `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,
       'POST',
       payload,
     ),
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(mapId));
+  return result;
 }
 
 // updateCanvasMapDeviceAreas replaces saved-map area assignments for selected devices.
@@ -293,13 +302,15 @@ export async function updateCanvasMapDeviceAreas(
   mapId: string,
   payload: { device_ids: string[]; area_ids: string[] },
 ): Promise<CanvasMap> {
-  return parseCanvasMapResponse(
+  const result = parseCanvasMapResponse(
     await requestJSONWithBody(
       `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/device-areas`,
       'PUT',
       payload,
     ),
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(mapId));
+  return result;
 }
 
 // updateCanvasMapDeviceVisualColor applies map-local visual color metadata to a device.
@@ -308,13 +319,15 @@ export async function updateCanvasMapDeviceVisualColor(
   deviceId: string,
   payload: { visual_color: string | null },
 ): Promise<CanvasMap> {
-  return parseCanvasMapResponse(
+  const result = parseCanvasMapResponse(
     await requestJSONWithBody(
       `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/devices/${encodeURIComponent(deviceId)}`,
       'PATCH',
       payload,
     ),
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(mapId));
+  return result;
 }
 
 // fetchCanvasMapAreas loads saved-map areas with imported device counts.
@@ -329,13 +342,15 @@ export async function createCanvasMapArea(
   mapId: string,
   payload: { name: string; description: string; color: string },
 ): Promise<Area> {
-  return parseAreaResponse(
+  const result = parseAreaResponse(
     await requestJSONWithBody(
       `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas`,
       'POST',
       payload,
     ),
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(mapId));
+  return result;
 }
 
 // updateCanvasMapArea replaces one map-local area snapshot.
@@ -344,13 +359,15 @@ export async function updateCanvasMapArea(
   areaId: string,
   payload: { name: string; description: string; color: string },
 ): Promise<Area> {
-  return parseAreaResponse(
+  const result = parseAreaResponse(
     await requestJSONWithBody(
       `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas/${encodeURIComponent(areaId)}`,
       'PUT',
       payload,
     ),
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(mapId));
+  return result;
 }
 
 // deleteCanvasMapArea removes one map-local area from a saved map.
@@ -359,6 +376,7 @@ export async function deleteCanvasMapArea(mapId: string, areaId: string): Promis
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/areas/${encodeURIComponent(areaId)}`,
     'DELETE',
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(mapId));
 }
 
 // duplicateCanvasMap creates a copy that preserves backend-managed memberships and positions.
@@ -366,13 +384,15 @@ export async function duplicateCanvasMap(
   id: string,
   payload: { name: string },
 ): Promise<CanvasMap> {
-  return parseCanvasMapResponse(
+  const result = parseCanvasMapResponse(
     await requestJSONWithBody(
       `/api/v1/canvas/maps/${encodeURIComponent(id)}/duplicate`,
       'POST',
       payload,
     ),
   );
+  recentCanvasBootstraps.delete(getCanvasBootstrapRequestKey(id));
+  return result;
 }
 
 // fetchCanvasMapBootstrap loads a saved-map topology bootstrap with map-specific cache identity.
@@ -381,7 +401,7 @@ export async function fetchCanvasMapBootstrap(
   options: FetchCanvasBootstrapOptions = {},
 ): Promise<{ topology: CanvasTopologyResponse }> {
   return fetchCanvasBootstrapWithCache(
-    `map:${mapId}`,
+    getCanvasBootstrapRequestKey(mapId),
     `/api/v1/canvas/maps/${encodeURIComponent(mapId)}/bootstrap`,
     options,
   );

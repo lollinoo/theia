@@ -104,13 +104,14 @@ export function buildTopologyHubModel({
   maps,
 }: BuildTopologyHubModelInput): TopologyHubModel {
   const degradedDevices = devices.filter((device) => isDeviceDegraded(device, snapshot));
+  const degradedDeviceIds = new Set(degradedDevices.map((device) => device.id));
 
   const areaModels = areas.map((area) => {
     const areaDevices = devices.filter((device) => device.area_ids?.includes(area.id));
     const deviceCount = area.device_count;
     const areaDeviceIds = new Set(areaDevices.map((device) => device.id));
     const degradedDeviceCount = areaDevices.filter((device) =>
-      isDeviceDegraded(device, snapshot),
+      degradedDeviceIds.has(device.id),
     ).length;
     const activeAreaLinks = areaLinks(links, areaDeviceIds);
     const degradedLinkCount = activeAreaLinks.filter((link) =>
@@ -119,13 +120,15 @@ export function buildTopologyHubModel({
     const healthLabel: TopologyHubAreaModel['healthLabel'] =
       degradedDeviceCount > 0 || degradedLinkCount > 0 ? 'Needs attention' : 'Healthy';
 
+    const effectiveDeviceCount = Math.max(deviceCount, areaDevices.length);
+
     return {
       area,
       deviceCount,
       activeLinkCount: activeAreaLinks.length,
       degradedDeviceCount,
       degradedLinkCount,
-      healthPercentage: healthPercentage(deviceCount, degradedDeviceCount),
+      healthPercentage: healthPercentage(effectiveDeviceCount, degradedDeviceCount),
       healthLabel,
     };
   });

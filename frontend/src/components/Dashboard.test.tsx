@@ -108,8 +108,18 @@ vi.mock('../contexts/ThemeContext', () => ({
 }));
 
 vi.mock('./dashboard/SSHCredentialForm', () => ({
-  SSHCredentialForm: ({ currentProfileId }: { currentProfileId?: string }) => (
-    <div data-testid="ssh-form" data-current-profile-id={currentProfileId ?? ''} />
+  SSHCredentialForm: ({
+    deviceId,
+    currentProfileId,
+  }: {
+    deviceId?: string;
+    currentProfileId?: string;
+  }) => (
+    <div
+      data-testid="ssh-form"
+      data-device-id={deviceId ?? ''}
+      data-current-profile-id={currentProfileId ?? ''}
+    />
   ),
 }));
 
@@ -475,5 +485,53 @@ describe('Dashboard', () => {
     expect(screen.getByTestId('filter-select-area')).toHaveAttribute('data-value', 'map-area-1');
     expect(screen.getByText('router-01')).toBeInTheDocument();
     expect(screen.queryByText('switch-01')).toBeNull();
+  });
+
+  it('guards against stale fetchDeviceCredentialProfiles responses using sequence ref', async () => {
+    let resolveFirst!: (value: unknown) => void;
+    const firstPromise = new Promise((res) => {
+      resolveFirst = res;
+    });
+
+    apiMocks.fetchDeviceCredentialProfiles
+      .mockReturnValueOnce(firstPromise)
+      .mockResolvedValueOnce([
+        { profile_id: 'profile-dev2', name: 'Dev 2 Admin', role: 'Admin', is_winbox: false },
+      ]);
+
+    const devices = [
+      mockDevice({ id: 'dev-1', hostname: 'router-01' }),
+      mockDevice({ id: 'dev-2', hostname: 'router-02' }),
+    ];
+
+    render(<Dashboard devices={devices} areas={[]} snapshot={null} />);
+
+    // Click dev-1 first (starts slow fetch)
+    fireEvent.click(screen.getByRole('button', { name: 'SSH credentials router-01' }));
+    expect(screen.getByTestId('ssh-form')).toHaveAttribute('data-device-id', 'dev-1');
+    expect(screen.getByTestId('ssh-form')).toHaveAttribute('data-current-profile-id', '');
+
+    // Quickly switch to dev-2 (starts fast fetch)
+    fireEvent.click(screen.getByRole('button', { name: 'SSH credentials router-02' }));
+    expect(screen.getByTestId('ssh-form')).toHaveAttribute('data-device-id', 'dev-2');
+
+    await waitFor(() =>
+      expect(screen.getByTestId('ssh-form')).toHaveAttribute(
+        'data-current-profile-id',
+        'profile-dev2',
+      ),
+    );
+
+    // Now resolve dev-1's fetch late
+    resolveFirst([
+      { profile_id: 'profile-stale', name: 'Stale Profile', role: 'Admin', is_winbox: false },
+    ]);
+    await firstPromise;
+
+    // Must still be profile-dev2, not overridden by dev-1's stale response
+    expect(screen.getByTestId('ssh-form')).toHaveAttribute(
+      'data-current-profile-id',
+      'profile-dev2',
+    );
   });
 });
