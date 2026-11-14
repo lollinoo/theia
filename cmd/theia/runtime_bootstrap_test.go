@@ -415,67 +415,44 @@ func TestSetupRequiredOperatorInputsIncludeMetricsToken(t *testing.T) {
 	}
 }
 
-func TestCIWorkflowPublishesNonMasterBranchImages(t *testing.T) {
+func TestCIImageJobsPublishThroughSharedScriptAfterGates(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	workflow := readGitHubWorkflow(t, filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
 
-	job := requireWorkflowJob(t, workflow, "branch-images")
-	for _, want := range []string{
-		"always()",
-		"github.event_name == 'push'",
-		"github.ref != 'refs/heads/master'",
-		"!contains(needs.*.result, 'failure')",
-		"!contains(needs.*.result, 'cancelled')",
-	} {
-		if !strings.Contains(job.If, want) {
-			t.Fatalf("branch-images if = %q, want fragment %q", job.If, want)
-		}
-	}
-	for _, want := range []string{"changes", "backend-fast", "frontend-fast", "browser-e2e"} {
-		if !stringSliceContains([]string(job.Needs), want) {
-			t.Fatalf("branch-images needs = %#v, want %q", job.Needs, want)
-		}
-	}
-	if job.Permissions["packages"] != "write" {
-		t.Fatalf("branch-images packages permission = %q, want write", job.Permissions["packages"])
-	}
-
-	backendMeta := requireWorkflowStepByID(t, job, "meta-backend-branch")
-	requireWorkflowDockerMetadataTags(t, backendMeta, "ghcr.io/lollinoo/theia-backend")
-	backendBuild := requireWorkflowStepByName(t, job, "Build and push backend branch image")
-	requireWorkflowBuildPushStep(t, backendBuild, ".", "./Dockerfile", "${{ steps.meta-backend-branch.outputs.tags }}")
-
-	frontendMeta := requireWorkflowStepByID(t, job, "meta-frontend-branch")
-	requireWorkflowDockerMetadataTags(t, frontendMeta, "ghcr.io/lollinoo/theia-frontend")
-	frontendBuild := requireWorkflowStepByName(t, job, "Build and push frontend branch image")
-	requireWorkflowBuildPushStep(t, frontendBuild, "./frontend", "./Dockerfile.frontend", "${{ steps.meta-frontend-branch.outputs.tags }}")
-}
-
-func TestCIImageJobsCheckoutRepositoryBeforeBuildPush(t *testing.T) {
-	repoRoot := filepath.Clean(filepath.Join("..", ".."))
-	workflow := readGitHubWorkflow(t, filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
-
-	for _, jobName := range []string{"master-images", "branch-images", "release-images"} {
+	for _, jobName := range []string{"publish-master-images", "publish-release-images"} {
 		t.Run(jobName, func(t *testing.T) {
 			job := requireWorkflowJob(t, workflow, jobName)
-			requireWorkflowCheckoutBeforeBuildPush(t, job)
-		})
-	}
-}
-
-func TestCIImageJobsUseGitHubTokenForGHCRLogin(t *testing.T) {
-	repoRoot := filepath.Clean(filepath.Join("..", ".."))
-	workflow := readGitHubWorkflow(t, filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
-
-	for _, jobName := range []string{"master-images", "branch-images", "release-images"} {
-		t.Run(jobName, func(t *testing.T) {
-			job := requireWorkflowJob(t, workflow, jobName)
-			login := requireWorkflowStepByUses(t, job, "docker/login-action@v4")
-			if login.With["registry"] != "ghcr.io" {
-				t.Fatalf("docker login registry = %q, want ghcr.io", login.With["registry"])
+			for _, want := range []string{"always()", "!contains(needs.*.result, 'failure')", "!contains(needs.*.result, 'cancelled')"} {
+				if !strings.Contains(job.If, want) {
+					t.Fatalf("%s if = %q, want fragment %q", jobName, job.If, want)
+				}
 			}
-			if login.With["password"] != "${{ secrets.GITHUB_TOKEN }}" {
-				t.Fatalf("docker login password = %q, want GitHub token", login.With["password"])
+			for _, want := range []string{"backend-fast", "frontend-fast", "browser-e2e", "deployment-integration"} {
+				if !stringSliceContains([]string(job.Needs), want) {
+					t.Fatalf("%s needs = %#v, want %q", jobName, job.Needs, want)
+				}
+			}
+			if job.Permissions["packages"] != "write" {
+				t.Fatalf("%s packages permission = %q, want write", jobName, job.Permissions["packages"])
+			}
+
+			checkoutIndex, publishIndex := -1, -1
+			for i, step := range job.Steps {
+				if step.Uses == "actions/checkout@v7" && checkoutIndex == -1 {
+					checkoutIndex = i
+				}
+				if strings.Contains(step.Run, "scripts/ci/publish-images.sh") {
+					publishIndex = i
+					if step.Env["GHCR_TOKEN"] != "${{ secrets.GITHUB_TOKEN }}" {
+						t.Fatalf("%s GHCR_TOKEN = %q, want GitHub token", jobName, step.Env["GHCR_TOKEN"])
+					}
+				}
+			}
+			if publishIndex == -1 {
+				t.Fatalf("%s has no step running scripts/ci/publish-images.sh", jobName)
+			}
+			if checkoutIndex == -1 || checkoutIndex > publishIndex {
+				t.Fatalf("%s checkout index = %d, want before publish step %d", jobName, checkoutIndex, publishIndex)
 			}
 		})
 	}
@@ -509,7 +486,7 @@ func TestDeploymentConfigsUsePostgres18(t *testing.T) {
 		{path: "docker-compose.yml", wantCount: 1},
 		{path: "docker-compose.prod.yml", wantCount: 1},
 		{path: "docker-compose.staging.yml", wantCount: 1},
-		{path: filepath.Join(".woodpecker", "woodpecker.yml"), wantCount: 1},
+		{path: filepath.Join(".woodpecker", "woodpecker.yml"), wantCount: 2},
 		{path: filepath.Join(".github", "workflows", "ci.yml"), wantCount: 2},
 	}
 
@@ -601,30 +578,29 @@ func TestWoodpeckerPipelineUsesWorkflowDirectory(t *testing.T) {
 	}
 }
 
-func TestWoodpeckerImageBuildsPublishPullableManifests(t *testing.T) {
+func TestImagePublishingPushesPullableManifests(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
-	workflowPath := filepath.Join(repoRoot, ".woodpecker", "woodpecker.yml")
-	content, err := os.ReadFile(workflowPath)
+	content, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "ci", "publish-images.sh"))
+	if err != nil {
+		t.Fatalf("read publish-images.sh: %v", err)
+	}
+	script := string(content)
+	for _, option := range []string{"--push", "--provenance=false", "--sbom=false", "docker buildx build"} {
+		if !strings.Contains(script, option) {
+			t.Fatalf("publish-images.sh missing %s", option)
+		}
+	}
+
+	pipeline, err := os.ReadFile(filepath.Join(repoRoot, ".woodpecker", "woodpecker.yml"))
 	if err != nil {
 		t.Fatalf("read Woodpecker workflow pipeline: %v", err)
 	}
-
-	var builds []string
-	for _, line := range strings.Split(string(content), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "docker buildx build ") {
-			builds = append(builds, line)
-		}
-	}
-	if len(builds) != 6 {
-		t.Fatalf("Woodpecker image build count = %d, want 6", len(builds))
-	}
-
-	for _, build := range builds {
-		for _, option := range []string{"--push", "--platform linux/amd64", "--provenance=false", "--sbom=false"} {
-			if !strings.Contains(build, option) {
-				t.Fatalf("Woodpecker image build %q missing %s", build, option)
-			}
+	for _, call := range []string{
+		"publish-images.sh linux/amd64 master",
+		`publish-images.sh linux/amd64,linux/arm64 "$CI_COMMIT_TAG" latest`,
+	} {
+		if !strings.Contains(string(pipeline), call) {
+			t.Fatalf("Woodpecker pipeline missing %q", call)
 		}
 	}
 }
@@ -1102,9 +1078,9 @@ func (n *githubWorkflowNeeds) UnmarshalYAML(value *yaml.Node) error {
 
 type githubWorkflowStep struct {
 	Name string            `yaml:"name"`
-	ID   string            `yaml:"id"`
 	Uses string            `yaml:"uses"`
-	With map[string]string `yaml:"with"`
+	Run  string            `yaml:"run"`
+	Env  map[string]string `yaml:"env"`
 }
 
 type composeService struct {
@@ -1199,101 +1175,6 @@ func requireWorkflowJob(t *testing.T, workflow githubWorkflowFile, name string) 
 		t.Fatalf("missing workflow job %q", name)
 	}
 	return job
-}
-
-func requireWorkflowStepByID(t *testing.T, job githubWorkflowJob, id string) githubWorkflowStep {
-	t.Helper()
-	for _, step := range job.Steps {
-		if step.ID == id {
-			return step
-		}
-	}
-	t.Fatalf("missing workflow step id %q", id)
-	return githubWorkflowStep{}
-}
-
-func requireWorkflowStepByName(t *testing.T, job githubWorkflowJob, name string) githubWorkflowStep {
-	t.Helper()
-	for _, step := range job.Steps {
-		if step.Name == name {
-			return step
-		}
-	}
-	t.Fatalf("missing workflow step %q", name)
-	return githubWorkflowStep{}
-}
-
-func requireWorkflowStepByUses(t *testing.T, job githubWorkflowJob, uses string) githubWorkflowStep {
-	t.Helper()
-	for _, step := range job.Steps {
-		if step.Uses == uses {
-			return step
-		}
-	}
-	t.Fatalf("missing workflow step uses %q", uses)
-	return githubWorkflowStep{}
-}
-
-func requireWorkflowDockerMetadataTags(t *testing.T, step githubWorkflowStep, image string) {
-	t.Helper()
-	if step.Uses != "docker/metadata-action@v6" {
-		t.Fatalf("%s uses = %q, want docker/metadata-action@v6", step.ID, step.Uses)
-	}
-	if step.With["images"] != image {
-		t.Fatalf("%s images = %q, want %q", step.ID, step.With["images"], image)
-	}
-	tags := step.With["tags"]
-	for _, want := range []string{"type=ref,event=branch", "type=sha"} {
-		if !strings.Contains(tags, want) {
-			t.Fatalf("%s tags = %q, want fragment %q", step.ID, tags, want)
-		}
-	}
-}
-
-func requireWorkflowBuildPushStep(t *testing.T, step githubWorkflowStep, contextPath, dockerfile, tags string) {
-	t.Helper()
-	if step.Uses != "docker/build-push-action@v7" {
-		t.Fatalf("%s uses = %q, want docker/build-push-action@v7", step.Name, step.Uses)
-	}
-	want := map[string]string{
-		"context": contextPath,
-		"file":    dockerfile,
-		"target":  "production",
-		"push":    "true",
-		"tags":    tags,
-	}
-	for key, value := range want {
-		if step.With[key] != value {
-			t.Fatalf("%s with.%s = %q, want %q", step.Name, key, step.With[key], value)
-		}
-	}
-}
-
-func requireWorkflowCheckoutBeforeBuildPush(t *testing.T, job githubWorkflowJob) {
-	t.Helper()
-	checkoutIndex := -1
-	firstBuildIndex := -1
-	for i, step := range job.Steps {
-		switch step.Uses {
-		case "actions/checkout@v7":
-			if checkoutIndex == -1 {
-				checkoutIndex = i
-			}
-		case "docker/build-push-action@v7":
-			if firstBuildIndex == -1 {
-				firstBuildIndex = i
-			}
-		}
-	}
-	if firstBuildIndex == -1 {
-		t.Fatalf("missing docker/build-push-action@v7 step")
-	}
-	if checkoutIndex == -1 {
-		t.Fatalf("missing actions/checkout@v7 step before docker/build-push-action@v7")
-	}
-	if checkoutIndex > firstBuildIndex {
-		t.Fatalf("actions/checkout@v7 step index = %d, want before first docker/build-push-action@v7 step index %d", checkoutIndex, firstBuildIndex)
-	}
 }
 
 func stringSliceContains(values []string, want string) bool {
