@@ -3,7 +3,6 @@ package postgres
 // This file defines canvas map helpers persistence behavior, ordering guarantees, and not-found conventions.
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -154,25 +153,9 @@ type canvasMapQueryRower interface {
 	QueryRow(query string, args ...interface{}) *sql.Row
 }
 
-type canvasMapContextQueryRower interface {
-	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
-}
-
-// ensureCanvasMapExists fails with the stable not-found text used by API mapping.
 func ensureCanvasMapExists(queryer canvasMapQueryRower, id uuid.UUID) error {
 	var count int
 	if err := queryer.QueryRow(`SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, id.String()).Scan(&count); err != nil {
-		return fmt.Errorf("checking canvas map existence: %w", err)
-	}
-	if count == 0 {
-		return fmt.Errorf("canvas map not found: %s", id)
-	}
-	return nil
-}
-
-func ensureCanvasMapExistsContext(ctx context.Context, queryer canvasMapContextQueryRower, id uuid.UUID) error {
-	var count int
-	if err := queryer.QueryRowContext(ctx, `SELECT COUNT(*) FROM canvas_maps WHERE id = ?`, id.String()).Scan(&count); err != nil {
 		return fmt.Errorf("checking canvas map existence: %w", err)
 	}
 	if count == 0 {

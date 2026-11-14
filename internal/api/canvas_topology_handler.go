@@ -159,28 +159,10 @@ type canvasTopologyVersionArea struct {
 // HandleGet handles GET /api/v1/topology/canvas.
 func (h *CanvasTopologyHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
-	devices, err := h.deviceService.GetAllDevices(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
+	response, ok := h.loadGlobalTopologyResponse(w, r)
+	if !ok {
 		return
 	}
-	links, err := h.linkRepo.GetAll()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list links", err)
-		return
-	}
-	positions, err := h.positionRepo.GetAll()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list positions", err)
-		return
-	}
-	areas, err := h.areaRepo.GetAllWithDeviceCount()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list areas", err)
-		return
-	}
-
-	response := h.buildResponse(devices, links, positions, areas)
 	etag := `"` + response.TopologyVersion + `"`
 	w.Header().Set("ETag", etag)
 	if requestETagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -198,28 +180,10 @@ func (h *CanvasTopologyHandler) HandleGet(w http.ResponseWriter, r *http.Request
 // WebSocket delta stream.
 func (h *CanvasTopologyHandler) HandleGetCanvas(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
-	devices, err := h.deviceService.GetAllDevices(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
+	response, ok := h.loadGlobalTopologyResponse(w, r)
+	if !ok {
 		return
 	}
-	links, err := h.linkRepo.GetAll()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list links", err)
-		return
-	}
-	positions, err := h.positionRepo.GetAll()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list positions", err)
-		return
-	}
-	areas, err := h.areaRepo.GetAllWithDeviceCount()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list areas", err)
-		return
-	}
-
-	response := h.buildResponse(devices, links, positions, areas)
 	if h.runtimeStateFunc != nil {
 		applyRuntimeOverviewState(&response, h.runtimeStateFunc())
 	}
@@ -227,6 +191,31 @@ func (h *CanvasTopologyHandler) HandleGetCanvas(w http.ResponseWriter, r *http.R
 	w.Header().Set("Cache-Control", "no-store")
 	logCanvasTopologyResponse("/api/v1/canvas", http.StatusOK, response, startedAt)
 	json.NewEncoder(w).Encode(response)
+}
+
+func (h *CanvasTopologyHandler) loadGlobalTopologyResponse(w http.ResponseWriter, r *http.Request) (canvasTopologyResponse, bool) {
+	devices, err := h.deviceService.GetAllDevices(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list devices", err)
+		return canvasTopologyResponse{}, false
+	}
+	links, err := h.linkRepo.GetAll()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list links", err)
+		return canvasTopologyResponse{}, false
+	}
+	positions, err := h.positionRepo.GetAll()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list positions", err)
+		return canvasTopologyResponse{}, false
+	}
+	areas, err := h.areaRepo.GetAllWithDeviceCount()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list areas", err)
+		return canvasTopologyResponse{}, false
+	}
+
+	return h.buildResponse(devices, links, positions, areas), true
 }
 
 // applyRuntimeOverviewState copies one atomic runtime lineage tuple into a canvas bootstrap.
@@ -267,6 +256,18 @@ func logCanvasTopologyResponse(endpoint string, status int, response canvasTopol
 }
 
 func (h *CanvasTopologyHandler) buildResponse(
+	devices []domain.Device,
+	links []domain.Link,
+	positions []domain.DevicePosition,
+	areas []domain.AreaWithCount,
+) canvasTopologyResponse {
+	response := h.buildResponseBase(devices, links, positions, areas)
+	versionInput := buildCanvasTopologyVersionInput(response.Devices, response.Links, response.Positions, response.Areas, response.Capabilities, response.Settings)
+	response.TopologyVersion = buildCanvasTopologyVersion(versionInput)
+	return response
+}
+
+func (h *CanvasTopologyHandler) buildResponseBase(
 	devices []domain.Device,
 	links []domain.Link,
 	positions []domain.DevicePosition,
@@ -322,18 +323,15 @@ func (h *CanvasTopologyHandler) buildResponse(
 	}
 	enrichedLinks := buildEnrichedLinkResponses(links, devices)
 
-	versionInput := buildCanvasTopologyVersionInput(deviceResources, enrichedLinks, positionMap, areaResponses, capabilities, settings)
-
 	return canvasTopologyResponse{
-		SchemaVersion:   1,
-		TopologyVersion: buildCanvasTopologyVersion(versionInput),
-		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
-		Devices:         deviceResources,
-		Links:           enrichedLinks,
-		Positions:       positionMap,
-		Areas:           areaResponses,
-		Capabilities:    capabilities,
-		Settings:        settings,
+		SchemaVersion: 1,
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		Devices:       deviceResources,
+		Links:         enrichedLinks,
+		Positions:     positionMap,
+		Areas:         areaResponses,
+		Capabilities:  capabilities,
+		Settings:      settings,
 	}
 }
 

@@ -236,4 +236,14 @@ describe('LinkEdge', () => {
     expect(labelLayerContent).toContain('presentation.items.map((badge) =>');
     expect(labelLayerContent).toContain('badge.warningIndicator');
   });
+
+  it('memoizes tone and SVG badge anchors independently of dynamic data reference', () => {
+    const edgeContent = readFileSync(LINK_EDGE_PATH, 'utf-8');
+    expect(edgeContent).toContain('const badgeAnchor = useMemo(');
+    expect(edgeContent).toContain(
+      'computeLinkBadgeAnchor(edgePath, { x: labelX, y: labelYOffset })',
+    );
+    expect(edgeContent).toContain('[edgePath, labelX, labelYOffset]');
+    expect(edgeContent).toContain('anchor: badgeAnchor');
+  });
 });

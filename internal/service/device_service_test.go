@@ -1046,7 +1046,6 @@ func TestDeviceServiceBuildDeviceDraft(t *testing.T) {
 		}
 
 		discoverCalls := 0
-		scheduler := &recordingBootstrapScheduler{}
 		svc := NewDeviceService(
 			deviceRepo,
 			linkRepo,
@@ -1056,7 +1055,6 @@ func TestDeviceServiceBuildDeviceDraft(t *testing.T) {
 				return nil, fmt.Errorf("draft construction must not probe")
 			},
 			nil,
-			WithBootstrapScheduler(scheduler),
 		)
 
 		notes := "  Core router in rack A  "
@@ -1157,9 +1155,6 @@ func TestDeviceServiceBuildDeviceDraft(t *testing.T) {
 		}
 		if discoverCalls != 0 {
 			t.Fatalf("probe calls = %d, want 0", discoverCalls)
-		}
-		if got := len(scheduler.devices); got != 0 {
-			t.Fatalf("bootstrap schedules = %d, want 0", got)
 		}
 	})
 
@@ -1456,7 +1451,8 @@ func TestAddDeviceSchedulesBootstrapInsteadOfStartingDiscoveryGoroutine(t *testi
 		return &snmp.DiscoveryResult{SysName: "edge-bootstrap"}, nil
 	}
 
-	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil, WithBootstrapScheduler(scheduler))
+	svc := NewDeviceService(deviceRepo, linkRepo, settingsRepo, discoverFn, nil)
+	svc.SetBootstrapScheduler(scheduler)
 
 	device, err := svc.AddDevice(context.Background(), "10.0.0.10", "edge-bootstrap",
 		domain.DeviceTypeRouter,

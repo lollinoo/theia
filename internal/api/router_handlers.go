@@ -236,7 +236,7 @@ func buildRouteHandlers(deps routerDependencies, routerOpts routerOptions) map[r
 			}
 			if len(r.URL.Path) > len("/api/v1/devices/") {
 				pathSuffix := r.URL.Path[len("/api/v1/devices/"):]
-				if idx := indexOf(pathSuffix, "/probe"); idx >= 0 && r.Method == http.MethodPost {
+				if strings.Contains(pathSuffix, "/probe") && r.Method == http.MethodPost {
 					deviceHandler.HandleProbe(w, r)
 					return
 				}

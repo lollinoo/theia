@@ -50,7 +50,7 @@ export function headersWithCsrf(headers: Record<string, string>): Record<string,
 }
 
 // errorMessageFromPayload preserves backend error text while falling back to response status text.
-function errorMessageFromPayload(payload: ErrorPayload | unknown, fallback: string): string {
+export function errorMessageFromPayload(payload: ErrorPayload | unknown, fallback: string): string {
   return typeof payload === 'object' &&
     payload !== null &&
     'error' in payload &&
@@ -60,7 +60,7 @@ function errorMessageFromPayload(payload: ErrorPayload | unknown, fallback: stri
 }
 
 // serverErrorFromMessage hides raw 500 details and preserves correlation references.
-function serverErrorFromMessage(errorMessage: string): ServerError {
+export function serverErrorFromMessage(errorMessage: string): ServerError {
   const refMatch = /ref:\s*([a-zA-Z0-9-]+)/.exec(errorMessage);
   const correlationId = refMatch ? refMatch[1] : undefined;
   const userMessage = correlationId

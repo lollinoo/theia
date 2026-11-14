@@ -1150,6 +1150,50 @@ describe('useWebSocket', () => {
     expect(getWebSocketDiagnostics().lastRuntimeAckVersion).toBe('12');
   });
 
+  it('does not call ws.send or throw when runtime ACK scheduler timer fires on closing or closed socket', () => {
+    for (const readyState of [MockWebSocket.CLOSING, MockWebSocket.CLOSED]) {
+      resetCanvasDiagnostics();
+      const { unmount } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+      openWithRuntimeSnapshot();
+      mockInstance.send.mockClear();
+
+      mockInstance.send.mockImplementation(() => {
+        if (mockInstance.readyState !== MockWebSocket.OPEN) {
+          throw new DOMException(
+            "Failed to execute 'send' on 'WebSocket': The connection is not open.",
+            'InvalidStateError',
+          );
+        }
+      });
+
+      sendFrames([
+        runtimeDeltaFrame({
+          baseVersion: 10,
+          version: 11,
+          delta: {
+            devices: {
+              'dev-1': { device_id: 'dev-1', cpu_percent: 60 },
+            },
+            links: {},
+          },
+        }),
+      ]);
+
+      expect(mockInstance.send).not.toHaveBeenCalled();
+
+      mockInstance.readyState = readyState;
+
+      expect(() => {
+        act(() => {
+          vi.advanceTimersByTime(250);
+        });
+      }).not.toThrow();
+
+      expect(mockInstance.send).not.toHaveBeenCalled();
+      unmount();
+    }
+  });
+
   it('falls back once to the runtime-only snapshot and resumes before applying replay', async () => {
     const dispatchSpy = spyOnDispatchEvent();
     const deferredResponse = createDeferred<Response>();
@@ -1965,6 +2009,32 @@ describe('useWebSocket', () => {
     });
   });
 
+  it('preserves prometheusStatus reference when receiving identical status', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'prometheus_status',
+        payload: { enabled: true, available: true },
+      });
+    });
+
+    const firstStatus = result.current.prometheusStatus;
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'prometheus_status',
+        payload: { enabled: true, available: true },
+      });
+    });
+
+    expect(result.current.prometheusStatus).toBe(firstStatus);
+  });
+
   it('dispatches backend-resync-required when resync_required arrives', () => {
     const dispatchSpy = spyOnDispatchEvent();
     renderHook(() => useWebSocket('ws://localhost:8080/ws'));
@@ -2766,6 +2836,43 @@ describe('useWebSocket', () => {
         summary: 'device down',
       },
     ]);
+  });
+
+  it('preserves empty alerts array reference on reconnect when alerts is already empty', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    const initialAlerts = result.current.alerts;
+    expect(initialAlerts).toEqual([]);
+
+    act(() => {
+      mockInstance.simulateClose();
+    });
+
+    expect(result.current.reconnecting).toBe(true);
+    expect(result.current.alerts).toBe(initialAlerts);
+  });
+
+  it('preserves empty alerts array reference when receiving empty alert message', () => {
+    const { result } = renderHook(() => useWebSocket('ws://localhost:8080/ws'));
+
+    act(() => {
+      mockInstance.simulateOpen();
+    });
+
+    const initialAlerts = result.current.alerts;
+
+    act(() => {
+      mockInstance.simulateMessage({
+        type: 'alert',
+        payload: { alerts: [] },
+      });
+    });
+
+    expect(result.current.alerts).toBe(initialAlerts);
   });
 
   it('preserves detail-only device metric fields from detail subscription deltas', () => {

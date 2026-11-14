@@ -397,12 +397,12 @@ func (s *Scheduler) run(ctx context.Context) {
 			default:
 				s.handleReduePerformanceTask(request)
 			}
-			s.recordMetricsLocked(s.now().UTC())
+			s.recordQueueAndInFlightMetricsLocked(s.now().UTC())
 			s.mu.Unlock()
 		case completion := <-s.completions:
 			s.mu.Lock()
 			s.handleCompletion(completion)
-			s.recordMetricsLocked(s.now().UTC())
+			s.recordQueueAndInFlightMetricsLocked(s.now().UTC())
 			s.mu.Unlock()
 		}
 	}
@@ -681,21 +681,6 @@ func (s *Scheduler) pushReadyFront(item *heapItem) {
 	item.queued = true
 	item.task.DueAt = item.dueAt
 	s.ready[priority] = append([]*heapItem{item}, s.ready[priority]...)
-}
-
-func (s *Scheduler) popReady() *heapItem {
-	for priority := range s.ready {
-		if len(s.ready[priority]) == 0 {
-			continue
-		}
-
-		item := s.ready[priority][0]
-		s.ready[priority] = s.ready[priority][1:]
-		item.queued = false
-		return item
-	}
-
-	return nil
 }
 
 func (s *Scheduler) popReadyEligible(limits dispatchLimits, scanState *dispatchScanState) *heapItem {
@@ -1101,14 +1086,6 @@ func taskIsBackground(task PollTask) bool {
 	return task.Kind == polling.TaskKindBackground || task.Key.Kind == polling.TaskKindBackground
 }
 
-func (s *Scheduler) maxInFlight() int {
-	return pollingbudget.Sum(s.classBudgets())
-}
-
-func (s *Scheduler) maxDispatchInFlight() int {
-	return s.dispatchLimits().globalLimit
-}
-
 func (s *Scheduler) maxEssentialInFlight() int {
 	policy, _ := polling.PolicyFromSettings(s.settingsRepo, 0, 0, 0)
 	return clampEssentialLimit(policy.EssentialWorkers, s.bufferLimit())
@@ -1139,22 +1116,6 @@ func clampEssentialLimit(limit int, bufferLimit int) int {
 		return 1
 	}
 	return limit
-}
-
-func (s *Scheduler) canDispatch(task PollTask, budgets map[domain.VolatilityClass]int, policy polling.Policy) bool {
-	return s.dispatchBlockReason(task, budgets, policy) == ""
-}
-
-func (s *Scheduler) dispatchBlockReason(task PollTask, budgets map[domain.VolatilityClass]int, policy polling.Policy) string {
-	return s.dispatchBlockReasonWithLimits(task, dispatchLimits{
-		budgets:        budgets,
-		policy:         policy,
-		essentialLimit: s.maxEssentialInFlight(),
-	})
-}
-
-func (s *Scheduler) dispatchBlockReasonWithLimits(task PollTask, limits dispatchLimits) string {
-	return s.dispatchBlockWithLimits(task, limits).reason
 }
 
 func (s *Scheduler) dispatchBlockWithLimits(task PollTask, limits dispatchLimits) isolationBlock {
@@ -1189,14 +1150,6 @@ func (s *Scheduler) decrementInFlight(task PollTask) {
 		s.inFlightByClass[task.VolatilityClass]--
 	}
 	s.decrementIsolationCounts(task)
-}
-
-func (s *Scheduler) withinIsolationBudgets(task PollTask, policy polling.Policy) bool {
-	return s.isolationBlockReason(task, policy) == ""
-}
-
-func (s *Scheduler) isolationBlockReason(task PollTask, policy polling.Policy) string {
-	return s.isolationBlock(task, policy).reason
 }
 
 func (s *Scheduler) isolationBlock(task PollTask, policy polling.Policy) isolationBlock {
@@ -1364,6 +1317,9 @@ func decrementCount(counts map[string]int, key string) {
 }
 
 func (s *Scheduler) markElapsedInFlightWindows(now time.Time) {
+	if s.inFlight <= 0 {
+		return
+	}
 	for _, item := range s.items {
 		if item == nil || !item.inFlight || item.dueAt.After(now) {
 			continue
@@ -1402,10 +1358,6 @@ func scheduledVolatilityClasses() []domain.VolatilityClass {
 		domain.VolatilityClassOperational,
 		domain.VolatilityClassStatic,
 	}
-}
-
-func scheduledVolatilityClassesForDevice(device domain.Device) []domain.VolatilityClass {
-	return scheduledBackgroundVolatilityClassesForDevice(device)
 }
 
 func scheduledBackgroundVolatilityClassesForDevice(device domain.Device) []domain.VolatilityClass {
@@ -1652,17 +1604,14 @@ drainRedueRequests:
 	}
 }
 
-func (s *Scheduler) recordMetrics() {
-	now := s.now().UTC()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	s.recordMetricsLocked(now)
+func (s *Scheduler) recordMetricsLocked(now time.Time) {
+	s.recordEffectiveRuntimeWorkerSettingsLocked()
+	s.recordQueueAndInFlightMetricsLocked(now)
 }
 
-func (s *Scheduler) recordMetricsLocked(now time.Time) {
+func (s *Scheduler) recordQueueAndInFlightMetricsLocked(now time.Time) {
 	observability.Default().SetSchedulerInFlight(s.inFlight)
 	observability.Default().SetPollingEssentialOverloaded(s.pollingEssentialOverloadedLocked(now))
-	s.recordEffectiveRuntimeWorkerSettingsLocked()
 	for _, volatility := range scheduledVolatilityClasses() {
 		priority := VolatilityPriority(volatility)
 		depth := 0

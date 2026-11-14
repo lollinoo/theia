@@ -14,8 +14,15 @@ import {
   parseBulkBackupRunResponse,
   parseBulkOperationStatus,
 } from './backupParsers';
-import { ServerError, ValidationError } from './errors';
-import { type ErrorPayload, headersWithCsrf, requestJSON, requestJSONWithBody } from './transport';
+import { ValidationError } from './errors';
+import {
+  type ErrorPayload,
+  errorMessageFromPayload,
+  headersWithCsrf,
+  requestJSON,
+  requestJSONWithBody,
+  serverErrorFromMessage,
+} from './transport';
 
 // triggerBackup starts a device backup and parses the created job envelope.
 export async function triggerBackup(deviceId: string): Promise<BackupJob> {
@@ -167,12 +174,6 @@ export async function fetchBackupFileContent(fileId: string): Promise<BackupFile
   return parseBackupFileContent(data, backupFileDownloadUrl(fileId));
 }
 
-// bulkDownloadUrl preserves the historical endpoint helper for form-post downloads.
-export function bulkDownloadUrl(_deviceIds: string[]): string {
-  // We use a form POST for the download, so return the endpoint URL
-  return '/api/v1/backups/bulk-download';
-}
-
 /** Describes the bulk download result contract used by the frontend API boundary. */
 export type BulkDownloadResult = 'saved' | 'cancelled';
 
@@ -193,9 +194,8 @@ export async function triggerBulkDownload(
     body: JSON.stringify({ device_ids: deviceIds }),
   });
   if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-    const errorMessage =
-      payload && typeof payload.error === 'string' ? payload.error : response.statusText;
+    const payload = (await response.json().catch(() => null)) as ErrorPayload | unknown;
+    const errorMessage = errorMessageFromPayload(payload, response.statusText);
     if (response.status === 413) {
       throw new ValidationError(formatBulkLimitMessage(errorMessage));
     }
@@ -229,13 +229,7 @@ async function requestBulkJSON(
     if (response.status === 409 && options.returnConflictPayload) {
       return payload;
     }
-    const errorMessage =
-      typeof payload === 'object' &&
-      payload !== null &&
-      'error' in payload &&
-      typeof payload.error === 'string'
-        ? payload.error
-        : response.statusText;
+    const errorMessage = errorMessageFromPayload(payload, response.statusText);
     if (response.status === 413) {
       throw new ValidationError(formatBulkLimitMessage(errorMessage));
     }
@@ -243,12 +237,7 @@ async function requestBulkJSON(
       throw new ValidationError(errorMessage);
     }
     if (response.status === 500) {
-      const refMatch = /ref:\s*([a-zA-Z0-9-]+)/.exec(errorMessage);
-      const correlationId = refMatch ? refMatch[1] : undefined;
-      const userMessage = correlationId
-        ? `Something went wrong (ref: ${correlationId})`
-        : 'Something went wrong';
-      throw new ServerError(userMessage, correlationId);
+      throw serverErrorFromMessage(errorMessage);
     }
     throw new Error(`${operation} failed: ${response.status} ${errorMessage}`);
   }
@@ -310,7 +299,7 @@ function defaultBulkDownloadFilename(): string {
   return `${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15)}_THEIA_BACKUPS.zip`;
 }
 
-// prepareStreamingSaveTarget opens an optional streaming save target and maps user cancel to null.
+// prepareStreamingSaveTarget opens an optional streaming save target and maps non-abort errors to null fallback.
 function prepareStreamingSaveTarget(filename: string): StreamingSaveTarget {
   const saveFilePicker = browserSaveFilePicker();
   if (!saveFilePicker) {
@@ -325,10 +314,13 @@ function prepareStreamingSaveTarget(filename: string): StreamingSaveTarget {
       },
     ],
   }).catch((error) => {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      return null;
+    const isAbort =
+      (error instanceof DOMException && error.name === 'AbortError') ||
+      (error instanceof Error && error.name === 'AbortError');
+    if (isAbort) {
+      throw error;
     }
-    throw error;
+    return null;
   });
 }
 
@@ -341,18 +333,20 @@ async function saveDownloadResponse(
   if (response.body && saveTarget) {
     try {
       const handle = await saveTarget;
-      if (!handle) {
-        await response.body.cancel();
-        return 'cancelled';
+      if (handle) {
+        const writable = await handle.createWritable().catch(async (error) => {
+          await response.body?.cancel().catch(() => {});
+          throw error;
+        });
+        await response.body.pipeTo(writable);
+        return 'saved';
       }
-      const writable = await handle.createWritable().catch(async (error) => {
-        await response.body?.cancel();
-        throw error;
-      });
-      await response.body.pipeTo(writable);
-      return 'saved';
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
+      const isAbort =
+        (error instanceof DOMException && error.name === 'AbortError') ||
+        (error instanceof Error && error.name === 'AbortError');
+      if (isAbort) {
+        await response.body.cancel().catch(() => {});
         return 'cancelled';
       }
       throw error;

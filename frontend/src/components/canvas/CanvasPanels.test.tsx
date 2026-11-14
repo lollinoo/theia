@@ -70,6 +70,42 @@ vi.mock('../DeviceConfigPanel', () => ({
       >
         Save area change
       </button>
+      <button
+        type="button"
+        onClick={() =>
+          props.onDeviceUpdated?.({
+            ...props.device,
+            device_type: 'virtual',
+            ip: '',
+            tags: { ...props.device.tags, virtual_subtype: 'cloud' },
+          })
+        }
+      >
+        Save virtual change
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock('../BulkEditPanel', () => ({
+  BulkEditPanel: (props: { devices: Device[]; onDevicesUpdated?: (devices: Device[]) => void }) => (
+    <div>
+      <div>Bulk edit count:{props.devices.length}</div>
+      <button
+        type="button"
+        onClick={() =>
+          props.onDevicesUpdated?.(
+            props.devices.map((d) => ({
+              ...d,
+              device_type: 'virtual',
+              ip: '',
+              tags: { ...d.tags, virtual_subtype: 'cloud' },
+            })),
+          )
+        }
+      >
+        Save bulk devices
+      </button>
     </div>
   ),
 }));
@@ -587,6 +623,12 @@ describe('CanvasPanels', () => {
 
     expect(updatedNode.data.device.ip).toBe('10.0.0.2');
     expect(updatedNode.data.runtime.metrics).toBeNull();
+    expect(updatedNode.data.runtime.monitoringState).toBe('monitorable');
+    expect(
+      (updatedNode.data as unknown as Record<string, unknown>).monitoringState,
+    ).toBeUndefined();
+    expect(updatedNode.data.isVirtual).toBe(false);
+    expect(updatedNode.data.subtype).toBeUndefined();
   });
 
   it('renders link details in read-only mode when edit mode is disabled', () => {
@@ -1057,5 +1099,161 @@ describe('CanvasPanels', () => {
     );
 
     expect(screen.queryByText('Device interface model:dev-2')).not.toBeInTheDocument();
+  });
+
+  it('updates runtime.monitoringState, isVirtual, and subtype without top-level monitoringState on device update', () => {
+    const device = mockDevice();
+    const setNodes = vi.fn();
+    const runtimeState = buildRuntimeState({
+      devices: [device],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    render(
+      <CanvasPanels
+        panelContent={{ type: 'deviceConfig', data: { deviceId: device.id } }}
+        setPanelContent={vi.fn()}
+        devices={[device]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
+        setDevices={vi.fn()}
+        setNodes={setNodes}
+        runtimeState={runtimeState}
+        editMode
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save virtual change' }));
+
+    const updateNodes = setNodes.mock.calls[0]?.[0] as
+      | ((nodes: DeviceNode[]) => DeviceNode[])
+      | undefined;
+    if (!updateNodes) {
+      throw new Error('expected setNodes updater to be called');
+    }
+    const previousNode: DeviceNode = {
+      id: device.id,
+      type: 'device',
+      position: { x: 0, y: 0 },
+      data: {
+        device,
+        runtime: {
+          status: device.status,
+          metrics: mockMetrics(),
+          alertStatus: 'normal',
+          monitoringState: 'monitorable',
+        },
+        pinned: false,
+      },
+    };
+
+    const [updatedNode] = updateNodes([previousNode]);
+
+    expect(updatedNode.data.device.device_type).toBe('virtual');
+    expect(updatedNode.data.isVirtual).toBe(true);
+    expect(updatedNode.data.subtype).toBe('cloud');
+    expect(updatedNode.data.runtime.monitoringState).toBe('unmonitored');
+    expect(
+      (updatedNode.data as unknown as Record<string, unknown>).monitoringState,
+    ).toBeUndefined();
+  });
+
+  it('updates runtime.monitoringState, isVirtual, and subtype on bulk devices update', () => {
+    const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1' });
+    const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2' });
+    const setNodes = vi.fn();
+    const setDevices = vi.fn();
+    const setPanelContent = vi.fn();
+    const runtimeState = buildRuntimeState({
+      devices: [dev1, dev2],
+      links: [],
+      snapshot: null,
+      alerts: [],
+      prometheusStatus: null,
+    });
+
+    render(
+      <CanvasPanels
+        panelContent={{
+          type: 'bulkEdit',
+          data: { deviceIds: ['dev-1', 'dev-2'] },
+        }}
+        setPanelContent={setPanelContent}
+        devices={[dev1, dev2]}
+        topologyLinks={[]}
+        loadTopology={vi.fn().mockResolvedValue(undefined)}
+        requestNewNodePlacement={vi.fn().mockResolvedValue(undefined)}
+        setDevices={setDevices}
+        setNodes={setNodes}
+        runtimeState={runtimeState}
+      />,
+    );
+
+    expect(screen.getByText('Bulk edit count:2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save bulk devices' }));
+
+    expect(setDevices).toHaveBeenCalled();
+    expect(setPanelContent).toHaveBeenCalledWith({
+      type: 'bulkEdit',
+      data: { deviceIds: ['dev-1', 'dev-2'] },
+    });
+
+    const updateNodes = setNodes.mock.calls[0]?.[0] as
+      | ((nodes: DeviceNode[]) => DeviceNode[])
+      | undefined;
+    if (!updateNodes) {
+      throw new Error('expected setNodes updater to be called');
+    }
+
+    const previousNodes: DeviceNode[] = [
+      {
+        id: 'dev-1',
+        type: 'device',
+        position: { x: 0, y: 0 },
+        data: {
+          device: dev1,
+          runtime: {
+            status: 'up',
+            metrics: null,
+            alertStatus: 'normal',
+            monitoringState: 'monitorable',
+          },
+          pinned: false,
+        },
+      },
+      {
+        id: 'dev-2',
+        type: 'device',
+        position: { x: 100, y: 100 },
+        data: {
+          device: dev2,
+          runtime: {
+            status: 'up',
+            metrics: null,
+            alertStatus: 'normal',
+            monitoringState: 'monitorable',
+          },
+          pinned: false,
+        },
+      },
+    ];
+
+    const updated = updateNodes(previousNodes);
+    expect(updated[0].data.device.device_type).toBe('virtual');
+    expect(updated[0].data.isVirtual).toBe(true);
+    expect(updated[0].data.subtype).toBe('cloud');
+    expect(updated[0].data.runtime.monitoringState).toBe('unmonitored');
+    expect((updated[0].data as unknown as Record<string, unknown>).monitoringState).toBeUndefined();
+
+    expect(updated[1].data.device.device_type).toBe('virtual');
+    expect(updated[1].data.isVirtual).toBe(true);
+    expect(updated[1].data.subtype).toBe('cloud');
+    expect(updated[1].data.runtime.monitoringState).toBe('unmonitored');
+    expect((updated[1].data as unknown as Record<string, unknown>).monitoringState).toBeUndefined();
   });
 });

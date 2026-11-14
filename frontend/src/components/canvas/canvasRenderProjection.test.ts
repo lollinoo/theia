@@ -8,6 +8,7 @@ import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
 import {
   type CanvasRenderProjectionNodeCacheEntry,
+  clearDisplayEdgesCache,
   type ProjectCanvasRenderGraphInput,
   projectCanvasRenderGraph,
 } from './canvasRenderProjection';
@@ -309,5 +310,48 @@ describe('projectCanvasRenderGraph', () => {
     expect(result.displayEdges[0]).toBe(alreadyDefault);
     expect(result.displayEdges[0]?.data).toBe(alreadyDefault.data);
     expect(result.displayEdges[0]?.data?.emphasis).toBe('default');
+  });
+
+  it('reuses the displayEdges reference when only node positions change', () => {
+    clearDisplayEdgesCache();
+    const alpha = device({ id: 'alpha', area_ids: ['area-1'] });
+    const beta = device({ id: 'beta', area_ids: ['area-1'] });
+    const alphaBeta = link('alpha-beta', alpha, beta);
+    const edges = [edgeFor(alphaBeta)];
+    const devices = [alpha, beta];
+    const links = [alphaBeta];
+    const initialNodes = [nodeFor(alpha, { x: 0, y: 0 }), nodeFor(beta, { x: 100, y: 0 })];
+
+    const baseInput = inputFor({
+      nodes: initialNodes,
+      edges,
+      devices,
+      links,
+      filteredDevices: devices,
+      filteredLinks: links,
+      areaColorMap: new Map([['area-1', '#123456']]),
+      selectedRealNodeIds: new Set(),
+    });
+
+    const firstResult = projectCanvasRenderGraph(baseInput);
+
+    // Simulate 60fps dragging of alpha
+    const draggedNodes = [nodeFor(alpha, { x: 50, y: 80 }), nodeFor(beta, { x: 100, y: 0 })];
+    const secondResult = projectCanvasRenderGraph({
+      ...baseInput,
+      nodes: draggedNodes,
+    });
+
+    expect(secondResult.displayEdges).toBe(firstResult.displayEdges);
+    expect(secondResult.edgesWithAreaColor).toBe(firstResult.edgesWithAreaColor);
+    expect(secondResult.displayNodes[0]?.position).toEqual({ x: 50, y: 80 });
+
+    // When selection changes, displayEdges reference updates
+    const selectionChangedResult = projectCanvasRenderGraph({
+      ...baseInput,
+      nodes: draggedNodes,
+      selectedRealNodeIds: new Set(['alpha']),
+    });
+    expect(selectionChangedResult.displayEdges).not.toBe(firstResult.displayEdges);
   });
 });

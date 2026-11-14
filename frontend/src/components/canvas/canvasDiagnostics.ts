@@ -199,11 +199,11 @@ let diagnosticsState: CanvasDiagnosticsState = createInitialState();
 let diagnosticEvents: CanvasDiagnosticEvent[] = [];
 const listeners = new Set<() => void>();
 let diagnosticEventSequence = 0;
-let diagnosticsNotificationTimer: ReturnType<typeof setTimeout> | undefined;
+let diagnosticsNotificationTimer: ReturnType<typeof setTimeout> | null = null;
 
 // flushDiagnosticsListeners delivers a coalesced diagnostics notification batch.
 function flushDiagnosticsListeners(): void {
-  diagnosticsNotificationTimer = undefined;
+  diagnosticsNotificationTimer = null;
   for (const listener of Array.from(listeners)) {
     listener();
   }
@@ -211,7 +211,7 @@ function flushDiagnosticsListeners(): void {
 
 // notifyDiagnosticsListeners schedules one async notification for all pending diagnostics changes.
 function notifyDiagnosticsListeners(): void {
-  if (listeners.size === 0 || diagnosticsNotificationTimer !== undefined) {
+  if (listeners.size === 0 || diagnosticsNotificationTimer !== null) {
     return;
   }
 
@@ -337,6 +337,10 @@ export function clearCanvasDiagnosticEvents(): void {
 
 // resetCanvasDiagnostics resets state, events, and sequence counters for tests and diagnostics clear.
 export function resetCanvasDiagnostics(): void {
+  if (diagnosticsNotificationTimer !== null) {
+    clearTimeout(diagnosticsNotificationTimer);
+    diagnosticsNotificationTimer = null;
+  }
   diagnosticsState = createInitialState();
   diagnosticEvents = [];
   diagnosticEventSequence = 0;

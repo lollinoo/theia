@@ -2,7 +2,15 @@
  * Provides theme context context state for the React application.
  * Centralizes shared lifecycle and persistence behavior behind a stable provider contract.
  */
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 
 type ThemePreference = 'dark' | 'light' | 'system';
 /** Describes the resolved theme contract used by the shared React context. */
@@ -36,9 +44,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return 'system';
   });
 
+  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(() => getSystemTheme());
+
   const resolvedTheme = useMemo<ResolvedTheme>(() => {
-    return theme === 'system' ? getSystemTheme() : theme;
-  }, [theme]);
+    return theme === 'system' ? systemTheme : theme;
+  }, [theme, systemTheme]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', resolvedTheme);
@@ -52,20 +62,24 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (theme !== 'system') return;
     const mql = window.matchMedia('(prefers-color-scheme: dark)');
-    const handler = () => {
-      setThemeState('system');
+    setSystemTheme(getSystemTheme());
+    const handler = (event: MediaQueryListEvent) => {
+      setSystemTheme(event.matches ? 'dark' : 'light');
     };
     mql.addEventListener('change', handler);
     return () => mql.removeEventListener('change', handler);
   }, [theme]);
 
-  const setTheme = (newTheme: ThemePreference) => setThemeState(newTheme);
+  const setTheme = useCallback((newTheme: ThemePreference) => {
+    setThemeState(newTheme);
+  }, []);
 
-  return (
-    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme }}>
-      {children}
-    </ThemeContext.Provider>
+  const contextValue = useMemo(
+    () => ({ theme, resolvedTheme, setTheme }),
+    [theme, resolvedTheme, setTheme],
   );
+
+  return <ThemeContext.Provider value={contextValue}>{children}</ThemeContext.Provider>;
 }
 
 /** Coordinates theme behavior for the shared React context. */

@@ -37,10 +37,10 @@ export function SSHCredentialForm({
   const [testResult, setTestResult] = useState<Awaited<
     ReturnType<typeof testSSHConnection>
   > | null>(null);
-  const [hostKeyResetMessage, setHostKeyResetMessage] = useState('');
-  const [hostKeyResetError, setHostKeyResetError] = useState('');
+  const [hostKeyResetMessage, setHostKeyResetMessage] = useState<string | null>(null);
+  const [hostKeyResetError, setHostKeyResetError] = useState<string | null>(null);
   const [resettingHostKey, setResettingHostKey] = useState(false);
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
   // Create form state
@@ -70,13 +70,21 @@ export function SSHCredentialForm({
     setSelectedProfileId(currentProfileId || '');
   }, [currentProfileId]);
 
+  useEffect(() => {
+    setTestResult(null);
+    setMessage(null);
+    setHostKeyResetMessage(null);
+    setHostKeyResetError(null);
+  }, [deviceId]);
+
   const hasChanged = selectedProfileId !== (currentProfileId || '');
   const hasProfile = selectedProfileId !== '';
 
   const handleSave = async () => {
     if (!hasChanged) return;
     setSaving(true);
-    setMessage('');
+    setMessage(null);
+    let unassignedCurrent = false;
     try {
       // Use the dedicated credential profile assignment API (T-27-07 mitigation:
       // avoids exposing profile IDs via updateDevice request logs).
@@ -84,15 +92,20 @@ export function SSHCredentialForm({
         // Unassign previous profile first if one was set
         if (currentProfileId) {
           await unassignCredentialProfile(deviceId, currentProfileId);
+          unassignedCurrent = true;
         }
         await assignCredentialProfile(deviceId, selectedProfileId);
       } else if (currentProfileId) {
         // Unassign — no new profile selected
         await unassignCredentialProfile(deviceId, currentProfileId);
+        unassignedCurrent = true;
       }
       onProfileChanged?.(selectedProfileId || undefined);
       setMessage(hasProfile ? 'SSH profile assigned' : 'SSH profile unassigned');
     } catch (err) {
+      if (unassignedCurrent) {
+        onProfileChanged?.(undefined);
+      }
       setMessage(err instanceof Error ? err.message : 'Save failed');
     } finally {
       setSaving(false);
@@ -102,8 +115,8 @@ export function SSHCredentialForm({
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
-    setHostKeyResetMessage('');
-    setHostKeyResetError('');
+    setHostKeyResetMessage(null);
+    setHostKeyResetError(null);
     try {
       const result = await testSSHConnection(deviceId);
       setTestResult(result);
@@ -121,8 +134,8 @@ export function SSHCredentialForm({
     if (!confirmed) return;
 
     setResettingHostKey(true);
-    setHostKeyResetMessage('');
-    setHostKeyResetError('');
+    setHostKeyResetMessage(null);
+    setHostKeyResetError(null);
     try {
       await resetSSHHostKey(deviceId);
       setHostKeyResetMessage('SSH host key reset. Run Test again to trust the new key.');

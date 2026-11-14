@@ -152,14 +152,36 @@ export async function fetchHealthRuntime(): Promise<HealthRuntime> {
   }
 }
 
+let inFlightSettingsRequest: Promise<SettingsWithMetadata> | null = null;
+
+// resetSettingsRequestCacheForTests clears in-flight settings request state for tests.
+export function resetSettingsRequestCacheForTests(): void {
+  inFlightSettingsRequest = null;
+}
+
 // fetchSettingsWithMetadata loads global settings and secret redaction metadata.
 export async function fetchSettingsWithMetadata(): Promise<SettingsWithMetadata> {
+  if (inFlightSettingsRequest !== null) {
+    return inFlightSettingsRequest;
+  }
+
+  const request = (async () => {
+    try {
+      const payload = await requestJSON('/api/v1/settings');
+      return parseSettingsPayload(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown error';
+      throw new Error(`Failed to fetch settings: ${message}`);
+    }
+  })();
+
+  inFlightSettingsRequest = request;
   try {
-    const payload = await requestJSON('/api/v1/settings');
-    return parseSettingsPayload(payload);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown error';
-    throw new Error(`Failed to fetch settings: ${message}`);
+    return await request;
+  } finally {
+    if (inFlightSettingsRequest === request) {
+      inFlightSettingsRequest = null;
+    }
   }
 }
 
@@ -172,4 +194,5 @@ export async function fetchSettings(): Promise<Record<string, string>> {
 // updateSetting stores one global setting value by encoded key.
 export async function updateSetting(key: string, value: string): Promise<void> {
   await requestJSONWithBody(`/api/v1/settings/${encodeURIComponent(key)}`, 'PUT', { value });
+  inFlightSettingsRequest = null;
 }

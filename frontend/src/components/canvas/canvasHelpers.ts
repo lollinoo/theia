@@ -4,12 +4,10 @@
  */
 import type { FitViewOptions } from '@xyflow/react';
 import type { PositionPayload } from '../../hooks/usePositions';
-import type { Device, Link } from '../../types/api';
 import type { LinkMetricsDTO } from '../../types/metrics';
 import { formatThroughput } from '../../types/metrics';
 import type { ContextMenuItem } from '../ContextMenu';
 import type { DeviceNode } from '../DeviceCard';
-import { formatBandwidth } from '../linkSemantics';
 
 /** Describes the handle side contract used by the topology canvas. */
 export type HandleSide = 'top' | 'right' | 'bottom' | 'left';
@@ -21,8 +19,6 @@ export const manualEdgeMigrationStorageKey = 'theia-manual-edge-migration-v1';
 
 /** Defines default polling interval ms constants and helper contracts for the topology canvas. */
 export const defaultPollingIntervalMs = 60_000;
-/** Defines stale threshold ms constants and helper contracts for the topology canvas. */
-export const staleThresholdMs = defaultPollingIntervalMs * 2;
 /** Defines topology fit view padding constants and helper contracts for the topology canvas. */
 export const topologyFitViewPadding: NonNullable<FitViewOptions['padding']> = {
   top: '96px',
@@ -48,23 +44,6 @@ export function isGhostDeviceNode(node: DeviceNode): boolean {
   return node.data.kind === 'ghost-device' || node.data.isGhost === true;
 }
 
-/** Infers speed label for the topology canvas. */
-export function inferSpeedLabel(
-  sourceDevice: Device | undefined,
-  targetDevice?: Device,
-): string | undefined {
-  const speeds = [
-    ...(sourceDevice?.interfaces ?? []).map((iface) => iface.speed),
-    ...(targetDevice?.interfaces ?? []).map((iface) => iface.speed),
-  ].filter((speed) => speed > 0);
-
-  if (speeds.length === 0) {
-    return undefined;
-  }
-
-  return formatBandwidth(Math.max(...speeds));
-}
-
 /** Compacts throughput for the topology canvas. */
 export function compactThroughput(bps: number): string {
   return formatThroughput(bps)
@@ -88,48 +67,6 @@ export function buildThroughputLabel(metrics: LinkMetricsDTO): string | undefine
   const txLabel = metrics.tx_bps === null ? '--' : compactThroughput(metrics.tx_bps);
   const rxLabel = metrics.rx_bps === null ? '--' : compactThroughput(metrics.rx_bps);
   return `TX: ${txLabel} / RX: ${rxLabel}`;
-}
-
-/** Finds link metrics for the topology canvas. */
-export function findLinkMetrics(
-  snapshotMetrics: Record<string, LinkMetricsDTO[]>,
-  link: Link,
-): LinkMetricsDTO | null {
-  // Try source device first (standard case: source has the physical interface)
-  const sourceDeviceMetrics = snapshotMetrics[link.source_device_id];
-  if (sourceDeviceMetrics) {
-    const sourceIfName = normalizeInterfaceName(link.source_if_name);
-    const found = sourceDeviceMetrics.find(
-      (metric) => normalizeInterfaceName(metric.source_if_name) === sourceIfName,
-    );
-    if (found) return found;
-  }
-
-  // Fallback: try target device (virtual-source links where metrics are keyed by real device)
-  const targetDeviceMetrics = snapshotMetrics[link.target_device_id];
-  if (targetDeviceMetrics) {
-    const targetIfName = normalizeInterfaceName(link.target_if_name);
-    const found = targetDeviceMetrics.find(
-      (metric) => normalizeInterfaceName(metric.target_if_name) === targetIfName,
-    );
-    if (found) return found;
-  }
-
-  return null;
-}
-
-/** Status color for the topology canvas. */
-export function statusColor(status: Device['status']): string {
-  switch (status) {
-    case 'up':
-      return 'var(--color-status-up)';
-    case 'down':
-      return 'var(--color-status-down)';
-    case 'probing':
-      return 'var(--color-status-probing)';
-    default:
-      return 'var(--color-status-unknown)';
-  }
 }
 
 /** Viewport size for the topology canvas. */
