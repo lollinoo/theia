@@ -2,7 +2,7 @@ module github.com/lollinoo/theia
 
 go 1.27.0
 
-toolchain go1.27.2
+toolchain go1.27.4
 
 require (
 	filippo.io/hpke v0.4.0 // indirect
