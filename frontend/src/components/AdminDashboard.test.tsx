@@ -700,4 +700,10 @@ describe('AdminDashboard', () => {
       expect(setAdminUserStatus).toHaveBeenCalledWith('user-1', 'active');
     });
   });
+
+  it('does not load admin data when visible is false', () => {
+    render(<AdminDashboard visible={false} />);
+    expect(fetchAdminDashboard).not.toHaveBeenCalled();
+    expect(fetchAdminUsers).not.toHaveBeenCalled();
+  });
 });

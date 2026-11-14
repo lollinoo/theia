@@ -53,7 +53,7 @@ func TestImportedCredentialsRemainRecoverableAfterRotationAndRestart(t *testing.
 	if err != nil || plaintext != "device-password" {
 		t.Fatalf("legacy credential lost: %v", err)
 	}
-	rewrapped, err := keys.RewrapString(legacy)
+	rewrapped, err := keys.EncryptString(plaintext)
 	if err != nil {
 		t.Fatal(err)
 	}

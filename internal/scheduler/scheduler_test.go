@@ -2245,13 +2245,13 @@ func TestSchedulerIsolationBlockReasonAvoidsSiteKeySliceAllocation(t *testing.T)
 
 	var reason string
 	allocs := testing.AllocsPerRun(100, func() {
-		reason = scheduler.isolationBlockReason(task, policy)
+		reason = scheduler.isolationBlock(task, policy).reason
 	})
 	if reason != "" {
-		t.Fatalf("isolationBlockReason() = %q, want empty", reason)
+		t.Fatalf("isolationBlock().reason = %q, want empty", reason)
 	}
 	if allocs > 2 {
-		t.Fatalf("isolationBlockReason allocations = %.0f, want at most 2", allocs)
+		t.Fatalf("isolationBlock allocations = %.0f, want at most 2", allocs)
 	}
 }
 
@@ -2324,77 +2324,6 @@ func TestSchedulerPollingHealth_ReportsQueueDepthLagAndWorkersByClass(t *testing
 	}
 	if staticQueue.ActiveWorkers != 1 || staticQueue.ConfiguredWorkers != 6 {
 		t.Fatalf("static workers = %#v, want active=1 configured=6", staticQueue)
-	}
-}
-
-func TestSchedulerMaxInFlight_DefaultAndConfigured(t *testing.T) {
-	tests := []struct {
-		name     string
-		repo     domain.SettingsRepository
-		expected int
-	}{
-		{
-			name:     "nil repo falls back",
-			expected: 5,
-		},
-		{
-			name:     "missing value falls back",
-			repo:     fakeSettingsRepo{err: errors.New("missing")},
-			expected: 5,
-		},
-		{
-			name:     "invalid value falls back",
-			repo:     fakeSettingsRepo{values: map[string]string{domain.SettingSNMPWorkerPoolSize: "not-a-number"}},
-			expected: 5,
-		},
-		{
-			name:     "non-positive falls back",
-			repo:     fakeSettingsRepo{values: map[string]string{domain.SettingSNMPWorkerPoolSize: "0"}},
-			expected: 5,
-		},
-		{
-			name:     "configured value",
-			repo:     fakeSettingsRepo{values: map[string]string{domain.SettingSNMPWorkerPoolSize: "7"}},
-			expected: 7,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			scheduler := NewScheduler(&fakeDeviceSource{}, tc.repo)
-			if got := scheduler.maxInFlight(); got != tc.expected {
-				t.Fatalf("maxInFlight() = %d, want %d", got, tc.expected)
-			}
-		})
-	}
-}
-
-func TestSchedulerMaxInFlight_UsesVolatilityBudgetSum(t *testing.T) {
-	scheduler := NewScheduler(
-		&fakeDeviceSource{},
-		fakeSettingsRepo{values: map[string]string{
-			domain.SettingSNMPWorkerPoolSize:        "9",
-			domain.SettingSNMPWorkerPoolPerformance: "4",
-			domain.SettingSNMPWorkerPoolOperational: "2",
-			domain.SettingSNMPWorkerPoolStatic:      "1",
-		}},
-	)
-
-	if got := scheduler.maxInFlight(); got != 7 {
-		t.Fatalf("maxInFlight() = %d, want 7", got)
-	}
-}
-
-func TestSchedulerMaxInFlight_CappedByInternalBuffers(t *testing.T) {
-	scheduler := NewScheduler(
-		&fakeDeviceSource{},
-		fakeSettingsRepo{values: map[string]string{domain.SettingSNMPWorkerPoolSize: "9"}},
-	)
-	scheduler.tasks = make(chan PollTask, 4)
-	scheduler.completions = make(chan Completion, 3)
-
-	if got := scheduler.maxInFlight(); got != 3 {
-		t.Fatalf("maxInFlight() = %d, want 3", got)
 	}
 }
 

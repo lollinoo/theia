@@ -578,9 +578,6 @@ export function parseDeviceRuntime(value: unknown): DeviceRuntimeDTO {
   }
 }
 
-/** parseDeviceMetrics is a compatibility alias for components that still use metrics naming. */
-export const parseDeviceMetrics = parseDeviceRuntime;
-
 /** Parses one link runtime payload and applies safe defaults for missing telemetry. */
 export function parseLinkRuntime(value: unknown): LinkRuntimeDTO {
   if (!isRecord(value)) {
@@ -605,9 +602,6 @@ export function parseLinkRuntime(value: unknown): LinkRuntimeDTO {
     throw new Error('invalid link runtime payload');
   }
 }
-
-/** parseLinkMetrics is a compatibility alias for components that still use metrics naming. */
-export const parseLinkMetrics = parseLinkRuntime;
 
 /** Parses a compact alert summary, preserving empty strings for optional display fields. */
 export function parseAlert(value: unknown): AlertDTO {

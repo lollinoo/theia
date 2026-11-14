@@ -4,7 +4,7 @@
  */
 import type { SnapGrid } from '@xyflow/react';
 
-import { copyLinkRoute, type Link, type LinkRouteMap } from '../../types/api';
+import { copyLinkRoute, type Device, type Link, type LinkRouteMap } from '../../types/api';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import type { LinkEdgeType } from '../LinkEdge';
@@ -14,7 +14,7 @@ import { buildTopologyNodes } from './nodeBuilder';
 import type { RuntimeState } from './runtimeAdapters';
 
 interface ComposeCanvasTopologyInput {
-  devices: Parameters<typeof buildTopologyNodes>[0];
+  devices: Device[];
   links: Link[];
   linkRoutes?: LinkRouteMap;
   onLinkRouteCommit?: LinkRouteCommit;
@@ -116,38 +116,21 @@ export function composeCanvasTopology({
   alerts,
   snapGrid,
 }: ComposeCanvasTopologyInput): ComposeCanvasTopologyResult {
-  const nodes = buildTopologyNodes(
+  const nodes = buildTopologyNodes({
     devices,
     savedPositions,
     computedPositions,
     explicitPositions,
     editMode,
     openDeviceMenu,
-    null,
+    pendingSnapshot: null,
     alerts,
     links,
-    openSelfLinkDetails,
+    onSelfLinkClick: openSelfLinkDetails,
     currentPositions,
     placementDeviceIds,
     snapGrid,
-  ).map((node) => {
-    const runtimeDevice = runtimeState.devicesById.get(node.id);
-    if (!runtimeDevice) {
-      return node;
-    }
-
-    return {
-      ...node,
-      data: {
-        ...node.data,
-        runtime: {
-          status: runtimeDevice.device.status,
-          metrics: runtimeDevice.metrics,
-          alertStatus: runtimeDevice.alertStatus,
-          monitoringState: runtimeDevice.monitoringState,
-        },
-      },
-    };
+    runtimeState,
   });
 
   const runtimeDevices = devices.map(

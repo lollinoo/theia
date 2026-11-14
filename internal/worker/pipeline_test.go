@@ -2119,7 +2119,7 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 		t.Fatalf("expected alert cache to update, got %d alert(s)", len(pipeline.runtime.alerts[deviceID]))
 	}
 	pipeline.runtime.mu.RUnlock()
-	if !pipeline.IsPromAvailable() {
+	if !pipeline.GetPrometheusStatus().Available {
 		t.Fatal("expected prometheus to remain available after successful refresh")
 	}
 
@@ -2135,7 +2135,7 @@ func TestPipelineOrchestratorPrometheusRefreshUpdatesAlertsAndStatus(t *testing.
 
 	pipeline.prometheusMonitor.refreshOnce(context.Background())
 
-	if pipeline.IsPromAvailable() {
+	if pipeline.GetPrometheusStatus().Available {
 		t.Fatal("expected prometheus availability to flip false on refresh failure")
 	}
 	if pipeline.GetPrometheusStatus().Error == "" {
@@ -3769,90 +3769,6 @@ func TestPipelineOrchestratorBuildDirtyOverviewDelta_PreservesPeerContextForLink
 	}
 }
 
-func TestMergeSnapshotPayload_RefreshesCompatibilityViewsAfterDelta(t *testing.T) {
-	deviceID := uuid.New().String()
-	linkID := uuid.New().String()
-	updatedCollectedAt := "2026-04-20T10:30:00Z"
-
-	base := &ws.SnapshotPayload{
-		Devices: map[string]ws.DeviceRuntimeDTO{
-			deviceID: {
-				DeviceID:          deviceID,
-				OperationalStatus: string(domain.DeviceStatusDown),
-				MetricsStatus:     "missing",
-			},
-		},
-		Links: map[string]ws.LinkRuntimeDTO{
-			linkID: {
-				LinkID:         linkID,
-				SourceDeviceID: deviceID,
-				SourceIfName:   "ether1",
-				MetricsStatus:  "missing",
-			},
-		},
-		DeviceMetrics: map[string]ws.DeviceRuntimeDTO{
-			deviceID: {
-				DeviceID:          deviceID,
-				OperationalStatus: string(domain.DeviceStatusDown),
-				MetricsStatus:     "missing",
-			},
-		},
-		LinkMetrics: map[string][]ws.LinkRuntimeDTO{
-			deviceID: {{
-				LinkID:          linkID,
-				DeviceID:        deviceID,
-				IfName:          "ether1",
-				MetricsStatus:   "missing",
-				LastCollectedAt: nil,
-			}},
-		},
-		DeviceStatuses: map[string]string{deviceID: string(domain.DeviceStatusDown)},
-	}
-
-	delta := &ws.SnapshotPayload{
-		Devices: map[string]ws.DeviceRuntimeDTO{
-			deviceID: {
-				DeviceID:          deviceID,
-				OperationalStatus: string(domain.DeviceStatusUp),
-				MetricsStatus:     "available",
-			},
-		},
-		Links: map[string]ws.LinkRuntimeDTO{
-			linkID: {
-				LinkID:          linkID,
-				SourceDeviceID:  deviceID,
-				SourceIfName:    "ether1",
-				DeviceID:        deviceID,
-				IfName:          "ether1",
-				MetricsStatus:   "available",
-				LastCollectedAt: &updatedCollectedAt,
-			},
-		},
-	}
-
-	merged := mergeSnapshotPayload(base, delta)
-
-	if got := merged.DeviceMetrics[deviceID].MetricsStatus; got != "available" {
-		t.Fatalf("DeviceMetrics[%s].MetricsStatus = %q, want available", deviceID, got)
-	}
-	if got := merged.DeviceStatuses[deviceID]; got != string(domain.DeviceStatusUp) {
-		t.Fatalf("DeviceStatuses[%s] = %q, want %q", deviceID, got, domain.DeviceStatusUp)
-	}
-	legacyLinks, ok := merged.LinkMetrics[deviceID]
-	if !ok {
-		t.Fatalf("expected LinkMetrics[%s] entry after merge", deviceID)
-	}
-	if len(legacyLinks) != 1 {
-		t.Fatalf("LinkMetrics[%s] length = %d, want 1", deviceID, len(legacyLinks))
-	}
-	if got := legacyLinks[0].MetricsStatus; got != "available" {
-		t.Fatalf("LinkMetrics[%s][0].MetricsStatus = %q, want available", deviceID, got)
-	}
-	if legacyLinks[0].LastCollectedAt == nil || *legacyLinks[0].LastCollectedAt != updatedCollectedAt {
-		t.Fatalf("LinkMetrics[%s][0].LastCollectedAt = %#v, want %q", deviceID, legacyLinks[0].LastCollectedAt, updatedCollectedAt)
-	}
-}
-
 func TestApplySnapshotDeltaToRuntime_UpdatesSnapshotAndHashesIncrementally(t *testing.T) {
 	deviceAID := uuid.New().String()
 	deviceBID := uuid.New().String()
@@ -3908,7 +3824,10 @@ func TestApplySnapshotDeltaToRuntime_UpdatesSnapshotAndHashesIncrementally(t *te
 		LastCollectedAt: &updatedCollectedAt,
 	}
 
-	expected := mergeSnapshotPayload(expectedBase, delta)
+	expectedBase.Devices[deviceAID] = delta.Devices[deviceAID]
+	expectedBase.Links[linkAID] = delta.Links[linkAID]
+	syncSnapshotCompatibility(expectedBase)
+	expected := expectedBase
 	expectedHashes := computeSnapshotHashes(expected)
 
 	got, gotHashes := applySnapshotDeltaToRuntime(base, baseHashes, delta)

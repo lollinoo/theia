@@ -19,7 +19,6 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	registry.SetSchedulerReadyDepth(domain.VolatilityClassStatic, 3)
 	registry.SetSchedulerInFlight(2)
 	registry.SetSchedulerQueueLag(domain.VolatilityClassStatic, 15*time.Second)
-	registry.IncSchedulerTaskDispatch(domain.VolatilityClassStatic)
 	registry.IncSchedulerTaskDispatchForTask("essential", domain.VolatilityClassPerformance)
 	registry.IncSchedulerTaskDispatchForTask("background", domain.VolatilityClassStatic)
 	registry.IncSchedulerBackpressure(domain.VolatilityClassStatic, "class_limit")
@@ -31,7 +30,9 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 		deviceID.String(),
 		"edge-router-01",
 	)
-	registry.SetRuntimeWorkerSettingEffective("polling_essential_workers", 72)
+	registry.SetRuntimeWorkerSettingsEffective([]RuntimeWorkerSettingEffective{
+		{Setting: "polling_essential_workers", Value: 72},
+	})
 	registry.ObserveSchedulerTaskDuration(domain.VolatilityClassStatic, 250*time.Millisecond)
 	registry.SetPollingEssentialOverloaded(true)
 	registry.IncPollingDeadlineMiss()
@@ -89,7 +90,6 @@ func TestRegistryHandlerRendersPrometheusSeries(t *testing.T) {
 	assertContainsMetric(t, body, `theia_scheduler_ready_queue_depth{volatility_class="static"} 3`)
 	assertContainsMetric(t, body, `theia_scheduler_in_flight_tasks 2`)
 	assertContainsMetric(t, body, `theia_scheduler_queue_lag_seconds{volatility_class="static"} 15`)
-	assertContainsMetric(t, body, `theia_scheduler_task_dispatch_total{task_kind="unknown",volatility_class="static"} 1`)
 	assertContainsMetric(t, body, `theia_scheduler_task_dispatch_total{task_kind="essential",volatility_class="performance"} 1`)
 	assertContainsMetric(t, body, `theia_scheduler_task_dispatch_total{task_kind="background",volatility_class="static"} 1`)
 	assertContainsMetric(t, body, `theia_scheduler_backpressure_total{reason="class_limit",volatility_class="static"} 1`)

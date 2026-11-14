@@ -15,10 +15,9 @@ import {
 } from './canvasDiagnostics';
 import {
   clearCanvasMetrics,
-  finishCanvasRenderMetric,
+  recordCanvasComponentRenderMetric,
   recordCanvasMetric,
   setCanvasRenderMetricsEnabled,
-  startCanvasRenderMetric,
 } from './canvasInstrumentation';
 
 describe('canvasDiagnostics', () => {
@@ -280,7 +279,7 @@ describe('canvasDiagnostics', () => {
 
   it('includes aggregate component render metrics in diagnostics exports', () => {
     setCanvasRenderMetricsEnabled(true);
-    finishCanvasRenderMetric(startCanvasRenderMetric('DeviceCard'), { deviceId: 'dev-1' });
+    recordCanvasComponentRenderMetric('DeviceCard', 12, { deviceId: 'dev-1' });
 
     expect(exportCanvasDiagnostics().metrics).toMatchObject({
       'runtime:deviceCardRender': expect.objectContaining({ count: 1 }),
