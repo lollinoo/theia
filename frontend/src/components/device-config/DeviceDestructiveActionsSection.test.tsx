@@ -178,4 +178,20 @@ describe('DeviceDestructiveActionsSection', () => {
     await waitFor(() => expect(screen.queryByText('Confirm Delete')).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Delete device everywhere' })).toBeEnabled();
   });
+
+  it('handles onRemoveFromMap rejection gracefully', async () => {
+    const onRemoveFromMap = vi.fn().mockRejectedValueOnce(new Error('map removal failed'));
+
+    renderSection({
+      mapContext: { mapId: 'map-1', mapName: 'Backbone' },
+      onRemoveFromMap,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove from this map' }));
+
+    await waitFor(() => {
+      expect(onRemoveFromMap).toHaveBeenCalledWith('dev-1');
+      expect(screen.getByRole('button', { name: 'Remove from this map' })).toBeEnabled();
+    });
+  });
 });

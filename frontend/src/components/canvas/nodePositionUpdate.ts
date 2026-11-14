@@ -70,7 +70,19 @@ export function buildManualNodePositionUpdate({
       const existingEdgeData = new Map<string, LinkEdgeData>(
         currentEdges.map((edge) => [edge.id, edge.data ?? {}]),
       );
-      return buildTopologyEdges(links, devicesById, nextNodes, existingEdgeData, openEdgeMenu);
+      const selectedByEdgeId = new Map<string, boolean | undefined>(
+        currentEdges.map((edge) => [edge.id, edge.selected]),
+      );
+      const rebuiltEdges = buildTopologyEdges(
+        links,
+        devicesById,
+        nextNodes,
+        existingEdgeData,
+        openEdgeMenu,
+      );
+      return rebuiltEdges.map((edge) =>
+        selectedByEdgeId.get(edge.id) ? { ...edge, selected: true } : edge,
+      );
     },
   };
 }

@@ -60,6 +60,7 @@ export function InstanceBackupManager() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [error, setError] = useState('');
   const [initialLoadErrors, setInitialLoadErrors] = useState<
     Partial<Record<InitialLoadSection, string>>
   >({});
@@ -317,12 +318,15 @@ export function InstanceBackupManager() {
     }
     setFieldError('scheduleInterval', null);
     setScheduleInterval(value);
+    setError('');
     if (scheduleTimerRef.current !== null) clearTimeout(scheduleTimerRef.current);
     scheduleTimerRef.current = setTimeout(() => {
-      void updateSetting('instance_backup_interval_hours', value).then(() => {
-        clearInitialLoadError('settings');
-        showSaved(setSavedSchedule, savedScheduleTimerRef);
-      });
+      void updateSetting('instance_backup_interval_hours', value)
+        .then(() => {
+          clearInitialLoadError('settings');
+          showSaved(setSavedSchedule, savedScheduleTimerRef);
+        })
+        .catch((err) => setError(err instanceof Error ? err.message : 'Failed to update setting'));
     }, 500);
   }
 
@@ -335,13 +339,16 @@ export function InstanceBackupManager() {
     }
     setFieldError('retentionCount', null);
     setRetentionCount(value);
+    setError('');
     if (retentionTimerRef.current !== null) clearTimeout(retentionTimerRef.current);
     const num = parseInt(value, 10);
     retentionTimerRef.current = setTimeout(() => {
-      void updateSetting('instance_backup_retention_count', String(num)).then(() => {
-        clearInitialLoadError('settings');
-        showSaved(setSavedRetention, savedRetentionTimerRef);
-      });
+      void updateSetting('instance_backup_retention_count', String(num))
+        .then(() => {
+          clearInitialLoadError('settings');
+          showSaved(setSavedRetention, savedRetentionTimerRef);
+        })
+        .catch((err) => setError(err instanceof Error ? err.message : 'Failed to update setting'));
     }, 500);
   }
 
@@ -800,6 +807,12 @@ export function InstanceBackupManager() {
       {createError && (
         <div className="rounded-md border border-status-down/20 bg-status-down/5 p-2 text-xs text-status-down">
           {createError}
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-md border border-status-down/20 bg-status-down/5 p-2 text-xs text-status-down">
+          {error}
         </div>
       )}
 

@@ -3,6 +3,7 @@ package canvasmap
 // This file exercises projection behavior so refactors preserve the documented contract.
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -45,13 +46,13 @@ func TestMaterializeMembershipProjectsBaseGhostLinksAndAreas(t *testing.T) {
 	if membership.Devices[0].DeviceID != baseID || membership.Devices[0].Role != domain.CanvasMapDeviceRoleBase {
 		t.Fatalf("first member = %+v, want base device %s", membership.Devices[0], baseID)
 	}
-	if got, want := membership.Devices[0].AreaIDs, []uuid.UUID{areaID}; !uuidSlicesEqual(got, want) {
+	if got, want := membership.Devices[0].AreaIDs, []uuid.UUID{areaID}; !slices.Equal(got, want) {
 		t.Fatalf("base area IDs = %v, want %v", got, want)
 	}
 	if membership.Devices[1].DeviceID != ghostID || membership.Devices[1].Role != domain.CanvasMapDeviceRoleGhost {
 		t.Fatalf("second member = %+v, want ghost device %s", membership.Devices[1], ghostID)
 	}
-	if got, want := membership.LinkIDs, []uuid.UUID{linkID}; !uuidSlicesEqual(got, want) {
+	if got, want := membership.LinkIDs, []uuid.UUID{linkID}; !slices.Equal(got, want) {
 		t.Fatalf("link IDs = %v, want %v", got, want)
 	}
 	if got, want := len(membership.Areas), 1; got != want {
@@ -93,7 +94,7 @@ func TestMaterializeMembershipFromSourceMapUsesSourceAreaAssignments(t *testing.
 	if got, want := len(membership.Devices), 1; got != want {
 		t.Fatalf("device membership count = %d, want %d", got, want)
 	}
-	if got, want := membership.Devices[0].AreaIDs, []uuid.UUID{areaID}; !uuidSlicesEqual(got, want) {
+	if got, want := membership.Devices[0].AreaIDs, []uuid.UUID{areaID}; !slices.Equal(got, want) {
 		t.Fatalf("source area IDs = %v, want %v", got, want)
 	}
 	if got, want := membership.Areas, sourceMembership.Areas; len(got) != len(want) || got[0] != want[0] {
@@ -137,7 +138,7 @@ func TestPlanSourceMapMaterializationFallsBackToImportedAreasAndPrunesPositions(
 	if len(plan.Membership.Devices) != 1 || plan.Membership.Devices[0].DeviceID != baseID {
 		t.Fatalf("planned devices = %+v, want only filtered base", plan.Membership.Devices)
 	}
-	if !uuidSlicesEqual(plan.Membership.Devices[0].AreaIDs, []uuid.UUID{areaID}) {
+	if !slices.Equal(plan.Membership.Devices[0].AreaIDs, []uuid.UUID{areaID}) {
 		t.Fatalf("planned device areas = %v, want imported area %s", plan.Membership.Devices[0].AreaIDs, areaID)
 	}
 	if len(plan.Membership.Areas) != 1 || plan.Membership.Areas[0].Name != "Imported" {
@@ -205,7 +206,7 @@ func TestConnectedBaseLinkIDsIncludesNewDeviceAndDeduplicates(t *testing.T) {
 		},
 	)
 
-	if want := []uuid.UUID{baseLinkID}; !uuidSlicesEqual(got, want) {
+	if want := []uuid.UUID{baseLinkID}; !slices.Equal(got, want) {
 		t.Fatalf("connected base link IDs = %v, want %v", got, want)
 	}
 }
@@ -220,7 +221,7 @@ func TestMissingLinkIDsKeepsOnlyCandidatesNotAlreadyInMembership(t *testing.T) {
 		[]uuid.UUID{existingID, firstMissingID, firstMissingID, secondMissingID},
 	)
 
-	if want := []uuid.UUID{firstMissingID, firstMissingID, secondMissingID}; !uuidSlicesEqual(got, want) {
+	if want := []uuid.UUID{firstMissingID, firstMissingID, secondMissingID}; !slices.Equal(got, want) {
 		t.Fatalf("missing link IDs = %v, want %v", got, want)
 	}
 }
@@ -320,7 +321,7 @@ func TestBaseDeviceMembershipCopiesAreaIDs(t *testing.T) {
 	if got.Role != domain.CanvasMapDeviceRoleBase {
 		t.Fatalf("BaseDeviceMembership().Role = %s, want base", got.Role)
 	}
-	if !uuidSlicesEqual(got.AreaIDs, []uuid.UUID{areaID}) {
+	if !slices.Equal(got.AreaIDs, []uuid.UUID{areaID}) {
 		t.Fatalf("BaseDeviceMembership().AreaIDs = %v, want copied %s", got.AreaIDs, areaID)
 	}
 }
@@ -635,7 +636,7 @@ func TestVirtualDeviceCloneCandidatesKeepsSharedVirtualMembersInMembershipOrder(
 	if err != nil {
 		t.Fatalf("VirtualDeviceCloneCandidates() error = %v", err)
 	}
-	if gotIDs, want := deviceIDs(got), []uuid.UUID{secondVirtualID, firstVirtualID}; !uuidSlicesEqual(gotIDs, want) {
+	if gotIDs, want := deviceIDs(got), []uuid.UUID{secondVirtualID, firstVirtualID}; !slices.Equal(gotIDs, want) {
 		t.Fatalf("VirtualDeviceCloneCandidates() IDs = %v, want %v", gotIDs, want)
 	}
 }
@@ -677,7 +678,7 @@ func TestMembershipWithDeviceClonesCopiesMembershipAndSwapsCloneIDs(t *testing.T
 	if got.Devices[0].Role != domain.CanvasMapDeviceRoleGhost {
 		t.Fatalf("MembershipWithDeviceClones() first role = %s, want ghost", got.Devices[0].Role)
 	}
-	if !uuidSlicesEqual(got.Devices[0].AreaIDs, []uuid.UUID{areaID}) {
+	if !slices.Equal(got.Devices[0].AreaIDs, []uuid.UUID{areaID}) {
 		t.Fatalf("MembershipWithDeviceClones() area IDs = %v, want copied %s", got.Devices[0].AreaIDs, areaID)
 	}
 	if got.Devices[0].VisualColor == nil || *got.Devices[0].VisualColor != "#AABBCC" {
@@ -689,7 +690,7 @@ func TestMembershipWithDeviceClonesCopiesMembershipAndSwapsCloneIDs(t *testing.T
 	if got.Devices[1].DeviceID != keptID {
 		t.Fatalf("MembershipWithDeviceClones() second device = %s, want kept %s", got.Devices[1].DeviceID, keptID)
 	}
-	if !uuidSlicesEqual(got.LinkIDs, []uuid.UUID{linkID}) {
+	if !slices.Equal(got.LinkIDs, []uuid.UUID{linkID}) {
 		t.Fatalf("MembershipWithDeviceClones() link IDs = %v, want copied %s", got.LinkIDs, linkID)
 	}
 	if len(got.Areas) != 1 || got.Areas[0].Name != "Core" {
@@ -747,13 +748,13 @@ func TestBuildMaterializedTopologyResponsePlanKeepsCountsPositionsGhostsAndVisua
 	if got, want := plan.PositionCount, 2; got != want {
 		t.Fatalf("PositionCount = %d, want %d", got, want)
 	}
-	if got, want := deviceIDs(plan.Devices), []uuid.UUID{baseID, ghostID}; !uuidSlicesEqual(got, want) {
+	if got, want := deviceIDs(plan.Devices), []uuid.UUID{baseID, ghostID}; !slices.Equal(got, want) {
 		t.Fatalf("Devices = %v, want base then ghost %v", got, want)
 	}
 	if got, want := len(plan.Links), 1; got != want || plan.Links[0].ID != linkID {
 		t.Fatalf("Links = %+v, want link %s", plan.Links, linkID)
 	}
-	if got, want := positionDeviceIDs(plan.Positions), []uuid.UUID{baseID, ghostID}; !uuidSlicesEqual(got, want) {
+	if got, want := positionDeviceIDs(plan.Positions), []uuid.UUID{baseID, ghostID}; !slices.Equal(got, want) {
 		t.Fatalf("Positions = %v, want %v", got, want)
 	}
 	if len(plan.Areas) != 1 || plan.Areas[0].ID != areaID || plan.Areas[0].DeviceCount != 1 {
@@ -798,13 +799,5 @@ func positionDeviceIDs(positions []domain.DevicePosition) []uuid.UUID {
 }
 
 func uuidSlicesEqual(got, want []uuid.UUID) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
+	return slices.Equal(got, want)
 }

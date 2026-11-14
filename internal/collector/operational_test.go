@@ -5,6 +5,7 @@ package collector
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -335,7 +336,7 @@ func TestOperationalCollectorPoll_KeepsStatusesWhenSysUpTimeFails(t *testing.T) 
 	if result.InterfaceStatuses["ether1"] != "up" {
 		t.Fatalf("InterfaceStatuses[ether1] = %q, want up", result.InterfaceStatuses["ether1"])
 	}
-	if !containsString(client.bulkWalkCalls, snmp.OidIfName) || !containsString(client.bulkWalkCalls, snmp.OidIfOperStatus) {
+	if !slices.Contains(client.bulkWalkCalls, snmp.OidIfName) || !slices.Contains(client.bulkWalkCalls, snmp.OidIfOperStatus) {
 		t.Fatalf("BulkWalk calls = %v, want operational walk attempts after sysUpTime timeout", client.bulkWalkCalls)
 	}
 
@@ -388,7 +389,7 @@ func TestOperationalCollectorPoll_ReturnsErrorWhenSysUpTimeAndStatusesFail(t *te
 	if result.Reachable {
 		t.Fatal("Reachable = true, want false")
 	}
-	if !containsString(client.bulkWalkCalls, snmp.OidIfName) || !containsString(client.bulkWalkCalls, snmp.OidIfDescr) || !containsString(client.bulkWalkCalls, snmp.OidIfOperStatus) {
+	if !slices.Contains(client.bulkWalkCalls, snmp.OidIfName) || !slices.Contains(client.bulkWalkCalls, snmp.OidIfDescr) || !slices.Contains(client.bulkWalkCalls, snmp.OidIfOperStatus) {
 		t.Fatalf("BulkWalk calls = %v, want name, descr, and status attempts", client.bulkWalkCalls)
 	}
 }
@@ -491,10 +492,10 @@ func TestOperationalCollectorPoll_UsesCachedInterfaceNamesForStatuses(t *testing
 	if result.Err != nil {
 		t.Fatalf("Err = %v, want nil", result.Err)
 	}
-	if containsString(client.bulkWalkCalls, snmp.OidIfName) || containsString(client.bulkWalkCalls, snmp.OidIfDescr) {
+	if slices.Contains(client.bulkWalkCalls, snmp.OidIfName) || slices.Contains(client.bulkWalkCalls, snmp.OidIfDescr) {
 		t.Fatalf("BulkWalk calls = %v, want cached interface names without ifName/ifDescr walks", client.bulkWalkCalls)
 	}
-	if !containsString(client.bulkWalkCalls, snmp.OidIfOperStatus) {
+	if !slices.Contains(client.bulkWalkCalls, snmp.OidIfOperStatus) {
 		t.Fatalf("BulkWalk calls = %v, want ifOperStatus walk", client.bulkWalkCalls)
 	}
 	if result.InterfaceStatuses["sfp7"] != "up" {

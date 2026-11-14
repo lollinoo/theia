@@ -486,32 +486,6 @@ func (r *BulkBackupRunRepo) RecalculateRunCounters(runID uuid.UUID) (*domain.Bul
 	return r.GetRun(runID)
 }
 
-func (r *BulkBackupRunRepo) updateRunCounters(run *domain.BulkBackupRun) error {
-	res, err := r.execProcessorMutation(run.ID,
-		`UPDATE backup_bulk_runs
-		 SET batch_size = ?, total_count = ?, queued_count = ?, success_count = ?,
-			failed_count = ?, skipped_count = ?, cancelled_count = ?, error_message = ?
-		 WHERE id = ?`,
-		run.BatchSize,
-		run.TotalCount,
-		run.QueuedCount,
-		run.SuccessCount,
-		run.FailedCount,
-		run.SkippedCount,
-		run.CancelledCount,
-		run.ErrorMessage,
-		run.ID.String(),
-	)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("bulk backup run %s not found", run.ID)
-	}
-	return nil
-}
-
 func (r *BulkBackupRunRepo) FinishBulkRun(runID uuid.UUID, status domain.BulkBackupRunStatus, completedAt time.Time) (bool, error) {
 	res, err := r.execProcessorMutation(runID,
 		`UPDATE backup_bulk_runs

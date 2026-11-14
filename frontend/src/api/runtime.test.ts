@@ -2,22 +2,9 @@
  * Exercises the compact runtime recovery API boundary.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mockResponse } from '../test/mockResponse';
 import { ServerError } from './errors';
 import { fetchRuntimeOverview } from './runtime';
-
-function mockResponse(
-  body: unknown,
-  init: { ok?: boolean; status?: number; statusText?: string } = {},
-) {
-  const { ok = true, status = 200, statusText = 'OK' } = init;
-  return {
-    ok,
-    status,
-    statusText,
-    json: () => Promise.resolve(body),
-    headers: new Headers(),
-  } as unknown as Response;
-}
 
 function validRuntimeOverview() {
   return {

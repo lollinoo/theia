@@ -1036,22 +1036,6 @@ func userSelectSQL() string {
 	        FROM users`
 }
 
-func (r *AuthRepo) userRolesAndPermissions(ctx context.Context, user domain.User) (*domain.UserWithRolesAndPermissions, error) {
-	roles, err := r.rolesForUser(ctx, user.ID)
-	if err != nil {
-		return nil, err
-	}
-	permissions, err := r.permissionsForUser(ctx, user.ID)
-	if err != nil {
-		return nil, err
-	}
-	return &domain.UserWithRolesAndPermissions{
-		User:        user,
-		Roles:       roles,
-		Permissions: permissions,
-	}, nil
-}
-
 func (r *AuthRepo) rolesForUser(ctx context.Context, userID uuid.UUID) ([]domain.Role, error) {
 	rows, err := r.queryContext(ctx,
 		`SELECT r.id, r.name, r.description, r.is_system_role, r.created_at, r.updated_at

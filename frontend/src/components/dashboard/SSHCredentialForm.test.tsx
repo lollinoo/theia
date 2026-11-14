@@ -218,4 +218,73 @@ describe('SSHCredentialForm — SSH host-key mismatch recovery', () => {
       screen.getByText('SSH host key reset. Run Test again to trust the new key.'),
     ).toBeInTheDocument();
   });
+
+  it('notifies onProfileChanged(undefined) when unassign succeeds but assign fails', async () => {
+    const { fetchCredentialProfiles, assignCredentialProfile, unassignCredentialProfile } =
+      await import('../../api/client');
+    (fetchCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+      mockProfile({ id: 'profile-1', name: 'Admin Profile' }),
+      mockProfile({ id: 'profile-2', name: 'Backup Profile' }),
+    ]);
+    (unassignCredentialProfile as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (assignCredentialProfile as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('Failed to assign'),
+    );
+
+    const onProfileChanged = vi.fn();
+    render(
+      <SSHCredentialForm
+        deviceId="dev-1"
+        currentProfileId="profile-1"
+        onProfileChanged={onProfileChanged}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Backup Profile (admin:22)')).toBeInTheDocument();
+    });
+
+    const select = screen.getByRole('combobox');
+    fireEvent.change(select, { target: { value: 'profile-2' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => {
+      expect(unassignCredentialProfile).toHaveBeenCalledWith('dev-1', 'profile-1');
+      expect(assignCredentialProfile).toHaveBeenCalledWith('dev-1', 'profile-2');
+      expect(onProfileChanged).toHaveBeenCalledWith(undefined);
+      expect(screen.getByText('Failed to assign')).toBeInTheDocument();
+    });
+  });
+
+  it('resets test results and status messages when deviceId changes', async () => {
+    const { fetchCredentialProfiles, testSSHConnection } = await import('../../api/client');
+    (fetchCredentialProfiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+      mockProfile({ id: 'profile-1', name: 'Admin Profile' }),
+    ]);
+    (testSSHConnection as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true,
+      stdout: 'ok',
+    });
+
+    const { rerender } = render(
+      <SSHCredentialForm deviceId="dev-1" currentProfileId="profile-1" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Admin Profile (admin:22)')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+    });
+
+    expect(await screen.findByText('Connection successful')).toBeInTheDocument();
+
+    // Rerender with a new deviceId
+    rerender(<SSHCredentialForm deviceId="dev-2" currentProfileId="profile-1" />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Connection successful')).not.toBeInTheDocument();
+    });
+  });
 });
