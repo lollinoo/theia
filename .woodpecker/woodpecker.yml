@@ -105,6 +105,7 @@ steps:
       - /var/cache/theia-ci/gobuild:/var/cache/theia-ci/gobuild
       - /var/cache/theia-ci/npm:/var/cache/theia-ci/npm
       - /var/cache/theia-ci/playwright:/var/cache/theia-ci/playwright
+      - /var/cache/theia-ci/godl:/var/cache/theia-ci/godl
     commands:
       - |
         set -eu
@@ -118,12 +119,15 @@ steps:
         test -n "$go_version"
         arch=$(dpkg --print-architecture)
 
-        apt-get update
-        apt-get install -y --no-install-recommends ca-certificates curl git
-        curl -fsSL "https://go.dev/dl/go$go_version.linux-$arch.tar.gz" -o /tmp/go.tar.gz
+        # node:bookworm already ships curl, git and CA certificates; the Go tarball is cached per version.
+        go_tar="/var/cache/theia-ci/godl/go$go_version.linux-$arch.tar.gz"
+        if [ ! -f "$go_tar" ]; then
+          go_tmp=$(mktemp "$go_tar.XXXXXX")
+          curl -fsSL "https://go.dev/dl/go$go_version.linux-$arch.tar.gz" -o "$go_tmp"
+          mv "$go_tmp" "$go_tar"
+        fi
         rm -rf /usr/local/go
-        tar -C /usr/local -xzf /tmp/go.tar.gz
-        rm -f /tmp/go.tar.gz
+        tar -C /usr/local -xzf "$go_tar" || { rm -f "$go_tar"; exit 1; }
         export PATH="/usr/local/go/bin:$PATH"
 
         # Run in an isolated tracked-files copy so parallel frontend-fast cannot race on frontend/node_modules.
