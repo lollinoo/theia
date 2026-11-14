@@ -857,57 +857,5 @@ func normalizeInterfaceName(name string) string {
 }
 
 func physicalInterfaceAnchor(name string) string {
-	normalized := normalizeInterfaceName(name)
-	if normalized == "" {
-		return ""
-	}
-
-	virtualHints := []string{
-		"vlan", "vrf", "vpn", "bridge", "br-", "bond", "loopback", "lo",
-		"gre", "eoip", "wg", "wireguard", "pppoe", "ppp", "sstp", "ovpn",
-		"l2tp", "vxlan", "veth", "tap", "tun",
-	}
-	for _, hint := range virtualHints {
-		if strings.Contains(normalized, hint) {
-			return ""
-		}
-	}
-
-	physicalPatterns := []string{
-		"ether", "eth", "sfp-sfpplus", "sfp", "qsfp", "ens", "eno", "enp",
-		"gigabitethernet", "tengigabitethernet", "fastethernet", "ge-", "xe-", "et-",
-	}
-	for _, pattern := range physicalPatterns {
-		if idx := strings.Index(normalized, pattern); idx >= 0 {
-			anchor := normalized[idx:]
-			for i, r := range anchor {
-				if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '/') {
-					anchor = anchor[:i]
-					break
-				}
-			}
-			anchor = strings.Trim(anchor, "- /")
-			if hasDigit(anchor) {
-				return anchor
-			}
-		}
-	}
-
-	shortPrefixes := []string{"gi", "te", "fo", "port"}
-	for _, prefix := range shortPrefixes {
-		if strings.HasPrefix(normalized, prefix) && hasDigit(normalized) {
-			return normalized
-		}
-	}
-
-	return ""
-}
-
-func hasDigit(value string) bool {
-	for _, r := range value {
-		if r >= '0' && r <= '9' {
-			return true
-		}
-	}
-	return false
+	return domain.PhysicalInterfaceAnchor(name)
 }

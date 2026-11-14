@@ -48,22 +48,6 @@ export function snapPositionToGrid<T extends XYPosition>(position: T, grid: Snap
   return Object.is(x, position.x) && Object.is(y, position.y) ? position : { ...position, x, y };
 }
 
-/** Returns nodes with grid-aligned positions and preserves structural sharing for aligned values. */
-export function snapNodesToGrid(nodes: DeviceNode[], grid: SnapGrid): DeviceNode[] {
-  let changed = false;
-  const snappedNodes = nodes.map((node) => {
-    const position = snapPositionToGrid(node.position, grid);
-    if (position === node.position) {
-      return node;
-    }
-
-    changed = true;
-    return { ...node, position };
-  });
-
-  return changed ? snappedNodes : nodes;
-}
-
 /** Snaps position changes while leaving every other controlled React Flow change untouched. */
 export function snapNodeChangesToGrid(
   changes: NodeChange<DeviceNode>[],

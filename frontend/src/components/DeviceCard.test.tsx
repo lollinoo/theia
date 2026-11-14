@@ -17,9 +17,16 @@ import DeviceCard, { getDeviceRenderSignature } from './DeviceCard';
 import { type DeviceMonitoringState, resolveDeviceMonitoringState } from './deviceVisualState';
 
 vi.mock('./NodeBorderHandles', () => ({
-  NodeBorderHandles: ({ isConnectable }: { isConnectable: boolean }) => (
-    <span data-testid="node-border-handles" data-is-connectable={String(isConnectable)} />
-  ),
+  NodeBorderHandles: ({
+    isConnectable,
+    editMode,
+  }: {
+    isConnectable?: boolean;
+    editMode?: boolean;
+  }) => {
+    const isEnabled = editMode ?? isConnectable ?? false;
+    return <span data-testid="node-border-handles" data-is-connectable={String(isEnabled)} />;
+  },
 }));
 
 function mockDevice(overrides: Partial<Device> = {}): Device {

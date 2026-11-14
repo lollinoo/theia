@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -157,7 +158,7 @@ func TestDeviceImportHandlerCommitMapsProfileDigestAndActor(t *testing.T) {
 	if got.Actor.UserID != user.User.User.ID || got.Actor.IPAddress != "198.51.100.22:4567" {
 		t.Fatalf("actor = %#v", got.Actor)
 	}
-	if !containsString(auth.checked, domain.PermissionCredentialsRead) || containsString(auth.checked, domain.PermissionCredentialsReveal) {
+	if !slices.Contains(auth.checked, domain.PermissionCredentialsRead) || slices.Contains(auth.checked, domain.PermissionCredentialsReveal) {
 		t.Fatalf("checked permissions = %#v", auth.checked)
 	}
 }
@@ -376,7 +377,7 @@ func TestDeviceImportHandlerEnforcesAllBaselineAndConditionalPermissions(t *test
 		_, auth := authorizeDeviceImportRequest(request)
 		response := httptest.NewRecorder()
 		NewDeviceImportHandler(provider, auth).HandlePreview(response, request)
-		if response.Code != http.StatusOK || provider.previewCalls != 1 || containsString(auth.checked, domain.PermissionCredentialsRead) {
+		if response.Code != http.StatusOK || provider.previewCalls != 1 || slices.Contains(auth.checked, domain.PermissionCredentialsRead) {
 			t.Fatalf("status=%d calls=%d checked=%#v body=%s", response.Code, provider.previewCalls, auth.checked, response.Body.String())
 		}
 	})
@@ -390,10 +391,10 @@ func TestDeviceImportHandlerEnforcesAllBaselineAndConditionalPermissions(t *test
 			_, auth := authorizeDeviceImportRequest(request)
 			response := httptest.NewRecorder()
 			NewDeviceImportHandler(provider, auth).HandlePreview(response, request)
-			if response.Code != http.StatusForbidden || provider.previewCalls != 0 || !containsString(auth.checked, domain.PermissionCredentialsRead) {
+			if response.Code != http.StatusForbidden || provider.previewCalls != 0 || !slices.Contains(auth.checked, domain.PermissionCredentialsRead) {
 				t.Fatalf("status=%d calls=%d checked=%#v body=%s", response.Code, provider.previewCalls, auth.checked, response.Body.String())
 			}
-			if containsString(auth.checked, domain.PermissionCredentialsReveal) {
+			if slices.Contains(auth.checked, domain.PermissionCredentialsReveal) {
 				t.Fatalf("credentials reveal was checked: %#v", auth.checked)
 			}
 		})
@@ -779,11 +780,3 @@ func withoutString(values []string, omitted string) []string {
 	return result
 }
 
-func containsString(values []string, wanted string) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
-}

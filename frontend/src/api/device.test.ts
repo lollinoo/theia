@@ -2,7 +2,9 @@
  * Exercises device API boundary behavior so refactors preserve the documented contract.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { deviceResource } from '../test/deviceFixtures';
 import { setDocumentCookie } from '../test/documentCookie';
+import { mockResponse } from '../test/mockResponse';
 import {
   type CreateDevicePayload,
   createBridgeLaunchRequest,
@@ -13,53 +15,6 @@ import {
   testSSHConnection,
 } from './device';
 import { ValidationError } from './errors';
-
-function mockResponse(
-  body: unknown,
-  init: { ok?: boolean; status?: number; statusText?: string } = {},
-) {
-  const { ok = true, status = 200, statusText = 'OK' } = init;
-  return {
-    ok,
-    status,
-    statusText,
-    json: () => Promise.resolve(body),
-    headers: new Headers(),
-  } as unknown as Response;
-}
-
-function deviceResource(id: string, hostname: string, ip: string) {
-  return {
-    id,
-    attributes: {
-      hostname,
-      ip,
-      notes: null,
-      device_type: 'router',
-      status: 'up',
-      sys_name: hostname,
-      sys_descr: 'RouterOS',
-      hardware_model: 'RB4011',
-      vendor: 'mikrotik',
-      managed: true,
-      backup_supported: true,
-      poll_class: 'standard',
-      poll_interval_override: null,
-      polling_enabled: true,
-      metrics_source: 'prometheus',
-      prometheus_label_name: 'instance',
-      prometheus_label_value: `${ip}:9100`,
-      topology_discovery_mode: 'inherit',
-      effective_topology_discovery_mode: 'off',
-      topology_bootstrap_state: 'idle',
-      last_topology_discovery_at: null,
-      last_topology_discovery_result: '',
-    },
-    relationships: {
-      interfaces: { data: [] },
-    },
-  };
-}
 
 beforeEach(() => {
   vi.restoreAllMocks();

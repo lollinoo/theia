@@ -11,13 +11,12 @@ export interface RegisteredLinkLabel {
   presentation: LinkBadgePresentation;
 }
 
-type RegisteredLinkLabelRecord = RegisteredLinkLabel & {
-  signature: string;
-};
-
-const labelsByEdgeId = new Map<string, RegisteredLinkLabelRecord>();
+const EMPTY_LABELS: RegisteredLinkLabel[] = [];
+const labelsByEdgeId = new Map<string, RegisteredLinkLabel>();
+const signaturesByEdgeId = new Map<string, string>();
 const listeners = new Set<() => void>();
-let snapshot: RegisteredLinkLabel[] = [];
+let snapshotDirty = false;
+let snapshot: RegisteredLinkLabel[] = EMPTY_LABELS;
 
 function serializeLabel(label: RegisteredLinkLabel): string {
   return JSON.stringify({
@@ -31,12 +30,6 @@ function serializeLabel(label: RegisteredLinkLabel): string {
     semanticPriority: label.presentation.semanticPriority,
     items: label.presentation.items,
   });
-}
-
-function rebuildSnapshot(): void {
-  snapshot = Array.from(labelsByEdgeId.values())
-    .sort((a, b) => a.edgeId.localeCompare(b.edgeId))
-    .map(({ signature: _signature, ...label }) => label);
 }
 
 function notifyLinkLabelListeners(): void {
@@ -54,40 +47,59 @@ export function subscribeLinkLabels(listener: () => void): () => void {
 }
 
 /** Returns link label snapshot for the UI component boundary. */
-export function getLinkLabelSnapshot(): RegisteredLinkLabel[] {
+export function getRegisteredLinkLabelsSnapshot(): RegisteredLinkLabel[] {
+  if (snapshotDirty) {
+    snapshot =
+      labelsByEdgeId.size === 0
+        ? EMPTY_LABELS
+        : [...labelsByEdgeId.values()].sort((a, b) => a.edgeId.localeCompare(b.edgeId));
+    snapshotDirty = false;
+  }
   return snapshot;
 }
+
+/** Returns link label snapshot for the UI component boundary. */
+export const getLinkLabelSnapshot = getRegisteredLinkLabelsSnapshot;
 
 /** Registers link label for the UI component boundary. */
 export function registerLinkLabel(label: RegisteredLinkLabel): void {
   const signature = serializeLabel(label);
-  const existing = labelsByEdgeId.get(label.edgeId);
-  if (existing?.signature === signature) {
+  const existingSignature = signaturesByEdgeId.get(label.edgeId);
+  if (existingSignature === signature) {
     return;
   }
 
-  labelsByEdgeId.set(label.edgeId, { ...label, signature });
-  rebuildSnapshot();
+  signaturesByEdgeId.set(label.edgeId, signature);
+  labelsByEdgeId.set(label.edgeId, { ...label });
+  snapshotDirty = true;
   notifyLinkLabelListeners();
 }
 
 /** Unregisters link label for the UI component boundary. */
 export function unregisterLinkLabel(edgeId: string): void {
+  signaturesByEdgeId.delete(edgeId);
   if (!labelsByEdgeId.delete(edgeId)) {
     return;
   }
 
-  rebuildSnapshot();
+  snapshotDirty = true;
   notifyLinkLabelListeners();
 }
 
 /** Clears link label registry for the UI component boundary. */
-export function clearLinkLabelRegistry(): void {
+export function clearRegisteredLinkLabels(): void {
   if (labelsByEdgeId.size === 0) {
+    snapshot = EMPTY_LABELS;
+    snapshotDirty = false;
     return;
   }
 
+  signaturesByEdgeId.clear();
   labelsByEdgeId.clear();
-  rebuildSnapshot();
+  snapshot = EMPTY_LABELS;
+  snapshotDirty = false;
   notifyLinkLabelListeners();
 }
+
+/** Clears link label registry for the UI component boundary. */
+export const clearLinkLabelRegistry = clearRegisteredLinkLabels;

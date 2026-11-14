@@ -17,8 +17,10 @@ interface SidePanelProps {
 /** Renders the SidePanel component within the UI component boundary. */
 export function SidePanel({ open, onClose, title, children, testId }: SidePanelProps) {
   useEffect(() => {
+    if (!open) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (open && e.key === 'Escape') {
+      if (e.key === 'Escape') {
         onClose();
       }
     };
@@ -30,8 +32,10 @@ export function SidePanel({ open, onClose, title, children, testId }: SidePanelP
   const panel = (
     <div
       data-testid={testId}
+      aria-hidden={!open}
+      inert={!open}
       className={`fixed right-0 top-0 z-40 flex h-full w-[min(420px,100vw)] transform flex-col border-l border-outline bg-surface-container-high transition-transform duration-200 ease-in-out shadow-panel ${
-        open ? 'translate-x-0' : 'translate-x-full'
+        open ? 'translate-x-0' : 'translate-x-full invisible pointer-events-none'
       }`}
     >
       <div className="topology-glass flex items-center justify-between px-5 py-3 transition-colors duration-200">

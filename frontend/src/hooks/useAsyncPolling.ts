@@ -1,7 +1,7 @@
 /**
  * Coordinates a single non-overlapping asynchronous polling loop.
  */
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 interface AsyncPollingOptions<T> {
   intervalMs: number;
@@ -17,10 +17,14 @@ interface AsyncPollingControls {
 
 interface PollingState {
   active: boolean;
-  inFlight: boolean;
+  inFlightVersion: number | null;
   mounted: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   version: number;
+}
+
+function isDocumentHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
 }
 
 /**
@@ -35,7 +39,7 @@ export function useAsyncPolling<T>({
 }: AsyncPollingOptions<T>): AsyncPollingControls {
   const stateRef = useRef<PollingState>({
     active: false,
-    inFlight: false,
+    inFlightVersion: null,
     mounted: false,
     timer: null,
     version: 0,
@@ -64,6 +68,7 @@ export function useAsyncPolling<T>({
       const state = stateRef.current;
       if (!state.mounted || !state.active || state.version !== version) return;
       clearTimer();
+      if (isDocumentHidden()) return;
       state.timer = setTimeout(() => {
         state.timer = null;
         void runRef.current(version);
@@ -74,9 +79,17 @@ export function useAsyncPolling<T>({
 
   runRef.current = async (version: number) => {
     const state = stateRef.current;
-    if (!state.mounted || !state.active || state.version !== version || state.inFlight) return;
+    if (
+      !state.mounted ||
+      !state.active ||
+      state.version !== version ||
+      state.inFlightVersion === version ||
+      isDocumentHidden()
+    ) {
+      return;
+    }
 
-    state.inFlight = true;
+    state.inFlightVersion = version;
     try {
       const result = await pollRef.current();
       if (!state.mounted || !state.active || state.version !== version) return;
@@ -89,8 +102,10 @@ export function useAsyncPolling<T>({
         onErrorRef.current?.(error);
       }
     } finally {
-      state.inFlight = false;
-      if (state.mounted && state.active) {
+      if (state.inFlightVersion === version) {
+        state.inFlightVersion = null;
+      }
+      if (state.mounted && state.active && state.version === version && !isDocumentHidden()) {
         schedule(state.version);
       }
     }
@@ -108,17 +123,41 @@ export function useAsyncPolling<T>({
     state.active = true;
     state.version += 1;
     clearTimer();
-    if (!state.inFlight) schedule(state.version);
+    if (state.inFlightVersion !== state.version) {
+      schedule(state.version);
+    }
   }, [clearTimer, schedule]);
 
   useEffect(() => {
     const state = stateRef.current;
     state.mounted = true;
+
+    const handleVisibilityChange = () => {
+      const currentState = stateRef.current;
+      if (isDocumentHidden()) {
+        clearTimer();
+      } else if (
+        currentState.mounted &&
+        currentState.active &&
+        currentState.inFlightVersion !== currentState.version &&
+        currentState.timer === null
+      ) {
+        schedule(currentState.version);
+      }
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
     return () => {
       state.mounted = false;
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
       stop();
     };
-  }, [stop]);
+  }, [clearTimer, schedule, stop]);
 
-  return { start, stop };
+  return useMemo(() => ({ start, stop }), [start, stop]);
 }

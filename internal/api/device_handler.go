@@ -151,19 +151,20 @@ type snmpCredsRequest struct {
 	SecurityLevel string `json:"security_level"`
 }
 
-type optionalPollIntervalOverride struct {
+type optionalJSONField[T any] struct {
 	Set   bool
-	Value *int
+	Value *T
 }
 
-func (o *optionalPollIntervalOverride) UnmarshalJSON(data []byte) error {
+// UnmarshalJSON records whether an optional field was present and whether it was null.
+func (o *optionalJSONField[T]) UnmarshalJSON(data []byte) error {
 	o.Set = true
-	if string(data) == "null" {
+	if strings.TrimSpace(string(data)) == "null" {
 		o.Value = nil
 		return nil
 	}
 
-	var value int
+	var value T
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
@@ -172,47 +173,9 @@ func (o *optionalPollIntervalOverride) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type optionalProbePortsOverride struct {
-	Set   bool
-	Value []int
-}
-
-func (o *optionalProbePortsOverride) UnmarshalJSON(data []byte) error {
-	o.Set = true
-	if string(data) == "null" {
-		o.Value = nil
-		return nil
-	}
-
-	var value []int
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-
-	o.Value = value
-	return nil
-}
-
-type optionalNullableString struct {
-	Set   bool
-	Value *string
-}
-
-func (o *optionalNullableString) UnmarshalJSON(data []byte) error {
-	o.Set = true
-	if string(data) == "null" {
-		o.Value = nil
-		return nil
-	}
-
-	var value string
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-
-	o.Value = &value
-	return nil
-}
+type optionalPollIntervalOverride = optionalJSONField[int]
+type optionalProbePortsOverride = optionalJSONField[[]int]
+type optionalNullableString = optionalJSONField[string]
 
 type updateDeviceRequest struct {
 	Hostname              *string                      `json:"hostname,omitempty"`
@@ -447,7 +410,11 @@ func (h *DeviceHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	var probePortsUpdate *[]int
 	if req.ProbePorts.Set {
-		probePorts, err := normalizeProbePorts(req.ProbePorts.Value)
+		var rawProbePorts []int
+		if req.ProbePorts.Value != nil {
+			rawProbePorts = *req.ProbePorts.Value
+		}
+		probePorts, err := normalizeProbePorts(rawProbePorts)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -695,7 +662,6 @@ func (h *DeviceHandler) HandleAddressReachability(w http.ResponseWriter, r *http
 
 func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDeviceRequest, error) {
 	deviceType := domain.DeviceType(req.DeviceType)
-	addressesProvided := req.Addresses != nil
 	probePorts, err := normalizeOptionalProbePorts(req.ProbePorts)
 	if err != nil {
 		return validatedCreateDeviceRequest{}, err
@@ -741,9 +707,6 @@ func validateCreateDeviceRequest(req createDeviceRequest) (validatedCreateDevice
 	}
 	req.IP = derivedIP
 
-	if req.IP == "" && !addressesProvided {
-		return validatedCreateDeviceRequest{}, errors.New("ip is required")
-	}
 	if req.IP == "" {
 		return validatedCreateDeviceRequest{}, errors.New("ip is required")
 	}

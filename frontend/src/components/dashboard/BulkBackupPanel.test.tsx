@@ -1187,4 +1187,64 @@ describe('BulkBackupPanel — uses persistent backend bulk runs', () => {
       expect(triggerBulkDownload).toHaveBeenCalledTimes(1);
     });
   }, 10000);
+
+  it('skips individual fetchBackupJob calls when run item already includes file_count and byte_count', async () => {
+    const {
+      fetchBackupJob,
+      fetchBulkOperationStatus,
+      fetchBulkBackupRun,
+      startBulkBackupRun,
+      triggerBulkDownload,
+    } = await import('../../api/client');
+    (fetchBackupJob as ReturnType<typeof vi.fn>).mockClear();
+    const successItems = [
+      mockRunItem({
+        device_id: 'dev-1',
+        device_name: 'router-1',
+        status: 'success',
+        backup_job_id: 'job-1',
+        file_count: 2,
+        byte_count: 2048,
+      }),
+      mockRunItem({
+        device_id: 'dev-2',
+        device_name: 'router-2',
+        status: 'success',
+        backup_job_id: 'job-2',
+        file_count: 1,
+        byte_count: 1024,
+      }),
+    ];
+    (fetchBulkOperationStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkOperationStatus(),
+    );
+    (startBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun(
+        { status: 'running' },
+        successItems.map((item) => ({ ...item, status: 'queued' })),
+      ),
+    );
+    (fetchBulkBackupRun as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      mockBulkRun({ status: 'success' }, successItems),
+    );
+
+    render(
+      <BulkBackupPanel
+        devices={[
+          mockDevice({ id: 'dev-1', sys_name: 'router-1' }),
+          mockDevice({ id: 'dev-2', sys_name: 'router-2' }),
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Backup All Devices'));
+
+    await screen.findByText('Download All as ZIP', {}, { timeout: 4000 });
+    fireEvent.click(screen.getByText('Download All as ZIP'));
+
+    await waitFor(() => {
+      expect(triggerBulkDownload).toHaveBeenCalledTimes(1);
+    });
+    expect(fetchBackupJob).not.toHaveBeenCalled();
+  }, 10000);
 });

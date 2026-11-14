@@ -46,7 +46,25 @@ export function useCanvasGraphState({
   const [nodes, setNodes] = useState<DeviceNode[]>([]);
   const [edges, setEdges] = useState<LinkEdgeType[]>([]);
 
-  const nodeIndexById = useMemo(() => buildIndexById(nodes), [nodes]);
+  const stableNodeIndexByIdRef = useRef<Map<string, number>>(new Map());
+  const nodeIndexById = useMemo(() => {
+    const prevMap = stableNodeIndexByIdRef.current;
+    if (prevMap.size === nodes.length) {
+      let matches = true;
+      for (let i = 0; i < nodes.length; i++) {
+        if (prevMap.get(nodes[i].id) !== i) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return prevMap;
+      }
+    }
+    const nextMap = buildIndexById(nodes);
+    stableNodeIndexByIdRef.current = nextMap;
+    return nextMap;
+  }, [nodes]);
   const edgeIndexById = useMemo(() => buildIndexById(edges), [edges]);
   const nodeIndexByIdRef = useRef<Map<string, number>>(new Map());
   const edgeIndexByIdRef = useRef<Map<string, number>>(new Map());

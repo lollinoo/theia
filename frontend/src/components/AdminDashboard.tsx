@@ -254,8 +254,11 @@ export function AdminDashboard({ visible = true, onOpenMap }: AdminDashboardProp
   }, [canReadAuditLogs, canReadRoles, canReadSettings, canReadUsers]);
 
   useEffect(() => {
+    if (!visible) {
+      return;
+    }
     void load();
-  }, [load]);
+  }, [load, visible]);
 
   useEffect(() => {
     if (!visible) {

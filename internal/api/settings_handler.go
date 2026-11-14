@@ -203,11 +203,6 @@ func (h *SettingsHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if settingResponseSensitive(key) {
-		json.NewEncoder(w).Encode(buildSettingsResponse(map[string]string{key: value}))
-		return
-	}
-
 	json.NewEncoder(w).Encode(settingsResponse{Data: map[string]string{key: value}})
 }
 
@@ -249,42 +244,19 @@ func (h *SettingsHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		debugSettingAffects(key),
 	)
 
-	if settingResponseSensitive(key) {
-		json.NewEncoder(w).Encode(buildSettingsResponse(map[string]string{key: value}))
-		return
-	}
-
 	json.NewEncoder(w).Encode(settingsResponse{Data: map[string]string{key: value}})
 }
 
 func buildSettingsResponse(settings map[string]string) settingsResponse {
 	data := make(map[string]string, len(settings))
-	secrets := make(map[string]settingSecretState)
 	for key, value := range settings {
 		if !isValidSettingKey(key) {
-			continue
-		}
-		if settingResponseSensitive(key) {
-			secrets[key] = settingSecretState{
-				Present:  strings.TrimSpace(value) != "",
-				Redacted: true,
-			}
 			continue
 		}
 		data[key] = value
 	}
 
-	if len(secrets) == 0 {
-		return settingsResponse{Data: data}
-	}
-	return settingsResponse{
-		Data: data,
-		Meta: &settingsResponseMeta{Secrets: secrets},
-	}
-}
-
-func settingResponseSensitive(key string) bool {
-	return false
+	return settingsResponse{Data: data}
 }
 
 func debugSettingValue(key string, value string, err error) string {
