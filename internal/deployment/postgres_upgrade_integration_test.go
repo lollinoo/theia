@@ -39,7 +39,8 @@ func TestPostgresUpgradeIntegration(t *testing.T) {
 			defer cancel()
 			root := t.TempDir()
 			dir := filepath.Join(root, "instance")
-			a := &Admin{Dir: dir, Output: io.Discard, OfflineImages: true}
+			var logs bytes.Buffer
+			a := &Admin{Dir: dir, Output: &logs, OfflineImages: true}
 			defer func() {
 				_ = a.compose(context.Background(), "down", "--remove-orphans", "--volumes")
 				_ = exec.Command("docker", "run", "--rm", "-v", root+":/test", "--entrypoint", "sh", "theia-managed-backend:local", "-c", "rm -rf /test/*").Run()
@@ -99,6 +100,11 @@ func TestPostgresUpgradeIntegration(t *testing.T) {
 				t.Fatal("injected import interruption ignored")
 			}
 			if !failAfterImport && err != nil {
+				// Docker output is otherwise discarded; keep the failing compose context in CI logs.
+				_ = a.compose(context.Background(), "ps", "-a")
+				_ = a.compose(context.Background(), "logs", "--no-color", "--tail", "40")
+				lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+				t.Log(strings.Join(lines[max(0, len(lines)-200):], "\n"))
 				t.Fatal(err)
 			}
 			current, err := LoadConfig(dir)

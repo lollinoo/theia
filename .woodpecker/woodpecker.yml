@@ -1,14 +1,26 @@
 # Woodpecker repository settings required by this workflow:
 # - Pipeline path: leave empty for default discovery, or set it to .woodpecker/
-# - Trusted Volumes: enabled for the Docker socket mount.
-# - GitHub webhook: subscribe to the release event. Woodpecker 3.16.0
-#   repository activation and repair do not add it automatically.
+# - Trusted Volumes: enabled for /var/run/docker.sock, /tmp/theia-managed-ci, and /var/cache/theia-ci/ mounts.
+# - require_approval: forks (or stricter) — Woodpecker grants trusted volumes to PRs, which run their own YAML.
+# - Secrets: restrict GHCR_USERNAME, GHCR_TOKEN, and GITHUB_TOKEN to push and release events only.
+# - cancel_previous_pipeline_events: [push, pull_request] (newer PR/branch run supersedes older one; releases never cancel).
+# - GitHub webhook: subscribe to the release event (Woodpecker activation/repair does not add it automatically).
+#   Note: Woodpecker starts release pipelines only on GitHub's `released` action (prereleases do not run).
 when:
-  - event: [push, pull_request, release, manual]
-    evaluate: 'CI_PIPELINE_EVENT == "push" || (CI_PIPELINE_EVENT == "pull_request" && CI_COMMIT_BRANCH == "master") || CI_PIPELINE_EVENT == "release" || CI_PIPELINE_EVENT == "manual"'
+  - event: pull_request
+    branch: master
+  - event: push
+    branch: master
+  - event: [release, manual]
 
 services:
   - name: postgres
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_USER: theia
+      POSTGRES_PASSWORD: theia
+      POSTGRES_DB: theia
+  - name: postgres-e2e
     image: postgres:18-bookworm
     environment:
       POSTGRES_USER: theia
@@ -19,138 +31,118 @@ steps:
   - name: changes
     image: alpine:3.24
     commands:
-      - apk add --no-cache jq
+      - apk add --no-cache bash jq
+      - bash scripts/ci/selftest.sh
       - |
-        set -e
+        set -eu
         mkdir -p .ci
-
-        backend=false
-        frontend=false
-        browser_e2e=false
-        bridge=false
-
         case "$CI_PIPELINE_EVENT" in
-          manual)
-            backend=true
-            frontend=true
-            browser_e2e=true
-            bridge=true
+          manual|release)
+            bash scripts/ci/changes.sh --all > .ci/changed-areas.env
             ;;
-          release)
-            backend=true
-            frontend=true
-            browser_e2e=true
-            bridge=true
-            ;;
-          push|pull_request)
-            if [ -z "$CI_PIPELINE_FILES" ] || [ "$CI_PIPELINE_FILES" = "null" ]; then
-              backend=true
-              frontend=true
-              browser_e2e=true
-              bridge=true
+          *)
+            if [ -z "$${CI_PIPELINE_FILES:-}" ]; then
+              bash scripts/ci/changes.sh --all > .ci/changed-areas.env
             else
-              printf '%s' "$CI_PIPELINE_FILES" | jq -r '.[]?' > /tmp/theia-changed-files
-
-              while IFS= read -r path; do
-                case "$path" in
-                  cmd/*|internal/*|go.mod|go.sum|config.example.yaml|Dockerfile|Dockerfile.deployment-test|docker-compose*.yml|Makefile|scripts/*.sh|scripts/*.ps1|.env*.example)
-                    backend=true
-                    browser_e2e=true
-                    ;;
-                esac
-
-                case "$path" in
-                  frontend/*|Dockerfile.frontend)
-                    frontend=true
-                    browser_e2e=true
-                    ;;
-                esac
-
-                case "$path" in
-                  cmd/winbox-bridge/*|scripts/build-winbox-bridge.ps1|scripts/test-build-winbox-bridge-safety.ps1|Makefile|go.mod|go.sum|.woodpecker/*.yml|.woodpecker/*.yaml)
-                    bridge=true
-                    ;;
-                esac
-
-                case "$path" in
-                  .woodpecker/*.yml|.woodpecker/*.yaml)
-                    backend=true
-                    frontend=true
-                    browser_e2e=true
-                    ;;
-                esac
-              done < /tmp/theia-changed-files
+              bash -euo pipefail -c 'printf "%s" "$CI_PIPELINE_FILES" | jq -r ".[]" | bash scripts/ci/changes.sh' > .ci/changed-areas.env
             fi
             ;;
         esac
-
-        {
-          echo "BACKEND_CHANGED=$backend"
-          echo "FRONTEND_CHANGED=$frontend"
-          echo "BROWSER_E2E_CHANGED=$browser_e2e"
-          echo "BRIDGE_CHANGED=$bridge"
-        } > .ci/changed-areas.env
+        cat .ci/changed-areas.env
 
   - name: backend-fast
     image: golang:1.27.4-bookworm
+    depends_on:
+      - changes
+    environment:
+      CGO_ENABLED: "1"
+      GOMODCACHE: /var/cache/theia-ci/gomod
+      GOCACHE: /var/cache/theia-ci/gobuild
+      THEIA_TEST_DB_DSN: postgres://theia:theia@postgres:5432/theia?sslmode=disable
+    volumes:
+      - /var/cache/theia-ci/gomod:/var/cache/theia-ci/gomod
+      - /var/cache/theia-ci/gobuild:/var/cache/theia-ci/gobuild
     commands:
       - |
         set -eu
         . .ci/changed-areas.env
-        if [ "$BACKEND_CHANGED" != "true" ]; then
+        if [ "$backend" != "true" ]; then
           echo "No backend changes detected."
           exit 0
         fi
-
-        go install golang.org/x/vuln/cmd/govulncheck@latest
-        export PATH="$PATH:$(go env GOPATH)/bin"
-        make backend-fast
+        bash scripts/ci/backend-fast.sh
 
   - name: frontend-fast
     image: node:26-bookworm
+    depends_on:
+      - changes
+    environment:
+      npm_config_cache: /var/cache/theia-ci/npm
+    volumes:
+      - /var/cache/theia-ci/npm:/var/cache/theia-ci/npm
     commands:
       - |
         set -eu
         . .ci/changed-areas.env
-        if [ "$FRONTEND_CHANGED" != "true" ]; then
+        if [ "$frontend" != "true" ]; then
           echo "No frontend changes detected."
           exit 0
         fi
-
         make frontend-fast
 
   - name: browser-e2e
     image: node:26-bookworm
+    depends_on:
+      - changes
+    environment:
+      GOMODCACHE: /var/cache/theia-ci/gomod
+      GOCACHE: /var/cache/theia-ci/gobuild
+      npm_config_cache: /var/cache/theia-ci/npm
+      PLAYWRIGHT_BROWSERS_PATH: /var/cache/theia-ci/playwright
+      PLAYWRIGHT_SKIP_BROWSER_GC: "1"
+      THEIA_E2E_DB_DSN: postgres://theia:theia@postgres-e2e:5432/theia?sslmode=disable
+    volumes:
+      - /var/cache/theia-ci/gomod:/var/cache/theia-ci/gomod
+      - /var/cache/theia-ci/gobuild:/var/cache/theia-ci/gobuild
+      - /var/cache/theia-ci/npm:/var/cache/theia-ci/npm
+      - /var/cache/theia-ci/playwright:/var/cache/theia-ci/playwright
+      - /var/cache/theia-ci/godl:/var/cache/theia-ci/godl
     commands:
       - |
         set -eu
         . .ci/changed-areas.env
-        if [ "$BROWSER_E2E_CHANGED" != "true" ]; then
+        if [ "$integration" != "true" ]; then
           echo "No browser E2E changes detected."
           exit 0
         fi
 
-        if [ "$CI_PIPELINE_EVENT" != "pull_request" ] && [ "$CI_PIPELINE_EVENT" != "manual" ] && [ "$CI_COMMIT_BRANCH" != "master" ] && [ "$CI_COMMIT_BRANCH" != "main" ]; then
-          echo "Browser E2E is limited to pull requests, master/main, and manual runs."
-          exit 0
-        fi
+        go_version=$(sed -n -E 's/^toolchain[[:space:]]+go([0-9]+\.[0-9]+(\.[0-9]+)?)[[:space:]]*$/\1/p' go.mod | head -n 1)
+        test -n "$go_version"
+        arch=$(dpkg --print-architecture)
 
-        apt-get update
-        apt-get install -y --no-install-recommends ca-certificates curl postgresql-client
-        curl -fsSL https://go.dev/dl/go1.27.4.linux-amd64.tar.gz -o /tmp/go.tar.gz
+        # node:bookworm already ships curl, git and CA certificates; the Go tarball is cached per version.
+        go_tar="/var/cache/theia-ci/godl/go$go_version.linux-$arch.tar.gz"
+        if [ ! -f "$go_tar" ]; then
+          go_tmp=$(mktemp "$go_tar.XXXXXX")
+          curl -fsSL "https://go.dev/dl/go$go_version.linux-$arch.tar.gz" -o "$go_tmp"
+          mv "$go_tmp" "$go_tar"
+        fi
         rm -rf /usr/local/go
-        tar -C /usr/local -xzf /tmp/go.tar.gz
+        tar -C /usr/local -xzf "$go_tar" || { rm -f "$go_tar"; exit 1; }
         export PATH="/usr/local/go/bin:$PATH"
 
-        until pg_isready -h postgres -U theia -d theia; do
-          sleep 2
-        done
-
-        export THEIA_E2E_DB_DSN=postgres://theia:theia@postgres:5432/theia?sslmode=disable
-        make browser-e2e
+        # Run in an isolated tracked-files copy so parallel frontend-fast cannot race on frontend/node_modules.
+        e2e_work=/tmp/theia-browser-e2e
+        rm -rf "$e2e_work"
+        mkdir -p "$e2e_work"
+        git -c safe.directory="$PWD" ls-files -z | tar --null -T - -cf - | tar -C "$e2e_work" -xf -
+        cd "$e2e_work"
+        bash scripts/ci/browser-e2e.sh
 
   - name: deployment-integration
     image: docker:29-cli
+    depends_on:
+      - changes
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/theia-managed-ci:/tmp/theia-managed-ci
@@ -158,57 +150,23 @@ steps:
       - |
         set -eu
         . .ci/changed-areas.env
-        if [ "$BACKEND_CHANGED" != "true" ] && [ "$FRONTEND_CHANGED" != "true" ]; then
+        if [ "$integration" != "true" ]; then
           echo "No managed deployment changes detected."
           exit 0
         fi
-
         apk add --no-cache bash git tar util-linux
         bash scripts/test-managed-ci.sh
 
-  - name: build-release-assets
-    image: golang:1.27.4-bookworm
-    when:
-      - event: release
-        evaluate: 'CI_COMMIT_PRERELEASE == "false"'
-    commands:
-      - make bridge-build-all
-      - test -f bridge_binaries/winbox-bridge-windows-amd64.exe
-      - test -f bridge_binaries/winbox-bridge-windows-arm64.exe
-      - test -f bridge_binaries/winbox-bridge-linux-amd64
-      - test -f bridge_binaries/winbox-bridge-linux-arm64
-      - |
-        set -eu
-        release_tag="$CI_COMMIT_TAG"
-        if [ -z "$release_tag" ]; then
-          release_tag=$(printf '%s' "$CI_COMMIT_REF" | sed 's#^refs/tags/##')
-        fi
-        bash scripts/build-deployment-bundles.sh "$release_tag"
-
   - name: publish-master-images
     image: docker:29-cli
-    environment:
-      GHCR_USERNAME:
-        from_secret: GHCR_USERNAME
-      GHCR_TOKEN:
-        from_secret: GHCR_TOKEN
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - backend-fast
+      - frontend-fast
+      - browser-e2e
+      - deployment-integration
     when:
       - event: push
         branch: master
-    commands:
-      - |
-        set -eu
-        printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
-        docker buildx inspect theia >/dev/null 2>&1 || docker buildx create --name theia --driver docker-container --use
-        docker buildx use theia
-
-        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile --target production --tag ghcr.io/lollinoo/theia-backend:master --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
-        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag ghcr.io/lollinoo/theia-frontend:master --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
-
-  - name: publish-branch-images
-    image: docker:29-cli
     environment:
       GHCR_USERNAME:
         from_secret: GHCR_USERNAME
@@ -216,28 +174,23 @@ steps:
         from_secret: GHCR_TOKEN
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    when:
-      - event: push
-        branch:
-          include: ["**"]
-          exclude: [master]
     commands:
+      - apk add --no-cache bash
       - |
         set -eu
-        branch_tag=$(printf '%s' "$CI_COMMIT_BRANCH" | tr '[:upper:]' '[:lower:]' | sed -E 's|[^a-z0-9_.-]+|-|g; s|^-+||; s|-+$||')
-        test -n "$branch_tag"
-        tag_length=$(printf '%s' "$branch_tag" | wc -c)
-        test "$tag_length" -le 128
-
-        printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
-        docker buildx inspect theia >/dev/null 2>&1 || docker buildx create --name theia --driver docker-container --use
-        docker buildx use theia
-
-        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile --target production --tag "ghcr.io/lollinoo/theia-backend:$branch_tag" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
-        docker buildx build --push --platform linux/amd64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$branch_tag" --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
+        export IMAGE_SOURCE="$CI_REPO_URL"
+        export IMAGE_REVISION="$CI_COMMIT_SHA"
+        bash scripts/ci/publish-images.sh linux/amd64 master
 
   - name: publish-release-images
     image: docker:29-cli
+    depends_on:
+      - backend-fast
+      - frontend-fast
+      - browser-e2e
+      - deployment-integration
+    when:
+      - event: release
     environment:
       GHCR_USERNAME:
         from_secret: GHCR_USERNAME
@@ -245,35 +198,32 @@ steps:
         from_secret: GHCR_TOKEN
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    when:
-      - event: release
-        evaluate: 'CI_COMMIT_PRERELEASE == "false"'
     commands:
+      - apk add --no-cache bash
       - |
         set -eu
-        release_tag=$(printf '%s' "$CI_COMMIT_REF" | sed 's#^refs/tags/##')
-        release_tag=$(printf '%s' "$release_tag" | tr '[:upper:]' '[:lower:]' | sed -E 's|[^a-z0-9_.-]+|-|g; s|^-+||; s|-+$||')
-        test -n "$release_tag"
-        tag_length=$(printf '%s' "$release_tag" | wc -c)
-        test "$tag_length" -le 128
+        export IMAGE_SOURCE="$CI_REPO_URL"
+        export IMAGE_REVISION="$CI_COMMIT_SHA"
+        bash scripts/ci/publish-images.sh linux/amd64,linux/arm64 "$CI_COMMIT_TAG" latest
 
-        printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
-        docker buildx inspect theia >/dev/null 2>&1 || docker buildx create --name theia --driver docker-container --use
-        docker buildx use theia
-
-        docker run --privileged --rm tonistiigi/binfmt --install arm64
-
-        docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --file Dockerfile --target production --tag "ghcr.io/lollinoo/theia-backend:$release_tag" --tag ghcr.io/lollinoo/theia-backend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" .
-        docker buildx build --push --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --file Dockerfile.frontend --target production --tag "ghcr.io/lollinoo/theia-frontend:$release_tag" --tag ghcr.io/lollinoo/theia-frontend:latest --label "org.opencontainers.image.source=$CI_REPO_URL" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" ./frontend
-
-  - name: upload-release-assets
+  - name: release-assets
     image: golang:1.27.4-bookworm
+    depends_on:
+      - backend-fast
+      - frontend-fast
+      - browser-e2e
+      - deployment-integration
+      - publish-release-images
+    when:
+      - event: release
     environment:
       GH_TOKEN:
         from_secret: GITHUB_TOKEN
-    when:
-      - event: release
-        evaluate: 'CI_COMMIT_PRERELEASE == "false"'
+      GOMODCACHE: /var/cache/theia-ci/gomod
+      GOCACHE: /var/cache/theia-ci/gobuild
+    volumes:
+      - /var/cache/theia-ci/gomod:/var/cache/theia-ci/gomod
+      - /var/cache/theia-ci/gobuild:/var/cache/theia-ci/gobuild
     commands:
       - |
         set -eu
@@ -285,13 +235,5 @@ steps:
         apt-get update
         apt-get install -y --no-install-recommends gh
 
-        release_tag="$CI_COMMIT_TAG"
-        if [ -z "$release_tag" ]; then
-          release_tag=$(printf '%s' "$CI_COMMIT_REF" | sed 's#^refs/tags/##')
-        fi
-        test -n "$release_tag"
-
-        gh release upload "$release_tag" bridge_binaries/winbox-bridge-windows-amd64.exe bridge_binaries/winbox-bridge-windows-arm64.exe bridge_binaries/winbox-bridge-linux-amd64 bridge_binaries/winbox-bridge-linux-arm64 --clobber --repo "$CI_REPO"
-        cd dist/deployment
-        sha256sum --check SHA256SUMS
-        gh release upload "$release_tag" ./*.tar.gz SHA256SUMS --clobber --repo "$CI_REPO"
+        export GH_REPO="$CI_REPO"
+        bash scripts/ci/release-assets.sh "$CI_COMMIT_TAG"

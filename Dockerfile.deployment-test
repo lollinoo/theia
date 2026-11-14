@@ -10,3 +10,9 @@ ENV PATH=/usr/local/go/bin:$PATH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl make python3 ripgrep && rm -rf /var/lib/apt/lists/*
+
+# Chromium system packages for the managed Playwright tests; the browser binary comes from the CI cache.
+ARG PLAYWRIGHT_VERSION
+RUN test -n "$PLAYWRIGHT_VERSION" \
+    && npx -y "playwright@$PLAYWRIGHT_VERSION" install-deps chromium \
+    && rm -rf /var/lib/apt/lists/* /root/.npm

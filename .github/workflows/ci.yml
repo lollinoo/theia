@@ -2,16 +2,19 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [master]
   pull_request:
     branches: [master]
   release:
-    types: [published]
+    types: [released]
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  contents: read
 
 jobs:
   changes:
@@ -20,85 +23,45 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
-      browser_e2e: ${{ steps.filter.outputs.browser_e2e }}
-      bridge: ${{ steps.filter.outputs.bridge }}
+      integration: ${{ steps.filter.outputs.integration }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Self-test CI scripts
+        run: bash scripts/ci/selftest.sh
+
       - name: Detect changed areas
         id: filter
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-
-          backend=false
-          frontend=false
-          browser_e2e=false
-          bridge=false
-
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            backend=true
-            frontend=true
-            browser_e2e=true
-            bridge=true
-          elif [[ "${{ github.event_name }}" == "release" ]]; then
-            backend=true
-            frontend=true
-            browser_e2e=true
-            bridge=true
-          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base="${{ github.event.pull_request.base.sha }}"
-            head="${{ github.event.pull_request.head.sha }}"
-          else
-            base="${{ github.event.before }}"
-            head="${{ github.sha }}"
-            if [[ "$base" == "0000000000000000000000000000000000000000" ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-              base="$(git merge-base origin/master "$head")"
-            fi
-          fi
-
-          if [[ "${{ github.event_name }}" != "workflow_dispatch" && "${{ github.event_name }}" != "release" ]]; then
-            git diff --name-only "$base" "$head" > /tmp/theia-changed-files
-
-            while IFS= read -r path; do
-              case "$path" in
-                cmd/*|internal/*|go.mod|go.sum|config.example.yaml|Dockerfile|Dockerfile.deployment-test|docker-compose*.yml|Makefile|scripts/*.sh|scripts/*.ps1|.env*.example)
-                  backend=true
-                  browser_e2e=true
-                  ;;
-              esac
-
-              case "$path" in
-                frontend/*|Dockerfile.frontend)
-                  frontend=true
-                  browser_e2e=true
-                  ;;
-              esac
-
-              case "$path" in
-                cmd/winbox-bridge/*|scripts/build-winbox-bridge.ps1|scripts/test-build-winbox-bridge-safety.ps1|Makefile|go.mod|go.sum|.github/workflows/ci.yml)
-                  bridge=true
-                  ;;
-              esac
-
-              case "$path" in
-                .github/workflows/ci.yml)
-                  backend=true
-                  frontend=true
-                  browser_e2e=true
-                  ;;
-              esac
-            done < /tmp/theia-changed-files
-          fi
-
-          {
-            echo "backend=$backend"
-            echo "frontend=$frontend"
-            echo "browser_e2e=$browser_e2e"
-            echo "bridge=$bridge"
-          } >> "$GITHUB_OUTPUT"
+          case "$EVENT_NAME" in
+            workflow_dispatch|release)
+              bash scripts/ci/changes.sh --all >> "$GITHUB_OUTPUT"
+              ;;
+            pull_request)
+              if [[ -n "$PR_BASE_SHA" && -n "$PR_HEAD_SHA" ]] && git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null && git cat-file -e "$PR_HEAD_SHA^{commit}" 2>/dev/null; then
+                git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" | bash scripts/ci/changes.sh >> "$GITHUB_OUTPUT"
+              else
+                bash scripts/ci/changes.sh --all >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            *)
+              if [[ -z "$PUSH_BEFORE_SHA" || "$PUSH_BEFORE_SHA" == "0000000000000000000000000000000000000000" ]] || ! git cat-file -e "$PUSH_BEFORE_SHA^{commit}" 2>/dev/null; then
+                bash scripts/ci/changes.sh --all >> "$GITHUB_OUTPUT"
+              else
+                git diff --name-only "$PUSH_BEFORE_SHA" "$COMMIT_SHA" | bash scripts/ci/changes.sh >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+          esac
 
   backend-fast:
     name: backend-fast
@@ -121,6 +84,7 @@ jobs:
           --health-retries 5
     env:
       CGO_ENABLED: 1
+      THEIA_TEST_DB_DSN: postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable
     steps:
       - uses: actions/checkout@v7
 
@@ -128,23 +92,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Run PostgreSQL settings atomicity regression
-        env:
-          THEIA_TEST_DB_DSN: postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable
-        run: go test ./internal/repository/postgres -run '^TestSettingsRepoUpdateSerializesConcurrentMutations$' -count=1
-
-      - name: Install govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
       - name: Run backend-fast gate
-        run: make backend-fast
-
-      - name: Run auth repository PostgreSQL regression
-        env:
-          THEIA_TEST_DB_DSN: postgres://theia:theia@127.0.0.1:5432/theia?sslmode=disable
-        run: go test ./internal/repository/postgres -run '^TestAuthRepoListUsersPostgresBatchAggregates$' -count=1
+        run: bash scripts/ci/backend-fast.sh
 
   frontend-fast:
     name: frontend-fast
@@ -160,13 +109,13 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Run frontend-fast quality gate
+      - name: Run frontend-fast gate
         run: make frontend-fast
 
   browser-e2e:
     name: browser-e2e
     needs: changes
-    if: needs.changes.outputs.browser_e2e == 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+    if: needs.changes.outputs.integration == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -198,7 +147,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Run browser-e2e gate
-        run: make browser-e2e
+        run: bash scripts/ci/browser-e2e.sh
 
       - name: Upload Playwright artifacts
         if: failure()
@@ -210,375 +159,108 @@ jobs:
             frontend/test-results
           if-no-files-found: ignore
 
-  build-bridge:
-    name: "Bridge: ${{ matrix.goos }}/${{ matrix.goarch }}"
-    needs: changes
-    if: ${{ github.event_name == 'release' && !github.event.release.draft }}
-    strategy:
-      matrix:
-        include:
-          - goos: windows
-            goarch: amd64
-            ext: .exe
-            runs-on: ubuntu-latest
-            cgo: '0'
-            ldflags: -s -w -H=windowsgui
-          - goos: windows
-            goarch: arm64
-            ext: .exe
-            runs-on: ubuntu-latest
-            cgo: '0'
-            ldflags: -s -w -H=windowsgui
-          - goos: linux
-            goarch: amd64
-            ext: ''
-            runs-on: ubuntu-latest
-            cgo: '0'
-            ldflags: -s -w
-          - goos: linux
-            goarch: arm64
-            ext: ''
-            runs-on: ubuntu-latest
-            cgo: '0'
-            ldflags: -s -w
-          - goos: darwin
-            goarch: amd64
-            ext: ''
-            runs-on: macos-latest
-            cgo: '1'
-            ldflags: -s -w
-          - goos: darwin
-            goarch: arm64
-            ext: ''
-            runs-on: macos-latest
-            cgo: '1'
-            ldflags: -s -w
-    runs-on: ${{ matrix.runs-on }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-
-      - name: Build bridge binary
-        env:
-          CGO_ENABLED: ${{ matrix.cgo }}
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          mkdir -p bridge_binaries
-          go build -ldflags="${{ matrix.ldflags }}" -o "bridge_binaries/winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/winbox-bridge/
-
-      - name: Upload bridge artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: bridge_binaries/winbox-bridge-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
-          if-no-files-found: error
-
-  release-bridge-assets:
-    name: Release Bridge Assets
-    needs: build-bridge
-    if: ${{ github.event_name == 'release' && !github.event.release.draft }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download bridge artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: winbox-bridge-*
-          path: release-assets
-          merge-multiple: true
-
-      - name: Upload bridge assets to release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          find release-assets -maxdepth 1 -type f -name 'winbox-bridge-*' -print -quit | grep -q .
-          ls -la release-assets
-          gh release upload "${{ github.event.release.tag_name }}" release-assets/winbox-bridge-* --clobber --repo "${{ github.repository }}"
-
-  master-images:
-    name: Master Images
-    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/master' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-    needs: [changes, backend-fast, frontend-fast, browser-e2e, build-bridge, deployment-integration]
-    runs-on: ubuntu-latest
-    concurrency:
-      group: master-images
-      cancel-in-progress: true
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: docker/setup-buildx-action@v4
-
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Backend image metadata
-        id: meta-backend
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/lollinoo/theia-backend
-          tags: |
-            type=raw,value=master
-
-      - name: Build and push backend image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          target: production
-          push: true
-          provenance: false
-          sbom: false
-          tags: ${{ steps.meta-backend.outputs.tags }}
-          labels: ${{ steps.meta-backend.outputs.labels }}
-          cache-from: type=gha,scope=backend-master
-          cache-to: type=gha,mode=max,scope=backend-master
-
-      - name: Frontend image metadata
-        id: meta-frontend
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/lollinoo/theia-frontend
-          tags: |
-            type=raw,value=master
-
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v7
-        with:
-          context: ./frontend
-          file: ./Dockerfile.frontend
-          target: production
-          push: true
-          provenance: false
-          sbom: false
-          tags: ${{ steps.meta-frontend.outputs.tags }}
-          labels: ${{ steps.meta-frontend.outputs.labels }}
-          cache-from: type=gha,scope=frontend-master
-          cache-to: type=gha,mode=max,scope=frontend-master
-
-  branch-images:
-    name: Branch Images
-    if: ${{ always() && github.event_name == 'push' && github.ref != 'refs/heads/master' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-    needs: [changes, backend-fast, frontend-fast, browser-e2e, deployment-integration]
-    runs-on: ubuntu-latest
-    concurrency:
-      group: branch-images-${{ github.ref }}
-      cancel-in-progress: true
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: docker/setup-buildx-action@v4
-
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Backend branch image metadata
-        id: meta-backend-branch
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/lollinoo/theia-backend
-          tags: |
-            type=ref,event=branch
-            type=sha
-
-      - name: Build and push backend branch image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          target: production
-          push: true
-          provenance: false
-          sbom: false
-          tags: ${{ steps.meta-backend-branch.outputs.tags }}
-          labels: ${{ steps.meta-backend-branch.outputs.labels }}
-          cache-from: type=gha,scope=backend-branch
-          cache-to: type=gha,mode=max,scope=backend-branch
-
-      - name: Frontend branch image metadata
-        id: meta-frontend-branch
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/lollinoo/theia-frontend
-          tags: |
-            type=ref,event=branch
-            type=sha
-
-      - name: Build and push frontend branch image
-        uses: docker/build-push-action@v7
-        with:
-          context: ./frontend
-          file: ./Dockerfile.frontend
-          target: production
-          push: true
-          provenance: false
-          sbom: false
-          tags: ${{ steps.meta-frontend-branch.outputs.tags }}
-          labels: ${{ steps.meta-frontend-branch.outputs.labels }}
-          cache-from: type=gha,scope=frontend-branch
-          cache-to: type=gha,mode=max,scope=frontend-branch
-
-  release-images:
-    name: Release Images
-    needs: [backend-fast, frontend-fast, browser-e2e, deployment-integration]
-    if: ${{ github.event_name == 'release' && !github.event.release.prerelease && !github.event.release.draft }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Compute release image tags
-        id: image
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          release_tag="$(echo "${{ github.event.release.tag_name }}" | tr '[:upper:]' '[:lower:]' | sed -E 's|[^a-z0-9_.-]+|-|g; s|^-+||; s|-+$||')"
-
-          if [[ -z "$release_tag" ]]; then
-            echo "Release tag ${{ github.event.release.tag_name }} cannot be converted into a Docker tag" >&2
-            exit 1
-          fi
-
-          if [[ ${#release_tag} -gt 128 ]]; then
-            echo "Release tag $release_tag is longer than Docker's 128 character tag limit" >&2
-            exit 1
-          fi
-
-          {
-            echo "release_tag=$release_tag"
-          } >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-qemu-action@v4
-
-      - uses: docker/setup-buildx-action@v4
-
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Backend release image metadata
-        id: meta-backend-release
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/lollinoo/theia-backend
-          tags: |
-            type=raw,value=${{ steps.image.outputs.release_tag }}
-            type=raw,value=latest
-
-      - name: Build and push backend release image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          target: production
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: false
-          sbom: false
-          tags: ${{ steps.meta-backend-release.outputs.tags }}
-          labels: ${{ steps.meta-backend-release.outputs.labels }}
-          cache-from: type=gha,scope=backend-release
-          cache-to: type=gha,mode=max,scope=backend-release
-
-      - name: Frontend release image metadata
-        id: meta-frontend-release
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/lollinoo/theia-frontend
-          tags: |
-            type=raw,value=${{ steps.image.outputs.release_tag }}
-            type=raw,value=latest
-
-      - name: Build and push frontend release image
-        uses: docker/build-push-action@v7
-        with:
-          context: ./frontend
-          file: ./Dockerfile.frontend
-          target: production
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: false
-          sbom: false
-          tags: ${{ steps.meta-frontend-release.outputs.tags }}
-          labels: ${{ steps.meta-frontend-release.outputs.labels }}
-          cache-from: type=gha,scope=frontend-release
-          cache-to: type=gha,mode=max,scope=frontend-release
-
-  deployment-bundles:
-    name: Deployment bundles
-    if: ${{ github.event_name == 'release' && !github.event.release.prerelease && !github.event.release.draft }}
-    needs: release-images
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - name: Build administration bundles for AMD64 and ARM64
-        env:
-          THEIA_BUNDLE_RELEASE: ${{ github.event.release.tag_name }}
-        run: bash scripts/build-deployment-bundles.sh "$THEIA_BUNDLE_RELEASE"
-      - name: Upload verified deployment bundles
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          THEIA_BUNDLE_RELEASE: ${{ github.event.release.tag_name }}
-        run: |
-          cd dist/deployment
-          sha256sum --check SHA256SUMS
-          gh release upload "$THEIA_BUNDLE_RELEASE" ./*.tar.gz SHA256SUMS --clobber --repo "${{ github.repository }}"
-
   deployment-integration:
-    name: Managed deployment integration
+    name: deployment-integration
     needs: changes
-    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' }}
+    if: needs.changes.outputs.integration == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+
+      - name: Run managed deployment integration
+        run: sudo -E bash scripts/test-managed-ci.sh
+
+  publish-master-images:
+    name: publish-master-images
+    needs: [changes, backend-fast, frontend-fast, browser-e2e, deployment-integration]
+    if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/master' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Publish master images
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_SOURCE: ${{ github.server_url }}/${{ github.repository }}
+          IMAGE_REVISION: ${{ github.sha }}
+        run: bash scripts/ci/publish-images.sh linux/amd64 master
+
+  publish-release-images:
+    name: publish-release-images
+    needs: [changes, backend-fast, frontend-fast, browser-e2e, deployment-integration]
+    if: ${{ always() && !cancelled() && github.event_name == 'release' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Publish release images
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_SOURCE: ${{ github.server_url }}/${{ github.repository }}
+          IMAGE_REVISION: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: bash scripts/ci/publish-images.sh linux/amd64,linux/arm64 "$RELEASE_TAG" latest
+
+  release-assets:
+    name: release-assets
+    needs: [changes, backend-fast, frontend-fast, browser-e2e, deployment-integration, publish-release-images]
+    if: ${{ always() && !cancelled() && github.event_name == 'release' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v7
+
+      - name: Build and upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: bash scripts/ci/release-assets.sh "$RELEASE_TAG"
+
+  release-assets-darwin:
+    # GHA-only exception: Woodpecker has no macOS agent and fyne.io/systray needs CGO.
+    name: release-assets-darwin (${{ matrix.goarch }})
+    needs: [changes, backend-fast, frontend-fast, browser-e2e, deployment-integration]
+    if: ${{ always() && !cancelled() && github.event_name == 'release' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
         with:
-          node-version: '26'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install browser and Kubernetes test tools
+          go-version-file: go.mod
+
+      - name: Build and upload macOS bridge binary
+        env:
+          CGO_ENABLED: 1
+          GOOS: darwin
+          GOARCH: ${{ matrix.goarch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if ! command -v rg >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y ripgrep
-          fi
-          npm --prefix frontend ci
-          npm --prefix frontend run e2e:install
-          bash scripts/install-kubernetes-test-tools.sh "$RUNNER_TEMP/theia-kube-tools"
-          echo "$RUNNER_TEMP/theia-kube-tools" >> "$GITHUB_PATH"
-      - name: Verify managed Docker deployment and encrypted recovery
-        run: make deployment-test maintenance-test postgres-upgrade-test
-      - name: Verify Kubernetes lifecycle on isolated persistent volumes
-        run: make kubernetes-test
+          set -euo pipefail
+          out="bridge_binaries/winbox-bridge-darwin-${GOARCH}"
+          mkdir -p bridge_binaries
+          go build -ldflags="-s -w" -o "$out" ./cmd/winbox-bridge/
+          gh release upload "$RELEASE_TAG" "$out" --clobber

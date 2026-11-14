@@ -7,7 +7,7 @@ repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 test_dir=$(mktemp -d)
 trap 'rm -rf "$test_dir"' EXIT
 cd "$repo_dir"
-docker build --target production -t theia-maintenance-test:local .
+docker build --pull --target production -t theia-maintenance-test:local .
 go test -c -o "$test_dir/service.test" ./internal/service
 docker run --rm \
   -e THEIA_MAINTENANCE_INTEGRATION=1 \

@@ -1171,36 +1171,56 @@ make browser-e2e
 | Frontend unit and static checks | `npm --prefix frontend run test` runs Vitest in jsdom; `check` runs Biome; `typecheck` runs the TypeScript project build without the Vite bundle. Tests that trigger React state updates must wrap those updates in `act(...)` before asserting the rendered behavior. | Component, hook, state-machine, DTO/parser, styling-contract, or TypeScript changes. |
 | Frontend fast gate | [`make frontend-fast`](Makefile) performs a clean `npm ci`, Biome check, Vitest coverage, TypeScript typecheck, and production Vite build. [`vitest.config.ts`](frontend/vitest.config.ts) enforces 60% line/statement, 50% function, and 55% branch coverage. | Frontend implementation, dependencies, build configuration, or browser-delivered contract changes before merge. |
 | Browser E2E | [`make browser-e2e`](Makefile) performs a clean install, installs Playwright Chromium, and runs the Playwright suite. [`playwright.config.ts`](frontend/playwright.config.ts) starts an isolated backend and Vite server against PostgreSQL; the suite covers authentication bootstrap, routing, saved maps, canvas behavior, and realtime recovery. | Changes spanning backend and frontend, auth/routing, saved maps/canvas, WebSocket recovery, proxy behavior, or browser-only lifecycle. |
-| CI and security analysis | [CI](.github/workflows/ci.yml) detects affected backend/frontend/E2E areas, runs the corresponding fast gates, includes PostgreSQL concurrency regressions, and uploads Playwright failure artifacts. [CodeQL](.github/workflows/codeql.yml) analyzes Go and JavaScript/TypeScript on the public repository for `master` pushes/PRs, weekly schedule, and manual dispatch. | The workflow definitions are the authority for remote triggers, path filtering, service versions, and conditional jobs; local commands do not reproduce every CI-only regression or event condition. |
+| CI and security analysis | [GitHub Actions CI](.github/workflows/ci.yml) and [Woodpecker CI](.woodpecker/woodpecker.yml) run 1:1 equivalent pipelines for PRs targeting `master`, pushes to `master`, non-prerelease (`released`) releases, and manual runs (with newer PR/master runs cancelling older runs of the same event, manual runs never cancelling `master` or release runs, and releases never cancelled). Both use [`scripts/ci/`](scripts/ci/) and [`scripts/test-managed-ci.sh`](scripts/test-managed-ci.sh) to check parity, detect affected areas, and run the fast, PostgreSQL, browser E2E, and managed-deployment gates. [CodeQL](.github/workflows/codeql.yml) analyzes Go and JavaScript/TypeScript on the public repository for `master` pushes/PRs, weekly schedule, and manual dispatch. | The workflow definitions and [`scripts/ci/`](scripts/ci/) scripts are the authority for remote triggers, path filtering, cancellation, service versions, and conditional jobs; local commands do not reproduce every CI-only regression or event condition. |
 
 ```mermaid
 flowchart LR
-    Change["Push, pull request,<br/>manual run, or release"] --> Filter["CI changed-area filter"]
-    Filter --> Backend["backend-fast<br/>plus PostgreSQL regressions"]
-    Filter --> Frontend["frontend-fast"]
-    Filter --> E2E["browser-e2e<br/>eligible events only"]
-    Backend --> ImageGate["No failed or cancelled<br/>required gate"]
-    Frontend --> ImageGate
-    E2E --> ImageGate
-    ImageGate -->|Non-master push| BranchImages["Branch-tagged GHCR images"]
-    ImageGate -->|master push| MasterImages["master GHCR images"]
-    Change --> StableRelease{"Published stable<br/>release event?"}
-    StableRelease -->|Yes; no needs| ReleaseImages["Release-tagged and latest<br/>GHCR images"]
-    Change --> NonDraftRelease{"Published non-draft<br/>release event?"}
-    NonDraftRelease -->|Yes| Bridge["Cross-platform bridge<br/>release binaries"]
+    Change["PR to master, push to master,<br/>manual run, or released GitHub release"] --> Changes["changes<br/>selftest.sh and changes.sh"]
+    Changes --> Backend["backend-fast<br/>plus PostgreSQL regressions"]
+    Changes --> Frontend["frontend-fast"]
+    Changes --> E2E["browser-e2e"]
+    Changes --> Deploy["deployment-integration"]
+    Backend --> Gates["All gates succeeded or skipped"]
+    Frontend --> Gates
+    E2E --> Gates
+    Deploy --> Gates
+    Gates -->|push to master| MasterImages["publish-master-images<br/>master GHCR images"]
+    Gates -->|release| ReleaseImages["publish-release-images<br/>release tag and latest GHCR images"]
+    Gates -->|release| ReleaseAssets["release-assets<br/>Windows/Linux bridge and bundles"]
+    ReleaseImages --> ReleaseAssets
+    Gates -->|release, GHA only| DarwinBridge["release-assets-darwin<br/>macOS bridge binaries"]
     CodeQL["CodeQL workflow"] -.-> Backend
     CodeQL -.-> Frontend
 ```
 
-Image publication and release assets are delivery outputs, not deployment automation. The CI
-workflow publishes backend/frontend images to GHCR for branch, `master`, and eligible release
-events, and uploads cross-platform bridge binaries to a published release. The Compose files and
-operator-managed environment remain the deployment authority. The push-image jobs,
-`master-images` and `branch-images`, run only when their event condition matches and their required
-jobs have neither failed nor been cancelled; skipped change-selected gates therefore do not prove
-that every fast gate ran for a documentation-only push. `release-images` has no `needs` dependency
-and independently builds images for an eligible published stable release. No additional release or
-rollout procedure should be inferred beyond the workflow definitions.
+[GitHub Actions](.github/workflows/ci.yml) and [Woodpecker](.woodpecker/woodpecker.yml) enforce 1:1
+parity: identical triggers (`pull_request` to `master`, `push` to `master`, `release` on
+`released`—non-prerelease only—and manual dispatch; feature-branch pushes do not run CI), identical
+job/step names, and identical shared [`scripts/ci/`](scripts/ci/) entrypoints (`lib.sh`, `selftest.sh`,
+`changes.sh`, `backend-fast.sh`, `browser-e2e.sh`, `publish-images.sh`, `release-assets.sh`) plus
+[`scripts/test-managed-ci.sh`](scripts/test-managed-ci.sh), while the YAML files handle only
+checkout, toolchains, caches, services, and secrets. `selftest.sh` runs first in `changes` on both
+platforms to verify change-mapping rules, tag sanitization, script references across both workflows,
+and Go/Node toolchain alignment. Newer PR or `master` runs cancel superseded runs of the same event
+via event-scoped workflow-level `concurrency` in GitHub Actions (so manual runs never cancel `master`
+pushes or releases; also applied to [CodeQL](.github/workflows/codeql.yml)) and
+`cancel_previous_pipeline_events` in Woodpecker repository settings (`push` and `pull_request` only),
+while release pipelines are never cancelled; the sole platform exception is `release-assets-darwin`,
+which runs only on GitHub Actions because Woodpecker lacks a macOS agent and the macOS bridge tray
+binary requires cgo.
+
+Image publication and release assets are delivery outputs, not deployment automation. The Compose
+files and operator-managed environment remain the deployment authority. `publish-master-images`
+publishes `master` backend/frontend GHCR images on `push` to `master` only when all four required
+gates (`backend-fast`, `frontend-fast`, `browser-e2e`, `deployment-integration`) have neither failed
+nor been cancelled; skipped change-selected gates therefore do not prove that every fast gate ran
+for a documentation-only `master` push (and branch-tagged images are not published).
+`publish-release-images` depends on all four gates to publish multi-arch (`linux/amd64`,
+`linux/arm64`) release-tag and `latest` GHCR images on `release` (`released`), `release-assets`
+depends on all four gates and `publish-release-images` to upload Windows/Linux bridge binaries and
+verified deployment bundles, and `release-assets-darwin` depends on all four gates to upload the
+macOS bridge binaries when GitHub Actions runs. No additional release or rollout procedure should be
+inferred beyond the workflow definitions and [`scripts/ci/`](scripts/ci/).
 
 ## Maintainer Source Map
 
@@ -1228,7 +1248,7 @@ focused verification seam and the documentation section that owns externally vis
 | Encryption, keyring, and credential reveal | [`internal/crypto/keyring.go`](internal/crypto/keyring.go), [`encrypt.go`](internal/crypto/encrypt.go), [`snmp_crypto.go`](internal/repository/postgres/snmp_crypto.go), credential handlers under [`internal/api`](internal/api), and [`instance_backup_encryption_metadata.go`](internal/service/instance_backup_encryption_metadata.go) | Crypto/envelope, repository, credential-handler, key-compatibility, and restore-manifest tests cover key lookup, AES-GCM authentication, rewrap, masked reads, privileged reveal, and backup metadata. Update [Security Architecture](#security-architecture), [SNMP and SSH credential contracts](API.md#snmp-and-ssh-credential-contracts), and [Backups and Restore](API.md#backups-and-restore). |
 | Metrics registry, export, and monitoring integrations | [`internal/observability/registry.go`](internal/observability/registry.go), [`internal/metrics/prometheus.go`](internal/metrics/prometheus.go), [`pipeline_prometheus_monitor.go`](internal/worker/pipeline_prometheus_monitor.go), Prometheus assets under [`docker/prometheus`](docker/prometheus), [`grafana_dashboard_handler.go`](internal/api/grafana_dashboard_handler.go), frontend [`grafana.ts`](frontend/src/api/grafana.ts), and [`grafanaDashboard.ts`](frontend/src/utils/grafanaDashboard.ts) | Registry/client/collector/pipeline/API and frontend URL/transport tests verify encoding, bounded labels, upstream health, normalized runtime projections, and application-managed external dashboard links. Update [Observability Architecture](#observability-architecture), [Operational Endpoints](API.md#operational-endpoints), and [Recovery metric dimensions and accounting](API.md#recovery-metric-dimensions-and-accounting). |
 | Prometheus alert rules | [`docker/prometheus/alert_rules.yml`](docker/prometheus/alert_rules.yml) and scrape/evaluation definitions under [`docker/prometheus`](docker/prometheus) | Validate rule syntax with the available Prometheus tooling, inspect the emitting metric tests, and exercise affected Grafana/runtime presentation. Keep the complete [Prometheus Alert Reference](#prometheus-alert-reference) synchronized with every rule, threshold, duration, or label change; update the API [Prometheus alerts](API.md#prometheus-alerts) subset when a WebSocket/recovery rule changes. |
-| Verification, CI, images, and release assets | [`Makefile`](Makefile), [`frontend/package.json`](frontend/package.json), [`frontend/vitest.config.ts`](frontend/vitest.config.ts), [`frontend/playwright.config.ts`](frontend/playwright.config.ts), [CI](.github/workflows/ci.yml), [CodeQL](.github/workflows/codeql.yml), and the backend/frontend Dockerfiles | Run the focused command and matching fast/E2E gate described in [Testing and Delivery](#testing-and-delivery); workflow changes require YAML review against their trigger/path conditions. Update that section for gate constituents, coverage thresholds, CI selection, image publication, or release-asset changes. |
+| Verification, CI, images, and release assets | [`Makefile`](Makefile), [`frontend/package.json`](frontend/package.json), [`frontend/vitest.config.ts`](frontend/vitest.config.ts), [`frontend/playwright.config.ts`](frontend/playwright.config.ts), [`scripts/ci/`](scripts/ci/), [GitHub Actions CI](.github/workflows/ci.yml), [Woodpecker CI](.woodpecker/woodpecker.yml), [CodeQL](.github/workflows/codeql.yml), and the backend/frontend Dockerfiles | Run the focused command, matching fast/E2E gate, and `bash scripts/ci/selftest.sh` described in [Testing and Delivery](#testing-and-delivery); CI changes require keeping both workflows and [`scripts/ci/`](scripts/ci/) in 1:1 parity. Update that section for gate constituents, coverage thresholds, CI selection, image publication, or release-asset changes. |
 
 ## Change-Impact Checklist
 
@@ -1291,9 +1311,10 @@ Check every applicable item before merging:
   path understood; validate rule syntax and affected metric tests, then keep the complete
   [Prometheus Alert Reference](#prometheus-alert-reference) synchronized and update the API
   [Prometheus alerts](API.md#prometheus-alerts) subset for WebSocket/recovery rule changes.
-- [ ] **Testing and delivery:** update `Makefile`, package scripts/config, CI path filters,
-  conditional gates, image tags, or release-asset jobs together; execute the affected local gate,
-  review workflow event semantics, and update [Testing and Delivery](#testing-and-delivery).
+- [ ] **Testing and delivery:** update `Makefile`, package scripts/config, [`scripts/ci/`](scripts/ci/),
+  both CI workflows in 1:1 parity, conditional gates, image tags, or release-asset jobs together;
+  execute the affected local gate and `bash scripts/ci/selftest.sh`, review workflow event
+  semantics, and update [Testing and Delivery](#testing-and-delivery).
 - [ ] **Durability and failure boundaries:** identify the durable owner, transient projections, and
   retry/reconciliation behavior for every new state transition; run the focused failure test and
   update [Data Architecture](#data-architecture) and [Failure Modes and Recovery](#failure-modes-and-recovery)
@@ -1381,5 +1402,6 @@ product and operator guidance and must be reconciled when executable behavior ch
   [`frontend/vitest.config.ts`](frontend/vitest.config.ts),
   [`frontend/playwright.config.ts`](frontend/playwright.config.ts), backend and frontend tests beside
   their sources, browser tests under [`frontend/e2e`](frontend/e2e),
-  [CI](.github/workflows/ci.yml), [CodeQL](.github/workflows/codeql.yml), [`Dockerfile`](Dockerfile),
-  and [`Dockerfile.frontend`](Dockerfile.frontend).
+  [`scripts/ci/`](scripts/ci/), [GitHub Actions CI](.github/workflows/ci.yml),
+  [Woodpecker CI](.woodpecker/woodpecker.yml), [CodeQL](.github/workflows/codeql.yml),
+  [`Dockerfile`](Dockerfile), and [`Dockerfile.frontend`](Dockerfile.frontend).
