@@ -2,7 +2,7 @@
  * Defines config viewer behavior for the operations dashboard.
  * Keeps table, backup, and device-management responsibilities isolated by module.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   backupFileDownloadUrl,
   fetchBackupFileContent,
@@ -50,6 +50,15 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
   const [content, setContent] = useState<LoadedBackupContent | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current !== null) {
+        clearTimeout(copiedTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,7 +107,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
     activeContent?.download_url || (activeFile ? backupFileDownloadUrl(activeFile.id) : '');
   const textPreviewUnavailable =
     activeTab !== 'binary' && activeContent !== null && !activeContent.inline;
-  const contentLines = (() => {
+  const contentLines = useMemo(() => {
     if (!contentText) {
       return [] as Array<{ key: string; line: string; number: number }>;
     }
@@ -113,7 +122,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
         number: index + 1,
       };
     });
-  })();
+  }, [contentText]);
 
   // Load text content when tab changes
   useEffect(() => {
@@ -149,12 +158,22 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
     };
   }, [activeFile?.id, activeTab]);
 
+  const markCopied = () => {
+    setCopied(true);
+    if (copiedTimerRef.current !== null) {
+      clearTimeout(copiedTimerRef.current);
+    }
+    copiedTimerRef.current = setTimeout(() => {
+      setCopied(false);
+      copiedTimerRef.current = null;
+    }, 2000);
+  };
+
   const handleCopy = async () => {
     if (!contentText) return;
     try {
       await navigator.clipboard.writeText(contentText);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      markCopied();
     } catch {
       const textarea = document.createElement('textarea');
       textarea.value = contentText;
@@ -162,8 +181,7 @@ export function ConfigViewer({ deviceId }: ConfigViewerProps) {
       textarea.select();
       document.execCommand('copy');
       document.body.removeChild(textarea);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      markCopied();
     }
   };
 

@@ -484,12 +484,7 @@ func (r *DeviceRepo) GetBySysName(sysName string) (*domain.Device, error) {
 }
 
 func normalizeDeviceSysNameLookup(sysName string) string {
-	normalized := strings.ToLower(strings.TrimSpace(sysName))
-	normalized = strings.TrimSuffix(normalized, ".")
-	if idx := strings.Index(normalized, "."); idx >= 0 {
-		normalized = normalized[:idx]
-	}
-	return normalized
+	return domain.NormalizeSysNameLookup(sysName)
 }
 
 // GetAll retrieves all devices with their interfaces.
@@ -592,32 +587,8 @@ func (r *DeviceRepo) GetOrphans() ([]domain.Device, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(devices) == 0 {
-		return devices, nil
-	}
-
-	loadedIDs := make([]uuid.UUID, 0, len(devices))
-	for _, device := range devices {
-		loadedIDs = append(loadedIDs, device.ID)
-	}
-
-	interfacesByDevice, err := r.loadInterfacesForDeviceIDs(loadedIDs)
-	if err != nil {
-		return nil, fmt.Errorf("loading interfaces for orphan devices: %w", err)
-	}
-	areaIDsByDevice, err := r.loadAreaIDsForDeviceIDs(loadedIDs)
-	if err != nil {
-		return nil, fmt.Errorf("loading area IDs for orphan devices: %w", err)
-	}
-	addressesByDevice, err := r.loadAddressesForDeviceIDs(loadedIDs)
-	if err != nil {
-		return nil, fmt.Errorf("loading addresses for orphan devices: %w", err)
-	}
-
-	for i := range devices {
-		devices[i].Interfaces = interfacesByDevice[devices[i].ID]
-		devices[i].AreaIDs = areaIDsByDevice[devices[i].ID]
-		devices[i].Addresses = addressesByDevice[devices[i].ID]
+	if err := r.hydrateDevicesByIDs(devices, "orphan devices"); err != nil {
+		return nil, err
 	}
 
 	return devices, nil
@@ -663,32 +634,8 @@ func (r *DeviceRepo) GetByIDs(ids []uuid.UUID) ([]domain.Device, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(devices) == 0 {
-		return devices, nil
-	}
-
-	loadedIDs := make([]uuid.UUID, 0, len(devices))
-	for _, device := range devices {
-		loadedIDs = append(loadedIDs, device.ID)
-	}
-
-	interfacesByDevice, err := r.loadInterfacesForDeviceIDs(loadedIDs)
-	if err != nil {
-		return nil, fmt.Errorf("loading interfaces for devices: %w", err)
-	}
-	areaIDsByDevice, err := r.loadAreaIDsForDeviceIDs(loadedIDs)
-	if err != nil {
-		return nil, fmt.Errorf("loading area IDs for devices: %w", err)
-	}
-	addressesByDevice, err := r.loadAddressesForDeviceIDs(loadedIDs)
-	if err != nil {
-		return nil, fmt.Errorf("loading addresses for devices: %w", err)
-	}
-
-	for i := range devices {
-		devices[i].Interfaces = interfacesByDevice[devices[i].ID]
-		devices[i].AreaIDs = areaIDsByDevice[devices[i].ID]
-		devices[i].Addresses = addressesByDevice[devices[i].ID]
+	if err := r.hydrateDevicesByIDs(devices, "devices"); err != nil {
+		return nil, err
 	}
 
 	return devices, nil
@@ -734,10 +681,17 @@ func (r *DeviceRepo) GetByIDsForTopology(ids []uuid.UUID) ([]domain.Device, erro
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(devices) == 0 {
-		return devices, nil
+	if err := r.hydrateDevicesByIDs(devices, "topology devices"); err != nil {
+		return nil, err
 	}
 
+	return devices, nil
+}
+
+func (r *DeviceRepo) hydrateDevicesByIDs(devices []domain.Device, scope string) error {
+	if len(devices) == 0 {
+		return nil
+	}
 	loadedIDs := make([]uuid.UUID, 0, len(devices))
 	for _, device := range devices {
 		loadedIDs = append(loadedIDs, device.ID)
@@ -745,15 +699,15 @@ func (r *DeviceRepo) GetByIDsForTopology(ids []uuid.UUID) ([]domain.Device, erro
 
 	interfacesByDevice, err := r.loadInterfacesForDeviceIDs(loadedIDs)
 	if err != nil {
-		return nil, fmt.Errorf("loading interfaces for topology devices: %w", err)
+		return fmt.Errorf("loading interfaces for %s: %w", scope, err)
 	}
 	areaIDsByDevice, err := r.loadAreaIDsForDeviceIDs(loadedIDs)
 	if err != nil {
-		return nil, fmt.Errorf("loading area IDs for topology devices: %w", err)
+		return fmt.Errorf("loading area IDs for %s: %w", scope, err)
 	}
 	addressesByDevice, err := r.loadAddressesForDeviceIDs(loadedIDs)
 	if err != nil {
-		return nil, fmt.Errorf("loading addresses for topology devices: %w", err)
+		return fmt.Errorf("loading addresses for %s: %w", scope, err)
 	}
 
 	for i := range devices {
@@ -761,8 +715,7 @@ func (r *DeviceRepo) GetByIDsForTopology(ids []uuid.UUID) ([]domain.Device, erro
 		devices[i].AreaIDs = areaIDsByDevice[devices[i].ID]
 		devices[i].Addresses = addressesByDevice[devices[i].ID]
 	}
-
-	return devices, nil
+	return nil
 }
 
 // UpdateStaticDiscovery persists static discovery fields and replaces interfaces without touching credentials.
@@ -998,8 +951,8 @@ func nullableTimeValue(value *time.Time) any {
 	return *value
 }
 
-// scanDevice scans a single device row from a *sql.Row.
-func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
+// scanDevice scans a single device row from a *sql.Row or *sql.Rows.
+func (r *DeviceRepo) scanDevice(row rowScanner) (*domain.Device, error) {
 	var d domain.Device
 	var idStr, credsJSON, tagsJSON, deviceType, status string
 	var managed int
@@ -1070,72 +1023,7 @@ func (r *DeviceRepo) scanDevice(row *sql.Row) (*domain.Device, error) {
 
 // scanDeviceRow scans a single device row from *sql.Rows.
 func (r *DeviceRepo) scanDeviceRow(rows *sql.Rows) (*domain.Device, error) {
-	var d domain.Device
-	var idStr, credsJSON, tagsJSON, deviceType, status string
-	var managed int
-	var metricsSource, prometheusLabelName, prometheusLabelValue string
-	var pollClass string
-	var pollIntervalOverride sql.NullInt64
-	var pollingEnabled int
-	var notes sql.NullString
-	var probePortsCSV string
-	var topologyMode, bootstrapState, lastTopologyResult string
-	var lastTopologyAt sql.NullTime
-
-	err := rows.Scan(
-		&idStr, &d.Hostname, &d.IP, &credsJSON, &deviceType, &status,
-		&d.SysName, &d.SysDescr, &d.SysObjectID, &d.HardwareModel, &d.OSVersion,
-		&d.Vendor, &managed, &tagsJSON, &d.CreatedAt, &d.UpdatedAt,
-		&metricsSource, &prometheusLabelName, &prometheusLabelValue,
-		&pollClass, &pollIntervalOverride, &pollingEnabled, &notes,
-		&probePortsCSV, &topologyMode, &bootstrapState, &lastTopologyAt, &lastTopologyResult,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	d.ID = uuid.MustParse(idStr)
-	d.DeviceType = domain.DeviceType(deviceType)
-	d.Status = domain.DeviceStatus(status)
-	d.Managed = managed != 0
-	d.MetricsSource = domain.MetricsSource(metricsSource)
-	d.PrometheusLabelName = prometheusLabelName
-	d.PrometheusLabelValue = prometheusLabelValue
-	d.PollClass = domain.PollClass(pollClass)
-	enabled := pollingEnabled != 0
-	d.PollingEnabled = &enabled
-	d.TopologyDiscoveryMode = domain.TopologyDiscoveryMode(topologyMode)
-	d.TopologyBootstrapState = domain.TopologyBootstrapState(bootstrapState)
-	d.LastTopologyDiscoveryResult = lastTopologyResult
-	if pollIntervalOverride.Valid {
-		v := int(pollIntervalOverride.Int64)
-		d.PollIntervalOverride = &v
-	}
-	if lastTopologyAt.Valid {
-		v := lastTopologyAt.Time
-		d.LastTopologyDiscoveryAt = &v
-	}
-	if notes.Valid {
-		v := notes.String
-		d.Notes = &v
-	}
-	probePorts, err := domain.ParseProbePortsCSV(probePortsCSV)
-	if err != nil {
-		return nil, fmt.Errorf("parsing device probe_ports for device %s: %w", idStr, err)
-	}
-	d.ProbePorts = probePorts
-
-	if err := json.Unmarshal([]byte(credsJSON), &d.SNMPCredentials); err != nil {
-		return nil, fmt.Errorf("unmarshaling snmp credentials: %w", err)
-	}
-	if err := decryptSNMPCredentials(&d.SNMPCredentials, r.keyring); err != nil {
-		return nil, fmt.Errorf("decrypting snmp credentials for device %s: %w", d.ID, err)
-	}
-	if err := json.Unmarshal([]byte(tagsJSON), &d.Tags); err != nil {
-		return nil, fmt.Errorf("unmarshaling tags: %w", err)
-	}
-
-	return &d, nil
+	return r.scanDevice(rows)
 }
 
 // scanDeviceTopologyRow scans a device row that intentionally excludes sensitive credentials.

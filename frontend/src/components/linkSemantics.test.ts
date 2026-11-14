@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildLinkTelemetryBadges,
+  computeLinkBadgeAnchor,
   resolveEdgeTone,
   resolveInlineBadgeTone,
   resolveLinkBadgePresentation,
@@ -493,5 +494,61 @@ describe('linkSemantics', () => {
       semanticState: 'critical',
       width: 10.7,
     });
+  });
+
+  it('uses precomputed anchor when provided to resolveLinkBadgePresentation', () => {
+    const precomputedAnchor = { x: 123.45, y: 67.89 };
+    const presentation = resolveLinkBadgePresentation({
+      data: {
+        bandwidthLabel: '10 Gbps',
+      },
+      zoom: 1,
+      path: 'M 0 0 L 100 0',
+      fallbackX: 50,
+      fallbackY: 0,
+      edgeTone: resolveEdgeTone(undefined),
+      isActive: false,
+      isConnected: false,
+      isMuted: false,
+      anchor: precomputedAnchor,
+    });
+
+    expect(presentation.anchor).toBe(precomputedAnchor);
+    expect(presentation.anchor.x).toBe(123.45);
+    expect(presentation.anchor.y).toBe(67.89);
+  });
+
+  it('computes fallback anchor when anchor is omitted from resolveLinkBadgePresentation', () => {
+    const presentation = resolveLinkBadgePresentation({
+      data: {
+        bandwidthLabel: '10 Gbps',
+      },
+      zoom: 1,
+      path: 'M 0 0 L 100 0',
+      fallbackX: 50,
+      fallbackY: 20,
+      edgeTone: resolveEdgeTone(undefined),
+      isActive: false,
+      isConnected: false,
+      isMuted: false,
+    });
+
+    expect(presentation.anchor).toBeDefined();
+    expect(typeof presentation.anchor.x).toBe('number');
+    expect(typeof presentation.anchor.y).toBe('number');
+  });
+
+  it('supports computeLinkBadgeAnchor with both object and positional parameter signatures', () => {
+    const fromObject = computeLinkBadgeAnchor({
+      path: 'M 0 0 L 100 0',
+      fallbackX: 50,
+      fallbackY: 10,
+    });
+    const fromPositional = computeLinkBadgeAnchor('M 0 0 L 100 0', { x: 50, y: 10 });
+
+    expect(fromObject).toBeDefined();
+    expect(fromPositional).toBeDefined();
+    expect(fromPositional.x).toBe(fromObject.x);
+    expect(fromPositional.y).toBe(fromObject.y);
   });
 });

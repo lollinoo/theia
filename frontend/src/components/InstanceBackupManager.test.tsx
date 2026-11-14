@@ -356,6 +356,20 @@ describe('InstanceBackupManager — independent initial loads', () => {
       expect(screen.queryByText('Could not load backup settings.')).not.toBeInTheDocument();
     });
   });
+
+  it('displays error when updateSetting fails', async () => {
+    const { updateSetting } = await import('../api/client');
+    vi.mocked(updateSetting).mockRejectedValueOnce(new Error('Failed to update interval'));
+    await renderAndWait();
+
+    act(() => {
+      fireEvent.change(screen.getByDisplayValue('Disabled'), { target: { value: '24' } });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to update interval')).toBeInTheDocument();
+    });
+  });
 });
 
 // --- Gap 9: InstanceBackupManager validation ---

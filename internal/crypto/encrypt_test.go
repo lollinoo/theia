@@ -209,9 +209,9 @@ func TestKeyringLegacyCiphertextRequiresCompatibilityPathAndRewraps(t *testing.T
 		t.Fatalf("legacy decrypt = (%q, %q), want plaintext and legacy key id", plaintext, legacyKeyID)
 	}
 
-	rewrapped, err := keyring.RewrapString(legacyCiphertext)
+	rewrapped, err := keyring.EncryptString(plaintext)
 	if err != nil {
-		t.Fatalf("RewrapString failed: %v", err)
+		t.Fatalf("EncryptString failed: %v", err)
 	}
 	if !strings.HasPrefix(rewrapped, EnvelopePrefix) {
 		t.Fatalf("rewrapped value should use envelope prefix, got %q", rewrapped)

@@ -42,10 +42,6 @@ func wireRuntimeResetter(deviceService *service.DeviceService, resetter deviceRu
 	deviceService.SetRuntimeResetter(resetter)
 }
 
-func applyPendingPostgresRestore(stateDir, dbDSN, deviceBackupDir, knownHostsPath string) error {
-	return applyPendingPostgresRestoreWithConfig(stateDir, dbDSN, deviceBackupDir, knownHostsPath, &config.Config{})
-}
-
 func applyPendingPostgresRestoreWithConfig(stateDir, dbDSN, deviceBackupDir, knownHostsPath string, cfg *config.Config) error {
 	coordinator := service.NewRestoreCoordinatorWithDSN(stateDir, dbDSN, deviceBackupDir, knownHostsPath)
 	coordinator.SetCompletionVerifier(func(ctx context.Context, reportPhase func(service.RestoreOperationPhase) error) error {

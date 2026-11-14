@@ -185,6 +185,14 @@ async function loadBulkDownloadCandidates(
   const successEntries = entries.filter((entry) => entry.phase === 'success');
   return Promise.all(
     successEntries.map(async (entry) => {
+      if (entry.fileCount > 0 && entry.byteCount > 0) {
+        return {
+          deviceId: entry.deviceId,
+          fileCount: entry.fileCount,
+          byteCount: entry.byteCount,
+          hasMetadata: true,
+        };
+      }
       if (!entry.jobId) {
         return {
           deviceId: entry.deviceId,
