@@ -10,6 +10,9 @@ mkdir -p "$ci_shared_root"
 chmod 700 "$ci_shared_root"
 exec 9> "$ci_shared_root/deployment.lock"
 flock 9
+# Wait for any cancelled pipeline's runner to finish its own cleanup before clearing --rm lag.
+docker wait theia-managed-ci-runner >/dev/null 2>&1 || true
+docker rm -f theia-managed-ci-runner >/dev/null 2>&1 || true
 ci_work=$(mktemp -d "$ci_shared_root/run-XXXXXX")
 trap 'rm -rf "$ci_work"' EXIT
 mkdir -p "$ci_work/repo" "$ci_work/tmp"
@@ -22,7 +25,7 @@ git -c safe.directory="$repo_dir" -C "$repo_dir" ls-files -z \
   | tar -C "$repo_dir" --null -T - -cf - \
   | tar -C "$ci_work/repo" -xf -
 docker build -f "$repo_dir/Dockerfile.deployment-test" -t theia-managed-ci-runner:local "$repo_dir"
-docker run --rm --network host \
+docker run --rm --name theia-managed-ci-runner --network host \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$ci_work:$ci_work" -w "$ci_work/repo" \
   -e TMPDIR="$ci_work/tmp" -e CI=true \
