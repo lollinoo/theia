@@ -47,11 +47,8 @@ import {
 import { type ScreenRect } from './newNodePlacement';
 import { buildExplicitNodePlacements } from './newNodePlacementAdapter';
 import { buildManualNodePositionUpdate } from './nodePositionUpdate';
-import {
-  buildRuntimeState,
-  countActiveAlertsFromRuntimeState,
-  type RuntimeState,
-} from './runtimeAdapters';
+import { buildAlertsPanelModel } from './panelAdapters';
+import { buildRuntimeState, type RuntimeState } from './runtimeAdapters';
 import { applyRuntimeSnapshotPatch } from './runtimeSnapshotPatch';
 import {
   createStructuralRefreshQueue,
@@ -244,7 +241,7 @@ export function useCanvasData({
 
   const runtimeSummary = useMemo<RuntimeSummary>(() => {
     return {
-      alertCount: countActiveAlertsFromRuntimeState(runtimeState, alerts),
+      alertCount: buildAlertsPanelModel({ alerts, runtimeState }).activeAlertCount,
       prometheusDiagnosticsVisible: isPrometheusUnavailable(prometheusStatus),
     };
   }, [alerts, prometheusStatus, runtimeState]);
