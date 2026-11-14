@@ -18,8 +18,8 @@ cleanup() {
 trap cleanup EXIT
 cd "$repo_dir"
 
-docker build --target production -t theia-managed-backend:local .
-docker build --target production -f Dockerfile.frontend -t theia-managed-frontend:local frontend
+docker build --pull --target production -t theia-managed-backend:local .
+docker build --pull --target production -f Dockerfile.frontend -t theia-managed-frontend:local frontend
 go build -o "$test_root/theia-admin" ./cmd/theia-admin
 read -r source_http source_https replacement_http replacement_https < <(python3 - <<'PY'
 import socket

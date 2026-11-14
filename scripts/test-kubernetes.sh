@@ -31,8 +31,8 @@ context="kind-$cluster_name"
 # Let both nodes host the application to exercise affinity rather than a single
 # eligible worker masked by the control-plane taint.
 kubectl --context "$context" taint node "$cluster_name-control-plane" node-role.kubernetes.io/control-plane-
-docker build --target production -t theia-managed-backend:local .
-docker build --target production -f Dockerfile.frontend -t theia-managed-frontend:local frontend
+docker build --pull --target production -t theia-managed-backend:local .
+docker build --pull --target production -f Dockerfile.frontend -t theia-managed-frontend:local frontend
 docker pull postgres:18-bookworm
 docker save theia-managed-backend:local theia-managed-frontend:local postgres:18-bookworm -o "$test_root/images.tar"
 # Explicit platform avoids importing absent ARM manifests from Docker's image store.
