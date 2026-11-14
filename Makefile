@@ -186,7 +186,7 @@ frontend-fast: ## Run the frontend-fast quality gate locally
 	npm --prefix frontend ci
 	npm --prefix frontend run check
 	npm --prefix frontend run test:coverage
-	npm --prefix frontend run typecheck
+	npm --prefix frontend run typecheck:saved-maps # build runs tsc -b tsconfig.app.json
 	npm --prefix frontend run build
 
 browser-e2e: ## Run the browser E2E gate locally
