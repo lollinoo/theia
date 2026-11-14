@@ -509,7 +509,6 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 		next.NetworkReachabilityResults = cloneNetworkProbeResults(essential.NetworkReachabilityResults)
 	}
 	next.SNMPReachable = essential.SNMPReachable
-	next.FieldStates = mergeEssentialFieldStates(prev.FieldStates, next.Metrics, essential)
 	next.RuntimeFlags = cloneRuntimeFlags(prev.RuntimeFlags)
 	setFlag(next.RuntimeFlags, polling.FlagDeadlineMissed, essential.DeadlineMissed)
 	setFlag(next.RuntimeFlags, polling.FlagOverloaded, essential.Overloaded)
@@ -528,8 +527,8 @@ func applyEssentialUpdate(next *DeviceState, prev DeviceState, update StateUpdat
 		}
 		merged.CollectedAt = update.Metrics.CollectedAt
 		next.Metrics = merged
-		next.FieldStates = mergeEssentialFieldStates(prev.FieldStates, next.Metrics, essential)
 	}
+	next.FieldStates = mergeEssentialFieldStates(prev.FieldStates, next.Metrics, essential)
 	setFlag(next.RuntimeFlags, polling.FlagPartialTelemetry, essential.PollStatus == polling.PollStatusPartial && hasPartialTelemetryFields(next.FieldStates))
 
 	switch {

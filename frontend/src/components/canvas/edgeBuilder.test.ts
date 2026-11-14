@@ -2,48 +2,10 @@
  * Exercises edge builder topology canvas behavior so refactors preserve the documented contract.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { Device, Link } from '../../types/api';
+import { mockDevice, mockLink } from '../../test/canvasFixtures';
 import type { AlertDTO } from '../../types/metrics';
 import type { DeviceNode } from '../DeviceCard';
 import { buildEdgeData, buildTopologyEdges } from './edgeBuilder';
-
-function mockDevice(overrides: Partial<Device> = {}): Device {
-  return {
-    id: 'dev-1',
-    hostname: 'router-01',
-    ip: '10.0.0.1',
-    device_type: 'router',
-    status: 'up',
-    sys_name: 'router-01',
-    sys_descr: 'RouterOS',
-    hardware_model: 'RB4011',
-    vendor: 'mikrotik',
-    managed: true,
-    interfaces: [],
-    backup_supported: false,
-    metrics_source: 'prometheus',
-    prometheus_label_name: 'instance',
-    prometheus_label_value: '10.0.0.1:9100',
-    area_ids: [],
-    ...overrides,
-  };
-}
-
-function mockLink(overrides: Partial<Link> = {}): Link {
-  return {
-    id: 'link-1',
-    source_device_id: 'dev-1',
-    source_if_name: 'ether1',
-    target_device_id: 'dev-2',
-    target_if_name: 'ether2',
-    discovery_protocol: 'lldp',
-    source_if_speed: 0,
-    source_if_oper_status: '',
-    target_if_speed: 0,
-    target_if_oper_status: '',
-    ...overrides,
-  };
-}
 
 function mockNode(id: string, x: number, y: number): DeviceNode {
   return {
@@ -336,6 +298,47 @@ describe('buildEdgeData', () => {
 
     expect(result.inertVirtualLink).toBe(false);
   });
+
+  it('preserves onSelfLinkClick and alertStatus from existingData', () => {
+    const source = mockDevice({ id: 'dev-1' });
+    const target = mockDevice({ id: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', source],
+      ['dev-2', target],
+    ]);
+    const link = mockLink();
+    const onSelfLinkClick = vi.fn();
+
+    const result = buildEdgeData(link, devicesByID, {
+      alertStatus: 'degraded',
+      onSelfLinkClick,
+    });
+
+    expect(result.alertStatus).toBe('degraded');
+    expect(result.onSelfLinkClick).toBe(onSelfLinkClick);
+  });
+
+  it('prefers direct onSelfLinkClick over existingData onSelfLinkClick in buildEdgeData', () => {
+    const source = mockDevice({ id: 'dev-1' });
+    const target = mockDevice({ id: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', source],
+      ['dev-2', target],
+    ]);
+    const link = mockLink();
+    const directOnSelfLinkClick = vi.fn();
+    const existingOnSelfLinkClick = vi.fn();
+
+    const result = buildEdgeData(
+      link,
+      devicesByID,
+      { onSelfLinkClick: existingOnSelfLinkClick },
+      undefined,
+      directOnSelfLinkClick,
+    );
+
+    expect(result.onSelfLinkClick).toBe(directOnSelfLinkClick);
+  });
 });
 
 describe('buildTopologyEdges', () => {
@@ -545,5 +548,88 @@ describe('buildTopologyEdges', () => {
     expect(edges).toHaveLength(1);
     expect(edges[0].id).toBe('link-rich');
     expect(edges[0].data.bandwidthLabel).toBe('1 Gbps');
+  });
+
+  it('preserves existing edge alertStatus and onSelfLinkClick when alerts is undefined', () => {
+    const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', dev1],
+      ['dev-2', dev2],
+    ]);
+    const nodes = [mockNode('dev-1', 0, 0), mockNode('dev-2', 300, 0)];
+    const links = [mockLink({ id: 'link-1' })];
+    const onSelfLinkClick = vi.fn();
+    const existingEdgeDataByID = new Map([
+      [
+        'link-1',
+        {
+          alertStatus: 'down' as const,
+          onSelfLinkClick,
+        },
+      ],
+    ]);
+
+    const edges = buildTopologyEdges(
+      links,
+      devicesByID,
+      nodes,
+      existingEdgeDataByID,
+      undefined,
+      undefined,
+    );
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0].data.alertStatus).toBe('down');
+    expect(edges[0].data.onSelfLinkClick).toBe(onSelfLinkClick);
+  });
+
+  it('defaults alertStatus to normal when alerts is undefined and existingData has no alertStatus', () => {
+    const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });
+    const devicesByID = new Map([
+      ['dev-1', dev1],
+      ['dev-2', dev2],
+    ]);
+    const nodes = [mockNode('dev-1', 0, 0), mockNode('dev-2', 300, 0)];
+    const links = [mockLink({ id: 'link-1' })];
+
+    const edges = buildTopologyEdges(links, devicesByID, nodes);
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0].data.alertStatus).toBe('normal');
+  });
+
+  it('resolves endpoints accurately via nodesById index regardless of node order', () => {
+    const dev1 = mockDevice({ id: 'dev-1', ip: '10.0.0.1', sys_name: 'dev-1' });
+    const dev2 = mockDevice({ id: 'dev-2', ip: '10.0.0.2', sys_name: 'dev-2' });
+    const dev3 = mockDevice({ id: 'dev-3', ip: '10.0.0.3', sys_name: 'dev-3' });
+    const devicesByID = new Map([
+      ['dev-1', dev1],
+      ['dev-2', dev2],
+      ['dev-3', dev3],
+    ]);
+    // Target device appears before source device in array
+    const nodes = [mockNode('dev-3', 500, 500), mockNode('dev-2', 300, 0), mockNode('dev-1', 0, 0)];
+    const links = [
+      mockLink({ id: 'link-1', source_device_id: 'dev-1', target_device_id: 'dev-2' }),
+      mockLink({ id: 'link-2', source_device_id: 'dev-2', target_device_id: 'dev-3' }),
+    ];
+
+    const edges = buildTopologyEdges(links, devicesByID, nodes);
+
+    expect(edges).toHaveLength(2);
+    const edge1 = edges.find((e) => e.id === 'link-1');
+    const edge2 = edges.find((e) => e.id === 'link-2');
+
+    expect(edge1?.source).toBe('dev-1');
+    expect(edge1?.target).toBe('dev-2');
+    expect(edge1?.sourceHandle).toBe('right');
+    expect(edge1?.targetHandle).toBe('left');
+
+    expect(edge2?.source).toBe('dev-2');
+    expect(edge2?.target).toBe('dev-3');
+    expect(edge2?.sourceHandle).toBe('bottom');
+    expect(edge2?.targetHandle).toBe('top');
   });
 });

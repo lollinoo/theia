@@ -5,6 +5,7 @@ package canvasmap
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -76,7 +77,7 @@ func TestLoadTopologyBuildsMaterializedResponsePlan(t *testing.T) {
 	if loaded.Plan.DeviceCount != 1 || loaded.Plan.LinkCount != 1 || loaded.Plan.PositionCount != 2 {
 		t.Fatalf("loaded counts = devices %d links %d positions %d, want 1/1/2", loaded.Plan.DeviceCount, loaded.Plan.LinkCount, loaded.Plan.PositionCount)
 	}
-	if got, want := deviceIDs(loaded.Plan.Devices), []uuid.UUID{baseID, ghostID}; !uuidSlicesEqual(got, want) {
+	if got, want := deviceIDs(loaded.Plan.Devices), []uuid.UUID{baseID, ghostID}; !slices.Equal(got, want) {
 		t.Fatalf("loaded devices = %v, want %v", got, want)
 	}
 	if len(loaded.Plan.Areas) != 1 || loaded.Plan.Areas[0].DeviceCount != 1 {

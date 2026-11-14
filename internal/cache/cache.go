@@ -358,10 +358,33 @@ func (c *DeviceLinkCache) loadChanges(devices map[uuid.UUID]domain.DeviceChangeE
 	defer c.relockAfterRead()
 	loadedDevices := make(map[uuid.UUID]domain.Device, len(devices))
 	loadedLinks := make(map[uuid.UUID]domain.Link, len(links))
+
+	deviceIDs := make([]uuid.UUID, 0, len(devices))
 	for id, event := range devices {
-		if event.Kind != domain.ChangeKindCreated && event.Kind != domain.ChangeKindUpdated {
-			continue
+		if event.Kind == domain.ChangeKindCreated || event.Kind == domain.ChangeKindUpdated {
+			deviceIDs = append(deviceIDs, id)
 		}
+	}
+	if len(deviceIDs) > 1 {
+		if batchRepo, ok := c.deviceRepo.(interface {
+			GetByIDs([]uuid.UUID) ([]domain.Device, error)
+		}); ok {
+			fetched, err := batchRepo.GetByIDs(deviceIDs)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, device := range fetched {
+				loadedDevices[device.ID] = device
+			}
+			for _, id := range deviceIDs {
+				if _, exists := loadedDevices[id]; !exists {
+					return nil, nil, fmt.Errorf("changed device %s is missing", id)
+				}
+			}
+			deviceIDs = nil
+		}
+	}
+	for _, id := range deviceIDs {
 		device, err := c.deviceRepo.GetByID(id)
 		if err != nil {
 			return nil, nil, err
@@ -371,10 +394,33 @@ func (c *DeviceLinkCache) loadChanges(devices map[uuid.UUID]domain.DeviceChangeE
 		}
 		loadedDevices[id] = *device
 	}
+
+	linkIDs := make([]uuid.UUID, 0, len(links))
 	for id, event := range links {
-		if event.Kind != domain.ChangeKindCreated && event.Kind != domain.ChangeKindUpdated {
-			continue
+		if event.Kind == domain.ChangeKindCreated || event.Kind == domain.ChangeKindUpdated {
+			linkIDs = append(linkIDs, id)
 		}
+	}
+	if len(linkIDs) > 1 {
+		if batchRepo, ok := c.linkRepo.(interface {
+			GetByIDs([]uuid.UUID) ([]domain.Link, error)
+		}); ok {
+			fetched, err := batchRepo.GetByIDs(linkIDs)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, link := range fetched {
+				loadedLinks[link.ID] = link
+			}
+			for _, id := range linkIDs {
+				if _, exists := loadedLinks[id]; !exists {
+					return nil, nil, fmt.Errorf("changed link %s is missing", id)
+				}
+			}
+			linkIDs = nil
+		}
+	}
+	for _, id := range linkIDs {
 		link, err := c.linkRepo.GetByID(id)
 		if err != nil {
 			return nil, nil, err
@@ -565,12 +611,7 @@ func makeLinkEndpointKey(link domain.Link) linkEndpointKey {
 }
 
 func normalizeSysNameLookup(sysName string) string {
-	normalized := strings.ToLower(strings.TrimSpace(sysName))
-	normalized = strings.TrimSuffix(normalized, ".")
-	if idx := strings.Index(normalized, "."); idx >= 0 {
-		normalized = normalized[:idx]
-	}
-	return normalized
+	return domain.NormalizeSysNameLookup(sysName)
 }
 
 func normalizeInterfaceName(value string) string {

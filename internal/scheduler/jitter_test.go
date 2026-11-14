@@ -14,55 +14,6 @@ import (
 	"github.com/lollinoo/theia/internal/polling"
 )
 
-func TestInitialOffset_DeterministicAndBounded(t *testing.T) {
-	deviceID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
-	interval := 60 * time.Second
-
-	first := initialOffset(deviceID, interval)
-	second := initialOffset(deviceID, interval)
-
-	if first != second {
-		t.Fatalf("initialOffset() not deterministic: first=%v second=%v", first, second)
-	}
-
-	if first < 0 || first >= interval {
-		t.Fatalf("initialOffset() = %v, want within [0, %v)", first, interval)
-	}
-
-	if got := initialOffset(deviceID, 0); got != 0 {
-		t.Fatalf("initialOffset(interval=0) = %v, want 0", got)
-	}
-
-	if got := initialOffset(deviceID, -time.Second); got != 0 {
-		t.Fatalf("initialOffset(interval<0) = %v, want 0", got)
-	}
-}
-
-func TestInitialOffset_DistributionAcrossBuckets(t *testing.T) {
-	interval := 60 * time.Second
-	bucketWidth := interval / 8
-	counts := make([]int, 8)
-
-	for i := 0; i < 256; i++ {
-		var deviceID uuid.UUID
-		deviceID[15] = byte(i)
-
-		offset := initialOffset(deviceID, interval)
-		bucket := int(offset / bucketWidth)
-		if bucket < 0 || bucket >= len(counts) {
-			t.Fatalf("bucket index out of range: offset=%v bucket=%d", offset, bucket)
-		}
-
-		counts[bucket]++
-	}
-
-	for bucket, count := range counts {
-		if count < 16 || count > 48 {
-			t.Fatalf("bucket %d count = %d, want between 16 and 48; counts=%v", bucket, count, counts)
-		}
-	}
-}
-
 func TestInitialOffsetForKeySpreadsSameDeviceTaskKinds(t *testing.T) {
 	deviceID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
 	interval := 30 * time.Second

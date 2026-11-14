@@ -493,7 +493,7 @@ func TestBuildDeviceDetailDelta_EmbedsOptionalDetailFieldsInDeviceMetrics(t *tes
 	deviceID := uuid.New()
 	collectedAt := time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)
 
-	delta := buildDeviceDetailDelta(
+	delta := buildDeviceDetailDeltaWithLinks(
 		domain.Device{
 			ID:     deviceID,
 			Status: domain.DeviceStatusUnknown,
@@ -512,6 +512,7 @@ func TestBuildDeviceDetailDelta_EmbedsOptionalDetailFieldsInDeviceMetrics(t *tes
 			Stale:            true,
 			ExpectedInterval: 45 * time.Second,
 		},
+		nil,
 		nil,
 		ws.PrometheusStatusPayload{},
 	)
@@ -538,9 +539,10 @@ func TestBuildDeviceDetailDelta_EmbedsOptionalDetailFieldsInDeviceMetrics(t *tes
 func TestBuildDeviceDetailDelta_UsesPrometheusStatusAndAlerts(t *testing.T) {
 	deviceID := uuid.New()
 
-	delta := buildDeviceDetailDelta(
+	delta := buildDeviceDetailDeltaWithLinks(
 		domain.Device{ID: deviceID, MetricsSource: domain.MetricsSourcePrometheus},
 		state.DeviceState{},
+		nil,
 		[]domain.AlertState{{
 			DeviceID:  deviceID,
 			Severity:  "critical",

@@ -9,8 +9,8 @@ import { resetCanvasDiagnostics } from './canvasDiagnostics';
 import { clearCanvasMetrics, exportCanvasMetrics } from './canvasInstrumentation';
 import { useCanvasFrameMetrics } from './useCanvasFrameMetrics';
 
-function Harness({ children }: { children?: ReactNode }) {
-  useCanvasFrameMetrics();
+function Harness({ enabled, children }: { enabled?: boolean; children?: ReactNode }) {
+  useCanvasFrameMetrics(enabled);
   return <>{children}</>;
 }
 
@@ -70,6 +70,40 @@ describe('useCanvasFrameMetrics', () => {
     expect(window.cancelAnimationFrame).toHaveBeenCalled();
   });
 
+  it('does not schedule requestAnimationFrame when enabled is false', () => {
+    render(<Harness enabled={false} />);
+
+    expect(window.requestAnimationFrame).not.toHaveBeenCalled();
+    expect(frameCallbacks).toHaveLength(0);
+  });
+
+  it('schedules requestAnimationFrame when enabled is explicitly true', () => {
+    render(<Harness enabled={true} />);
+
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(frameCallbacks).toHaveLength(1);
+  });
+
+  it('cancels animation frame when enabled changes from true to false', () => {
+    const { rerender } = render(<Harness enabled={true} />);
+
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(1);
+
+    rerender(<Harness enabled={false} />);
+
+    expect(window.cancelAnimationFrame).toHaveBeenCalled();
+  });
+
+  it('starts scheduling animation frames when enabled changes from false to true', () => {
+    const { rerender } = render(<Harness enabled={false} />);
+
+    expect(window.requestAnimationFrame).not.toHaveBeenCalled();
+
+    rerender(<Harness enabled={true} />);
+
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(1);
+  });
+
   it('records browser long task observer entries when supported', () => {
     class MockPerformanceObserver {
       static supportedEntryTypes = ['longtask'];
@@ -112,6 +146,53 @@ describe('useCanvasFrameMetrics', () => {
     });
 
     unmount();
+
+    expect(disconnectObserver).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not register long task observer when enabled is false', () => {
+    const observeMock = vi.fn();
+    class MockPerformanceObserver {
+      static supportedEntryTypes = ['longtask'];
+
+      constructor(callback: PerformanceObserverCallback) {
+        longTaskCallback = callback;
+      }
+
+      observe = observeMock;
+      disconnect = disconnectObserver;
+      takeRecords = vi.fn(() => []);
+    }
+
+    vi.stubGlobal('PerformanceObserver', MockPerformanceObserver);
+
+    render(<Harness enabled={false} />);
+
+    expect(observeMock).not.toHaveBeenCalled();
+    expect(longTaskCallback).toBeUndefined();
+  });
+
+  it('disconnects long task observer when enabled changes from true to false', () => {
+    const observeMock = vi.fn();
+    class MockPerformanceObserver {
+      static supportedEntryTypes = ['longtask'];
+
+      constructor(callback: PerformanceObserverCallback) {
+        longTaskCallback = callback;
+      }
+
+      observe = observeMock;
+      disconnect = disconnectObserver;
+      takeRecords = vi.fn(() => []);
+    }
+
+    vi.stubGlobal('PerformanceObserver', MockPerformanceObserver);
+
+    const { rerender } = render(<Harness enabled={true} />);
+
+    expect(observeMock).toHaveBeenCalledTimes(1);
+
+    rerender(<Harness enabled={false} />);
 
     expect(disconnectObserver).toHaveBeenCalledTimes(1);
   });

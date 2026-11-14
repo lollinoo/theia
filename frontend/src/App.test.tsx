@@ -108,7 +108,7 @@ vi.mock('./components/NavigationPill', () => ({
     selectedMapName: string;
     canViewAdmin: boolean;
     userLabel: string;
-    onViewChange: (view: 'hub' | 'canvas' | 'dashboard' | 'admin') => void;
+    onViewChange: (view: 'hub' | 'canvas' | 'dashboard' | 'admin' | 'settings') => void;
     onAreaSelect: (areaId: string | null) => void;
     onMapSelect: (map: CanvasMap) => void;
     onManageMaps: () => void;
@@ -128,6 +128,9 @@ vi.mock('./components/NavigationPill', () => ({
           Admin
         </button>
       )}
+      <button type="button" onClick={() => onViewChange('settings')}>
+        Settings
+      </button>
       <button
         type="button"
         onClick={() =>
@@ -305,8 +308,8 @@ vi.mock('./components/Canvas', () => ({
   },
 }));
 
-vi.mock('./components/topology-hub/TopologyHub', () => ({
-  default: ({
+vi.mock('./components/topology-hub/TopologyHub', () => {
+  const MockTopologyHub = ({
     devices,
     areas,
     links,
@@ -416,11 +419,15 @@ vi.mock('./components/topology-hub/TopologyHub', () => ({
         ))}
       </div>
     );
-  },
-}));
+  };
+  return {
+    default: MockTopologyHub,
+    TopologyHub: MockTopologyHub,
+  };
+});
 
-vi.mock('./components/AdminDashboard', () => ({
-  AdminDashboard: (props: {
+vi.mock('./components/AdminDashboard', () => {
+  const MockAdminDashboard = (props: {
     visible?: boolean;
     onOpenMap?: (map: CanvasMap, placementRequest?: ImportedNodePlacementRequest) => void;
   }) => {
@@ -457,11 +464,15 @@ vi.mock('./components/AdminDashboard', () => ({
         </button>
       </div>
     );
-  },
-}));
+  };
+  return {
+    default: MockAdminDashboard,
+    AdminDashboard: MockAdminDashboard,
+  };
+});
 
-vi.mock('./components/Dashboard', () => ({
-  Dashboard: ({
+vi.mock('./components/Dashboard', () => {
+  const MockDashboard = ({
     devices,
     areas,
     selectedAreaId,
@@ -483,8 +494,20 @@ vi.mock('./components/Dashboard', () => ({
         Open map
       </button>
     </div>
-  ),
-}));
+  );
+  return {
+    default: MockDashboard,
+    Dashboard: MockDashboard,
+  };
+});
+
+vi.mock('./components/settings/UserSettingsPage', () => {
+  const MockUserSettingsPage = () => <div data-testid="user-settings-page">User settings</div>;
+  return {
+    default: MockUserSettingsPage,
+    UserSettingsPage: MockUserSettingsPage,
+  };
+});
 
 function mockArea(overrides: Partial<Area> = {}): Area {
   return {
@@ -557,7 +580,7 @@ function mockSnapshot(overrides: Partial<SnapshotPayload> = {}): SnapshotPayload
 // renderApp waits for App's initial async fetch/effect updates so tests do not leak act warnings.
 async function renderApp() {
   const result = render(<App />);
-  await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+  await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
   return result;
 }
 
@@ -620,6 +643,7 @@ describe('App', () => {
     );
 
     await renderApp();
+    expect(screen.queryByTestId('admin-dashboard')).not.toBeInTheDocument();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Admin' }));
     await waitFor(() => {
@@ -628,12 +652,11 @@ describe('App', () => {
         onOpenMap: expect.any(Function),
       });
     });
+    expect(await screen.findByTestId('admin-dashboard')).toBeInTheDocument();
+
     await clickButton('Dashboard');
     await waitFor(() => {
-      expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({
-        visible: false,
-        onOpenMap: expect.any(Function),
-      });
+      expect(screen.queryByTestId('admin-dashboard')).not.toBeInTheDocument();
     });
   });
 
@@ -655,10 +678,7 @@ describe('App', () => {
         'placement:import-placement-request:imported-b|imported-a',
       );
     });
-    expect(adminDashboardPropsMock).toHaveBeenLastCalledWith({
-      visible: false,
-      onOpenMap: expect.any(Function),
-    });
+    expect(screen.queryByTestId('admin-dashboard')).not.toBeInTheDocument();
 
     await clickButton('Complete imported placement');
     expect(screen.getByTestId('canvas')).toHaveTextContent('placement:none:');
@@ -781,7 +801,7 @@ describe('App', () => {
   it('wires canvas devices links and snapshot into TopologyHub and Dashboard', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Hub');
     await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     expect(await screen.findByTestId('topology-hub')).toHaveTextContent('devices:1');
@@ -826,8 +846,9 @@ describe('App', () => {
   it('keeps the canvas mounted and opacity-masked while the hub is active', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Hub');
+    expect(await screen.findByTestId('topology-hub')).toBeInTheDocument();
 
     const canvasViewport = screen.getByTestId('canvas').parentElement;
     expect(canvasViewport).not.toHaveClass('hidden');
@@ -841,7 +862,7 @@ describe('App', () => {
   it('passes map-local areas into Devices instead of global areas', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
     );
@@ -886,7 +907,7 @@ describe('App', () => {
   it('keeps Devices active when selecting a map from the navigation pill', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Dashboard');
     expect(await screen.findByTestId('dashboard')).toHaveTextContent('devices:1');
     await clickButton('Pill Open Backbone map');
@@ -899,39 +920,43 @@ describe('App', () => {
   it('opens the canvas and requests fit view when selecting a map from the hub navigation pill', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Hub');
-    expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
+    expect((await screen.findByTestId('topology-hub')).parentElement?.className).toContain(
+      'h-full',
+    );
     await clickButton('Pill Open Backbone map');
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     expect(screen.getByTestId('canvas')).toHaveTextContent('fit:1');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
     expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-100');
-    expect(screen.getByTestId('topology-hub').parentElement).toHaveClass('opacity-0');
+    expect(screen.queryByTestId('topology-hub')).not.toBeInTheDocument();
   });
 
   it('opens the selected map-local area in Canvas from the navigation pill', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
     );
     await clickButton('Dashboard');
+    expect(await screen.findByTestId('dashboard')).toBeInTheDocument();
     await clickButton('Pill area Backbone');
 
     expect(screen.getByTestId('canvas')).toHaveTextContent('area:map-area-1');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
     expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-100');
-    expect(screen.getByTestId('dashboard').parentElement).toHaveClass('opacity-0');
+    expect(screen.queryByTestId('dashboard')).not.toBeInTheDocument();
   });
 
   it('returns from Devices to the currently selected map', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Dashboard');
+    expect(await screen.findByTestId('dashboard')).toBeInTheDocument();
     await clickButton('Pill Open Backbone map');
     expect(screen.getByTestId('dashboard').parentElement?.className).toContain('h-full');
     await clickButton('Open map');
@@ -939,13 +964,13 @@ describe('App', () => {
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     expect(screen.getByTestId('canvas').parentElement?.className).toContain('h-full');
     expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-100');
-    expect(screen.getByTestId('dashboard').parentElement).toHaveClass('opacity-0');
+    expect(screen.queryByTestId('dashboard')).not.toBeInTheDocument();
   });
 
   it('keeps websocket runtime updates paused briefly after canvas interaction ends', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     expect(useWebSocketMock).toHaveBeenLastCalledWith(
       '/api/v1/ws',
       null,
@@ -992,7 +1017,7 @@ describe('App', () => {
   it('keeps the canvas watermark visible while canvas interaction pauses runtime updates', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Start interaction');
 
     expect(screen.getByTestId('watermark')).toHaveAttribute('data-hidden', 'false');
@@ -1002,7 +1027,7 @@ describe('App', () => {
   it('anchors the canvas watermark inside the canvas viewport wrapper', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
 
     const canvasViewport = screen.getByTestId('watermark').parentElement;
     expect(canvasViewport?.className).toContain('absolute');
@@ -1013,19 +1038,21 @@ describe('App', () => {
   it('passes selected map props from the navigation pill to Canvas', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:default:Default');
     await clickButton('Pill Open Backbone map');
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     await clickButton('Pill Manage maps');
-    expect(screen.getByTestId('topology-hub').parentElement?.className).toContain('h-full');
+    expect((await screen.findByTestId('topology-hub')).parentElement?.className).toContain(
+      'h-full',
+    );
     expect(screen.getByTestId('canvas').parentElement).toHaveClass('opacity-0');
   });
 
   it('requests fit view when selecting a map from the navigation pill on the canvas', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     expect(screen.getByTestId('canvas')).toHaveTextContent('fit:0');
     await clickButton('Pill Open Backbone map');
 
@@ -1038,7 +1065,7 @@ describe('App', () => {
   it('lets the navigation pill select maps and filter areas without leaving the selected map', async () => {
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
     );
@@ -1066,7 +1093,7 @@ describe('App', () => {
 
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Hub');
     await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Create empty map');
@@ -1093,7 +1120,7 @@ describe('App', () => {
 
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Hub');
     await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     const fetchCountBeforeDelete = fetchCanvasMapsMock.mock.calls.length;
@@ -1118,7 +1145,7 @@ describe('App', () => {
 
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Hub');
     await waitFor(() =>
       expect(screen.getByTestId('topology-hub')).toHaveTextContent(
@@ -1165,7 +1192,7 @@ describe('App', () => {
 
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent(
         'pill-map:default-map-id:Default',
@@ -1234,7 +1261,7 @@ describe('App', () => {
 
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Pill Open Backbone map');
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-areas:Map Local Area'),
@@ -1262,7 +1289,7 @@ describe('App', () => {
 
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Pill Open Backbone map');
     await clickButton('Hub');
 
@@ -1311,7 +1338,7 @@ describe('App', () => {
 
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await waitFor(() =>
       expect(screen.getByTestId('navigation-pill')).toHaveTextContent('pill-map:default-map'),
     );
@@ -1349,7 +1376,7 @@ describe('App', () => {
 
     await renderApp();
 
-    await waitFor(() => expect(fetchAreasMock).toHaveBeenCalled());
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
     await clickButton('Pill Open Backbone map');
     await clickButton('Hub');
 
@@ -1359,7 +1386,7 @@ describe('App', () => {
     expect(screen.getByTestId('canvas')).toHaveTextContent('map:map-1:Backbone');
     await clickButton('Hub');
     fireEvent.click(
-      screen.getByRole('button', {
+      await screen.findByRole('button', {
         name: 'Create map from area Map Local Area',
       }),
     );
@@ -1380,5 +1407,21 @@ describe('App', () => {
         },
       }),
     );
+  });
+
+  it('does not mount inactive views when canvas is active', async () => {
+    hasPermissionMock.mockImplementation(
+      (permission: string) =>
+        permission === 'admin:dashboard:read' || permission === 'account:manage',
+    );
+    await renderApp();
+
+    await waitFor(() => expect(fetchCanvasMapsMock).toHaveBeenCalled());
+    expect(screen.getByTestId('canvas')).toBeInTheDocument();
+
+    expect(screen.queryByTestId('topology-hub')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dashboard')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('admin-dashboard')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('user-settings-page')).not.toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@
  * Defines topology hub behavior for the topology hub.
  * Keeps saved-map and area workflows separate from the live canvas surface.
  */
+import { useMemo } from 'react';
 import type { Area, CanvasMap, Device, Link } from '../../types/api';
 import type { SnapshotPayload } from '../../types/metrics';
 import { AreaManager } from '../AreaManager';
@@ -86,7 +87,10 @@ export function TopologyHub({
   canOpenSettings = false,
   onOpenSettings,
 }: TopologyHubProps) {
-  const model = buildTopologyHubModel({ devices, areas, links, snapshot, maps });
+  const model = useMemo(
+    () => buildTopologyHubModel({ devices, areas, links, snapshot, maps }),
+    [devices, areas, links, snapshot, maps],
+  );
   const selectedMap =
     maps.find((map) => map.id === selectedMapId) ??
     maps.find((map) => selectedMapId === null && map.is_default) ??
@@ -94,16 +98,20 @@ export function TopologyHub({
     maps[0] ??
     null;
   const selectedMapDisplayName = selectedMap?.name ?? selectedMapName;
-  const areaMetrics = Object.fromEntries(
-    model.areas.map((areaModel) => [
-      areaModel.area.id,
-      {
-        healthLabel: areaModel.healthLabel,
-        activeLinkCount: areaModel.activeLinkCount,
-        degradedDeviceCount: areaModel.degradedDeviceCount,
-        degradedLinkCount: areaModel.degradedLinkCount,
-      },
-    ]),
+  const areaMetrics = useMemo(
+    () =>
+      Object.fromEntries(
+        model.areas.map((areaModel) => [
+          areaModel.area.id,
+          {
+            healthLabel: areaModel.healthLabel,
+            activeLinkCount: areaModel.activeLinkCount,
+            degradedDeviceCount: areaModel.degradedDeviceCount,
+            degradedLinkCount: areaModel.degradedLinkCount,
+          },
+        ]),
+      ),
+    [model.areas],
   );
 
   return (

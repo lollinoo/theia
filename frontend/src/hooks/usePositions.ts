@@ -52,6 +52,45 @@ function toPositionMap(
   );
 }
 
+function arePositionsEqual(
+  prev: Map<string, PositionState>,
+  nextPositions: DevicePosition[] | PositionPayload[],
+): boolean {
+  if (prev.size !== nextPositions.length) {
+    return false;
+  }
+  if (prev.size === 0) {
+    return true;
+  }
+  const seen = new Set<string>();
+  for (const pos of nextPositions) {
+    if (seen.has(pos.device_id)) {
+      return false;
+    }
+    seen.add(pos.device_id);
+    const existing = prev.get(pos.device_id);
+    if (
+      !existing ||
+      existing.x !== pos.x ||
+      existing.y !== pos.y ||
+      existing.pinned !== pos.pinned
+    ) {
+      return false;
+    }
+  }
+  return seen.size === prev.size;
+}
+
+function updatePositionsIfChanged(
+  prev: Map<string, PositionState>,
+  nextPositions: DevicePosition[] | PositionPayload[],
+): Map<string, PositionState> {
+  if (arePositionsEqual(prev, nextPositions)) {
+    return prev;
+  }
+  return toPositionMap(nextPositions);
+}
+
 /** Coordinates positions behavior for the React hook lifecycle. */
 export function usePositions(mapId: string | null) {
   const [positions, setPositions] = useState<Map<string, PositionState>>(new Map());
@@ -61,27 +100,37 @@ export function usePositions(mapId: string | null) {
   const pendingSaveCountRef = useRef(0);
   const endpointRef = useRef(positionsEndpoint(mapId));
   const fetchSequenceRef = useRef(0);
+  const fetchAbortControllerRef = useRef<AbortController | null>(null);
   const latestSaveTokenRef = useRef(0);
   const saveQueueByEndpointRef = useRef(new Map<string, Promise<void>>());
   const positionSaveFenceDepthByEndpointRef = useRef(new Map<string, number>());
 
   const fetchPositions = useCallback(async () => {
+    if (fetchAbortControllerRef.current !== null) {
+      fetchAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchAbortControllerRef.current = controller;
+
     const requestEndpoint = endpointRef.current;
     const requestSequence = fetchSequenceRef.current + 1;
     fetchSequenceRef.current = requestSequence;
     const isCurrentRequest = () =>
-      fetchSequenceRef.current === requestSequence && endpointRef.current === requestEndpoint;
+      fetchSequenceRef.current === requestSequence &&
+      endpointRef.current === requestEndpoint &&
+      fetchAbortControllerRef.current === controller;
 
     setLoading(true);
     try {
       const response = await fetch(requestEndpoint, {
+        signal: controller.signal,
         headers: {
           Accept: 'application/json',
         },
       });
       const payload = await response.json().catch(() => null);
 
-      if (!isCurrentRequest()) {
+      if (!isCurrentRequest() || controller.signal.aborted) {
         return new Map<string, PositionState>();
       }
 
@@ -98,20 +147,27 @@ export function usePositions(mapId: string | null) {
 
       const parsed = parsePositionsResponse(payload);
       const nextPositions = toPositionMap(parsed);
-      if (!isCurrentRequest()) {
+      if (!isCurrentRequest() || controller.signal.aborted) {
         return new Map<string, PositionState>();
       }
 
-      setPositions(nextPositions);
+      setPositions((prev) => updatePositionsIfChanged(prev, parsed));
       return nextPositions;
     } catch (error) {
-      if (!isCurrentRequest()) {
+      if (!isCurrentRequest() || controller.signal.aborted) {
+        return new Map<string, PositionState>();
+      }
+      if (
+        (error instanceof DOMException && error.name === 'AbortError') ||
+        (error instanceof Error && error.name === 'AbortError')
+      ) {
         return new Map<string, PositionState>();
       }
       throw error;
     } finally {
       if (isCurrentRequest()) {
         setLoading(false);
+        fetchAbortControllerRef.current = null;
       }
     }
   }, []);
@@ -258,6 +314,11 @@ export function usePositions(mapId: string | null) {
       return;
     }
 
+    if (fetchAbortControllerRef.current !== null) {
+      fetchAbortControllerRef.current.abort();
+      fetchAbortControllerRef.current = null;
+    }
+
     const pendingPayload = pendingRef.current;
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
@@ -285,7 +346,7 @@ export function usePositions(mapId: string | null) {
       if ((positionSaveFenceDepthByEndpointRef.current.get(endpointRef.current) ?? 0) > 0) {
         return;
       }
-      setPositions(toPositionMap(nextPositions));
+      setPositions((prev) => updatePositionsIfChanged(prev, nextPositions));
       const token = latestSaveTokenRef.current + 1;
       latestSaveTokenRef.current = token;
       pendingRef.current = { endpoint: endpointRef.current, positions: nextPositions, token };
@@ -407,7 +468,7 @@ export function usePositions(mapId: string | null) {
       const saveRemainsCurrent =
         token === latestSaveTokenRef.current && endpoint === endpointRef.current;
       if (saveRemainsCurrent) {
-        setPositions(toPositionMap(nextPositions));
+        setPositions((prev) => updatePositionsIfChanged(prev, nextPositions));
       }
       return saveRemainsCurrent;
     },
@@ -472,11 +533,28 @@ export function usePositions(mapId: string | null) {
 
   useEffect(() => {
     return () => {
+      if (fetchAbortControllerRef.current !== null) {
+        fetchAbortControllerRef.current.abort();
+        fetchAbortControllerRef.current = null;
+      }
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      const pendingPayload = pendingRef.current;
+      pendingRef.current = null;
+
+      if (pendingPayload !== null) {
+        void enqueuePositionsCommit(
+          pendingPayload.endpoint,
+          pendingPayload.positions,
+          pendingPayload.token,
+        ).catch((error) => {
+          handleSaveFailure(error, pendingPayload.positions.length, pendingPayload.token);
+        });
       }
     };
-  }, []);
+  }, [enqueuePositionsCommit, handleSaveFailure]);
 
   return {
     positions,
