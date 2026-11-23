@@ -10,7 +10,7 @@
 # ---------------------------------------------------------------------------
 # Stage: postgres-tools — PostgreSQL 18 client binaries
 # ---------------------------------------------------------------------------
-FROM postgres:18-bookworm AS postgres-tools
+FROM postgres:19-bookworm AS postgres-tools
 
 # Normalize the libpq location for both AMD64 and ARM64 development images.
 RUN mkdir -p /theia-libs && cp -L "$(pg_config --libdir)/libpq.so.5" /theia-libs/libpq.so.5
@@ -76,7 +76,7 @@ RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -o /a
 # ---------------------------------------------------------------------------
 # Stage: production — Minimal runtime image
 # ---------------------------------------------------------------------------
-FROM postgres:18-bookworm AS production
+FROM postgres:19-bookworm AS production
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates libc6 curl libpq5 libreadline8 && \
